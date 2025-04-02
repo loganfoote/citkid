@@ -122,7 +122,7 @@ class CRS:
         Parameters:
         fres (array-like): tone frequencies in Hz
         ares (array-like): tone powers in dBm
-        return_max_ntones (bool): If True, returns 
+        return_max_ntones (bool): If True, returns
             max_ntones (int): maximum number of tones on any given module
         """
         # Split fres and ares into dictionaries
@@ -155,10 +155,10 @@ class CRS:
                                   self.ares_dict)
         if return_max_ntones:
             max_ntones = max([len(f) for f in self.fres_dict.values()])
-            return max_ntones 
+            return max_ntones
 
-    async def sweep(self, frequencies, ares, nsamps = 10, verbose = True,
-                    pbar_description = 'Sweeping'):
+    async def sweep(self, frequencies, ares, nsamps = 10, return_dbc = True,
+                    verbose = True, pbar_description = 'Sweeping'):
         """
         Performs a frequency sweep and returns the complex S21 value at each
         frequency. Performs sweeps over axis 0 of frequencies simultaneously
@@ -169,6 +169,7 @@ class CRS:
             for a single point in the sweep
         ares (M array-like float): amplitudes in dBm for each channel
         nsamps (int): number of samples to average per point
+        return_dbc (bool): If True, divides the output by the tone power
         verbose (bool): If True, displays a progress bar while sweeping
         pbar_description (str): description for the progress bar
         """
@@ -217,7 +218,8 @@ class CRS:
                                                         res_index)
             f[res_index] = sweep_f[module_index][ch_index]
             z[res_index] = sweep_z[module_index][ch_index]
-        z /= 10 ** (ares[:, np.newaxis] / 20)
+        if return_dbc:
+            z /= 10 ** (ares[:, np.newaxis] / 20)
         return f, z
 
     async def sweep_linear(self, fres, ares, bw = 20e3, npoints = 10,
@@ -294,8 +296,8 @@ class CRS:
         bw_total = 625e6 if self.extended_bw else 500e6
         bw = bw_total / 1024 + 200
         spacing = bw / npoints
-        fres = np.concatenate([np.linspace(nco - bw_total / 2 + 10 + bw, 
-                                           nco + bw_total / 2 - 10 - bw, 
+        fres = np.concatenate([np.linspace(nco - bw_total / 2 + 10 + bw,
+                                           nco + bw_total / 2 - 10 - bw,
                                            1024) for nco in ncos])
         ares = amplitude * np.ones(len(fres))
         # Left off here
@@ -311,7 +313,7 @@ class CRS:
     async def capture_noise(self, fres, ares, noise_time, fir_stage = 6,
                             parser_loc='/home/daq1/github/rfmux/firmware/r1.5.5/parser',
                             interface='enp2s0', delete_parser_data = True,
-                            verbose = True):
+                            return_dbc = True, verbose = True):
         """
         Captures a noise timestream using the parser.
 
@@ -327,6 +329,7 @@ class CRS:
         interface (str): Ethernet interface identifier
         delete_parser_data (bool): If True, deletes the parser data files
             after importing the data
+        return_dbc (bool): If true, divides the output by the tone power
         verbose (bool): If True, displays a progress bar while taking data
 
         Returns:
@@ -351,7 +354,7 @@ class CRS:
         max_ntones = await self.write_tones(fres, ares, return_max_ntones = True)
         sleep(1)
         # Collect the data
-        channels = '1-' + f'{max_ntones}' 
+        channels = '1-' + f'{max_ntones}'
         cmd = [parser_loc, '-c', channels, '-d', data_path,
                            '-i', interface, '-s', f'{self.serial_number:04d}']
         run_for_duration(cmd, noise_time, verbose)
@@ -371,7 +374,8 @@ class CRS:
         z = np.array([zi[:data_len] for zi in z])
         if delete_parser_data:
             shutil.rmtree('tmp/')
-        z /= 10 ** (ares[:, np.newaxis] / 20)
+        if return_dbc:
+            z /= 10 ** (ares[:, np.newaxis] / 20)
         return z
 
     async def capture_fast_noise(self, frequency, amplitude, time = 1,
@@ -415,13 +419,13 @@ class CRS:
         f = np.asarray(samples.spectrum.freq_iq)
         z = np.asarray(samples.spectrum.psd_i + 1j * samples.spectrum.psd_q)
         z = np.array(samples.i + 1j * samples.q)
-        
+
         # This might be already applied with reference = True
         # z *= rfmux.core.utils.transferfunctions.VOLTS_PER_ROC / np.sqrt(2)
         # z /= 10 ** (ares[:, np.newaxis] / 20)
         return None, None
         return f, z
-    
+
 ################################################################################
 ################## Methods registered to rfmux.ReadoutModule ###################
 ################################################################################
