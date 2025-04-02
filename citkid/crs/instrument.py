@@ -223,7 +223,7 @@ class CRS:
         return f, z
 
     async def sweep_linear(self, fres, ares, bw = 20e3, npoints = 10,
-                           nsamps = 10, verbose = True,
+                           nsamps = 10, return_dbc = True, verbose = True,
                            pbar_description = 'Sweeping'):
         """
         Performs a frequency sweep where each channel is swept over the same
@@ -235,6 +235,7 @@ class CRS:
         bw (float): span around each frequency to sweep in Hz
         npoints (int): number of sweep points per channel
         nsamps (int): number of samples to average per point
+        return_dbc (bool): If True, divides the output by the tone power
         verbose (bool): If True, displays a progress bar while sweeping
         pbar_description (str): description for the progress bar
 
@@ -250,7 +251,8 @@ class CRS:
         return f, z
 
     async def sweep_qres(self, fres, ares, qres, npoints = 10, nsamps = 10,
-                         verbose = True, pbar_description = 'Sweeping'):
+                         return_dbc = True, verbose = True,
+                         pbar_description = 'Sweeping'):
         """
         Performs a frequency sweep where the span around each frequency is set
         equal to fres / qres
@@ -260,6 +262,7 @@ class CRS:
         ares (array-like): amplitudes in dBm
         qres (arrz_noise_dict(int): number of sweep points per channel
         nsamps (int): number of samples to average per point
+        return_dbc (bool): If True, divides the output by the tone power
         verbose (bool): If True, displays a progress bar while sweeping
         pbar_description (str): description for the progress bar
 
@@ -276,7 +279,8 @@ class CRS:
         return f, z
 
     async def sweep_full(self, amplitude, npoints = 10, nsamps = 10,
-                         verbose = True, pbar_description = 'Sweeping'):
+                         return_dbc = True, verbose = True,
+                         pbar_description = 'Sweeping'):
         """
         Performs a frequency sweep over the full bandwidth around the NCO
         frequency
@@ -285,6 +289,7 @@ class CRS:
         amplitude (float): amplitude in dBm
         npoints (int): number of sweep points per channel
         nsamps (int): number of samples to average per point
+        return_dbc (bool): If True, divides the output by the tone power
         verbose (bool): If True, displays a progress bar while sweeping
         pbar_description (str): description for the progress bar
 
