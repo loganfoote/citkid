@@ -25,7 +25,7 @@ def convert_parser_to_z(path, crs_sn, module, ntones, max_ntones):
                                           parser_batch_file),
                                           np.dtype([('i', np.int32),
                                                     ('q', np.int32)]))
-    z = np.array([complex(*pi) for pi in parser_dat])
+    z = parser_dat['i'].astype(np.float64) + 1j * parser_dat['q'].astype(np.float64)
     z = np.array([z[i::max_ntones] for i in range(ntones)])
     z = z * rfmux.core.utils.transferfunctions.VOLTS_PER_ROC / 256 / np.sqrt(2)
     return z
