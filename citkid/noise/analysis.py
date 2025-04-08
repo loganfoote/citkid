@@ -172,10 +172,9 @@ def compute_psd_simple(ffine, zfine, fnoise, znoise, dt, deglitch_nstd = 5,
         fits for the circle origin
 
     Returns:
-    psd (tuple): on-resonance psd data, or None
-        f_psd (np.array): frequency array for PSDs
-        spar  (np.array): PSD of Q noise
-        sper  (np.array): PSD of I noise
+    f_psd (np.array): frequency array for PSDs
+    spar  (np.array): PSD of Q noise
+    sper  (np.array): PSD of I noise
     """
     # Prepare data
     ffine, zfine= np.asarray(ffine), np.asarray(zfine)
