@@ -22,7 +22,8 @@ def find_common_modes(x, N_comp, N_iter, dt, lowpass_f, lowpass_order):
     sig_iter (array-like, N_iter X N X N_comp): array of sigma values for each
         iteration
     """
-    x = np.asarray(x)
+    x = np.asarray(x).copy()
+    x -= np.mean(x, axis = 1)[:, np.newaxis]
     sig = calculate_sigma(x)
     sig_iter = np.empty((N_iter, x.shape[0], N_comp), dtype = float)
     pbar = tqdm(range(N_iter), total = N_iter, leave = False)
@@ -64,6 +65,7 @@ def pca(x, sig, N_comp):
     a (array-like, N X N_comp): scaling factors from A -> x
     A (array-like, N_comp X T): common modes
     """
+    x = np.asarray(x)
     N, T = x.shape
     x0 = x / sig
     C = x0 @ x0.T / T
