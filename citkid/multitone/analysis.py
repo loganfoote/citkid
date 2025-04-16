@@ -13,6 +13,7 @@ from ..noise.analysis import compute_psd
 from ..noise.data_io import save_psd
 from .data_io import import_iq_noise
 from .fres import cut_fine_scan
+from rfmux.core.transferFunctions import compensate_psd_for_cics
 import matplotlib
 matplotlib.use('Agg')
 
@@ -162,7 +163,7 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
                   plot_timestreamq = False, plot_factor = 1, min_cal_points = 5,
                   deglitch_nstd = 10, cr_nstd = 5, cr_width = 100e-6,
                   cr_peak_spacing = 100e-6, cr_removal_time = 1e-3,
-                  circfit_npoints = None, correct_cic2 = False,
+                  circfit_npoints = None, correct_cic = False,
                   overwrite = False, catch_exceptions = False,
                   res_whitelist = None, xcal_weight_sigma = None,
                   xcal_weight_theta0 = 0.0, circfit_mode = 'sequential',
@@ -193,7 +194,7 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
     cr_removal_time (float): number of seconds to remove around each peak
     circfit_npoints (int): if not None, limits the number of points in the
         circle fit to circfit_npoints around the noise ball
-    correct_cic2 (bool): If True, corrects the PSDs for the CIC rolloff
+    correct_cic (bool): If True, corrects the PSDs for the CIC rolloff
         NOT IMPLEMENTED YET: WAITING FOR RFMUX UPDATE
     overwrite (bool): if False, raises an error instead of overwriting files
     catch_exceptions (bool): If True, catches any exceptions that occur while
@@ -290,9 +291,10 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
                             plot_timestreamq = plot_timestreamq_single,
                             xcal_weight_theta0 = xcal_weight_theta0,
                             xcal_weight_sigma = xcal_weight_sigma)
-                if correct_cic2:
+                if correct_cic:
                     for i in range(1, 3):
-                        ftrim_off, s = apply_cic2_comp_psd(psd_offres[0], 10 ** (psd_offres[i] / 10), 1 / dt, trim=0.15)
+                        ftrim_off, s = compensate_psd_for_cics(psd_offres[0], 10 ** (psd_offres[i] / 10),
+                                                dec_stage=fir_stage, spectrum_cutoff=0.9)
                         psd_offres[i] = 10 * np.log10(s)
                     psd_offres[0] = ftrim_off
                 row =\
@@ -317,8 +319,9 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
 
                 if correct_cic2:
                     raise Exception('CIC correction is not implemented yet. Waiting for an rfmux update.')
-                    for i in range(1, 3):
-                        ftrim_on, s = apply_cic2_comp_psd(psd_onres[0], 10 ** (psd_onres[i] / 10), 1 / dt, trim=0.15)
+                    for i in range(1, 4):
+                        ftrim_off, s = compensate_psd_for_cics(psd_offres[0], 10 ** (psd_offres[i] / 10),
+                                                dec_stage=fir_stage, spectrum_cutoff=0.9)
                         psd_onres[i] = 10 * np.log10(s)
                     ftrim_on, psd_onres[3] = apply_cic2_comp_psd(psd_onres[0], psd_onres[3], 1 / dt, trim=0.15)
                     psd_onres[0] = ftrim_on

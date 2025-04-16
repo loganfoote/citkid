@@ -474,7 +474,7 @@ async def write_tones(module, nco_freq_dict, fres_dict, ares_dict):
         # don't randomize lowest and highest frequency to avoid exceeding bandwidth
         if len(fres) > 2:
             fres[ix] += np.random.uniform(-50, 50, len(fres) - 2)
-        comb_sampling_freq =rfmux.core.utils.transferfunctions.COMB_SAMPLING_FREQ
+        comb_sampling_freq =rfmux.core.transferfunctions.COMB_SAMPLING_FREQ
         threshold = 101.
         fres[fres%(comb_sampling_freq/512) < threshold] += threshold
         # Check NCO and input parameters
@@ -563,7 +563,7 @@ async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
                                              average = True)
             # format and average data
             zi = np.asarray(samples.mean.i) + 1j * np.asarray(samples.mean.q)
-            zi = zi[:n_channels] * rfmux.core.utils.transferfunctions.VOLTS_PER_ROC / np.sqrt(2)
+            zi = zi[:n_channels] * rfmux.core.transferfunctions.VOLTS_PER_ROC / np.sqrt(2)
             z[:, sweep_index] = zi
 
         # Turn off channels

@@ -1,11 +1,11 @@
 import numpy as np
 import os
 import rfmux
-import subprocess 
-import signal 
-import sys 
-from time import sleep 
-from tqdm.auto import tqdm 
+import subprocess
+import signal
+import sys
+from time import sleep
+from tqdm.auto import tqdm
 
 def convert_parser_to_z(path, crs_sn, module, ntones, max_ntones):
     """
@@ -27,7 +27,7 @@ def convert_parser_to_z(path, crs_sn, module, ntones, max_ntones):
                                                     ('q', np.int32)]))
     z = parser_dat['i'].astype(np.float64) + 1j * parser_dat['q'].astype(np.float64)
     z = np.array([z[i::max_ntones] for i in range(ntones)])
-    z = z * rfmux.core.utils.transferfunctions.VOLTS_PER_ROC / 256 / np.sqrt(2)
+    z = z * rfmux.core.transferfunctions.VOLTS_PER_ROC / 256 / np.sqrt(2)
     return z
 
 def find_key_and_index(dictionary, j):
@@ -69,13 +69,13 @@ def get_modules(crs, module_indices):
 
 def run_for_duration(cmd, duration, verbose = True):
     """
-    Run a command for a given duration, then shut it down safely, 
+    Run a command for a given duration, then shut it down safely,
     even if Python is closed.
-    
+
     Parameters:
-    cmd (str): command to run 
-    duration (int): duration in seconds 
-    verbose (bool): If True, displays a progress bar while running 
+    cmd (str): command to run
+    duration (int): duration in seconds
+    verbose (bool): If True, displays a progress bar while running
     """
     if os.name == "nt":  # Windows
         process = subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
@@ -94,4 +94,3 @@ def run_for_duration(cmd, duration, verbose = True):
             subprocess.call(["taskkill", "/F", "/T", "/PID", str(process.pid)])  # Windows force kill
         else:
             os.killpg(os.getpgid(process.pid), signal.SIGTERM)  # Unix kill entire process group
-
