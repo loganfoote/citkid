@@ -13,7 +13,7 @@ from ..noise.analysis import compute_psd
 from ..noise.data_io import save_psd
 from .data_io import import_iq_noise
 from .fres import cut_fine_scan
-from rfmux.core.transferFunctions import compensate_psd_for_cics
+from rfmux.core.transferfunctions import compensate_psd_for_cics
 import matplotlib
 matplotlib.use('Agg')
 
