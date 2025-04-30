@@ -1,8 +1,9 @@
 import numpy as np
 from tqdm.auto import tqdm
-from .timestream_filter import lowpass_filter
+from .timestream_filter import lowpass_filter, highpass_filter
 
-def find_common_modes(x, N_comp, N_iter, dt, lowpass_f, lowpass_order):
+def find_common_modes(x, N_comp, N_iter, dt, lowpass_f, lowpass_order,
+                      highpass_params):
     """
     Iteratively find common modes in multiple timestreams. In each iteration,
     performs a PCA normalized by the variance of the timestreams with the
@@ -15,6 +16,15 @@ def find_common_modes(x, N_comp, N_iter, dt, lowpass_f, lowpass_order):
     dt (float): sample time in s
     lowpass_f (float): lowpass filter frequency in Hz
     lowpass_order (int): lowpass filter order
+    highpass_params: (frequency, order) -> (float, int): performs a highpass
+        filter on the timestreams before calculating a and sigma, but not in the
+        calulation of A. Parameters are
+            frequency: highpass filter frequency in Hz
+            order: highpass filter order
+        The highpass filter improves the performance when dealing with
+        uncorrelated noise that contains a 1/f component, but filtering out the
+        low-frequency noise until it is approximately white. The 1/f correlated
+        noise is preserved in A.
 
     Returns:
     a (array-like, N X N_comp): scaling factors from A -> x
@@ -28,10 +38,11 @@ def find_common_modes(x, N_comp, N_iter, dt, lowpass_f, lowpass_order):
     sig_iter = np.empty((N_iter, x.shape[0], N_comp), dtype = float)
     pbar = tqdm(range(N_iter), total = N_iter, leave = False)
     for i in pbar:
-        a, A = pca(x, sig, N_comp)
+        a, A = pca(x, N_comp, sig, (dt, highpass_params[0], highpass_params[1]))
         A = lowpass_filter(A, dt, lowpass_f, lowpass_order)
-        sig = calculate_sigma(x - a @ A) ** 2
-        sig_iter[i] = sig
+        y = highpass_filter(x - a @ A, dt, *highpass_params)
+        sig = calculate_sigma(y)
+        sig_iter[i] = sig ** 2
     return a, A, sig_iter
 
 def calculate_sigma(x):
@@ -47,7 +58,7 @@ def calculate_sigma(x):
     x = np.asarray(x)
     return np.sqrt(np.sum(x ** 2, axis = 1)[:, np.newaxis] / x.shape[1])
 
-def pca(x, sig, N_comp):
+def pca(x, N_comp, sig = None, highpass_params = None):
     """
     Calculates common-mode components given timestreams and variances. Assumes
     the individual timestreams are white:
@@ -58,8 +69,19 @@ def pca(x, sig, N_comp):
 
     Parameters:
     x (array-like, N X T): timestream data with N timestreams of length T
-    sig (array-like, N): normalized variance array
     N_comp (int): number of common components to calculate
+    sig (array-like, N) or None: normalized variance array. If None, calculates
+        sigma using calculate_sigma
+    highpass_params: (dt, frequency, order) -> (float, float, int) or None: if
+        not None, performs a highpass filter on the timestreams before
+        calculating a and sigma, but not in the calulation of A. Parameters are
+            dt: timestream sample rate in seconds
+            frequency: highpass filter frequency in Hz
+            order: highpass filter order
+        The highpass filter improves the performance when dealing with
+        uncorrelated noise that contains a 1/f component, but filtering out the
+        low-frequency noise until it is approximately white. The 1/f correlated
+        noise is preserved in A.
 
     Returns:
     a (array-like, N X N_comp): scaling factors from A -> x
@@ -67,7 +89,13 @@ def pca(x, sig, N_comp):
     """
     x = np.asarray(x)
     N, T = x.shape
-    x0 = x / sig
+    if highpass_params is not None:
+        x_filt = highpass_filter(x, *highpass_params)
+    else:
+        x_filt = x.copy()
+    if sig is None:
+        sig = calculate_sigma(x_filt)
+    x0 = x_filt / sig
     C = x0 @ x0.T / T
     eigval, eigvec = np.linalg.eig(C)
     eigval, eigvec = np.real(eigval), np.real(eigvec)
