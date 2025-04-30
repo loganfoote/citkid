@@ -103,3 +103,19 @@ def pca(x, N_comp, sig = None, highpass_params = None):
     a = sig * v
     A = a.T @ (x / sig**2)
     return a, A
+
+def calc_a(x, A):
+    """
+    Calculate the values a that minimize |x - a @ A|^2
+
+    Parameters:
+    x (np.array, N X T): array of N timestreams of length T
+    A (np.array, C X T): array of C common modes of length T
+
+    Returns:
+    a (np.array, N X C): array of N scaling factors for each of C common modes
+        that minimize |x - a @ A|^2
+    """
+    cov = np.sum(x[:, :, np.newaxis] * A.T[np.newaxis, :, :], axis = 1)
+    a = cov / np.sum(np.real(A) ** 2, axis = 1)
+    return a 
