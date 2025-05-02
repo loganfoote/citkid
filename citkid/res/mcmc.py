@@ -6,8 +6,8 @@ from .funcs import nonlinear_iq_for_fitter
 from citkid.res.data_io import nonlinear_iq_p_labels
 
 def run_mcmc(f, z_stacked, popt, nsteps = 2000, nwalkers = 256,
-             ndiscard = 200, nthin = 1, plotq = True, verbose = True,
-             **kwargs):
+             ndiscard = 200, nthin = 1, downward = True, plotq = True,
+             verbose = True, **kwargs):
     """
     Runs a Monte-Carlo Markov Chain analysis of nonlinear_iq data
 
@@ -20,6 +20,8 @@ def run_mcmc(f, z_stacked, popt, nsteps = 2000, nwalkers = 256,
     nwalkers (int): number of MCMC walkers. 256 is recommended
     ndiscard (int): number of samples to discard
     nthin (int): factor by which the samples are thinned
+    downward (bool): If True, solves the equation for a downward sweep. If
+        False, solves for an upward sweep. 
     plotq (bool): If True, returns a corner plot
     verbose (bool): If True, tracks progress with a progress bar. If False,
         does not track progress.
@@ -38,7 +40,7 @@ def run_mcmc(f, z_stacked, popt, nsteps = 2000, nwalkers = 256,
             progress = True
     else:
         progress = False
-    log_probability, bounds = get_log_probability(f, popt)
+    log_probability, bounds = get_log_probability(f, popt, downward)
     sigma = 0.5
     ndim = len(popt)
     # Initialize MCMC
@@ -70,7 +72,7 @@ def run_mcmc(f, z_stacked, popt, nsteps = 2000, nwalkers = 256,
 ################################################################################
 ######################### Utility functions ####################################
 ################################################################################
-def get_log_probability(f, popt):
+def get_log_probability(f, popt, downward = True):
     """
     Creates the log probability function
 
@@ -78,6 +80,8 @@ def get_log_probability(f, popt):
     f (np.array): frequency data
     popt (array-like): optimal parameters, found using least-squares or other
         fitting method
+    downward (bool): If True, solves the equation for a downward sweep. If
+        False, solves for an upward sweep.
 
     Returns:
     log_probability (func): log probability function
@@ -111,7 +115,7 @@ def get_log_probability(f, popt):
             return 0.0
         return -np.inf
 
-    def log_probability(params, x, y, sigma):
+    def log_probability(params, x, y, sigma, downward):
         """
         Calculate the log of the posterior probability
 
@@ -120,6 +124,8 @@ def get_log_probability(f, popt):
         x (array-like): model x data
         y (array-like): model y data
         sigma (float): standard deviation of the observational uncertainties
+        downward (bool): True corresponds to a downward sweep, False corresponds
+            to an upward sweep
 
         Returns:
         (float): log of the posterior probability
@@ -127,23 +133,25 @@ def get_log_probability(f, popt):
         lp = log_prior(params)
         if not np.isfinite(lp):
             return -np.inf
-        return lp + log_likelihood(params, x, y, sigma)
+        return lp + log_likelihood(params, x, y, sigma, downward)
     return log_probability, bounds
 
-def model(f, params):
+def model(f, params, downward = True):
     """
     Wrapping the nonlinear_iq_for_fitter model.
 
     Parameters:
     f (np.array): frequency data
     params (list): list of parameter inputs to nonlinear_iq_for_fitter
+    downward (bool): If True, solves the equation for a downward sweep. If
+        False, solves for an upward sweep.
 
     Returns:
     z (np.array): horizontally stacked complex IQ data
     """
-    return nonlinear_iq_for_fitter(f, *params)
+    return nonlinear_iq_for_fitter(f, *params, downward)
 
-def log_likelihood(params, x, y, sigma):
+def log_likelihood(params, x, y, sigma, downward = True):
     """
     Calculate the log likelihood of the given parameters
 
@@ -152,12 +160,14 @@ def log_likelihood(params, x, y, sigma):
     x (array-like): model x data
     y (array-like): model y data
     sigma (float): standard deviation of the observational uncertainties
+    downward (bool): If True, solves the equation for a downward sweep. If
+        False, solves for an upward sweep.
 
     Returns:
     ll (float): log likelihood value
     """
     # Compute the log-likelihood given the model parameters
-    y_model = model(x, params)
+    y_model = model(x, params, downward)
     ll = -0.5 * np.sum(((y - y_model) / sigma) ** 2 + np.log(2 * np.pi * sigma ** 2))
     return ll
 

@@ -77,16 +77,19 @@ def calculate_residuals(z, z_fit):
     return res
 
 @vectorize(nopython=True)
-def cardan(a, b, c, d):
+def cardan(a, b, c, d, largest = True):
     """
-    Analyticaly calculates the largest real root of a 3rd-order polynomial
-    Based on code from https://github.com/Wheeler1711/submm_python_routines
+    Analyticaly calculates the largest or smallest real root of a 3rd-order
+    polynomial. Based on code from
+        https://github.com/Wheeler1711/submm_python_routines
 
     Parameters:
     a, b, c, d (float): polynomial coefficients
+    largest (bool): If True, returns the largest root. Otherwise, returns the
+        smallest root
 
     Returns:
-    root (float): largest real root
+    root (float): largest or smallest real root
     """
     J = np.exp(2j * np.pi / 3)
     Jc = 1 / J
@@ -118,7 +121,10 @@ def cardan(a, b, c, d):
         # max solution corresponds to a downward sweep. An upward sweep is more
         # complicated to calculate. It will stay at the min to a certain point,
         # then jump to the max. See Swenson et al. 2013 for details
-        return np.max(np.real(roots))
+        if largest:
+            return np.max(np.real(roots))
+        else:
+            return np.min(np.real(roots))
     else:
         # one real root: return value with smallest imaginary component
         return np.real(roots[np.argsort(np.abs(np.imag(roots)))][0])

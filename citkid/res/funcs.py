@@ -3,7 +3,7 @@ from numba import jit
 from .util import cardan
 
 @jit(nopython=True)
-def nonlinear_iq(f, fr, Qr, amp, phi, a, i0, q0, tau):
+def nonlinear_iq(f, fr, Qr, amp, phi, a, i0, q0, tau, downward = True):
     r"""
     Describes the transmission through a nonlinear resonator
 
@@ -28,13 +28,15 @@ def nonlinear_iq(f, fr, Qr, amp, phi, a, i0, q0, tau):
     q0 (float): Q gain factor
         i0 + j * q0 describes the overall constant gain and phase offset
     tau(float): cable delay in seconds
+    downward (bool): If True, solves the equation for a downward sweep. If
+        False, solves for an upward sweep.
 
     Returns:
     z (np.array): array of complex IQ data corresponding to f
     """
     deltaf = f - fr
     yg = Qr * deltaf / fr
-    y = get_y(yg, a)
+    y = get_y(yg, a, downward)
     s21_readout = (i0 + 1.j * q0) * np.exp(-2.j * np.pi * deltaf * tau)
     s21_res = (1. - (amp / np.cos(phi)) * np.exp(1.j * phi) / (1. + 2.j * y))
     z = s21_readout * s21_res
@@ -63,20 +65,22 @@ def circle_objective(params, x, y):
 ################################################################################
 
 @jit(nopython=True)
-def get_y(yg, a):
+def get_y(yg, a, largest = True):
     """
-    Calculates the largest real root of
+    Calculates the largest or smallest real root of
         yg = y + a / (1 + y^2)
 
     Parameters:
     yg (float or np.array): unmodified resonance shift
         yg = Qr * (f - fr) / fr
     a (float): nonlinearity parameter
+    largest (bool): If True, returns the largest root. Otherwise, returns the
+        smallest root
 
     Returns:
-    y (float or np.array): largest real root of the above equation
+    y (float or np.array): largest or smallest real root of the above equation
     """
-    y = cardan(4.0, -4.0 * yg, 1.0, -(yg + a))
+    y = cardan(4.0, -4.0 * yg, 1.0, -(yg + a), largest)
     return y
 
 ################################################################################
@@ -84,7 +88,8 @@ def get_y(yg, a):
 ################################################################################
 
 @jit(nopython=True)
-def nonlinear_iq_for_fitter(f, fr, Qr, amp, phi, a, i0, q0, tau):
+def nonlinear_iq_for_fitter(f, fr, Qr, amp, phi, a, i0, q0, tau,
+                            downward = True):
     """
     Same as nonlinear_iq, but returns stacked real and imaginary components
     for the fitter. The input data should be scaled as follows
@@ -92,5 +97,6 @@ def nonlinear_iq_for_fitter(f, fr, Qr, amp, phi, a, i0, q0, tau):
     Qr X 10^-4
     tau * 1e6
     """
-    z = nonlinear_iq(f, fr / 100e-6, Qr / 1e-4, amp, phi, a, i0, q0, tau / 1e6)
+    z = nonlinear_iq(f, fr / 100e-6, Qr / 1e-4, amp, phi, a, i0, q0, tau / 1e6,
+                     downward)
     return np.hstack((np.real(z), np.imag(z)))

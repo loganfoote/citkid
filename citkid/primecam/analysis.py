@@ -15,9 +15,9 @@ from .data_io import import_iq_noise
 
 def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
            constant_atten, temperature_index, temperature,
-           resonator_indices = None,
-           extra_fitdata_values = {}, plotq = False, plot_factor = 1,
-           overwrite = False, verbose = True, catch_exceptions = False):
+           resonator_indices = None, extra_fitdata_values = {}, downward = True,
+           plotq = False, plot_factor = 1, overwrite = False, verbose = True,
+           catch_exceptions = False):
     """
     Fits all IQ loops in a target scan
 
@@ -40,6 +40,8 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
     extra_fitdata_values (dict): keys (str) are data column names and values
         (single value or np.array with same length as number of targets) are set
         to that data column
+    downward (bool): If True, solves the equation for a downward sweep. If
+        False, solves for an upward sweep.
     plotq (bool): If True, plots IQ fits and saves them
     plot_factor (int): for plotting a subset of resonators. Plots every
         plot_factor resonators
@@ -111,6 +113,7 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
                 fitrow, fig = \
                     fit_nonlinear_iq_with_gain(fgain, zgain, ffine, zfine, fres,
                                                Qres, plotq = plotq_single,
+                                               downward = downward,
                                                return_dataframe = True)
                 fitrow['plotpath'] = plot_path
             else:
@@ -121,6 +124,7 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
                 p = [np.nan] * 7
                 res = np.nan
                 fitrow = make_fit_row(p_amp, p_phase, p, p, p, res,
+                                      downward = downward,
                                       plot_path = plot_path)
             if not fig is None:
                 save_fig(fig, file_prefix + '_fit', fit_plot_directory)
@@ -232,7 +236,7 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
         znoise = i + 1j * q
         znoise = znoise[int(tstart / dt):]
 
-        p_amp, p_phase, p0, popt, perr, res, plot_path =\
+        p_amp, p_phase, p0, popt, perr, res, downward, plot_path =\
             separate_fit_row(iq_fit_row)
 
         zfine = remove_gain(ffine, zfine, p_amp, p_phase)

@@ -1,4 +1,3 @@
-from .funcs import nonlinear_iq
 from numba import jit
 import numpy as np
 from citkid.res.funcs import get_y
@@ -70,7 +69,7 @@ def get_resonance_s21(f, fr_nstd, amp_nstd, fr, Qr, amp, phi, a, p_amp0, p_amp1,
     fr = fr_with_noise
     deltaf = f - fr
     yg = Qr * deltaf / fr
-    y = get_y(yg, a)
+    y = get_y(yg, a, True)
     z0 = 1 / (1. + 2.j * y)
     theta = np.angle(z0)
     amp_noise = amp_noise * np.exp(1j * theta + 1j * np.pi)
