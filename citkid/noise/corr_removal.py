@@ -38,12 +38,12 @@ def find_common_modes(x, N_comp, N_iter, dt, lowpass_f, lowpass_order,
     sig_iter = np.empty((N_iter, x.shape[0], N_comp), dtype = float)
     pbar = tqdm(range(N_iter), total = N_iter, leave = False)
     for i in pbar:
-        a, A = pca(x, N_comp, sig, (dt, highpass_params[0], highpass_params[1]))
-        A = lowpass_filter(A, dt, lowpass_f, lowpass_order)
+        a, A0 = pca(x, N_comp, sig, (dt, highpass_params[0], highpass_params[1]))
+        A = lowpass_filter(A0, dt, lowpass_f, lowpass_order)
         y = highpass_filter(x - a @ A, dt, *highpass_params)
         sig = calculate_sigma(y)
         sig_iter[i] = sig ** 2
-    return a, A, sig_iter
+    return a, A0, sig_iter
 
 def calculate_sigma(x):
     """
@@ -118,4 +118,4 @@ def calc_a(x, A):
     """
     cov = np.sum(x[:, :, np.newaxis] * A.T[np.newaxis, :, :], axis = 1)
     a = cov / np.sum(np.real(A) ** 2, axis = 1)
-    return a 
+    return a
