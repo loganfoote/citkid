@@ -148,7 +148,7 @@ def nonlinear_iq_simple(f, fr, Qr, amp, phi, a, p_amp, p_phase):
     """
     deltaf = f - fr
     yg = Qr * deltaf / fr
-    y = get_y(yg, a)
+    y = get_y(yg, a, True)
     s21_res = (1. - (amp / np.cos(phi)) * np.exp(1.j * phi) / (1. + 2.j * y))
     f0 = np.mean(f)
     s21_readout = 10 ** (polyval(p_amp, f - f0) / 20) + 0j
@@ -157,33 +157,37 @@ def nonlinear_iq_simple(f, fr, Qr, amp, phi, a, p_amp, p_phase):
     return z
 
 @jit(nopython = True)
-def get_y(yg, a):
+def get_y(yg, a, largest = True):
     """
-    Calculates the largest real root of
+    Calculates the largest or smallest real root of
         yg = y + a / (1 + y^2)
 
     Parameters:
     yg (float or np.array): unmodified resonance shift
         yg = Qr * (f - fr) / fr
     a (float): nonlinearity parameter
+    largest (bool): If True, solves the equation for a downward sweep. If
+        False, solves for an upward sweep.
 
     Returns:
-    y (float or np.array): largest real root of the above equation
+    y (float or np.array): largest or smallest real root of the above equation
     """
-    y = cardan(4.0, -4.0 * yg, 1.0, -(yg + a))
+    y = cardan(4.0, -4.0 * yg, 1.0, -(yg + a), largest)
     return y
 
 @vectorize(nopython = True)
-def cardan(a, b, c, d):
+def cardan(a, b, c, d, largest = True):
     """
     Analyticaly calculates the largest real root of a 3rd-order polynomial
     Based on code from https://github.com/Wheeler1711/submm_python_routines
 
     Parameters:
     a, b, c, d (float): polynomial coefficients
+    largest(bool): If True, solves the equation for a downward sweep. If
+        False, solves for an upward sweep.
 
     Returns:
-    root (float): largest real root
+    root (float): largest or smallest real root
     """
     J = np.exp(2j * np.pi / 3)
     Jc = 1 / J
@@ -212,7 +216,10 @@ def cardan(a, b, c, d):
     where_real = np.where(np.abs(np.imag(roots)) < 1e-15)
     if D > 0:
         # three real roots: return the max
-        return np.max(np.real(roots))
+        if largest:
+            return np.max(np.real(roots))
+        else:
+            return np.min(np.real(roots))
     else:
         # one real root: return value with smalles imaginary component
         return np.real(roots[np.argsort(np.abs(np.imag(roots)))][0])

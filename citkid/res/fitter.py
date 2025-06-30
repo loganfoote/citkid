@@ -9,8 +9,8 @@ import citkid.res.guess as guess
 from .data_io import make_fit_row
 
 def fit_nonlinear_iq_with_gain(fgain, zgain, ffine, zfine, frs, Qrs,
-                               plotq = False, return_dataframe = False,
-                               **kwargs):
+                               downward = True, plotq = False,
+                               return_dataframe = False, **kwargs):
     """
     Fits IQ data with gain amplitudes and phase correction from a gain scan.
     Cuts resonance frequencies from the gain scan in spans of fr / Qr around fr,
@@ -26,6 +26,8 @@ def fit_nonlinear_iq_with_gain(fgain, zgain, ffine, zfine, frs, Qrs,
     zfine (np.array): fine sweep complex S21 data
     frs (list of float): resonance frequencies to cut from the gain scan
     Qrs (list of float): spans of frs / Qrs are cut from the gain scan
+    downward (bool): If True, fits the equation for a downward sweep. If
+        False, fits for an upward sweep.
     plotq (bool): If True, plots the fits.
     return_dataframe (bool): if True, returns the output of
         .data_io.make_fit_row instead of the separated data
@@ -54,19 +56,21 @@ def fit_nonlinear_iq_with_gain(fgain, zgain, ffine, zfine, frs, Qrs,
     p_phase[1] += np.angle(zoff)
     # Fit IQ
     p0, popt, perr, res, (fig_fit, axs_fit) = fit_nonlinear_iq(ffine,
-                                            zfine_rmvd, plotq = plotq, **kwargs)
+                                            zfine_rmvd, plotq = plotq,
+                                            downward = downward, **kwargs)
     if plotq:
         fig = combine_figures_vertically(fig_gain, fig_fit)
     else:
         fig = None
     if return_dataframe:
         row = make_fit_row(p_amp, p_phase, p0, popt, perr, res,
-                              plot_path = '', prefix = 'iq')
+                           downward = downward, plot_path = '', prefix = 'iq')
         return row, fig
     return p_amp, p_phase, p0, popt, perr, res, fig
 
 def fit_nonlinear_iq(f, z, bounds = None, p0 = None, fr_guess = None,
-                     fit_tau = True, tau_guess = None, plotq = False):
+                     fit_tau = True, tau_guess = None, downward = True,
+                     plotq = False):
     """
     Fit a nonlinear IQ with from an S21 sweep. Uses scipy.optimize.curve_fit.
     It is assumed that the system gain and phase are removed from the data
@@ -96,6 +100,8 @@ def fit_nonlinear_iq(f, z, bounds = None, p0 = None, fr_guess = None,
     fit_tau (bool): if False, tau is enforced from p0[7] to speed up fitting.
         If True, tau is fit.
     tau_guess (float or None): If float, overides p0[7]
+    downward (bool): If True, fits the equation for a downward sweep. If
+        False, fits for an upward sweep.
     plotq (bool): if True, plots the data with the fit
 
     Returns:
@@ -135,7 +141,7 @@ def fit_nonlinear_iq(f, z, bounds = None, p0 = None, fr_guess = None,
     niter = 0
     while not res_acceptable:
         popt, perr, res = fit_util(np.array(p0), np.array(bounds), fit_tau, f,
-                                   z_stacked, z)
+                                   z_stacked, z, downward)
         if res < 1e-2 or niter > 1:
             res_acceptable = True
         elif res < 1e-1:
@@ -150,7 +156,7 @@ def fit_nonlinear_iq(f, z, bounds = None, p0 = None, fr_guess = None,
             niter += 1
     # plot
     if plotq:
-        figax = plot_nonlinear_iq(f, z, popt, p0)
+        figax = plot_nonlinear_iq(f, z, popt, p0, downward = downward)
     else:
         figax = None, None
     p0 = np.array(p0)
@@ -188,7 +194,7 @@ def fit_iq_circle(z, plotq = False):
 ################################################################################
 ######################### Utility functions ####################################
 ################################################################################
-def fit_util(p0, bounds, fit_tau, f, z_stacked, z):
+def fit_util(p0, bounds, fit_tau, f, z_stacked, z, downward = True):
     """
     Utility function for fitting IQ loops. Given data and initial fit parameters,
     fits the IQ loop and returns the fit parameters
@@ -200,6 +206,8 @@ def fit_util(p0, bounds, fit_tau, f, z_stacked, z):
     f (np.array): frequency data in Hz
     z_stacked (np.array): stacked complex S21 data
     z (np.array) complex S21 data
+    downward (bool): If True, fits the equation for a downward sweep. If
+        False, fits for an upward sweep.
 
     Returns:
     popt (np.array): fit parameters
@@ -217,7 +225,8 @@ def fit_util(p0, bounds, fit_tau, f, z_stacked, z):
         bounds = np.array([bounds[0][:7], bounds[1][:7]])
         p0 = p0[:7]
         def fit_func(x_lamb, a, b, c, d, e, f, g):
-            return nonlinear_iq_for_fitter(x_lamb, a, b, c, d, e, f, g, tau)
+            return nonlinear_iq_for_fitter(x_lamb, a, b, c, d, e, f, g, tau,
+                                           downward)
         popt, pcov = optimize.curve_fit(fit_func, f, z_stacked, p0,
                                         bounds = bounds)
         popt = np.insert(popt, 7, tau)
@@ -231,6 +240,6 @@ def fit_util(p0, bounds, fit_tau, f, z_stacked, z):
         perr = np.sqrt(np.diag(pcov))
     popt = [pi / s for pi, s in zip(popt, scaler)]
     perr = [pi / s for pi, s in zip(perr, scaler)]
-    z_fit = nonlinear_iq(f, *popt)
+    z_fit = nonlinear_iq(f, *popt, downward)
     res = calculate_residuals(z, z_fit)
     return popt, perr, res

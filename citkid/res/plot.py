@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from .funcs import nonlinear_iq
 
-def plot_nonlinear_iq(f, z, popt, p0, plot_guess = False):
+def plot_nonlinear_iq(f, z, popt, p0, downward = True, plot_guess = False):
     """
     Plots the fit to the nonlinear iq model
 
@@ -11,6 +11,8 @@ def plot_nonlinear_iq(f, z, popt, p0, plot_guess = False):
     z (np.array): complex iq data
     popt (list): fit parameters
     p0 (list): initial guess parameters
+    downward (bool): If True, plots the equation for a downward sweep. If
+        False, plots for an upward sweep.
     plot_guess (bool): If True, also plots the guess curve
 
     Returns:
@@ -32,12 +34,12 @@ def plot_nonlinear_iq(f, z, popt, p0, plot_guess = False):
                 color = color0, markersize = 5)
 
     fsamp = np.linspace(min(f), max(f), 1000)
-    zsamp = nonlinear_iq(fsamp, *popt)
+    zsamp = nonlinear_iq(fsamp, *popt, downward)
     axs[0].plot(np.real(zsamp), np.imag(zsamp), '--r', label = 'fit')
     axs[1].plot((fsamp - f0) / 1e3, 20 * np.log10(abs(zsamp)), '--r')
 
     if plot_guess:
-        zsamp = nonlinear_iq(fsamp, *p0)
+        zsamp = nonlinear_iq(fsamp, *p0, downward)
         axs[0].plot(np.real(zsamp), np.imag(zsamp), '--k', label = 'guess')
         axs[1].plot((fsamp - f0) / 1e3, 20 * np.log10(abs(zsamp)), '--k')
         axs[0].legend(framealpha = 1)
