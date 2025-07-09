@@ -201,7 +201,7 @@ class CRS:
 
         # Set fir_stage
         fir_stage = 6
-        await self.d.set_fir_stage(fir_stage)
+        await self.d.set_decimation(fir_stage) 
         # Sweep
         sweep_f, sweep_z = {}, {}
         modules = get_modules(self.d, list(self.frequencies_dict.keys()))
@@ -224,7 +224,7 @@ class CRS:
 
     async def sweep_linear(self, fres, ares, bw = 20e3, npoints = 10,
                            nsamps = 10, return_dbc = True, verbose = True,
-                           pbar_description = 'Sweeping'):
+                           pbar_description = 'Sweeping',center_fres=True):
         """
         Performs a frequency sweep where each channel is swept over the same
         frequency span
@@ -238,6 +238,7 @@ class CRS:
         return_dbc (bool): If True, divides the output by the tone power
         verbose (bool): If True, displays a progress bar while sweeping
         pbar_description (str): description for the progress bar
+        center_fres (bool): If True, fres is the center of each band. False, fres is the starting frequency.
 
         Returns:
         f (M X N np.array): array of frequencies where M is the channel index
@@ -245,9 +246,14 @@ class CRS:
         z (M X N np.array): array of complex S21 data corresponding to f
         """
         fres, ares = np.asarray(fres), np.asarray(ares)
-        f = np.linspace(fres + bw / 2, fres - bw / 2, npoints).T
+        if center_fres:
+            f = np.linspace(fres + bw / 2, fres - bw / 2, npoints).T
+        else:
+            f = np.linspace(fres , fres + bw, npoints).T
         f, z = await self.sweep(f, ares, nsamps = nsamps, verbose = verbose,
                                 pbar_description = pbar_description)
+        if return_dbc:
+            z /= 10 ** (ares[:, np.newaxis] / 20)
         return f, z
 
     async def sweep_qres(self, fres, ares, qres, npoints = 10, nsamps = 10,
@@ -276,6 +282,8 @@ class CRS:
         f = np.linspace(fres + spans / 2, fres - spans / 2, npoints).T
         f, z = await self.sweep(f, ares, nsamps = nsamps, verbose = verbose,
                                 pbar_description = pbar_description)
+        if return_dbc:
+            z /= 10 ** (ares[:, np.newaxis] / 20)
         return f, z
 
     async def sweep_full(self, amplitude, npoints = 10, nsamps = 10,
@@ -316,7 +324,7 @@ class CRS:
         return f, z
 
     async def capture_noise(self, fres, ares, noise_time, fir_stage = 6,
-                            parser_loc='/home/daq1/github/rfmux/firmware/r1.5.5/parser',
+                            parser_loc='/home/daq1/github/rfmux/firmware/r1.5.6/parser',
                             interface='enp2s0', delete_parser_data = True,
                             return_dbc = True, verbose = True):
         """
@@ -329,7 +337,10 @@ class CRS:
         fir_stage (int): fir_stage frequency downsampling factor.
             6 ->   596.05 Hz
             5 -> 1,192.09 Hz
-            4 -> 2,384.19 Hz, will drop some packets
+            4 -> 2,384.19 Hz
+            ...
+            1 -> 19 kHz
+            0 -> 38 kHz, can only be used with 1 module at a time. Make sure active module is module 1.
         parser_loc (str): path to the parser file
         interface (str): Ethernet interface identifier
         delete_parser_data (bool): If True, deletes the parser data files
@@ -342,18 +353,24 @@ class CRS:
             complex S21 data point in the timestream
         """
         module_indices = list(self.nco_freq_dict.keys())
-        if fir_stage <= 4:
-            warnings.warn(f"packets will drop if fir_stage < 5", UserWarning)
+        
         fres, ares = np.asarray(fres), np.asarray(ares)
         os.makedirs('tmp/', exist_ok = True)
         data_path = 'tmp/parser_data_00/'
         if os.path.exists(data_path):
             raise FileExistsError(f'{data_path} already exists')
         # set fir stage
-        await self.d.set_fir_stage(fir_stage)
+        if fir_stage ==0:
+            # as of 1.5.6, can only use 1 module or else packets drop
+            await self.d.set_decimation(0, short=True, modules=[1])
+        elif fir_stage ==1:
+            # don't know if this restriction is necessary for stage 1
+            await self.d.set_decimation(1, short=True, modules=[1])
+        else:
+            await self.d.set_decimation(fir_stage)
         self.sample_frequency = 625e6 / (256 * 64 * 2 ** fir_stage)
         if verbose:
-            print(f'fir stage is {await self.d.get_fir_stage()}')
+            print(f'fir stage is {await self.d.get_decimation()}')
 
         # set the tones
         max_ntones = await self.write_tones(fres, ares, return_max_ntones = True)
@@ -364,7 +381,7 @@ class CRS:
                            '-i', interface, '-s', f'{self.serial_number:04d}']
         run_for_duration(cmd, noise_time, verbose)
         # Set fir stage back
-        await self.d.set_fir_stage(6)
+        await self.d.set_decimation(6)
         # read the data and convert to z
         z = [[]] * len(fres)
         for module_index in module_indices:
@@ -558,7 +575,8 @@ async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
                                       module = module_index)
                 await ctx()
             nsamples_discard = 0 # 15
-            samples = await d.py_get_samples(nsamps + nsamples_discard,
+            # d.py_get_samples is t0's preferred method, but it does not work with every computer.
+            samples = await d.get_samples(nsamps + nsamples_discard,
                                              module = module_index,
                                              average = True)
             # format and average data
