@@ -1,19 +1,19 @@
 import pandas as pd
 import numpy as np
 
-f_vs_T_names = ['fr0', 'alpha', 'Tc', 'Fdelta0']
-f_vs_T_labels = [r'$f_r^0$', r'$\alpha$', r'$T_c$', r'$F\delta_0$']
-f_vs_T_qp_names = ['fr0', 'alpha', 'Tc']
-f_vs_T_qp_labels = [r'$f_r^0$', r'$\alpha$', r'$T_c$']
-f_vs_T_tls_names = ['fr0', 'Fdelta0']
-f_vs_T_tls_labels = [r'$f_r^0$', r'$F\delta_0$']
-Q_vs_T_names = ['fr0', 'alpha', 'Tc', 'Fdelta0', 'delta_z']
-Q_vs_T_labels = [r'$f_r^0$', r'$\alpha$', r'$T_c$', r'$F\delta_0$',
+f_vs_T_names = ['f0', 'alpha', 'Tc', 'Fdelta0']
+f_vs_T_labels = [r'$f_0$', r'$\alpha$', r'$T_c$', r'$F\delta_0$']
+f_vs_T_qp_names = ['f0', 'alpha', 'Tc']
+f_vs_T_qp_labels = [r'$f_0$', r'$\alpha$', r'$T_c$']
+f_vs_T_tls_names = ['f0', 'Fdelta0']
+f_vs_T_tls_labels = [r'$f_0$', r'$F\delta_0$']
+Q_vs_T_names = ['f0', 'alpha', 'Tc', 'Fdelta0', 'delta_z']
+Q_vs_T_labels = [r'$f_0$', r'$\alpha$', r'$T_c$', r'$F\delta_0$',
                  r'$\delta_z$']
-Q_vs_T_qp_names = ['fr0', 'alpha', 'Tc', 'delta_z']
-Q_vs_T_qp_labels = [r'$f_r^0$', r'$\alpha$', r'$T_c$', r'$\delta_z$']
-Q_vs_T_tls_names = ['fr0', 'Fdelta0', 'delta_z']
-Q_vs_T_tls_labels = [r'$f_r^0$', r'$F\delta_0$', r'$\delta_z$']
+Q_vs_T_qp_names = ['f0', 'alpha', 'Tc', 'delta_z']
+Q_vs_T_qp_labels = [r'$f_0$', r'$\alpha$', r'$T_c$', r'$\delta_z$']
+Q_vs_T_tls_names = ['f0', 'Fdelta0', 'delta_z']
+Q_vs_T_tls_labels = [r'$f_0$', r'$F\delta_0$', r'$\delta_z$']
 
 ################################################################################
 ############### Resonance shift from thermal QP density and TLS ################

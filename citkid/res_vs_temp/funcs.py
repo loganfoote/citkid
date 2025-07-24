@@ -13,14 +13,14 @@ N0_Nb = 6.135e48
 ################################################################################
 ############### Resonance shift from thermal QP density and TLS ################
 ################################################################################
-def f_vs_T(T, fr0, alpha, Tc, Fdelta0, gamma = 1):
+def f_vs_T(T, f0, alpha, Tc, Fdelta0, gamma = 1):
     """
     Calcuates the resonant frequency shift due to the thermal QP density and
     TLSs as a function of temperature.
 
     Parameters:
     T (float or array-like): temperature in K
-    fr0 (float): resonant frequency at T = 0 K
+    f0 (float): resonant frequency at T = 0 K
     alpha (float): kinetic inductance fraction
     Tc (float): critical temperature in K
     Fdelta0 (float): filling factor times dielectric loss at T = 0 K
@@ -30,18 +30,18 @@ def f_vs_T(T, fr0, alpha, Tc, Fdelta0, gamma = 1):
     f (float or array-like): resonant frequency(ies) at the given
         temperature(s)
     """
-    f_tls = f_vs_T_tls(T, fr0, Fdelta0)
-    f_qp = f_vs_T_qp(T, fr0, alpha, Tc, gamma = 1)
-    return f_tls + f_qp - fr0
+    f_tls = f_vs_T_tls(T, f0, Fdelta0)
+    f_qp = f_vs_T_qp(T, f0, alpha, Tc, gamma = 1)
+    return f_tls + f_qp - f0
 
-def Q_vs_T(T, fr0, alpha, Tc, Fdelta0, delta_z, gamma = 1):
+def Q_vs_T(T, f0, alpha, Tc, Fdelta0, delta_z, gamma = 1):
     """
     Calcuates the quality factor shift due to the thermal QP density and TLSs as
     a function of temperature.
 
     Parameters:
     T (float or array-like): temperature in K
-    fr0 (float): resonant frequency at T = 0 K
+    f0 (float): resonant frequency at T = 0 K
     alpha (float): kinetic inductance fraction
     Tc (float): critical temperature in K
     Fdelta0 (float): filling factor times dielectric loss at T = 0 K
@@ -51,21 +51,21 @@ def Q_vs_T(T, fr0, alpha, Tc, Fdelta0, delta_z, gamma = 1):
     Returns:
     Q (float or array-like): quality factor(s) at the given temperature(s)
     """
-    Q_tls = Q_vs_T_tls(T, fr0, Fdelta0, delta_z = 0)
-    Q_qp = Q_vs_T_qp(T, fr0, alpha, Tc, delta_z = 0, gamma = gamma)
+    Q_tls = Q_vs_T_tls(T, f0, Fdelta0, delta_z = 0)
+    Q_qp = Q_vs_T_qp(T, f0, alpha, Tc, delta_z = 0, gamma = gamma)
     return 1 / (1 / Q_tls + 1 / Q_qp + delta_z)
 
 ################################################################################
 ################### Resonance shift from thermal QP density ####################
 ################################################################################
-def f_vs_T_qp(T, fr0, alpha, Tc, gamma = 1):
+def f_vs_T_qp(T, f0, alpha, Tc, gamma = 1):
     """
     Calculates the resonant frequency shift due to the thermal QP density as a
     function of temperature.
 
     Parameters:
     T (float or array-like): temperature in K
-    fr0 (float): resonant frequency at T = 0 K
+    f0 (float): resonant frequency at T = 0 K
     alpha (float): kinetic inductance fraction
     Tc (float): critical temperature in K
     gamma (float): 1, 1/2, or 1/3 for thin-film, local, or anomalous limits
@@ -77,21 +77,21 @@ def f_vs_T_qp(T, fr0, alpha, Tc, gamma = 1):
     T = np.asarray(T)
     kT = k_B * T
     Delta0 = 1.762 * k_B * Tc
-    hf0 = h * fr0
+    hf0 = h * f0
 
     nth_N0 = nth_over_N0(kT, Delta0)
     A = - gamma * alpha / (4 * Delta0)
     x_qp = A * S2(kT, Delta0, hf0) * nth_N0
-    return fr0 * (1 + x_qp)
+    return f0 * (1 + x_qp)
 
-def Q_vs_T_qp(T, fr0, alpha, Tc, delta_z, gamma = 1):
+def Q_vs_T_qp(T, f0, alpha, Tc, delta_z, gamma = 1):
     """
     Calculates the quality factor shift due to the thermal QP density as a
     function of temperature.
 
     Parameters:
     T (float or array-like): temperature in K
-    fr0 (float): resonant frequency at T = 0 K
+    f0 (float): resonant frequency at T = 0 K
     alpha (float): kinetic inductance fraction
     Tc (float): critical temperature in K
     delta_z (float): inverse quality factor at T = 0 K
@@ -103,7 +103,7 @@ def Q_vs_T_qp(T, fr0, alpha, Tc, delta_z, gamma = 1):
     T = np.asarray(T)
     kT = k_B * T
     Delta0 = 1.762 * k_B * Tc
-    hf0 = h * fr0
+    hf0 = h * f0
 
     nth_N0 = nth_over_N0(kT, Delta0)
     A = - gamma * alpha / (2 * Delta0)
@@ -113,13 +113,13 @@ def Q_vs_T_qp(T, fr0, alpha, Tc, delta_z, gamma = 1):
 ################################################################################
 ########################### Resonance shift from TLS ###########################
 ################################################################################
-def f_vs_T_tls(T, fr0, Fdelta0):
+def f_vs_T_tls(T, f0, Fdelta0):
     """
     Calculates the resonant frequency due to TLSs as a function of temperature.
 
     Parameters:
     T (float or array-like): temperature in K
-    fr0 (float): resonant frequency at T = 0 K
+    f0 (float): resonant frequency at T = 0 K
     Fdelta0 (float): filling factor times dielectric loss at T = 0 K
 
     Returns:
@@ -128,20 +128,20 @@ def f_vs_T_tls(T, fr0, Fdelta0):
     """
     T = np.asarray(T)
     kT = k_B * T
-    xi = h * fr0 / (2 * kT)
+    xi = h * f0 / (2 * kT)
 
     G = np.real(digamma(1/2 + 1j * xi / np.pi) - np.log(xi / np.pi)) / np.pi
     x_tls = Fdelta0 * G
-    return fr0 * (1 + x_tls)
+    return f0 * (1 + x_tls)
 
-def Q_vs_T_tls(T, fr0, Fdelta0, delta_z):
+def Q_vs_T_tls(T, f0, Fdelta0, delta_z):
     """
     Calculates the quality factor shift due to TLSs as a function of
     temperature under the assumption that P_uW << P_crit(T).
 
     Parameters:
     T (float or array-like): temperature in K
-    fr0 (float): resonant frequency at T = 0 K
+    f0 (float): resonant frequency at T = 0 K
     Fdelta0 (float): filling factor times dielectric loss at T = 0 K
     delta_z (float): inverse quality factor at T = 0 K
 
@@ -150,7 +150,7 @@ def Q_vs_T_tls(T, fr0, Fdelta0, delta_z):
     """
     T = np.asarray(T)
     kT = k_B * T
-    xi = h * fr0 / (2 * kT)
+    xi = h * f0 / (2 * kT)
 
     delta = Fdelta0 * np.tanh(xi)
     return 1 / (delta + delta_z)
