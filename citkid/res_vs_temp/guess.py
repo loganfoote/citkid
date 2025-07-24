@@ -94,7 +94,7 @@ def get_bounds_Q_vs_T(bounds_qp, bounds_tls):
     # Choose widest bounds for f0
     bounds[0][0] = min(bounds[0][0], bounds_tls[0][0])
     bounds[1][0] = max(bounds[1][0], bounds_tls[1][0])
-    # Insert Fdelt0 into index 3
+    # Insert Fdelta0 into index 3
     bounds[0].insert(3, bounds_tls[0][1])
     bounds[1].insert(3, bounds_tls[1][1])
     # Choose widest bounds for delta_z

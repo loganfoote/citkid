@@ -8,8 +8,9 @@ from .data_io import *
 ################################################################################
 ############### Resonance shift from thermal QP density and TLS ################
 ################################################################################
-def fit_f_vs_T(T, f, gamma = 1, Tc_guess = 1.2, f_err = None, guess = None,
-               bounds = None, return_dataframe = False, plotq = False,
+def fit_f_vs_T(T, f, gamma = 1, Tc_guess = 1.2, enforced_alpha = None,
+               f_err = None, guess = None, bounds = None,
+               return_dataframe = False, plotq = False,
                catch_exceptions = False):
     """
     Fits resonant frequency versus temperature data to f_vs_T.
@@ -21,6 +22,8 @@ def fit_f_vs_T(T, f, gamma = 1, Tc_guess = 1.2, f_err = None, guess = None,
     Tc_guess (float): critical temperature guess in K
     f_err (array-like or None): If not None, f_err is the error on f used in
         the fitting. If None, points are weighted equally
+    enforced_alpha (float or None): if not None, enforces alpha to be this
+        value. Else fits for alpha
     guess (list or None): If not None, overwrites the initial guess. Also
         overwrites Tc_guess.
     bounds (list or None): custom bounds to overwrite the default option
@@ -45,56 +48,72 @@ def fit_f_vs_T(T, f, gamma = 1, Tc_guess = 1.2, f_err = None, guess = None,
     ix = np.argsort(T)
     T, f = T[ix], f[ix]
     if f_err is not None:
-       f_err = np.array(f_err)[ix]
+        f_err = np.array(f_err)[ix]
 
-    fit_func = lambda a, b, c, d, e: f_vs_T(a, b, c, d, e, gamma = gamma)
+    if enforced_alpha is None:
+        fit_func = lambda a, b, c, d, e: f_vs_T(a, b, c, d, e, gamma = gamma)
+    else:
+        fit_func = lambda a, b, d, e: f_vs_T(a, b, enforced_alpha, d, e,
+                                             gamma = gamma)
     # Initial guess
     if guess is not None:
-       p0 = guess
-       bounds_qp, bounds_tls = get_bounds_f_vs_T_qp(p0), get_bounds_f_vs_T_tls(p0)
-       bounds0 = get_bounds_f_vs_T(bounds_qp, bounds_tls)
+        p0 = list(guess)
+        bounds_qp = get_bounds_f_vs_T_qp(p0[:3])
+        bounds_tls = get_bounds_f_vs_T_tls([p0[0], p0[3]])
+        bounds0 = get_bounds_f_vs_T(bounds_qp, bounds_tls)
     else:
-       p0, bounds0 = guess_p0_f_vs_T(T, f, Tc_guess, gamma)
+        p0, bounds0 = guess_p0_f_vs_T(T, f, Tc_guess, gamma)
     if bounds is None:
-       bounds = bounds0
+        bounds = bounds0
+    p0, bounds = p0[:], [b[:] for b in bounds]
+    if enforced_alpha is not None:
+        p0.pop(1)
+        bounds[0].pop(1)
+        bounds[1].pop(1)
     # Fit
     if f_err is None:
-       sigma = None
-       p00 = p0
+        sigma = None
+        p00 = p0
     else:
-       sigma = f_err
-       try:
-          p00, _ = curve_fit(fit_func, T, f, sigma = None,
+        sigma = f_err
+        try:
+            p00, _ = curve_fit(fit_func, T, f, sigma = None,
                               p0 = p0, bounds = bounds)
-          # To fit with sigma, the initial guess must be really good, so
-          # update the initial guess with curve_fit without sigma
-       except Exception as e:
-          if not catch_exceptions:
-              raise e
-          p00 = p0
+            # To fit with sigma, the initial guess must be really good, so
+            # update the initial guess with curve_fit without sigma
+        except Exception as e:
+            if not catch_exceptions:
+                raise e
+            p00 = p0
     try:
-       popt, pcov = curve_fit(fit_func, T, f, sigma = sigma,
+        popt, pcov = curve_fit(fit_func, T, f, sigma = sigma,
                               p0 = p00, bounds = bounds, absolute_sigma = True)
-       perr = np.sqrt(np.diag(pcov))
+        perr = np.sqrt(np.diag(pcov))
     except Exception as e:
-       if not catch_exceptions:
-           raise e
-       popt = [np.nan, np.nan, np.nan, np.nan]
-       perr = [np.nan, np.nan, np.nan, np.nan]
+        if not catch_exceptions:
+            raise e
+        popt = [np.nan, np.nan, np.nan, np.nan]
+        perr = [np.nan, np.nan, np.nan, np.nan]
+    popt, perr = list(popt), list(perr)
+    if enforced_alpha is not None and np.isfinite(popt[0]):
+        p0.insert(1, enforced_alpha)
+        popt.insert(1, enforced_alpha)
+        perr.insert(1, np.nan)
     # Plot
     if plotq:
-       fig, ax = plot_f_vs_T(T, f, f_err, popt, p0, gamma)
+        fig, ax = plot_f_vs_T(T, f, f_err, popt, p0, gamma)
     else:
-       fig, ax = None, None
+        fig, ax = None, None
 
     if return_dataframe:
-       row = make_fit_row_f_vs_T(p0, popt, perr, gamma)
-       return row, (fig, ax)
+        row = make_fit_row_f_vs_T(p0, popt, perr, gamma)
+        return row, (fig, ax)
     return p0, popt, perr, (fig, ax)
 
 def fit_Q_vs_T(T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
-               guess = None, bounds = None, return_dataframe = False,
-               plotq = False, catch_exceptions = False):
+               enforced_alpha = None, guess = None, bounds = None,
+               return_dataframe = False, plotq = False,
+               catch_exceptions = False):
     """
     Fits quality factor versus temperature data to Q_vs_T.
 
@@ -106,6 +125,8 @@ def fit_Q_vs_T(T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
     Tc_guess (float): critical temperature guess in K
     Q_err (array-like or None): If not None, Q_err is the error on Q used in
         the fitting. If None, points are weighted equally
+    enforced_alpha (float or None): if not None, enforces alpha to be this
+        value. Else fits for alpha
     guess (list or None): If not None, overwrites the initial guess. Also
         overwrites f0_guess.
     bounds (list or None): custom bounds to overwrite the default option
@@ -134,17 +155,27 @@ def fit_Q_vs_T(T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
     if Q_err is not None:
       Q_err = np.array(Q_err)[ix]
 
-    fit_func = lambda a, b, c, d, e, f: Q_vs_T(a, b, c, d, e, f,
-                                                  gamma = gamma)
+    if enforced_alpha is None:
+        fit_func = lambda a, b, c, d, e, f: Q_vs_T(a, b, c, d, e, f,
+                                                   gamma = gamma)
+    else:
+        fit_func = lambda a, b, d, e, f: Q_vs_T(a, b, enforced_alpha, d, e, f,
+                                                gamma = gamma)
     # Initial guess
     if guess is not None:
-        p0 = guess
-        bounds_qp, bounds_tls = get_bounds_Q_vs_T_qp(p0), get_bounds_Q_vs_T_tls(p0)
+        p0 = list(guess)
+        bounds_qp = get_bounds_Q_vs_T_qp(p0[:3] + [p0[4]])
+        bounds_tls = get_bounds_Q_vs_T_tls([p0[0], p0[3], p0[4]])
         bounds0 = get_bounds_Q_vs_T(bounds_qp, bounds_tls)
     else:
           p0, bounds0 = guess_p0_Q_vs_T(T, Q, f0_guess, Tc_guess, gamma)
     if bounds is None:
         bounds = bounds0
+    p0, bounds = p0[:], [b[:] for b in bounds]
+    if enforced_alpha is not None:
+        p0.pop(1)
+        bounds[0].pop(1)
+        bounds[1].pop(1)
     # Fit
     if Q_err is None:
         sigma = None
@@ -169,6 +200,11 @@ def fit_Q_vs_T(T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
           raise e
       popt = [np.nan, np.nan, np.nan, np.nan, np.nan]
       perr = [np.nan, np.nan, np.nan, np.nan, np.nan]
+    popt, perr = list(popt), list(perr)
+    if enforced_alpha is not None and np.isfinite(popt[0]):
+        p0.insert(1, enforced_alpha)
+        popt.insert(1, enforced_alpha)
+        perr.insert(1, np.nan)
     # Plot
     if plotq:
       fig, ax = plot_Q_vs_T(T, Q, Q_err, popt, p0, gamma)
@@ -183,8 +219,9 @@ def fit_Q_vs_T(T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
 ################################################################################
 ################### Resonance shift from thermal QP density ####################
 ################################################################################
-def fit_f_vs_T_qp(T, f, gamma = 1, Tc_guess = 1.2, f_err = None, guess = None,
-                  bounds = None, return_dataframe = False, plotq = False,
+def fit_f_vs_T_qp(T, f, gamma = 1, Tc_guess = 1.2, f_err = None,
+                  enforced_alpha = None, guess = None, bounds = None,
+                  return_dataframe = False, plotq = False,
                   catch_exceptions = False):
     """
     Fits resonant frequency versus temperature data to f_vs_T_qp.
@@ -196,6 +233,8 @@ def fit_f_vs_T_qp(T, f, gamma = 1, Tc_guess = 1.2, f_err = None, guess = None,
     Tc_guess (float): critical temperature guess in K
     f_err (array-like or None): If not None, f_err is the error on f used in
         the fitting. If None, points are weighted equally
+    enforced_alpha (float or None): if not None, enforces alpha to be this
+        value. Else fits for alpha
     guess (list or None): If not None, overwrites the initial guess. Also
         overwrites Tc_guess.
     bounds (list or None): custom bounds to overwrite the default option
@@ -220,15 +259,24 @@ def fit_f_vs_T_qp(T, f, gamma = 1, Tc_guess = 1.2, f_err = None, guess = None,
     if f_err is not None:
        f_err = np.array(f_err)[ix]
 
-    fit_func = lambda a, b, c, d: f_vs_T_qp(a, b, c, d, gamma = gamma)
+    if enforced_alpha is None:
+        fit_func = lambda a, b, c, d: f_vs_T_qp(a, b, c, d, gamma = gamma)
+    else:
+        fit_func = lambda a, b, d: f_vs_T_qp(a, b, enforced_alpha, d,
+                                             gamma = gamma)
     # Initial guess
     if guess is not None:
-       p0 = guess
+       p0 = list(guess)
        bounds0 = get_bounds_f_vs_T_qp(p0)
     else:
        p0, bounds0 = guess_p0_f_vs_T_qp(T, f, Tc_guess, gamma)
     if bounds is None:
        bounds = bounds0
+    p0, bounds = p0[:], [b[:] for b in bounds]
+    if enforced_alpha is not None:
+       p0.pop(1)
+       bounds[0].pop(1)
+       bounds[1].pop(1)
     # Fit
     if f_err is None:
        sigma = None
@@ -253,6 +301,11 @@ def fit_f_vs_T_qp(T, f, gamma = 1, Tc_guess = 1.2, f_err = None, guess = None,
            raise e
        popt = [np.nan, np.nan, np.nan]
        perr = [np.nan, np.nan, np.nan]
+    popt, perr = list(popt), list(perr)
+    if enforced_alpha is not None and np.isfinite(popt[0]):
+        p0.insert(1, enforced_alpha)
+        popt.insert(1, enforced_alpha)
+        perr.insert(1, np.nan)
     # Plot
     if plotq:
        fig, ax = plot_f_vs_T_qp(T, f, f_err, popt, p0, gamma)
@@ -265,8 +318,9 @@ def fit_f_vs_T_qp(T, f, gamma = 1, Tc_guess = 1.2, f_err = None, guess = None,
     return p0, popt, perr, (fig, ax)
 
 def fit_Q_vs_T_qp(T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
-                  guess = None, bounds = None, return_dataframe = False,
-                  plotq = False, catch_exceptions = False):
+                  enforced_alpha = None, guess = None, bounds = None,
+                  return_dataframe = False, plotq = False,
+                  catch_exceptions = False):
     """
     Fits quality factor versus temperature data to Q_vs_T_qp.
 
@@ -278,6 +332,8 @@ def fit_Q_vs_T_qp(T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
     Tc_guess (float): critical temperature guess in K
     Q_err (array-like or None): If not None, Q_err is the error on Q used in
         the fitting. If None, points are weighted equally
+    enforced_alpha (float or None): if not None, enforces alpha to be this
+        value. Else fits for alpha
     guess (list or None): If not None, overwrites the initial guess. Also
         overwrites f0_guess.
     bounds (list or None): custom bounds to overwrite the default option
@@ -304,15 +360,24 @@ def fit_Q_vs_T_qp(T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
     if Q_err is not None:
         Q_err = np.array(Q_err)[ix]
 
-    fit_func = lambda a, b, c, d, e: Q_vs_T_qp(a, b, c, d, e, gamma = gamma)
+    if enforced_alpha is None:
+        fit_func = lambda a, b, c, d, e: Q_vs_T_qp(a, b, c, d, e, gamma = gamma)
+    else:
+        fit_func = lambda a, b, d, e: Q_vs_T_qp(a, b, enforced_alpha, d, e,
+                                                gamma = gamma)
     # Initial guess
     if guess is not None:
-        p0 = guess
+        p0 = list(guess)
         bounds0 = get_bounds_Q_vs_T_qp(p0)
     else:
         p0, bounds0 = guess_p0_Q_vs_T_qp(T, Q, f0_guess, Tc_guess, gamma)
     if bounds is None:
         bounds = bounds0
+    p0, bounds = p0[:], [b[:] for b in bounds]
+    if enforced_alpha is not None:
+        p0.pop(1)
+        bounds[0].pop(1)
+        bounds[1].pop(1)
     # Fit
     if Q_err is None:
         sigma = None
@@ -327,7 +392,7 @@ def fit_Q_vs_T_qp(T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
         except Exception as e:
             if not catch_exceptions:
                 raise e
-         p00 = p0
+        p00 = p0
     try:
         popt, pcov = curve_fit(fit_func, T, Q, sigma = sigma,
                              p0 = p00, bounds = bounds, absolute_sigma = True)
@@ -337,6 +402,11 @@ def fit_Q_vs_T_qp(T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
             raise e
         popt = [np.nan, np.nan, np.nan, np.nan]
         perr = [np.nan, np.nan, np.nan, np.nan]
+    popt, perr = list(popt), list(perr)
+    if enforced_alpha is not None and np.isfinite(popt[0]):
+        p0.insert(1, enforced_alpha)
+        popt.insert(1, enforced_alpha)
+        perr.insert(1, np.nan)
     # Plot
     if plotq:
         fig, ax = plot_Q_vs_T_qp(T, Q, Q_err, popt, p0, gamma)
@@ -389,7 +459,7 @@ def fit_f_vs_T_tls(T, f, f_err = None, guess = None, bounds = None,
     fit_func = lambda a, b, c: f_vs_T_tls(a, b, c)
     # Initial guess
     if guess is not None:
-       p0 = guess
+       p0 = list(guess)
        bounds0 = get_bounds_f_vs_T_tls(p0)
     else:
        p0, bounds0 = guess_p0_f_vs_T_tls(T, f)
@@ -419,6 +489,7 @@ def fit_f_vs_T_tls(T, f, f_err = None, guess = None, bounds = None,
             raise e
         popt = [np.nan, np.nan]
         perr = [np.nan, np.nan]
+    popt, perr = list(popt), list(perr)
     # Plot
     if plotq:
        fig, ax = plot_f_vs_T_tls(T, f, f_err, popt, p0)
@@ -471,10 +542,10 @@ def fit_Q_vs_T_tls(T, Q, f0_guess, Q_err = None,  guess = None, bounds = None,
     fit_func = lambda a, b, c, d: Q_vs_T_tls(a, b, c, d)
     # Initial guess
     if guess is not None:
-        p0 = guess
-        bounds = get_bounds_Q_vs_T_tls(p0)
+        p0 = list(guess)
+        bounds0 = get_bounds_Q_vs_T_tls(p0)
     else:
-        p0, bounds = guess_p0_Q_vs_T_tls(T, Q, f0_guess)
+        p0, bounds0 = guess_p0_Q_vs_T_tls(T, Q, f0_guess)
     if bounds is None:
         bounds = bounds0
     # Fit
@@ -501,6 +572,7 @@ def fit_Q_vs_T_tls(T, Q, f0_guess, Q_err = None,  guess = None, bounds = None,
             raise e
         popt = [np.nan, np.nan, np.nan]
         perr = [np.nan, np.nan, np.nan]
+    popt, perr = list(popt), list(perr)
     # Plot
     if plotq:
        fig, ax = plot_Q_vs_T_tls(T, Q, Q_err, popt, p0)
