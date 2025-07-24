@@ -5,201 +5,209 @@ from scipy.special import kv as K_n # modified bessel function of the second kin
 
 k_B = 1.380649e-23
 h = 6.62607015e-34
-hbar = h / (2*np.pi)
+hbar = h / (2 * np.pi)
+# N0 is not actually used here, but I am leaving it for reference
 N0_Al = 1.0737e47
 N0_Nb = 6.135e48
 
-def fr_vs_temp(temperature, fr0, D, alpha, Tc, gamma = 1):
+################################################################################
+############### Resonance shift from thermal QP density and TLS ################
+################################################################################
+def f_vs_T(T, fr0, alpha, Tc, Fdelta0, gamma = 1):
     """
-    Calculates the resonance frequency at the given temperature, including
-    the Mattis-Bardeen and TLS components of the temperature dependence
+    Calcuates the resonant frequency shift due to the thermal QP density and
+    TLSs as a function of temperature.
 
     Parameters:
-    temperature (float or array-like): in K
-    fr0 (float): frequency at 0 K
-    D (float): fitting parameter. See TLS write-up for details
+    T (float or array-like): temperature in K
+    fr0 (float): resonant frequency at T = 0 K
     alpha (float): kinetic inductance fraction
-    Tc (float): superconducting transition temperature in K
-    gamma (float): 1, 1/2, or 1/3 for thin-film, local, or anomalous limits.
-        This parameter should be enforced if fitting
+    Tc (float): critical temperature in K
+    Fdelta0 (float): filling factor times dielectric loss at T = 0 K
+    gamma (float): 1, 1/2, or 1/3 for thin-film, local, or anomalous limits
 
     Returns:
-    fr (float or array-like): resonance frequency(ies) at the given
+    f (float or array-like): resonant frequency(ies) at the given
         temperature(s)
     """
-    kT = k_B * temperature
-    Delta0 = 1.762 * k_B * Tc
-    zeta = Delta0 / kT
-    xi = h * fr0 / (2 * kT)
+    f_tls = f_vs_T_tls(T, fr0, Fdelta0)
+    f_qp = f_vs_T_qp(T, fr0, alpha, Tc, gamma = 1)
+    return f_tls + f_qp - fr0
 
-    g_tls = (np.real(digamma(1/2 + 1j * xi / np.pi)) - np.log(2 * xi)) / np.pi
-    # There may be a factor of 1 / 2pi in the log. Sources are inconsistent
-    g_mb = np.sqrt(2 * np.pi / zeta) + 2 * np.exp(-xi) * I_n(0, xi)
-    g_mb = - g_mb * np.exp(-zeta) / 2
-    fr = fr0 * (1 + D * g_tls + alpha * gamma * g_mb)
-    return fr
-
-def Q_vs_temp(temperature, fr0, D, alpha, Tc, A, B, m, n, delta_z,
-                 gamma = 1, N0 = N0_Al):
+def Q_vs_T(T, fr0, alpha, Tc, Fdelta0, delta_z, gamma = 1):
     """
-    Calculates the resonator quality factor at a given temperature, including
-    the Mattis-Bardeen and TLS components of the temperature dependence
+    Calcuates the quality factor shift due to the thermal QP density and TLSs as
+    a function of temperature.
 
     Parameters:
-    temperature (float or array-like): in K
-    fr0 (float): frequency at 0 K
-    D (float): fitting parameter. See TLS write-up for details
+    T (float or array-like): temperature in K
+    fr0 (float): resonant frequency at T = 0 K
     alpha (float): kinetic inductance fraction
-    Tc (float): superconducting transition temperature in K
-    A (float): model parameter. Compared to Basu Thakur 2017, A -> P / A
-    B (float): model parameter
-    m (float): model power parameter
-    n (float): model power parameter
-    delta_z (float): 1 / Qr at T = 0
-    gamma (float): 1, 1/2, or 1/3 for thin-film, local, or anomalous limits.
-        This parameter should be enforced if fitting
-    N0 (float): single-spin density of states at the Fermi Level.
-        This parameter should be enforced if fitting
+    Tc (float): critical temperature in K
+    Fdelta0 (float): filling factor times dielectric loss at T = 0 K
+    delta_z (float): inverse quality factor at T = 0 K
+    gamma (float): 1, 1/2, or 1/3 for thin-film, local, or anomalous limits
 
     Returns:
     Q (float or array-like): quality factor(s) at the given temperature(s)
     """
-    kT = k_B * temperature
-    Delta0 = 1.762 * k_B * Tc
-    zeta = Delta0 / kT
-    xi = h * fr0 / (2 * kT)
-
-    num = D * np.tanh(xi)
-    den0 = A * np.tanh(xi) ** 2 / (1 + B * np.tanh(xi) * temperature ** m)
-    den = np.sqrt(1 + den0 ** n)
-    delta_tls = num / den
-
-    omega = 2 * np.pi * fr0
-    # T << Tc approximation for the thermal quasiparticle density
-    nth = 2 * N0 * np.sqrt(2 * np.pi * kT * Delta0) * np.exp(-Delta0 / kT)
-    # T << Tc approximation of S1
-    S1 = 2 / np.pi * np.sqrt(2 * Delta0 / (np.pi * kT)) * np.sinh(xi) * K_n(0, xi)
-    delta_qp = alpha * gamma * S1 * nth / (2 * N0 * Delta0)
-
-    return 1 / (delta_tls + delta_qp + delta_z)
+    Q_tls = Q_vs_T_tls(T, fr0, Fdelta0, delta_z = 0)
+    Q_qp = Q_vs_T_qp(T, fr0, alpha, Tc, delta_z = 0, gamma = gamma)
+    return 1 / (1 / Q_tls + 1 / Q_qp + delta_z)
 
 ################################################################################
-######################### Funcs without TLS component ##########################
+################### Resonance shift from thermal QP density ####################
 ################################################################################
-def fr_vs_temp_notls(temperature, fr0, alpha, Tc, gamma = 1):
+def f_vs_T_qp(T, fr0, alpha, Tc, gamma = 1):
     """
-    Calculates the resonance frequency at the given temperature, including
-    only the Mattis-Bardeen component of the temperature dependence. This model
-    does not accurately extract the low-temperature dependence of the data if
-    TLS behavior is present.
+    Calculates the resonant frequency shift due to the thermal QP density as a
+    function of temperature.
 
     Parameters:
-    temperature (float or array-like): in K
-    fr0 (float): frequency at 0 K
+    T (float or array-like): temperature in K
+    fr0 (float): resonant frequency at T = 0 K
     alpha (float): kinetic inductance fraction
-    Tc (float): superconducting transition temperature in K
-    gamma (float): 1, 1/2, or 1/3 for thin-film, local, or anomalous limits.
-        This parameter should be enforced if fitting
+    Tc (float): critical temperature in K
+    gamma (float): 1, 1/2, or 1/3 for thin-film, local, or anomalous limits
 
     Returns:
-    fr (float or array-like): resonance frequency(ies) at the given
+    f (float or array-like): resonant frequency(ies) at the given
         temperature(s)
     """
-    kT = k_B * temperature
+    T = np.asarray(T)
+    kT = k_B * T
     Delta0 = 1.762 * k_B * Tc
-    zeta = Delta0 / kT
-    xi = h * fr0 / (2 * kT)
+    hf0 = h * fr0
 
-    g_mb = np.sqrt(2 * np.pi / zeta) + 2 * np.exp(-xi) * I_n(0, xi)
-    g_mb = - g_mb * np.exp(-zeta) / 2
-    fr = fr0 * (1 + alpha * gamma * g_mb)
-    return fr
+    nth_N0 = nth_over_N0(kT, Delta0)
+    A = - gamma * alpha / (4 * Delta0)
+    x_qp = A * S2(kT, Delta0, hf0) * nth_N0
+    return fr0 * (1 + x_qp)
 
-def Q_vs_temp_notls(temperature, fr0, alpha, Tc, delta_z,
-                 gamma = 1, N0 = N0_Al):
+def Q_vs_T_qp(T, fr0, alpha, Tc, delta_z, gamma = 1):
     """
-    Calculates the quality factor at the given temperature, including
-    only the Mattis-Bardeen component of the temperature dependence. This model
-    does not accurately extract the low-temperature dependence of the data if
-    TLS behavior is present.
+    Calculates the quality factor shift due to the thermal QP density as a
+    function of temperature.
 
     Parameters:
-    temperature (float or array-like): in K
-    fr0 (float): frequency at 0 K
+    T (float or array-like): temperature in K
+    fr0 (float): resonant frequency at T = 0 K
     alpha (float): kinetic inductance fraction
-    Tc (float): superconducting transition temperature in K
-    delta_z (float): 1 / Qr at T = 0
-    gamma (float): 1, 1/2, or 1/3 for thin-film, local, or anomalous limits.
-        This parameter should be enforced if fitting
-    N0 (float): single-spin density of states at the Fermi Level.
-        This parameter should be enforced if fitting
+    Tc (float): critical temperature in K
+    delta_z (float): inverse quality factor at T = 0 K
+    gamma (float): 1, 1/2, or 1/3 for thin-film, local, or anomalous limits
 
     Returns:
     Q (float or array-like): quality factor(s) at the given temperature(s)
     """
-    kT = k_B * temperature
+    T = np.asarray(T)
+    kT = k_B * T
     Delta0 = 1.762 * k_B * Tc
-    zeta = Delta0 / kT
-    xi = h * fr0 / (2 * kT)
+    hf0 = h * fr0
 
-    omega = 2 * np.pi * fr0
-    # T << Tc approximation for the thermal quasiparticle density
-    nth = 2 * N0 * np.sqrt(2 * np.pi * kT * Delta0) * np.exp(-Delta0 / kT)
-    # T << Tc approximation of S1
-    S1 = 2 / np.pi * np.sqrt(2 * Delta0 / (np.pi * kT)) * np.sinh(xi) * K_n(0, xi)
-    delta_qp = alpha * gamma * S1 * nth / (2 * N0 * Delta0)
+    nth_N0 = nth_over_N0(kT, Delta0)
+    A = - gamma * alpha / (2 * Delta0)
+    delta_qp = A * S1(kT, Delta0, hf0)  * nth_N0
     return 1 / (delta_qp + delta_z)
 
 ################################################################################
-######################## Funcs with only TLS component #########################
+########################### Resonance shift from TLS ###########################
 ################################################################################
-def fr_vs_temp_tls(temperature, fr0, D):
+def f_vs_T_tls(T, fr0, Fdelta0):
     """
-    Calculates the resonance frequency at the given temperature, including
-    only the TLS component of the temperature dependence. This model works at
-    low temperatures where the Mattis-Bardeen component is negligible.
+    Calculates the resonant frequency due to TLSs as a function of temperature.
 
     Parameters:
-    temperature (float or array-like): in K
-    fr0 (float): frequency at 0 K
-    D (float): fitting parameter. See TLS write-up for details
+    T (float or array-like): temperature in K
+    fr0 (float): resonant frequency at T = 0 K
+    Fdelta0 (float): filling factor times dielectric loss at T = 0 K
 
     Returns:
-    fr (float or array-like): resonance frequency(ies) at the given
+    f (float or array-like): resonant frequency(ies) at the given
         temperature(s)
     """
-    kT = k_B * temperature
+    T = np.asarray(T)
+    kT = k_B * T
     xi = h * fr0 / (2 * kT)
 
-    g_tls = (np.real(digamma(1/2 + 1j * xi / np.pi)) - np.log(2 * xi)) / np.pi
-    # There may be a factor of 1 / 2pi in the log. Sources are inconsistent
-    fr = fr0 * (1 + D * g_tls)
-    return fr
+    G = np.real(digamma(1/2 + 1j * xi / np.pi) - np.log(xi / np.pi)) / np.pi
+    x_tls = Fdelta0 * G
+    return fr0 * (1 + x_tls)
 
-def Q_vs_temp_tls(temperature, fr0, D, A, B, m, n, delta_z):
+def Q_vs_T_tls(T, fr0, Fdelta0, delta_z):
     """
-    Calculates the quality factor at the given temperature, including
-    only the TLS component of the temperature dependence. This model works at
-    low temperatures where the Mattis-Bardeen component is negligible.
+    Calculates the quality factor shift due to TLSs as a function of
+    temperature under the assumption that P_uW << P_crit(T).
 
     Parameters:
-    temperature (float or array-like): in K
-    fr0 (float): frequency at 0 K
-    D (float): fitting parameter. See TLS write-up for details
-    A (float): model parameter. Compared to Basu Thakur 2017, A -> P / A
-    B (float): model parameter
-    m (float): model power parameter
-    n (float): model power parameter
-    delta_z (float): 1 / Q at T = 0
+    T (float or array-like): temperature in K
+    fr0 (float): resonant frequency at T = 0 K
+    Fdelta0 (float): filling factor times dielectric loss at T = 0 K
+    delta_z (float): inverse quality factor at T = 0 K
 
     Returns:
     Q (float or array-like): quality factor(s) at the given temperature(s)
     """
-    kT = k_B * temperature
+    T = np.asarray(T)
+    kT = k_B * T
     xi = h * fr0 / (2 * kT)
 
-    num = D * np.tanh(xi)
-    den0 = A * np.tanh(xi) ** 2 / (1 + B * np.tanh(xi) * temperature ** m)
-    den = np.sqrt(1 + den0 ** n)
-    delta_tls = num / den
-    return 1 / (delta_tls + delta_z)
+    delta = Fdelta0 * np.tanh(xi)
+    return 1 / (delta + delta_z)
+
+################################################################################
+########################## Mattis-Bardeen Functions ############################
+################################################################################
+def S1(kT, Delta0, hf0):
+    """
+    Calculates S1(T), as defined in Foote thesis Section 2.4.
+
+    Parameters:
+    kT (float or array-like): Boltzmann constant times temperature in J
+    Delta0 (float): gap energy in J
+    hf0 (float): resonant frequency energy corresponding to f(T = 0 K) in J
+
+    Returns:
+    S1 (float): Mattis-Bardeen S1 function value
+    """
+    kT = np.asarray(kT)
+    xi = hf0 / (2 * kT)
+    A = (2 / np.pi) * np.sqrt(2 * Delta0 / (np.pi * kT))
+    S1 = A * np.sinh(xi) * K_n(0, xi)
+    return S1
+
+def S2(kT, Delta0, hf0):
+    """
+    Calculates S2(T), as defined in Foote thesis Section 2.4.
+
+    Parameters:
+    kT (float or array-like): Boltzmann constant times temperature in J
+    Delta0 (float): gap energy in J
+    hf0 (float): resonator energy corresponding to f(T = 0 K) in J
+
+    Returns:
+    S2 (float): Mattis-Bardeen S2 function value
+    """
+    kT = np.asarray(kT)
+    xi = hf0 / (2 * kT)
+    S2 = 1 + np.sqrt(2 * Delta0 / (np.pi * kT)) * np.exp(-xi) * I_n(0, xi)
+    return S2
+
+def nth_over_N0(kT, Delta0):
+    """
+    Calculates
+        nth / N0,
+    where nth is the thermal QP density and N0 is the single-spin density of
+    states at the Fermi level.
+
+    Parameters:
+    kT (float or array-like): Boltzmann constant times temperature in J
+    Delta0 (float): gap energy in J
+
+    Returns:
+    nth_N0 (float or array-like): thermal QP density divided by the single-spin
+        density of states at the Fermi level
+    """
+    kT = np.asarray(kT)
+    nth_N0 = 2 * np.sqrt(2 * np.pi * kT * Delta0) * np.exp(-Delta0 / kT)
+    return nth_N0
