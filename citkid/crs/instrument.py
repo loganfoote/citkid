@@ -250,10 +250,8 @@ class CRS:
             f = np.linspace(fres + bw / 2, fres - bw / 2, npoints).T
         else:
             f = np.linspace(fres , fres + bw, npoints).T
-        f, z = await self.sweep(f, ares, nsamps = nsamps, verbose = verbose,
-                                pbar_description = pbar_description)
-        if return_dbc:
-            z /= 10 ** (ares[:, np.newaxis] / 20)
+        f, z = await self.sweep(f, ares, nsamps = nsamps, return_dbc = return_dbc,
+								verbose = verbose, pbar_description = pbar_description)
         return f, z
 
     async def sweep_qres(self, fres, ares, qres, npoints = 10, nsamps = 10,
