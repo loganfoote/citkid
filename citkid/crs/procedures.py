@@ -270,7 +270,7 @@ async def optimize_ares(inst, out_directory, fres, ares, qres, fcal_indices, res
         data = fit_iq(out_directory, None, file_suffix, 0, 0, 0, 0, 0, rejected_points = [],
                       plotq = False, verbose = verbose, catch_exceptions = True) # Turn off catch_exceptions
         a_nl = np.array(data.sort_values('dataIndex').iq_a, dtype = float)
-        res = np.array(data.sort_values('dataIndex').iq_a, dtype = float)
+        res = np.array(data.sort_values('dataIndex').iq_a, dtype = float) - a_target
         a_nls.append(a_nl)
         np.save(out_directory + f'a_nl_{file_suffix}.npy', a_nl)
         if plot_directory is not None:
