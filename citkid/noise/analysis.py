@@ -73,6 +73,7 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
         fig_psd (plt.figure): plot of the PSDs
         fig_timestream (plt.figure): plot of the timestream data
     """
+    assert len(zfine), "No fine scan points provided to compute_psd"
     # Prepare data
     ffine, zfine= np.array(ffine), np.array(zfine)
     ix = np.argsort(ffine)
@@ -252,6 +253,7 @@ def calibrate_timestreams(origin, ffine, zfine, fnoise, znoise, dt,
     x (np.array): deglitched x timestream
     cr_indices (np.array): cosmic ray indices
     """
+    assert len(zfine), "No fine scan points provided to calibrate_timestreams"
     theta_fine, theta, A = calculate_theta_A(zfine, znoise, origin)
     if offres:
         znoise_clean = deglitch_timestream(znoise, deglitch_nstd)
@@ -375,6 +377,7 @@ def calculate_theta_A(zfine, znoise, origin):
     theta_noise (np.array): theta timestream corresponding the the noise data
     A_noise (np.array): amplitude timestream corresponding to the noise data
     """
+    assert len(zfine), "No fine scan points provided to calculate_theta_A"
     zn_mean = np.mean(znoise)
     # Get x, y basic vectors, where x is the vector that passes through the
     # origin of the circle and the mean of the noise ball, and y is
