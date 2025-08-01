@@ -278,10 +278,8 @@ class CRS:
         fres, ares, qres = np.asarray(fres), np.asarray(ares), np.asarray(qres)
         spans = fres / qres
         f = np.linspace(fres + spans / 2, fres - spans / 2, npoints).T
-        f, z = await self.sweep(f, ares, nsamps = nsamps, verbose = verbose,
-                                pbar_description = pbar_description)
-        if return_dbc:
-            z /= 10 ** (ares[:, np.newaxis] / 20)
+        f, z = await self.sweep(f, ares, nsamps = nsamps, return_dbc = return_dbc,
+                                verbose = verbose, pbar_description = pbar_description)
         return f, z
 
     async def sweep_full(self, amplitude, npoints = 10, nsamps = 10,
@@ -314,7 +312,7 @@ class CRS:
         # Left off here
         f, z = await self.sweep_linear(fres, ares, bw = bw - spacing,
                                        npoints = npoints, nsamps = nsamps,
-                                       verbose = verbose,
+                                       return_dbc = return_dbc, verbose = verbose,
                                        pbar_description = pbar_description)
         f, z = f.flatten(), z.flatten()
         ix = np.argsort(f)
