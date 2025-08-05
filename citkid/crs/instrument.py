@@ -319,7 +319,7 @@ class CRS:
         f, z = f[ix], z[ix]
         return f, z
 
-    async def capture_noise(self, fres, ares, noise_time, fir_stage = 6,
+    async def capture_noise(self, fres, ares, noise_time, fir_stage = 6, fast_modules = [1],
                             parser_loc='/home/daq1/github/rfmux/firmware/r1.5.6/parser',
                             interface='enp2s0', delete_parser_data = True,
                             return_dbc = True, verbose = True):
@@ -337,6 +337,7 @@ class CRS:
             ...
             1 -> 19 kHz
             0 -> 38 kHz, can only be used with 1 module at a time. Make sure active module is module 1.
+        fast_modules (array-like): up to 2 modules that you want to run at 38 or 19 kHz
         parser_loc (str): path to the parser file
         interface (str): Ethernet interface identifier
         delete_parser_data (bool): If True, deletes the parser data files
@@ -357,11 +358,11 @@ class CRS:
             raise FileExistsError(f'{data_path} already exists')
         # set fir stage
         if fir_stage ==0:
-            # as of 1.5.6, can only use 1 module or else packets drop
-            await self.d.set_decimation(0, short=True, modules=[1])
+            # as of 1.5.6, can only use 2 module or else packets drop
+            await self.d.set_decimation(0, short=True, module=fast_modules)
         elif fir_stage ==1:
             # don't know if this restriction is necessary for stage 1
-            await self.d.set_decimation(1, short=True, modules=[1])
+            await self.d.set_decimation(1, short=True, module=fast_modules)
         else:
             await self.d.set_decimation(fir_stage)
         self.sample_frequency = 625e6 / (256 * 64 * 2 ** fir_stage)
