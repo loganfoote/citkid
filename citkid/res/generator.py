@@ -68,8 +68,8 @@ def get_resonance_s21(f, fr_nstd, amp_nstd, fr, Qr, amp, phi, a, p_amp0, p_amp1,
 
     fr = fr_with_noise
     deltaf = f - fr
-    yg = Qr * deltaf / fr
-    y = get_y(yg, a, True)
+    y0 = Qr * deltaf / fr
+    y = get_y(y0, a, True)
     z0 = 1 / (1. + 2.j * y)
     theta = np.angle(z0)
     amp_noise = amp_noise * np.exp(1j * theta + 1j * np.pi)
