@@ -8,13 +8,14 @@ import rfmux
 from .util import find_key_and_index, convert_parser_to_z, get_modules, run_for_duration
 
 class CRS:
-    def __init__(self, serial_number = 27):
+    def __init__(self, serial_number = 27, interface = 'enp2s0'):
         """
         Initializes the crs object d. Not that the system must be
         configured using CRS.configure_system before measurements
 
         Parameters:
         serial_number (int): CRS serial number
+        interface (str): Ethernet interface identifier
         """
         self.serial_number = serial_number
         session_str = '!HardwareMap [ !CRS { ' + f'serial: "{serial_number:04d}"'
@@ -22,6 +23,7 @@ class CRS:
         s = rfmux.load_session(session_str)
         self.d = s.query(rfmux.CRS).one()
         self.nco_freq_dict = {}
+        self.interface = interface
 
     async def configure_system(self, clock_source="SMA", full_scale_dbm = 7,
                                analog_bank_high = False, verbose = True):
@@ -249,7 +251,7 @@ class CRS:
         if center_fres:
             f = np.linspace(fres + bw / 2, fres - bw / 2, npoints).T
         else:
-            f = np.linspace(fres , fres + bw, npoints).T
+            f = np.linspace(fres, fres + bw, npoints).T
         f, z = await self.sweep(f, ares, nsamps = nsamps, return_dbc = return_dbc,
 								verbose = verbose, pbar_description = pbar_description)
         return f, z
@@ -302,7 +304,7 @@ class CRS:
         z (np.array): array of complex S21 data corresponding to f
         """
         ncos = list(self.nco_freq_dict.values())
-        bw_total = 625e6 if self.extended_bw else 500e6
+        bw_total = 600e6 if self.extended_bw else 500e6
         bw = bw_total / 1024 + 200
         spacing = bw / npoints
         fres = np.concatenate([np.linspace(nco - bw_total / 2 + 10 + bw,
@@ -321,8 +323,7 @@ class CRS:
 
     async def capture_noise(self, fres, ares, noise_time, fir_stage = 6, fast_modules = [1],
                             parser_loc='/home/daq1/github/rfmux/firmware/r1.5.6/parser',
-                            interface='enp2s0', delete_parser_data = True,
-                            return_dbc = True, verbose = True):
+                            delete_parser_data = True, return_dbc = True, verbose = True):
         """
         Captures a noise timestream using the parser.
 
@@ -339,7 +340,6 @@ class CRS:
             0 -> 38 kHz, can only be used with 1 module at a time. Make sure active module is module 1.
         fast_modules (array-like): up to 2 modules that you want to run at 38 or 19 kHz
         parser_loc (str): path to the parser file
-        interface (str): Ethernet interface identifier
         delete_parser_data (bool): If True, deletes the parser data files
             after importing the data
         return_dbc (bool): If true, divides the output by the tone power
@@ -349,7 +349,7 @@ class CRS:
         z (M X N np.array): first index is channel index and second index is
             complex S21 data point in the timestream
         """
-        module_indices = list(self.nco_freq_dict.keys())
+        module_indices = list(self.nco_freq_dict.keys()) if fir_stage > 2 else fast_modules
         
         fres, ares = np.asarray(fres), np.asarray(ares)
         os.makedirs('tmp/', exist_ok = True)
@@ -375,7 +375,7 @@ class CRS:
         # Collect the data
         channels = '1-' + f'{max_ntones}'
         cmd = [parser_loc, '-c', channels, '-d', data_path,
-                           '-i', interface, '-s', f'{self.serial_number:04d}']
+                           '-i', self.interface, '-s', f'{self.serial_number:04d}']
         run_for_duration(cmd, noise_time, verbose)
         # Set fir stage back
         await self.d.set_decimation(6)

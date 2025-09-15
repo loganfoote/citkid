@@ -72,13 +72,13 @@ class peakFinder:
                 vline.remove()
         self.vlines = []
         for xi in self.fres:
-            self.vlines.append(self.ax.axvline(xi / 1e6, color='red',
+            self.vlines.append(self.ax.axvline(xi / 1e6, color=plt.cm.viridis(0.5),
                                                linestyle = '--',
                                                alpha = 0.8))
         if self.line is not None:
             self.line.remove()
         self.line, = self.ax.plot(self.x_data / 1e6, self.y_data,
-                                  color='blue', linewidth=1)
+                                  color= plt.cm.viridis(0.), linewidth=1)
         xd = (max(self.x_data) - min(self.x_data)) / 10 * 1e-6
         self.ax.set_xlim(min(self.x_data) / 1e6 - xd,
                          max(self.x_data) / 1e6 + xd)
@@ -150,7 +150,7 @@ class peakFinder:
         for vline in old_vlines:
             vline.remove()
         for xi in self.fres:
-            self.vlines.append(self.ax.axvline(xi / 1e6, color='red',
+            self.vlines.append(self.ax.axvline(xi / 1e6, color=plt.cm.viridis(0.5),
                                                linestyle = '--',
                                                alpha = 0.8))
         self.fig.canvas.draw()
@@ -417,7 +417,8 @@ class qresFinderSingle:
         """
         self.x0 = np.mean(self.x_data) / 1e3
         for p in self.iq_cut:
-            p.remove()
+            if p in self.ax_iq.lines:
+                self.ax_iq.lines.remove_(p)
             self.iq_cut = []
         if self.span_fill is not None:
             self.span_fill.remove()
@@ -429,16 +430,19 @@ class qresFinderSingle:
             for vline in self.other_vlines:
                 vline.remove()
         for p in self.fres_point:
-            p.remove()
+            if p in self.ax_iq.lines:
+                self.ax_iq.lines.remove_(p)
         self.other_vlines = []
         if self.line is not None:
             self.line.remove()
         if self.iq_scatter is not None:
             for p in self.iq_scatter:
-                p.remove()
+                if p in self.ax_iq.lines:
+                    self.ax_iq.lines.remove_(p)
         if self.iq_cut is not None:
             for p in self.iq_cut:
-                p.remove()
+                if p in self.ax_iq.lines:
+                    self.ax_iq.lines.remove_(p)
 
 
         for xi in self.other_fres:
@@ -556,7 +560,8 @@ class qresFinderSingle:
                                            alpha = 1)
 
         for p in self.iq_cut:
-            p.remove()
+            if p in self.ax_iq.lines:
+                self.ax_iq.lines.remove_(p)
             self.iq_cut = []
         if self.span_fill is not None:
             self.span_fill.remove()
@@ -577,8 +582,8 @@ class qresFinderSingle:
                                           np.imag(self.y_data[self.ydata_ix]),
                                           '.', color = plt.cm.viridis(0.67), alpha = 0.8)
         for p in self.fres_point:
-            p.remove()
-            print(p)
+            if p in self.ax_iq.lines:
+                self.ax_iq.lines.remove_(p)
         if np.isfinite(self.fres):
             ix = np.argmin(abs(self.fres - self.x_data))
             x, y = np.real(self.y_data[ix]), np.imag(self.y_data[ix])
