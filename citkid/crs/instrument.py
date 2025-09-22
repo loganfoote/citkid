@@ -203,7 +203,7 @@ class CRS:
 
         # Set fir_stage
         fir_stage = 6
-        await self.d.set_decimation(fir_stage) 
+        await self.d.set_decimation(fir_stage)
         # Sweep
         sweep_f, sweep_z = {}, {}
         modules = get_modules(self.d, list(self.frequencies_dict.keys()))
@@ -350,7 +350,7 @@ class CRS:
             complex S21 data point in the timestream
         """
         module_indices = list(self.nco_freq_dict.keys()) if fir_stage > 2 else fast_modules
-        
+
         fres, ares = np.asarray(fres), np.asarray(ares)
         os.makedirs('tmp/', exist_ok = True)
         data_path = 'tmp/parser_data_00/'
@@ -380,22 +380,30 @@ class CRS:
         # Set fir stage back
         await self.d.set_decimation(6)
         # read the data and convert to z
-        z = [[]] * len(fres)
+        if not batch_process:
+            z = [[]] * len(fres)
+            for module_index in module_indices:
+                zi = convert_parser_to_z(data_path, self.serial_number, module_index,
+                                         ntones = len(self.ch_ix_dict[module_index]),
+                                         max_ntones = max_ntones)
+                # fres0 = self.fres_dict[module_index].copy()
+                for index, ch_index in enumerate(self.ch_ix_dict[module_index]):
+                    z[ch_index] = zi[index]
+            # Sometimes the number of points is not exact
+            data_len = min([len(zi) for zi in z])
+            z = np.array([zi[:data_len] for zi in z])
+            if delete_parser_data:
+                shutil.rmtree('tmp/')
+            if return_dbc:
+                z /= 10 ** (ares[:, np.newaxis] / 20)
+            return z
+        # batch processing
         for module_index in module_indices:
-            zi = convert_parser_to_z(data_path, self.serial_number, module_index,
-                                     ntones = len(self.ch_ix_dict[module_index]),
-                                     max_ntones = max_ntones)
-            fres0 = self.fres_dict[module_index].copy()
-            for index, ch_index in enumerate(self.ch_ix_dict[module_index]):
-                z[ch_index] = zi[index]
-        # Sometimes the number of points is not exact
-        data_len = min([len(zi) for zi in z])
-        z = np.array([zi[:data_len] for zi in z])
-        if delete_parser_data:
-            shutil.rmtree('tmp/')
-        if return_dbc:
-            z /= 10 ** (ares[:, np.newaxis] / 20)
-        return z
+            convert_parser_to_z_batch(data_path, outpath, self.serial_number,
+                                      module_indices, ntones,
+                                      max_ntones = max_ntones,
+                                      return_dbc = return_dbc,
+                                      ares = ares, ch_ix_dict = self.ch_ix_dict)
 
     async def capture_fast_noise(self, frequency, amplitude, time = 1,
                                  nsegments = 10, verbose = False):

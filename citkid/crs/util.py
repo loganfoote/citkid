@@ -6,6 +6,7 @@ import signal
 import sys
 from time import sleep
 from tqdm.auto import tqdm
+import warnings
 
 def convert_parser_to_z(path, crs_sn, module, ntones, max_ntones):
     """
@@ -20,15 +21,84 @@ def convert_parser_to_z(path, crs_sn, module, ntones, max_ntones):
     Returns:
     z (np.array): complex S21 data in V
     """
+    dtype = np.dtype([('i', np.int32), ('q', np.int32)])
+    record_size = dtype.itemsize
+    batch_size = 100_000
     parser_batch_file ='m0%d_raw32'%(module)
-    parser_dat = np.fromfile(os.path.join(path, f'serial_{crs_sn:04d}',
-                                          parser_batch_file),
-                                          np.dtype([('i', np.int32),
-                                                    ('q', np.int32)]))
-    z = parser_dat['i'].astype(np.float64) + 1j * parser_dat['q'].astype(np.float64)
-    z = np.array([z[i::max_ntones] for i in range(ntones)])
-    z = z * rfmux.core.transferfunctions.VOLTS_PER_ROC / 256 / np.sqrt(2)
+    with open(os.path.join(path, f'serial_{crs_sn:04d}', parser_batch_file),
+              'rb') as f:
+      while True:
+          data = np.fromfile(f, dtype = dtype, count = batch_size)
+          if data.size == 0:
+              break
+          z = parser_dat['i'].astype(np.float64) + 1j * parser_dat['q'].astype(np.float64)
+          z = np.array([z[i::max_ntones] for i in range(ntones)])
+          z = z * rfmux.core.transferfunctions.VOLTS_PER_ROC / 256 / np.sqrt(2)
+          ### save to file here
     return z
+
+def convert_parser_to_z_batch(path, outpath, crs_sn, module, ntones,
+                              max_ntones, return_dbc, ares, ch_ixs):
+    """
+    Import a parser file and convert the data to complex S21 in V
+
+    Parameters:
+    path (str): path to the parser folder
+    outpath (str): path to the output file. Must end in .npy. Suffices will be
+        appended to the output files for each batch.
+    crs_sn (int): CRS serial number
+    module (int): module number
+    ntones (int): number of tones
+    return_dbc (bool): if true, divides the output by the tone power
+    ares (np.ndarray or None): if return_dbc, uses ares as the tone powers
+    ch_ixs (list): values (int) are indices into the data corresponding to the
+        channels, in order.
+
+    Returns:
+    z (np.array): complex S21 data in V
+    """
+    warnings.warn("convert_parser_to_z_batch will overwrite data",
+                  warnings.UserWarning)
+
+    dtype = np.dtype([('i', np.int32), ('q', np.int32)])
+    record_size = dtype.itemsize
+
+    target_bytes = 500 * (1024 ** 2) # 500 MB
+    batch_size = target_bytes // (record_size * len(module_indices))
+
+    file_paths = [
+        os.path.join(path, f'serial_{crs_sn:04d}', 'm0%d_raw32'%(module))
+        for module in module_indices
+    ]
+
+    files = [open(fp, 'rb') for fp in file_paths]
+    try:
+      batch_index = 0
+      while True:
+          batch_parts = [
+            np.fromfile(f, dtype = dtype, count = batch_size)
+            for f in files
+          ]
+          z = [[]] * len(fres)
+          for module_index, parser_dat  in zip(module_indices, batch_parts):
+              zi = parser_dat['i'].astype(np.float64) + 1j * parser_dat['q'].astype(np.float64)
+              for index, ch_index in enumerate(ch_ix_dict[module_index]):
+                  z[ch_index] = zi[index]
+          data_len = min([len(zi) for zi in z])
+          z = np.array([zi[:data_len] for zi in z])
+          if z.shape[1] == 0:
+              break
+
+          z = np.array([z[i::max_ntones] for i in range(ntones)])
+          z = z * rfmux.core.transferfunctions.VOLTS_PER_ROC / 256 / np.sqrt(2)
+          if return_dbc:
+              z /= 10 ** (ares[:, np.newaxis] / 20)
+          np.save(outpath.replace('.npy', f'_{batch_index:02d}.npy'))
+          batch_index += 1
+     finally:
+          for f in files:
+              f.close()
+
 
 def find_key_and_index(dictionary, j):
     """
