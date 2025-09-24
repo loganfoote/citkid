@@ -22,50 +22,45 @@ def convert_parser_to_z(path, crs_sn, module, ntones, max_ntones):
     z (np.array): complex S21 data in V
     """
     dtype = np.dtype([('i', np.int32), ('q', np.int32)])
-    record_size = dtype.itemsize
-    batch_size = 100_000
     parser_batch_file ='m0%d_raw32'%(module)
     with open(os.path.join(path, f'serial_{crs_sn:04d}', parser_batch_file),
               'rb') as f:
-      while True:
-          data = np.fromfile(f, dtype = dtype, count = batch_size)
-          if data.size == 0:
-              break
-          z = parser_dat['i'].astype(np.float64) + 1j * parser_dat['q'].astype(np.float64)
-          z = np.array([z[i::max_ntones] for i in range(ntones)])
-          z = z * rfmux.core.transferfunctions.VOLTS_PER_ROC / 256 / np.sqrt(2)
-          ### save to file here
+        parser_dat = np.fromfile(f, dtype = dtype)
+        z = parser_dat['i'] + 1j * parser_dat['q']
+        z = np.array([z[i::max_ntones] for i in range(ntones)])
+        z = z * rfmux.core.transferfunctions.VOLTS_PER_ROC / 256 / np.sqrt(2)
     return z
 
-def convert_parser_to_z_batch(path, outpath, crs_sn, module, ntones,
-                              max_ntones, return_dbc, ares, ch_ixs):
+def convert_parser_to_z_batch(path, outpath, crs_sn, module_indices, ntones, max_ntones,
+                              return_dbc, ares, ch_ix_dict, batch_size = 500):
     """
-    Import a parser file and convert the data to complex S21 in V
+    Import a parser file in batchesand reformat it in order of the channels of interest. Saves
+    each batch as int32 data, to later be scaled by the scaling factors saved by CRS.take_noise.
 
     Parameters:
-    path (str): path to the parser folder
+    path (str): path to the parser folder.
     outpath (str): path to the output file. Must end in .npy. Suffices will be
         appended to the output files for each batch.
-    crs_sn (int): CRS serial number
-    module (int): module number
-    ntones (int): number of tones
-    return_dbc (bool): if true, divides the output by the tone power
-    ares (np.ndarray or None): if return_dbc, uses ares as the tone powers
-    ch_ixs (list): values (int) are indices into the data corresponding to the
-        channels, in order.
-
-    Returns:
-    z (np.array): complex S21 data in V
+    crs_sn (int): CRS serial number.
+    module (int): module number.
+    ntones (int): number of tones.
+    max_ntones (int): maximum number of tones, for parsing data.
+    return_dbc (bool): if true, divides the output by the tone power.
+    ares (np.ndarray or None): if return_dbc, uses ares as the tone powers.
+    ch_ix_dict (dict): channel index dictionary. keys (int) are module indices. Values are lists
+        where values (int) are indices into the data corresponding to the channels, in order.
+    batch_size (int): batch size, in MB.
     """
     warnings.warn("convert_parser_to_z_batch will overwrite data",
-                  warnings.UserWarning)
+                  UserWarning)
 
     dtype = np.dtype([('i', np.int32), ('q', np.int32)])
     record_size = dtype.itemsize
 
-    target_bytes = 500 * (1024 ** 2) # 500 MB
+    target_bytes = batch_size * (1024 ** 2) # 500 MB
     batch_size = target_bytes // (record_size * len(module_indices))
-
+    batch_size = (batch_size // max_ntones) * max_ntones 
+    # channel data is stored, sequentially, so batch_size must be a multiple of max_ntones
     file_paths = [
         os.path.join(path, f'serial_{crs_sn:04d}', 'm0%d_raw32'%(module))
         for module in module_indices
@@ -73,31 +68,51 @@ def convert_parser_to_z_batch(path, outpath, crs_sn, module, ntones,
 
     files = [open(fp, 'rb') for fp in file_paths]
     try:
-      batch_index = 0
-      while True:
-          batch_parts = [
+        batch_index = 0
+        while True:
+            batch_parts = [
             np.fromfile(f, dtype = dtype, count = batch_size)
             for f in files
-          ]
-          z = [[]] * len(fres)
-          for module_index, parser_dat  in zip(module_indices, batch_parts):
-              zi = parser_dat['i'].astype(np.float64) + 1j * parser_dat['q'].astype(np.float64)
-              for index, ch_index in enumerate(ch_ix_dict[module_index]):
-                  z[ch_index] = zi[index]
-          data_len = min([len(zi) for zi in z])
-          z = np.array([zi[:data_len] for zi in z])
-          if z.shape[1] == 0:
-              break
+            ]
+            z_real = [[]] * ntones
+            z_imag = [[]] * ntones
+            for module_index, parser_dat  in zip(module_indices, batch_parts):
+                zi_real = parser_dat['i'].astype(np.int32) 
+                zi_imag = parser_dat['q'].astype(np.int32)
+                for index, ch_index in enumerate(ch_ix_dict[module_index]):
+                    z_real[ch_index] = zi_real[index::max_ntones]
+                    z_imag[ch_index] = zi_imag[index::max_ntones]
+            data_len = min([len(zi) for zi in z_real])
+            if data_len == 0:
+                break
+            z_real = np.array([zi[:data_len] for zi in z_real])
+            z_imag = np.array([zi[:data_len] for zi in z_imag])
+            if z_real.shape[1] == 0:
+                break
+            np.save(outpath.replace('.npy', f'_batch{batch_index:02d}.npy'), 
+                    [z_real, z_imag])
+            batch_index += 1
+    finally:
+        for f in files:
+            f.close()
 
-          z = np.array([z[i::max_ntones] for i in range(ntones)])
-          z = z * rfmux.core.transferfunctions.VOLTS_PER_ROC / 256 / np.sqrt(2)
-          if return_dbc:
-              z /= 10 ** (ares[:, np.newaxis] / 20)
-          np.save(outpath.replace('.npy', f'_{batch_index:02d}.npy'))
-          batch_index += 1
-     finally:
-          for f in files:
-              f.close()
+def import_noise_data(data_path, scale_factor_path):
+    """
+    Imports noise data as saved by the batch processor.
+
+    Parameters:
+    data_path (str): path to the complex IQ data.
+    scale_factor_path (str): path to the scale factor data.
+
+    Returns:
+    z (np.array): data, converted to complex128 and scaled by scale_factor.
+    """
+    i, q = np.load(data_path).astype(np.int32)
+    scale_factor = np.load(scale_factor_path).astype(np.float64)
+    z = np.empty(i.shape, dtype = np.complex128)
+    np.multiply(i, scale_factor, out = z.real)
+    np.multiply(q, scale_factor, out = z.imag)
+    return z
 
 
 def find_key_and_index(dictionary, j):

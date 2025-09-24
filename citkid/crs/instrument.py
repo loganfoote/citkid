@@ -5,7 +5,8 @@ import numpy as np
 from time import sleep
 from tqdm.auto import tqdm
 import rfmux
-from .util import find_key_and_index, convert_parser_to_z, get_modules, run_for_duration
+from .util import find_key_and_index, get_modules, run_for_duration
+from .util import convert_parser_to_z, convert_parser_to_z_batch
 
 class CRS:
     def __init__(self, serial_number = 27, interface = 'enp2s0'):
@@ -323,14 +324,15 @@ class CRS:
 
     async def capture_noise(self, fres, ares, noise_time, fir_stage = 6, fast_modules = [1],
                             parser_loc='/home/daq1/github/rfmux/firmware/r1.5.6/parser',
-                            delete_parser_data = True, return_dbc = True, verbose = True):
+                            delete_parser_data = True, return_dbc = True, batch_process = False,
+                            outpath = '', batch_size = 500, verbose = True):
         """
         Captures a noise timestream using the parser.
 
         Parameters:
-        fres (array-like): tone frequencies in Hz
-        ares (array-like): tone amplitudes in dBm
-        noise_time (float): timestream length in seconds
+        fres (array-like): tone frequencies in Hz.
+        ares (array-like): tone amplitudes in dBm.
+        noise_time (float): timestream length in seconds.
         fir_stage (int): fir_stage frequency downsampling factor.
             6 ->   596.05 Hz
             5 -> 1,192.09 Hz
@@ -338,17 +340,23 @@ class CRS:
             ...
             1 -> 19 kHz
             0 -> 38 kHz, can only be used with 1 module at a time. Make sure active module is module 1.
-        fast_modules (array-like): up to 2 modules that you want to run at 38 or 19 kHz
-        parser_loc (str): path to the parser file
+        fast_modules (array-like): up to 2 modules that you want to run at 38 or 19 kHz.
+        parser_loc (str): path to the parser file.
         delete_parser_data (bool): If True, deletes the parser data files
-            after importing the data
-        return_dbc (bool): If true, divides the output by the tone power
-        verbose (bool): If True, displays a progress bar while taking data
+            after importing the data.
+        return_dbc (bool): If true, divides the output by the tone power.
+        batch_process (bool): If True, processes the noise data in batches.
+        outpath (str): path to save the batch data. Data will be saved in multiple files 
+            with suffices appended to outpath.
+        batch_size (int): batch size, in MB.
+        verbose (bool): If True, displays a progress bar while taking data.
 
         Returns:
         z (M X N np.array): first index is channel index and second index is
-            complex S21 data point in the timestream
+            complex S21 data point in the timestream.
         """
+        if batch_process and not outpath.endswith('.npy'):
+            raise ValueError('outpath must end with .npy')
         module_indices = list(self.nco_freq_dict.keys()) if fir_stage > 2 else fast_modules
 
         fres, ares = np.asarray(fres), np.asarray(ares)
@@ -397,13 +405,21 @@ class CRS:
             if return_dbc:
                 z /= 10 ** (ares[:, np.newaxis] / 20)
             return z
+        
         # batch processing
-        for module_index in module_indices:
-            convert_parser_to_z_batch(data_path, outpath, self.serial_number,
-                                      module_indices, ntones,
-                                      max_ntones = max_ntones,
-                                      return_dbc = return_dbc,
-                                      ares = ares, ch_ix_dict = self.ch_ix_dict)
+        scale_factor = rfmux.core.transferfunctions.VOLTS_PER_ROC / 256 / np.sqrt(2)
+        scale_factor = np.array(scale_factor, dtype = np.float64)
+        if return_dbc:
+            scale_factor = scale_factor / 10 ** (ares[:, np.newaxis].astype(np.float64) / 20)
+        np.save(outpath.replace('.npy', f'_batch_scale_factor.npy'), scale_factor)
+        convert_parser_to_z_batch(data_path, outpath, self.serial_number,
+                                    module_indices, ntones = len(fres),
+                                    max_ntones = max_ntones,
+                                    return_dbc = return_dbc, ares = ares, 
+                                    ch_ix_dict = self.ch_ix_dict,
+                                    batch_size = batch_size)
+        if delete_parser_data:
+            shutil.rmtree('tmp/')
 
     async def capture_fast_noise(self, frequency, amplitude, time = 1,
                                  nsegments = 10, verbose = False):
