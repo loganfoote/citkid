@@ -153,15 +153,16 @@ async def take_iq_noise(inst, fres, ares, qres, fcal_indices, res_indices,
             proceed = input(msg).strip().lower()
             if proceed == 'y':
                 break
-        filename = f'noise{file_suffix}_00.npy'
+        filename = f'noise{file_suffix}.npy'
         z = await inst.capture_noise(fres, ares, noise_time,
                                      fir_stage = fir_stage,
                                      delete_parser_data = True,
-                                     parser_loc = parser_loc,
-                                     verbose = verbose)
-        np.save(out_directory + filename, [np.real(z), np.imag(z)])
+                                     return_dbc = True, batch_process = True,
+                                     outpath = out_directory + filename,
+                                     batch_size = batch_size,
+                                     parser_loc = parser_loc, verbose = verbose)
         fsample_noise = inst.sample_frequency
-        filename = f'noise{file_suffix}_tsample_00.npy'
+        filename = f'noise{file_suffix}_tsample.npy'
         np.save(out_directory + filename, 1 / fsample_noise)
 
 
