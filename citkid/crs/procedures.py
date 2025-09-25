@@ -161,10 +161,6 @@ async def take_iq_noise(inst, fres, ares, qres, fcal_indices, res_indices,
                                      outpath = out_directory + filename,
                                      batch_size = batch_size,
                                      parser_loc = parser_loc, verbose = verbose)
-        fsample_noise = inst.sample_frequency
-        filename = f'noise{file_suffix}_tsample.npy'
-        np.save(out_directory + filename, 1 / fsample_noise)
-
 
 async def take_rough_sweep(inst, fres, ares, qres, fcal_indices, res_indices,
                            out_directory, file_suffix, npoints = 600,

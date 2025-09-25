@@ -31,11 +31,13 @@ def convert_parser_to_z(path, crs_sn, module, ntones, max_ntones):
         z = z * rfmux.core.transferfunctions.VOLTS_PER_ROC / 256 / np.sqrt(2)
     return z
 
-def convert_parser_to_z_batch(path, outpath, crs_sn, module_indices, ntones, max_ntones,
-                              return_dbc, ares, ch_ix_dict, batch_size = 500):
+def convert_parser_to_z_batch(path, outpath, crs_sn, module_indices, ntones,
+                              max_ntones, return_dbc, ares, ch_ix_dict,
+                              batch_size = 500):
     """
-    Import a parser file in batchesand reformat it in order of the channels of interest. Saves
-    each batch as int32 data, to later be scaled by the scaling factors saved by CRS.take_noise.
+    Import a parser file in batchesand reformat it in order of the channels of
+    interest. Saves each batch as int32 data, to later be scaled by the scaling
+    factors saved by CRS.take_noise.
 
     Parameters:
     path (str): path to the parser folder.
@@ -47,8 +49,9 @@ def convert_parser_to_z_batch(path, outpath, crs_sn, module_indices, ntones, max
     max_ntones (int): maximum number of tones, for parsing data.
     return_dbc (bool): if true, divides the output by the tone power.
     ares (np.ndarray or None): if return_dbc, uses ares as the tone powers.
-    ch_ix_dict (dict): channel index dictionary. keys (int) are module indices. Values are lists
-        where values (int) are indices into the data corresponding to the channels, in order.
+    ch_ix_dict (dict): channel index dictionary. keys (int) are module indices.
+        Values are lists where values (int) are indices into the data
+        corresponding to the channels, in order.
     batch_size (int): batch size, in MB.
     """
     warnings.warn("convert_parser_to_z_batch will overwrite data",
@@ -59,7 +62,7 @@ def convert_parser_to_z_batch(path, outpath, crs_sn, module_indices, ntones, max
 
     target_bytes = batch_size * (1024 ** 2) # 500 MB
     batch_size = target_bytes // (record_size * len(module_indices))
-    batch_size = (batch_size // max_ntones) * max_ntones 
+    batch_size = (batch_size // max_ntones) * max_ntones
     # channel data is stored, sequentially, so batch_size must be a multiple of max_ntones
     file_paths = [
         os.path.join(path, f'serial_{crs_sn:04d}', 'm0%d_raw32'%(module))
@@ -77,7 +80,7 @@ def convert_parser_to_z_batch(path, outpath, crs_sn, module_indices, ntones, max
             z_real = [[]] * ntones
             z_imag = [[]] * ntones
             for module_index, parser_dat  in zip(module_indices, batch_parts):
-                zi_real = parser_dat['i'].astype(np.int32) 
+                zi_real = parser_dat['i'].astype(np.int32)
                 zi_imag = parser_dat['q'].astype(np.int32)
                 for index, ch_index in enumerate(ch_ix_dict[module_index]):
                     z_real[ch_index] = zi_real[index::max_ntones]
@@ -89,7 +92,7 @@ def convert_parser_to_z_batch(path, outpath, crs_sn, module_indices, ntones, max
             z_imag = np.array([zi[:data_len] for zi in z_imag])
             if z_real.shape[1] == 0:
                 break
-            np.save(outpath.replace('.npy', f'_batch{batch_index:02d}.npy'), 
+            np.save(outpath.replace('.npy', f'_batch{batch_index:02d}.npy'),
                     [z_real, z_imag])
             batch_index += 1
     finally:

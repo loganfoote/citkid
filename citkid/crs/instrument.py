@@ -449,6 +449,8 @@ class CRS:
         if return_dbc:
             scale_factor = scale_factor / 10 ** (ares[:, np.newaxis].astype(np.float64) / 20)
         np.save(outpath.replace('.npy', f'_batch_scale_factor.npy'), scale_factor)
+        np.save(outpath.replace('.npy', f'_batch_tsample.npy'),
+                1 / self.sample_frequency)
         convert_parser_to_z_batch(data_path, outpath, self.serial_number,
                                     module_indices, ntones = len(fres),
                                     max_ntones = max_ntones,
