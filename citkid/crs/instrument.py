@@ -188,7 +188,7 @@ class CRS:
         def select_nco(k):
             ncos = [np.abs(self.nco_freq_dict[k] - fr) for fr in [max(freqs),
                                                                   min(freqs)]]
-             return max(ncos)
+            return max(ncos)
         for ch_ix, freqs, ar in zip(channel_indices, frequencies, ares):
             module_index = min(self.nco_freq_dict, key = select_nco)
             self.frequencies_dict[module_index].append(freqs)
@@ -206,7 +206,7 @@ class CRS:
         # Confirm that frequencies are in each NCO bandwidth
         for module_index in self.nco_freq_dict.keys():
             bw_half = 312.5e6 if self.extended_bw else 250e6
-            diffs = self.frequencies_dict[module_index]
+            diffs = self.frequencies_dict[module_index].copy()
             diffs -= self.nco_freq_dict[module_index]
             if any(np.abs(diffs).flatten() > bw_half):
                 err = 'All of frequencies must be within '

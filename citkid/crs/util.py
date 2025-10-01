@@ -26,7 +26,7 @@ def convert_parser_to_z(path, crs_sn, module, ntones, max_ntones):
     with open(os.path.join(path, f'serial_{crs_sn:04d}', parser_batch_file),
               'rb') as f:
         parser_dat = np.fromfile(f, dtype = dtype)
-        z = parser_dat['i'] + 1j * parser_dat['q']
+        z = parser_dat['i'].astype(np.float64) + 1j * parser_dat['q'].astype(np.float64)
         z = np.array([z[i::max_ntones] for i in range(ntones)])
         z = z * rfmux.core.transferfunctions.VOLTS_PER_ROC / 256 / np.sqrt(2)
     return z
@@ -77,6 +77,7 @@ def convert_parser_to_z_batch(path, outpath, crs_sn, module_indices, ntones,
             np.fromfile(f, dtype = dtype, count = batch_size)
             for f in files
             ]
+            # Should get data_len from here, then initialize lists as arrays
             z_real = [[]] * ntones
             z_imag = [[]] * ntones
             for module_index, parser_dat  in zip(module_indices, batch_parts):
