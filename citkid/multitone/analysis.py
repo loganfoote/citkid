@@ -366,7 +366,7 @@ def plot_fits_batch(directory, file_suffix, plot_directory):
     fs, zs, popts, ress, res_indices = [], [], [], [], []
     for index in [d for d in range(len(fres)) if d not in fcal_indices]:
         row = data[data.dataIndex == index].iloc[0]
-        p_amp, p_phase, p0, popt, perr, res, downward plot_path = separate_fit_row(row, prefix = 'iq')
+        p_amp, p_phase, p0, popt, perr, res, downward, plot_path = separate_fit_row(row, prefix = 'iq')
 
         ff, zf = ffine[index], zfine[index]
         zs.append(remove_gain(ff, zf, p_amp, p_phase))
