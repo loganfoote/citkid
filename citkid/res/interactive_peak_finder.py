@@ -71,8 +71,10 @@ class peakFinder:
             for vline in self.vlines:
                 vline.remove()
         self.vlines = []
-        for xi in self.fres:
-            self.vlines.append(self.ax.axvline(xi / 1e6, color=plt.cm.viridis(0.5),
+        for i, xi in enumerate(self.fres):
+            # alternate colors to make overlaps visible
+            color = plt.cm.viridis(0.33 + 0.34 * (i % 2))
+            self.vlines.append(self.ax.axvline(xi / 1e6, color = color,
                                                linestyle = '--',
                                                alpha = 0.8))
         if self.line is not None:
@@ -149,8 +151,10 @@ class peakFinder:
         self.vlines = []
         for vline in old_vlines:
             vline.remove()
-        for xi in self.fres:
-            self.vlines.append(self.ax.axvline(xi / 1e6, color=plt.cm.viridis(0.5),
+        for i, xi in enumerate(self.fres):
+            # alternate colors to make overlaps visible
+            color = plt.cm.viridis(0.33 + 0.34 * (i % 2))
+            self.vlines.append(self.ax.axvline(xi / 1e6, color = color,
                                                linestyle = '--',
                                                alpha = 0.8))
         self.fig.canvas.draw()
