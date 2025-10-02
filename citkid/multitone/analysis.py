@@ -272,6 +272,8 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
             if circfit_npoints is not None:
                 ix_mid = np.argmin(np.abs(np.mean(znoise) - zfine))
                 ix0, ix1 = ix_mid - circfit_npoints // 2, ix_mid + (circfit_npoints - circfit_npoints // 2)
+                ix0 = max(ix0, 0)
+                ix1 = min(ix1, len(ffine))
                 ffine, zfine = ffine[ix0:ix1], zfine[ix0:ix1]
         elif circfit_mode == 'nearest_z':
             # Take the n points closest to the median of the noise by
@@ -282,6 +284,8 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
             ffine, zfine = ffine[i_nearest], zfine[i_nearest]
         else:
             raise ValueError("Invalid value for circfit_mode: " + str(circfit_mode))
+
+        assert len(zfine), "No fine scan points remain after trim"
 
         try:
             if data_index in fcal_indices:
@@ -322,8 +326,7 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
                             xcal_weight_theta0 = xcal_weight_theta0,
                             xcal_weight_sigma = xcal_weight_sigma)
 
-                if correct_cic2:
-                    raise Exception('CIC correction is not implemented yet. Waiting for an rfmux update.')
+                if correct_cic:
                     for i in range(1, 4):
                         ftrim_off, s = compensate_psd_for_cics(psd_offres[0], 10 ** (psd_offres[i] / 10),
                                                 dec_stage=fir_stage, spectrum_cutoff=0.9)

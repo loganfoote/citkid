@@ -8,13 +8,14 @@ import rfmux
 from .util import find_key_and_index, convert_parser_to_z, get_modules, run_for_duration
 
 class CRS:
-    def __init__(self, serial_number = 27):
+    def __init__(self, serial_number = 27, interface = 'enp2s0'):
         """
         Initializes the crs object d. Not that the system must be
         configured using CRS.configure_system before measurements
 
         Parameters:
         serial_number (int): CRS serial number
+        interface (str): Ethernet interface identifier
         """
         self.serial_number = serial_number
         session_str = '!HardwareMap [ !CRS { ' + f'serial: "{serial_number:04d}"'
@@ -22,6 +23,7 @@ class CRS:
         s = rfmux.load_session(session_str)
         self.d = s.query(rfmux.CRS).one()
         self.nco_freq_dict = {}
+        self.interface = interface
 
     async def configure_system(self, clock_source="SMA", full_scale_dbm = 7,
                                analog_bank_high = False, verbose = True):
@@ -201,7 +203,7 @@ class CRS:
 
         # Set fir_stage
         fir_stage = 6
-        await self.d.set_fir_stage(fir_stage)
+        await self.d.set_decimation(fir_stage) 
         # Sweep
         sweep_f, sweep_z = {}, {}
         modules = get_modules(self.d, list(self.frequencies_dict.keys()))
@@ -224,7 +226,7 @@ class CRS:
 
     async def sweep_linear(self, fres, ares, bw = 20e3, npoints = 10,
                            nsamps = 10, return_dbc = True, verbose = True,
-                           pbar_description = 'Sweeping'):
+                           pbar_description = 'Sweeping',center_fres=True):
         """
         Performs a frequency sweep where each channel is swept over the same
         frequency span
@@ -238,6 +240,7 @@ class CRS:
         return_dbc (bool): If True, divides the output by the tone power
         verbose (bool): If True, displays a progress bar while sweeping
         pbar_description (str): description for the progress bar
+        center_fres (bool): If True, fres is the center of each band. False, fres is the starting frequency.
 
         Returns:
         f (M X N np.array): array of frequencies where M is the channel index
@@ -245,9 +248,12 @@ class CRS:
         z (M X N np.array): array of complex S21 data corresponding to f
         """
         fres, ares = np.asarray(fres), np.asarray(ares)
-        f = np.linspace(fres + bw / 2, fres - bw / 2, npoints).T
-        f, z = await self.sweep(f, ares, nsamps = nsamps, verbose = verbose,
-                                pbar_description = pbar_description)
+        if center_fres:
+            f = np.linspace(fres + bw / 2, fres - bw / 2, npoints).T
+        else:
+            f = np.linspace(fres, fres + bw, npoints).T
+        f, z = await self.sweep(f, ares, nsamps = nsamps, return_dbc = return_dbc,
+								verbose = verbose, pbar_description = pbar_description)
         return f, z
 
     async def sweep_qres(self, fres, ares, qres, npoints = 10, nsamps = 10,
@@ -274,8 +280,8 @@ class CRS:
         fres, ares, qres = np.asarray(fres), np.asarray(ares), np.asarray(qres)
         spans = fres / qres
         f = np.linspace(fres + spans / 2, fres - spans / 2, npoints).T
-        f, z = await self.sweep(f, ares, nsamps = nsamps, verbose = verbose,
-                                pbar_description = pbar_description)
+        f, z = await self.sweep(f, ares, nsamps = nsamps, return_dbc = return_dbc,
+                                verbose = verbose, pbar_description = pbar_description)
         return f, z
 
     async def sweep_full(self, amplitude, npoints = 10, nsamps = 10,
@@ -298,7 +304,7 @@ class CRS:
         z (np.array): array of complex S21 data corresponding to f
         """
         ncos = list(self.nco_freq_dict.values())
-        bw_total = 625e6 if self.extended_bw else 500e6
+        bw_total = 600e6 if self.extended_bw else 500e6
         bw = bw_total / 1024 + 200
         spacing = bw / npoints
         fres = np.concatenate([np.linspace(nco - bw_total / 2 + 10 + bw,
@@ -308,17 +314,16 @@ class CRS:
         # Left off here
         f, z = await self.sweep_linear(fres, ares, bw = bw - spacing,
                                        npoints = npoints, nsamps = nsamps,
-                                       verbose = verbose,
+                                       return_dbc = return_dbc, verbose = verbose,
                                        pbar_description = pbar_description)
         f, z = f.flatten(), z.flatten()
         ix = np.argsort(f)
         f, z = f[ix], z[ix]
         return f, z
 
-    async def capture_noise(self, fres, ares, noise_time, fir_stage = 6,
-                            parser_loc='/home/daq1/github/rfmux/firmware/r1.5.5/parser',
-                            interface='enp2s0', delete_parser_data = True,
-                            return_dbc = True, verbose = True):
+    async def capture_noise(self, fres, ares, noise_time, fir_stage = 6, fast_modules = [1],
+                            parser_loc='/home/daq1/github/rfmux/firmware/r1.5.6/parser',
+                            delete_parser_data = True, return_dbc = True, verbose = True):
         """
         Captures a noise timestream using the parser.
 
@@ -329,9 +334,12 @@ class CRS:
         fir_stage (int): fir_stage frequency downsampling factor.
             6 ->   596.05 Hz
             5 -> 1,192.09 Hz
-            4 -> 2,384.19 Hz, will drop some packets
+            4 -> 2,384.19 Hz
+            ...
+            1 -> 19 kHz
+            0 -> 38 kHz, can only be used with 1 module at a time. Make sure active module is module 1.
+        fast_modules (array-like): up to 2 modules that you want to run at 38 or 19 kHz
         parser_loc (str): path to the parser file
-        interface (str): Ethernet interface identifier
         delete_parser_data (bool): If True, deletes the parser data files
             after importing the data
         return_dbc (bool): If true, divides the output by the tone power
@@ -341,19 +349,25 @@ class CRS:
         z (M X N np.array): first index is channel index and second index is
             complex S21 data point in the timestream
         """
-        module_indices = list(self.nco_freq_dict.keys())
-        if fir_stage <= 4:
-            warnings.warn(f"packets will drop if fir_stage < 5", UserWarning)
+        module_indices = list(self.nco_freq_dict.keys()) if fir_stage > 2 else fast_modules
+        
         fres, ares = np.asarray(fres), np.asarray(ares)
         os.makedirs('tmp/', exist_ok = True)
         data_path = 'tmp/parser_data_00/'
         if os.path.exists(data_path):
             raise FileExistsError(f'{data_path} already exists')
         # set fir stage
-        await self.d.set_fir_stage(fir_stage)
+        if fir_stage ==0:
+            # as of 1.5.6, can only use 2 module or else packets drop
+            await self.d.set_decimation(0, short=True, module=fast_modules)
+        elif fir_stage ==1:
+            # don't know if this restriction is necessary for stage 1
+            await self.d.set_decimation(1, short=True, module=fast_modules)
+        else:
+            await self.d.set_decimation(fir_stage)
         self.sample_frequency = 625e6 / (256 * 64 * 2 ** fir_stage)
         if verbose:
-            print(f'fir stage is {await self.d.get_fir_stage()}')
+            print(f'fir stage is {await self.d.get_decimation()}')
 
         # set the tones
         max_ntones = await self.write_tones(fres, ares, return_max_ntones = True)
@@ -361,10 +375,10 @@ class CRS:
         # Collect the data
         channels = '1-' + f'{max_ntones}'
         cmd = [parser_loc, '-c', channels, '-d', data_path,
-                           '-i', interface, '-s', f'{self.serial_number:04d}']
+                           '-i', self.interface, '-s', f'{self.serial_number:04d}']
         run_for_duration(cmd, noise_time, verbose)
         # Set fir stage back
-        await self.d.set_fir_stage(6)
+        await self.d.set_decimation(6)
         # read the data and convert to z
         z = [[]] * len(fres)
         for module_index in module_indices:
@@ -558,7 +572,8 @@ async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
                                       module = module_index)
                 await ctx()
             nsamples_discard = 0 # 15
-            samples = await d.py_get_samples(nsamps + nsamples_discard,
+            # d.py_get_samples is t0's preferred method, but it does not work with every computer.
+            samples = await d.get_samples(nsamps + nsamples_discard,
                                              module = module_index,
                                              average = True)
             # format and average data

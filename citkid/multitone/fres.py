@@ -107,6 +107,8 @@ def update_fr_distance(f, z):
     Returns:
     fr (float): Updated frequency
     """
+    if len(f) < 1:
+        return np.nan
     offres = np.mean(np.roll(z, 10)[:20])
     diff = np.abs(z - offres)
     ix = np.argmax(diff)

@@ -18,6 +18,7 @@ async def take_iq_noise(inst, fres, ares, qres, fcal_indices, res_indices,
                         take_rough_sweep = False,
                         fres_update_method = 'distance', fir_stage = 6,
                         fres_all = None, qres_all = None, cable_delay = 0,
+                        parser_loc='/home/daq1/github/rfmux/firmware/r1.5.6/parser',
                         verbose = True):
     """
     Takes multitone IQ sweeps and noise.
@@ -59,6 +60,7 @@ async def take_iq_noise(inst, fres, ares, qres, fcal_indices, res_indices,
         incomplete
     qres_all (array-like): array of span factors corresponding to fres_all
     cable_delay (float): Cable delay estimate to improve frequency update
+    parser_loc (str): path to the parser file
     verbose (bool): If True, displays progress bars while taking data
     """
     data_path = 'tmp/parser_data_00/'
@@ -127,7 +129,8 @@ async def take_iq_noise(inst, fres, ares, qres, fcal_indices, res_indices,
         z = await inst.capture_noise(fres, ares, noise_time,
                                      fir_stage = fir_stage,
                                      delete_parser_data = True,
-                                    verbose = verbose)
+                                     parser_loc = parser_loc,
+                                     verbose = verbose)
         np.save(out_directory + filename, [np.real(z), np.imag(z)])
         fsample_noise = inst.sample_frequency
         filename = f'noise{file_suffix}_tsample_00.npy'
@@ -270,7 +273,7 @@ async def optimize_ares(inst, out_directory, fres, ares, qres, fcal_indices, res
         data = fit_iq(out_directory, None, file_suffix, 0, 0, 0, 0, 0, rejected_points = [],
                       plotq = False, verbose = verbose, catch_exceptions = True) # Turn off catch_exceptions
         a_nl = np.array(data.sort_values('dataIndex').iq_a, dtype = float)
-        res = np.array(data.sort_values('dataIndex').iq_a, dtype = float)
+        res = np.array(data.sort_values('dataIndex').iq_a, dtype = float) - a_target
         a_nls.append(a_nl)
         np.save(out_directory + f'a_nl_{file_suffix}.npy', a_nl)
         if plot_directory is not None:

@@ -17,6 +17,7 @@ def responsivity(P, R_0, P_0):
     if P_0 == 0:
         return np.nan
     return - R_0 * (1 + P / P_0) ** (-0.5)
+responsivity = np.vectorize(responsivity)
 
 @jit(nopython = True)
 def responsivity_int(P, R_0, P_0, c):
