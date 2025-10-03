@@ -73,7 +73,7 @@ class peakFinder:
         self.vlines = []
         for i, xi in enumerate(self.fres):
             # alternate colors to make overlaps visible
-            color = plt.cm.viridis(0.33 + 0.34 * (i % 2))
+            color = plt.cm.viridis(0.33 + 0.34 * ((i + len(self.fres))%2))
             self.vlines.append(self.ax.axvline(xi / 1e6, color = color,
                                                linestyle = '--',
                                                alpha = 0.8))
@@ -153,7 +153,7 @@ class peakFinder:
             vline.remove()
         for i, xi in enumerate(self.fres):
             # alternate colors to make overlaps visible
-            color = plt.cm.viridis(0.33 + 0.34 * (i % 2))
+            color = plt.cm.viridis(0.33 + 0.34 * ((i + len(self.fres))%2))
             self.vlines.append(self.ax.axvline(xi / 1e6, color = color,
                                                linestyle = '--',
                                                alpha = 0.8))
