@@ -7,6 +7,8 @@ from tqdm.auto import tqdm
 import rfmux
 from .util import find_key_and_index, get_modules, run_for_duration
 from .util import convert_parser_to_z, convert_parser_to_z_batch
+from .util import get_sample_frequency
+from ..util import fix_path
 
 class CRS:
     def __init__(self, serial_number = 27, interface = 'enp2s0'):
@@ -170,12 +172,12 @@ class CRS:
         Parameters:
         frequencies (M X N array-like float): the first index M is the channel
             index (max len 1024) and the second index N is the frequency in Hz
-            for a single point in the sweep.
-        ares (M array-like float): amplitudes in dBm for each channel.
-        nsamps (int): number of samples to average per point.
-        return_dbc (bool): If True, divides the output by the tone power.
-        verbose (bool): If True, displays a progress bar while sweeping.
-        pbar_description (str): description for the progress bar.
+            for a single point in the sweep
+        ares (M array-like float): amplitudes in dBm for each channel
+        nsamps (int): number of samples to average per point
+        return_dbc (bool): If True, divides the output by the tone power
+        verbose (bool): If True, displays a progress bar while sweeping
+        pbar_description (str): description for the progress bar
         """
         frequencies, ares = np.asarray(frequencies), np.asarray(ares)
         if not len(self.nco_freq_dict):
@@ -349,11 +351,11 @@ class CRS:
         f, z = f[ix], z[ix]
         return f, z
 
-    async def capture_noise(self, fres, ares, noise_time, fir_stage = 6,
-                            fast_modules = [1],
+    async def capture_noise(self, fres, ares, noise_time, fir_stage = 6, 
+                            fast_modules = [1], tmp_directory = 'tmp/',
                             parser_loc = '/home/daq1/github/rfmux/firmware/r1.5.6/parser',
-                            delete_parser_data = True, return_dbc = True,
-                            batch_process = False, outpath = '',
+                            delete_parser_data = True, return_dbc = True, 
+                            batch_process = False, outpath = '', 
                             batch_size = 500, verbose = True):
         """
         Captures a noise timestream using the parser.
@@ -372,12 +374,15 @@ class CRS:
                  active module is module 1.
         fast_modules (array-like): up to 2 modules that you want to run at 38
             or 19 kHz.
+        tmp_directory (str): directory to save the temporary parser data before 
+            converting to .npy. Data will be streamed straight to disc, so this 
+            must be a fast enough drive that contains enough room for the files.
         parser_loc (str): path to the parser file.
         delete_parser_data (bool): If True, deletes the parser data files
             after importing the data.
         return_dbc (bool): If true, divides the output by the tone power.
         batch_process (bool): If True, processes the noise data in batches.
-        outpath (str): path to save the batch data. Data will be saved in
+        outpath (str): path to save the batch data. Data will be saved in 
             multiple files with suffices appended to outpath.
         batch_size (int): batch size, in MB.
         verbose (bool): If True, displays a progress bar while taking data.
@@ -386,6 +391,13 @@ class CRS:
         z (M X N np.array): first index is channel index and second index is
             complex S21 data point in the timestream.
         """
+        # Type checks
+        tmp_directory = fix_path(tmp_directory)
+        os.makedirs(tmp_directory, exist_ok = True)
+        data_directory = os.path.join(tmp_directory, 'parser_data_00/')
+        if os.path.exists(data_directory):
+            raise FileExistsError(f'{data_directory} already exists')
+        
         if batch_process and not outpath.endswith('.npy'):
             raise ValueError('outpath must end with .npy')
         if fir_stage > 2:
@@ -394,20 +406,17 @@ class CRS:
             module_indices = fast_modules
 
         fres, ares = np.asarray(fres), np.asarray(ares)
-        os.makedirs('tmp/', exist_ok = True)
-        data_path = 'tmp/parser_data_00/'
-        if os.path.exists(data_path):
-            raise FileExistsError(f'{data_path} already exists')
+        
         # set fir stage
         if fir_stage ==0:
             # as of 1.5.6, can only use 2 module or else packets drop
             await self.d.set_decimation(0, short=True, module=fast_modules)
-        elif fir_stage ==1:
+        elif fir_stage == 1:
             # don't know if this restriction is necessary for stage 1
             await self.d.set_decimation(1, short=True, module=fast_modules)
         else:
             await self.d.set_decimation(fir_stage)
-        self.sample_frequency = 625e6 / (256 * 64 * 2 ** fir_stage)
+        self.sample_frequency = get_sample_frequency(fir_stage)
         if verbose:
             print(f'fir stage is {await self.d.get_decimation()}')
 
@@ -417,18 +426,20 @@ class CRS:
         sleep(1)
         # Collect the data
         channels = '1-' + f'{max_ntones}'
-        cmd = [parser_loc, '-c', channels, '-d', data_path,
+        cmd = [parser_loc, '-c', channels, '-d', data_directory,
                            '-i', self.interface, '-s',
                            f'{self.serial_number:04d}']
         run_for_duration(cmd, noise_time, verbose)
         # Set fir stage back
         await self.d.set_decimation(6)
         # read the data and convert to z
-        if not batch_process:
+        if not batch_process: 
+            # Legacy method 
+            # -> larger data files, without batch processing, and slower
             z = [[]] * len(fres)
             for module_index in module_indices:
                 ntones = len(self.ch_ix_dict[module_index])
-                zi = convert_parser_to_z(data_path, self.serial_number,
+                zi = convert_parser_to_z(data_directory, self.serial_number,
                                          module_index, ntones = ntones,
                                          max_ntones = max_ntones)
                 # fres0 = self.fres_dict[module_index].copy()
@@ -438,30 +449,33 @@ class CRS:
             data_len = min([len(zi) for zi in z])
             z = np.array([zi[:data_len] for zi in z])
             if delete_parser_data:
-                shutil.rmtree('tmp/')
+                shutil.rmtree(data_directory)
             if return_dbc:
                 z /= 10 ** (ares[:, np.newaxis] / 20)
             return z
-
+        
         # batch processing
         scale_factor = rfmux.core.transferfunctions.VOLTS_PER_ROC / 256 / np.sqrt(2)
         scale_factor = np.array(scale_factor, dtype = np.float64)
         if return_dbc:
-            scale_factor = scale_factor / 10 ** (ares[:, np.newaxis].astype(np.float64) / 20)
-        np.save(outpath.replace('.npy', f'_batch_scale_factor.npy'), scale_factor)
-        np.save(outpath.replace('.npy', f'_batch_tsample.npy'),
+            p_scale = 1 / 10 ** (ares[:, np.newaxis].astype(np.float64) / 20)
+            scale_factor = scale_factor * p_scale
+        np.save(outpath.replace('.npy', f'_batch_scale_factor.npy'), 
+                scale_factor)
+        np.save(outpath.replace('.npy', f'_batch_tsample.npy'), 
                 1 / self.sample_frequency)
-        convert_parser_to_z_batch(data_path, outpath, self.serial_number,
+        convert_parser_to_z_batch(data_directory, outpath, self.serial_number,
                                     module_indices, ntones = len(fres),
                                     max_ntones = max_ntones,
-                                    return_dbc = return_dbc, ares = ares,
+                                    return_dbc = return_dbc, ares = ares, 
                                     ch_ix_dict = self.ch_ix_dict,
                                     batch_size = batch_size)
         if delete_parser_data:
-            shutil.rmtree('tmp/')
+            shutil.rmtree(data_directory)
 
     async def capture_fast_noise(self, frequency, amplitude, time = 1,
                                  nsegments = 10, verbose = False):
+        ### Legacy - to be removed in V 1.0
         """
         Captures noise with a 2.44 MHz sample rate on a single channel. Turns on
         only a single channel to avoid noise spikes from neighboring channels.

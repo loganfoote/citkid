@@ -10,13 +10,14 @@ import warnings
 
 def convert_parser_to_z(path, crs_sn, module, ntones, max_ntones):
     """
-    Import a parser file and convert the data to complex S21 in V
+    Import a parser file and convert the data to complex S21 in V.
 
     Parameters:
-    path (str): path to the parser folder
-    crs_sn (int): CRS serial number
-    module (int): module number
-    ntones (int): number of tones
+    path (str): path to the parser folder.
+    crs_sn (int): CRS serial number.
+    module (int): module number.
+    ntones (int): number of tones.
+    max_ntones (int): maximum number of tones per module. 
 
     Returns:
     z (np.array): complex S21 data in V
@@ -46,7 +47,7 @@ def convert_parser_to_z_batch(path, outpath, crs_sn, module_indices, ntones,
     crs_sn (int): CRS serial number.
     module (int): module number.
     ntones (int): number of tones.
-    max_ntones (int): maximum number of tones, for parsing data.
+    max_ntones (int): maximum number of tones per module.
     return_dbc (bool): if true, divides the output by the tone power.
     ares (np.ndarray or None): if return_dbc, uses ares as the tone powers.
     ch_ix_dict (dict): channel index dictionary. keys (int) are module indices.
@@ -63,7 +64,8 @@ def convert_parser_to_z_batch(path, outpath, crs_sn, module_indices, ntones,
     target_bytes = batch_size * (1024 ** 2) # 500 MB
     batch_size = target_bytes // (record_size * len(module_indices))
     batch_size = (batch_size // max_ntones) * max_ntones
-    # channel data is stored, sequentially, so batch_size must be a multiple of max_ntones
+    # channel data is stored, sequentially, so batch_size must be 
+    # a multiple of max_ntones
     file_paths = [
         os.path.join(path, f'serial_{crs_sn:04d}', 'm0%d_raw32'%(module))
         for module in module_indices
@@ -77,20 +79,15 @@ def convert_parser_to_z_batch(path, outpath, crs_sn, module_indices, ntones,
             np.fromfile(f, dtype = dtype, count = batch_size)
             for f in files
             ]
-            # Should get data_len from here, then initialize lists as arrays
-            z_real = [[]] * ntones
-            z_imag = [[]] * ntones
+            N = min([b.shape[0] // (max_ntones) for b in batch_parts])
+            z_real = np.empty((ntones, N), dtype = np.int32)
+            z_imag = np.empty((ntones, N), dtype = np.int32)
             for module_index, parser_dat  in zip(module_indices, batch_parts):
                 zi_real = parser_dat['i'].astype(np.int32)
                 zi_imag = parser_dat['q'].astype(np.int32)
                 for index, ch_index in enumerate(ch_ix_dict[module_index]):
-                    z_real[ch_index] = zi_real[index::max_ntones]
-                    z_imag[ch_index] = zi_imag[index::max_ntones]
-            data_len = min([len(zi) for zi in z_real])
-            if data_len == 0:
-                break
-            z_real = np.array([zi[:data_len] for zi in z_real])
-            z_imag = np.array([zi[:data_len] for zi in z_imag])
+                    z_real[ch_index] = zi_real[index:N * max_ntones:max_ntones]
+                    z_imag[ch_index] = zi_imag[index:N * max_ntones:max_ntones]
             if z_real.shape[1] == 0:
                 break
             np.save(outpath.replace('.npy', f'_batch{batch_index:02d}.npy'),
@@ -118,21 +115,20 @@ def import_noise_data(data_path, scale_factor_path):
     np.multiply(q, scale_factor, out = z.imag)
     return z
 
-
 def find_key_and_index(dictionary, j):
     """
     Finds the key in a dictionary where the numpy array (value) contains the
-    integer 'j', and returns both the key and the index of 'j' in that array
+    integer 'j', and returns both the key and the index of 'j' in that array.
 
     Parameters:
     dictionary (dict): A dictionary where keys are integers and values are numpy
-        arrays of integers
-    j (int): The integer to search for in the numpy arrays
+        arrays of integers.
+    j (int): The integer to search for in the numpy arrays.
 
     Returns:
     tuple: A tuple (key, index) where 'key' is the dictionary key and 'index'
         is the position of 'j' in the array If 'j' is not found, returns
-        (None, None)
+        (None, None).
     """
     for key, value_array in dictionary.items():
         indices = np.where(value_array == j)[0]
@@ -142,15 +138,15 @@ def find_key_and_index(dictionary, j):
 
 def get_modules(crs, module_indices):
     """
-    Gets the subset of crs ReadoutModule objects given the module indices
+    Gets the subset of crs ReadoutModule objects given the module indices.
 
     Parameters:
-    crs (rfmux.CRS): rfmux CRS system module
-    module_indices (array-like, int): module indices
+    crs (rfmux.CRS): rfmux CRS system module.
+    module_indices (array-like, int): module indices.
 
     Returns:
     modules (array-like, rfmux.ReadoutModule): crs system object readout modules
-        corresponding to the module indices
+        corresponding to the module indices.
     """
     modules_generic = rfmux.ReadoutModule.module.in_(module_indices)
     modules = crs.modules.filter(modules_generic)
@@ -162,14 +158,15 @@ def run_for_duration(cmd, duration, verbose = True):
     even if Python is closed.
 
     Parameters:
-    cmd (str): command to run
-    duration (int): duration in seconds
-    verbose (bool): If True, displays a progress bar while running
+    cmd (str): command to run.
+    duration (int): duration in seconds.
+    verbose (bool): If True, displays a progress bar while running.
     """
     if os.name == "nt":  # Windows
-        process = subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+        process = subprocess.Popen(cmd, 
+                            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP)
     else:  # Linux/macOS
-        process = subprocess.Popen(cmd, preexec_fn=os.setsid)
+        process = subprocess.Popen(cmd, preexec_fn = os.setsid)
 
     try:
         pbar = list(range(int(duration)))
@@ -180,6 +177,71 @@ def run_for_duration(cmd, duration, verbose = True):
             sleep(1)
     finally:
         if os.name == "nt":
-            subprocess.call(["taskkill", "/F", "/T", "/PID", str(process.pid)])  # Windows force kill
+            # Windows force kill
+            subprocess.call(["taskkill", "/F", "/T", "/PID", str(process.pid)])  
         else:
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)  # Unix kill entire process group
+            # Unix kill entire process group
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)  
+
+def get_sample_frequency(fir_stage):
+    """
+    Returns the sample frequency in Hz given the decimation stage index.
+    
+    Parameters:
+    fir_stage (int): decimation stage index.
+    
+    Returns:
+    (float): sample frequency in Hz.
+    """
+    return 625e6 / (256 * 64 * 2 ** fir_stage)
+
+def estimate_timestream_data_size(fir_stage, noise_time, nmodules, max_ntones, 
+                                  ntones):
+    """
+    Estimates and prints the raw parser data size and processed data size of a 
+    timestream. 
+
+    Parameters:
+    fir_stage (int): decimation stage.
+    noise_time (float): timestream length in s. 
+    nmodules (int): number of active modules. Be careful - if an NCO has been 
+        set, the modules will stream max_ntones channels whether or not tones 
+        are written.
+    max_ntones (int): maximum number of tones on a module. 
+    ntones (int): total number of tones across the modules. 
+    """
+    # Type and range checks
+    if type(fir_stage) != int or fir_stage < 0 or fir_stage > 6:
+        raise ValueError('fir_stage must be an int in range [0, 6]')
+    if noise_time < 0:
+        raise ValueError('noise_time must be positive')
+    if nmodules not in [1, 2, 3, 4]:
+        raise ValueError('nmodules must be in [1, 2, 3, 4]')
+    if type(max_ntones) != int or max_ntones < 0 or max_ntones > 1024:
+        raise ValueError('max_ntones must be an int in range [0, 1024]')
+    if type(ntones) != int or ntones < 0 or ntones > 1024 * 4:
+        raise ValueError('ntones must be an int in range [0, 4 * 1024]')
+    # Calculate file sizes
+    sample_frequency = get_sample_frequency(fir_stage)
+    size_perchannel = 4 * 2 * (noise_time * sample_frequency)
+    size_raw = size_perchannel * nmodules * max_ntones + 103
+    size_processed = size_perchannel * ntones
+    size_processed += 8 * ntones # scale factors 
+
+    # print files sizes
+    size_raw /= 1e6 
+    unit = 'MB'
+    s = f'{size_raw:.0f}'
+    if size_raw // 1000:
+        size_raw /= 1e3 
+        unit = 'GB'
+        s = f'{size_raw:.1f}'
+        
+    print(f'Raw parser data size: {s} {unit}')
+    size_processed /= 1e6 
+    s = f'{size_processed:.0f}'
+    if size_processed // 1000:
+        size_processed /= 1e3 
+        unit = 'GB'
+        s = f'{size_processed:.1f}'
+    print(f'Processed data size:  {s} {unit}') 
