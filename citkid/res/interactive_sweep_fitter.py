@@ -2,6 +2,7 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.markers import MarkerStyle
 from citkid.res.fitter import fit_nonlinear_iq_with_gain
 from ipywidgets import IntSlider, Dropdown, VBox, HBox
 from ipywidgets import Output, Label, ToggleButton, Button, FloatText, Layout
@@ -92,7 +93,7 @@ class resSweepFitter:
         self.out_directory = fix_path(out_directory)
         os.makedirs(self.out_directory, exist_ok = True)
         self.fig_fit = None
-
+        
     def run_fitter(self):
         """
         Run the main fitting code by setting up and displaying widgets.
@@ -123,6 +124,7 @@ class resSweepFitter:
         self.zgs = [np.asarray(zgs[i]) for i in ix]
         self.fres_alls = [np.asarray(fres_alls[i]) for i in ix]
         self.qres_alls = [np.asarray(qres_alls[i]) for i in ix]
+        self.bad_iq_flags = np.zeros(len(self.ffs), dtype = int)
         # # update dropdown options
         options = [("Select", None)]
         options += [(f"{xi:.0f} {self.x_unit}", i)
@@ -166,22 +168,31 @@ class resSweepFitter:
                                                 dpi = self.dpi)
         self.axs[0].set(ylabel = ylbl,
                         xlabel = f'{self.x_name} ({self.x_unit})')
+        self.axs[0].plot([], [], 'sk', label = 'fit data')
+        self.axs[0].plot([], [], '--k', label = 'flagged bad data')
+        self.axs[0].legend(framealpha = 1)
         f0 = np.mean(self.ffs[0])
         self.axs[1].set(ylabel = r'$|S_{21}|$ offset (dB)',
                    xlabel = f'(f - {f0 / 1e6:.4f} MHz) (kHz)')
         # Plot data
         offset = 0
-        self.xy_scatter = []
+        self.xy_scatter = [None] * len(self.ffs)
         for ix, (xi, yi, f, z) in enumerate(zip(self.x, y,
                                                  self.ffs, self.zfs)):
             color = plt.cm.viridis(ix / (len(self.ffs) - 1))
-            self.xy_scatter.append(self.axs[0].scatter(xi, yi, color = color,
-                                                       marker = 's'))
+            # Scatter or vline on ax 0 
+            if self.bad_iq_flags[ix]:
+                self.xy_scatter[ix] = self.axs[0].axvline(xi, linestyle = '--', 
+                                                          color = color)
+            else:
+                self.xy_scatter[ix] = self.axs[0].scatter(xi, yi, 
+                                            color = color, marker = 's')
+            # Plot |S21| with offset on ax 1
             dB = 20 * np.log10(np.abs(z))
             dB += offset - min(dB)
             offset = max(dB)
             self.axs[1].plot((f - f0) / 1e3, dB, '.',
-                             color = color)
+                                color = color)
 
     def update_sweep_plot(self):
         """
@@ -193,12 +204,18 @@ class resSweepFitter:
         elif self.y_name == 'Qr':
             y = self.y * 1e-3
         else:
-            y = self.y
-        for xi, yi, scatter in zip(self.x, y, self.xy_scatter):
-            scatter.set_offsets(np.c_[xi, yi])
-        # rescale axis and redraw figure
-        offset = (max(y) - min(y)) * 0.1
-        self.axs[0].set_ylim([min(y) - offset, max(y) + offset])
+            y = self.y 
+        for ix, (xi, yi, scatter) in enumerate(zip(self.x, y, self.xy_scatter)):
+            color = plt.cm.viridis(ix / (len(self.ffs) - 1))
+            scatter.remove()
+            if not self.bad_iq_flags[ix]:
+                self.xy_scatter[ix] = self.axs[0].scatter(xi, yi, 
+                                            color = color, marker = 's')
+            else:
+                self.xy_scatter[ix] = self.axs[0].axvline(xi, linestyle = '--', 
+                                                          color = color)
+ 
+        # redraw figure
         with self.out_swp:
             self.out_swp.clear_output(wait = True)
             self.fig_sweep.canvas.draw_idle()
@@ -247,8 +264,8 @@ class resSweepFitter:
                                         tooltip = tt,
                                         layout = Layout(width = 'auto'),
                                         style = {'description_width': 'auto'})
-        self.bad_iq_flag.observe(lambda c: update_bad_iq_color(c,
-                                            self.bad_iq_flag), 'value')
+        # single handler that updates color and reruns fit/plot
+        self.bad_iq_flag.observe(self._bad_iq_flag_change, 'value')
         tt = 'Apply current configuration to all S21 datasets in the sweep'
         self.apply_all_btn = Button(description = 'Apply to all',
                                     button_style = '',
@@ -259,12 +276,11 @@ class resSweepFitter:
                             style = {'description_width': 'auto'})
 
         # connect widgets
-        self.dataset_selector.observe(self.select_dataset, names = "value")
-        self.start_ix_slider.observe(self.rerun_fit, names = "value")
-        self.end_ix_slider.observe(self.rerun_fit,   names = "value")
-        self.q_mult_text.observe(self.rerun_fit,     names = "value")
-        self.bad_iq_flag.observe(self.rerun_fit,     names = "value")
-        self.apply_all_btn.on_click(self.rerun_all_fits)
+        self.dataset_selector.observe(self._select_dataset, names = "value")
+        self.start_ix_slider.observe(self._rerun_fit, names = "value")
+        self.end_ix_slider.observe(self._rerun_fit,   names = "value")
+        self.q_mult_text.observe(self._rerun_fit,     names = "value")
+        self.apply_all_btn.on_click(self._rerun_all_fits)
 
         # Buttons and label
         self.btn_prev = Button(description = "Previous Resonator",
@@ -275,8 +291,8 @@ class resSweepFitter:
                                layout = Layout(width = 'auto'))
         lbl = f"Dataset {self.data_ix + 1:d} / {self.nres:d}"
         self.data_ix_label = Label(value = lbl)
-        self.btn_prev.on_click(lambda b: on_prev_clicked(b, rsf = self))
-        self.btn_next.on_click(lambda b: on_next_clicked(b, rsf = self))
+        self.btn_prev.on_click(lambda b: _on_prev_clicked(b, rsf = self))
+        self.btn_next.on_click(lambda b: _on_next_clicked(b, rsf = self))
 
         # initial load
         self.load_data_ix()
@@ -296,22 +312,7 @@ class resSweepFitter:
         ], align_items = 'flex-start')
         return vbox
 
-    def select_dataset(self, change = None):
-        """
-        Callback function to select the next dataset.
-
-        change (dict or None): widget change event dictionary (ignored, but
-            required for ipywidgets.observe). Defaults to None.
-        """
-        sweep_ix = self.dataset_selector.value
-        data_len = self.s21_data_lens[sweep_ix]
-        self.start_ix_slider.max = data_len
-        self.end_ix_slider.max = data_len
-        self.start_ix_slider.value = 0
-        self.end_ix_slider.value = data_len
-        self.rerun_fit()
-
-    def rerun_all_fits(self, button):
+    def _rerun_all_fits(self, button):
         """
         Callback function to run fitter and update plots for all datasets in
         the sweep.
@@ -327,7 +328,7 @@ class resSweepFitter:
             self.dataset_selector.value = sweep_ix
             self.select_dataset()
 
-    def rerun_fit(self, change = None):
+    def _rerun_fit(self, change = None):
         """
         Callback function to run fitter and update plots.
 
@@ -341,8 +342,6 @@ class resSweepFitter:
 
         self.status.value = "Fitting..."
         if sweep_ix is None:
-            # with self.out_fit: self.out_fit.clear_output()
-            # with self.out_swp: self.out_swp.clear_output()
             self.status.value = 'Idle'
             return
         if bypass_fit:
@@ -377,18 +376,19 @@ class resSweepFitter:
                 status = 'Fit failed, idle...'
 
         # Save fit output as CSV
+        self.bad_iq_flags[self.data_ix] = int(self.bad_iq_flag.value)
         data_out = pd.DataFrame(out_row).T
         data_out['resIndex'] = self.res_ix
         data_out[self.x_df_name] = self.x[self.data_ix]
         data_out['resSweepFitterIndex'] = sweep_ix
         data_out['badS21dataFlag'] = int(self.bad_iq_flag.value)
+        data_out['iqFitStartIx'] = start_ix
+        data_out['iqFitEndIx'] = end_ix
+        data_out['iqFitQresMult'] = q_mult
         path = os.path.join(os.path.join(self.out_directory,
                             f'fitdata_SI{sweep_ix:d}_Fn{self.res_ix:d}.csv'))
         data_out.to_csv(path, index = False)
 
-        if fit_fig is None:
-            self.status.value = status
-            return
         # Redraw sweep plot with updated row
         self.y[self.data_ix] = out_row[f'iq_{self.y_name}']
         # Update and display plots
@@ -399,10 +399,36 @@ class resSweepFitter:
             d = display(fit_fig)
         self.status.value = status
 
+    def _select_dataset(self, change = None):
+        """
+        Callback function to select the next dataset.
+
+        change (dict or None): widget change event dictionary (ignored, but
+            required for ipywidgets.observe). Defaults to None.
+        """
+        sweep_ix = self.dataset_selector.value
+        data_len = self.s21_data_lens[sweep_ix]
+        self.start_ix_slider.max = data_len
+        self.end_ix_slider.max = data_len
+        self.start_ix_slider.value = 0
+        self.end_ix_slider.value = data_len
+        self._rerun_fit()
+
+    def _bad_iq_flag_change(self, change = None):
+        """
+        Helper function for bad_iq_flag toggle button change.
+
+        Parameters:
+        change (dict or None): widget change event dictionary (ignored, but
+            required for ipywidgets.observe). Defaults to None.
+        """
+        _update_bad_iq_color(change, self.bad_iq_flag)
+        self._rerun_fit(change)
+
 ################################################################################
 ############################## Callback functions ##############################
 ################################################################################
-def on_prev_clicked(b, rsf):
+def _on_prev_clicked(b, rsf):
     """
     Callback for the 'Previous' button.
 
@@ -416,7 +442,7 @@ def on_prev_clicked(b, rsf):
     plt.close(rsf.fig_sweep)
     rsf.load_data_ix()
 
-def on_next_clicked(b, rsf):
+def _on_next_clicked(b, rsf):
     """
     Callback for the 'Next' button.
 
@@ -430,7 +456,7 @@ def on_next_clicked(b, rsf):
     plt.close(rsf.fig_sweep)
     rsf.load_data_ix()
 
-def update_bad_iq_color(change, toggle):
+def _update_bad_iq_color(change, toggle):
     """
     Callback function for changing the toggle button color.
 
