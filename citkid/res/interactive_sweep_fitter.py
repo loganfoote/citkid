@@ -2,11 +2,10 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.markers import MarkerStyle
 from citkid.res.fitter import fit_nonlinear_iq_with_gain
 from ipywidgets import IntSlider, Dropdown, VBox, HBox
 from ipywidgets import Output, Label, ToggleButton, Button, FloatText, Layout
-from IPython.display import display, clear_output
+from IPython.display import display
 from citkid.res.data_io import nonlinear_iq_names, nonlinear_iq_labels
 from citkid.util import fix_path
 
