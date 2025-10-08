@@ -1,4 +1,3 @@
-from numba import jit
 import numpy as np
 import emcee
 import corner

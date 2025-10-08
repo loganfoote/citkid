@@ -1,6 +1,5 @@
 import numpy as np
-from numba import jit, vectorize
-from scipy import stats
+from numba import vectorize, float64, boolean
 from scipy import signal
 from scipy.interpolate import interp1d
 
@@ -27,7 +26,7 @@ def bounds_check(p0, bounds):
     10% lower or higher than p0.
 
     Parameters:
-    p0(np.array): initial guesses for all parameters
+    p0 (np.array): initial guesses for all parameters
     bounds (tuple): 2d tuple of low values bounds[0] the high values bounds[1]
         to bound the fitting problem
 
@@ -59,7 +58,6 @@ def bounds_check(p0, bounds):
             upper_bounds.append(ub)
     return lower_bounds, upper_bounds
 
-@jit(nopython=True)
 def calculate_residuals(z, z_fit):
     """
     Given IQ data and fitted IQ data, return the chi squared value and p value
@@ -76,7 +74,8 @@ def calculate_residuals(z, z_fit):
     res = np.sqrt(sum((z - z_fit) ** 2)) / len(z)
     return res
 
-@vectorize(nopython=True)
+@vectorize([float64(float64, float64, float64, float64, boolean)], 
+           nopython = True, cache = True)
 def cardan(a, b, c, d, largest = True):
     """
     Analyticaly calculates the largest or smallest real root of a 3rd-order

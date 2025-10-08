@@ -217,6 +217,8 @@ def fit_util(p0, bounds, fit_tau, f, z_stacked, z, downward = True):
     p0 = [p0i * s for p0i, s in zip(p0, scaler)]
     bounds[0] = [bi * s for bi, s in zip(bounds[0], scaler)]
     bounds[1] = [bi * s for bi, s in zip(bounds[1], scaler)]
+    f = np.asarray(f, dtype = np.float64) 
+    z_stacked = np.asarray(z_stacked, dtype = np.float64)
     if not fit_tau:
         # Fit with tau enforced from p0[7]
         tau = p0[7]
@@ -225,6 +227,8 @@ def fit_util(p0, bounds, fit_tau, f, z_stacked, z, downward = True):
         def fit_func(x_lamb, a, b, c, d, e, f, g):
             return nonlinear_iq_for_fitter(x_lamb, a, b, c, d, e, f, g, tau,
                                            downward)
+        p0 = np.asarray(p0, dtype = np.float64) 
+        bounds = np.asarray(bounds, dtype = np.float64)
         popt, pcov = optimize.curve_fit(fit_func, f, z_stacked, p0,
                                         bounds = bounds)
         popt = np.insert(popt, 7, tau)
@@ -235,8 +239,9 @@ def fit_util(p0, bounds, fit_tau, f, z_stacked, z, downward = True):
         def fit_func(x_lamb, a, b, c, d, e, f, g, h):
             return nonlinear_iq_for_fitter(x_lamb, a, b, c, d, e, f, g, h,
                                            downward)
-        popt, pcov = optimize.curve_fit(nonlinear_iq_for_fitter, f, z_stacked,
-                              p0, bounds = bounds)
+        p0 = np.asarray(p0, dtype = np.float64) 
+        bounds = np.asarray(bounds, dtype = np.float64)
+        popt, pcov = optimize.curve_fit(fit_func, f, z_stacked, p0, bounds = bounds)
 
         perr = np.sqrt(np.diag(pcov))
     popt = [pi / s for pi, s in zip(popt, scaler)]

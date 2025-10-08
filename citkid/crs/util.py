@@ -3,7 +3,6 @@ import os
 import rfmux
 import subprocess
 import signal
-import sys
 from time import sleep
 from tqdm.auto import tqdm
 import warnings

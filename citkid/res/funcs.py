@@ -1,8 +1,36 @@
 import numpy as np
-from numba import jit
+from numba import njit, float64, complex128, boolean
 from .util import cardan
 
-@jit(nopython=True)
+@njit(float64[:](float64[:], float64, boolean), cache = True)
+def get_y(y0, a, largest = True):
+    """
+    Calculates the largest or smallest real root of
+        y0 = y + a / (1 + y^2)
+
+    Parameters:
+    y0 (np.array): resonance shift in the low-power and linear limit.
+    a (float): nonlinearity parameter
+    largest (bool): If True, returns the largest root. Otherwise, returns the
+        smallest root
+
+    Returns:
+    y (float or np.array): largest or smallest real root of the above equation
+    """
+    y = cardan(4.0, -4.0 * y0, 1.0, -(y0 + a), largest)
+    return y
+    # We may want to switch to the numpy method below, but I haven't had time
+    # to test it yet
+    # p = np.polynomial.Polynomial([-y0 - a, 1, -4 * y0, 4]) 
+    # all_roots = p.roots()
+    # real_roots = real_only(all_roots)
+    # if largest:
+    #     return max(real_roots)
+    # else:
+    #     return min(real_roots)
+
+@njit(complex128[:](float64[:], float64, float64, float64, float64,
+                 float64, float64, float64, float64, boolean), cache = True)
 def nonlinear_iq(f, fr, Qr, amp, phi, a, i0, q0, tau, downward = True):
     r"""
     Describes the transmission through a nonlinear resonator
@@ -44,7 +72,7 @@ def nonlinear_iq(f, fr, Qr, amp, phi, a, i0, q0, tau, downward = True):
     z = s21_readout * s21_res
     return z
 
-@jit(nopython=True)
+@njit(float64(float64[:], float64[:], float64[:]), cache = True)
 def circle_objective(params, x, y):
     """
     Objective for circle fitting
@@ -59,45 +87,14 @@ def circle_objective(params, x, y):
     error (float): error for minimization
     """
     A, B, R = params
-    error = sum(((x - A) ** 2+(y - B) ** 2 - R ** 2) ** 2)
+    error = sum(((x - A) ** 2 + (y - B) ** 2 - R ** 2) ** 2)
     return error
 
 ################################################################################
-######################### Utility functions ####################################
+######################### Equation for fitter ##################################
 ################################################################################
-
-@jit(nopython=True)
-def get_y(y0, a, largest = True):
-    """
-    Calculates the largest or smallest real root of
-        y0 = y + a / (1 + y^2)
-
-    Parameters:
-    y0 (float or np.array): resonance shift in the low-power and linear limit.
-    a (float): nonlinearity parameter
-    largest (bool): If True, returns the largest root. Otherwise, returns the
-        smallest root
-
-    Returns:
-    y (float or np.array): largest or smallest real root of the above equation
-    """
-    y = cardan(4.0, -4.0 * y0, 1.0, -(y0 + a), largest)
-    return y
-    # We may want to switch to the numpy method below, but I haven't had time
-    # to test it yet
-    # p = np.polynomial.Polynomial([-y0 - a, 1, -4 * y0, 4]) 
-    # all_roots = p.roots()
-    # real_roots = real_only(all_roots)
-    # if largest:
-    #     return max(real_roots)
-    # else:
-    #     return min(real_roots)
-
-################################################################################
-######################## Equations for fitter ##################################
-################################################################################
-
-@jit(nopython=True)
+@njit(float64[:](float64[:], float64, float64, float64, float64,
+                 float64, float64, float64, float64, boolean), cache = True)
 def nonlinear_iq_for_fitter(f, fr, Qr, amp, phi, a, i0, q0, tau,
                             downward = True):
     """
