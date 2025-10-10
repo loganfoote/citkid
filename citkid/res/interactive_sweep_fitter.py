@@ -325,7 +325,7 @@ class resSweepFitter:
             return
         for sweep_ix in range(self.sweep_data_len):
             self.dataset_selector.value = sweep_ix
-            self.select_dataset()
+            self._select_dataset(maintain_state = True)
 
     def _rerun_fit(self, change = None):
         """
@@ -335,6 +335,7 @@ class resSweepFitter:
             required for ipywidgets.observe). Defaults to None.
         """
         sweep_ix = self.dataset_selector.value
+        self.sweep_ix = sweep_ix
         start_ix, end_ix = self.start_ix_slider.value, self.end_ix_slider.value
         q_mult = self.q_mult_text.value
         bypass_fit = self.bad_iq_flag.value
@@ -375,10 +376,10 @@ class resSweepFitter:
                 status = 'Fit failed, idle...'
 
         # Save fit output as CSV
-        self.bad_iq_flags[self.data_ix] = int(self.bad_iq_flag.value)
+        self.bad_iq_flags[self.sweep_ix] = int(self.bad_iq_flag.value)
         data_out = pd.DataFrame(out_row).T
         data_out['resIndex'] = self.res_ix
-        data_out[self.x_df_name] = self.x[self.data_ix]
+        data_out[self.x_df_name] = self.x[self.sweep_ix]
         data_out['resSweepFitterIndex'] = sweep_ix
         data_out['badS21dataFlag'] = int(self.bad_iq_flag.value)
         data_out['iqFitStartIx'] = start_ix
@@ -389,7 +390,7 @@ class resSweepFitter:
         data_out.to_csv(path, index = False)
 
         # Redraw sweep plot with updated row
-        self.y[self.data_ix] = out_row[f'iq_{self.y_name}']
+        self.y[self.sweep_ix] = out_row[f'iq_{self.y_name}']
         # Update and display plots
         self.update_sweep_plot()
 
@@ -398,7 +399,7 @@ class resSweepFitter:
             d = display(fit_fig)
         self.status.value = status
 
-    def _select_dataset(self, change = None):
+    def _select_dataset(self, change = None, maintain_state = False):
         """
         Callback function to select the next dataset.
 
@@ -406,11 +407,14 @@ class resSweepFitter:
             required for ipywidgets.observe). Defaults to None.
         """
         sweep_ix = self.dataset_selector.value
+        if sweep_ix is None:
+            sweep_ix = 0
         data_len = self.s21_data_lens[sweep_ix]
-        self.start_ix_slider.max = data_len
-        self.end_ix_slider.max = data_len
-        self.start_ix_slider.value = 0
-        self.end_ix_slider.value = data_len
+        if not maintain_state:
+            self.start_ix_slider.max = data_len
+            self.end_ix_slider.max = data_len
+            self.start_ix_slider.value = 0
+            self.end_ix_slider.value = data_len
         self._rerun_fit()
 
     def _bad_iq_flag_change(self, change = None):
