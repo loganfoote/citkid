@@ -405,6 +405,8 @@ class resSweepFitter:
 
         change (dict or None): widget change event dictionary (ignored, but
             required for ipywidgets.observe). Defaults to None.
+        maintain_state (bool): If True, maintains the current start and end 
+            sliders and q_mult.
         """
         sweep_ix = self.dataset_selector.value
         if sweep_ix is None:
