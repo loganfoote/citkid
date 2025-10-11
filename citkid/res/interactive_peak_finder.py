@@ -425,7 +425,8 @@ class qresFinderSingle:
                 self.ax_iq.lines.remove(p)
             self.iq_cut = []
         if self.span_fill is not None:
-            self.span_fill.remove()
+            if self.span_fill in self.ax.collections:
+                self.span_fill.remove()
             self.span_fill = None
         if self.span_vline is not None:
             self.span_vline.remove()

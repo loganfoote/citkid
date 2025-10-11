@@ -19,6 +19,7 @@ async def take_iq_noise(inst, fres, ares, qres, fcal_indices, res_indices,
                         take_rough_sweep = False, update_fres_from_fine = False,
                         fres_update_method = 'distance', fir_stage = 6,
                         fres_all = None, qres_all = None, cable_delay = 0,
+                        batch_size = 1000,
                         parser_loc = '/home/daq1/github/rfmux/firmware/r1.5.6/parser',
                         wait_for_noise = False, verbose = True):
     """
@@ -63,6 +64,7 @@ async def take_iq_noise(inst, fres, ares, qres, fcal_indices, res_indices,
         incomplete.
     qres_all (array-like): array of span factors corresponding to fres_all.
     cable_delay (float): Cable delay estimate to improve frequency update.
+    batch_size (int): noise processing batch size in MB.
     parser_loc (str): path to the parser file.
     wait_for_noise (bool): If True, after taking IQ loops, waits for user input
         before proceeding with noise measurements.

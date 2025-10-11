@@ -356,7 +356,7 @@ class CRS:
                             parser_loc = '/home/daq1/github/rfmux/firmware/r1.5.6/parser',
                             delete_parser_data = True, return_dbc = True, 
                             batch_process = False, outpath = '', 
-                            batch_size = 500, verbose = True):
+                            batch_size = 1000, verbose = True):
         """
         Captures a noise timestream using the parser.
 
