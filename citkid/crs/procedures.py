@@ -108,7 +108,7 @@ async def take_iq_noise(inst, fres, ares, qres, fcal_indices, res_indices,
                                      pbar_description = 'Rough sweep')
         np.save(out_directory + filename, [f, np.real(z), np.imag(z)])
         if npoints_noisefreq_update:
-            ix0 = npoints_rough // 2 - npoints_noisefreq_update // 2,
+            ix0 = npoints_rough // 2 - npoints_noisefreq_update // 2
             ix1 = npoints_rough // 2 + npoints_noisefreq_update // 2
             ix1 += npoints_noisefreq_update % 2
             f0 = [fi[ix0: ix1] for fi in f]
@@ -137,7 +137,7 @@ async def take_iq_noise(inst, fres, ares, qres, fcal_indices, res_indices,
     np.save(out_directory + filename, [f, np.real(z), np.imag(z)])
     if update_fres_from_fine:
         if (npoints_noisefreq_update is not None):
-            ix0 = npoints_fine // 2 - npoints_noisefreq_update // 2,
+            ix0 = npoints_fine // 2 - npoints_noisefreq_update // 2
             ix1 = npoints_fine // 2 + npoints_noisefreq_update // 2
             ix1 += npoints_noisefreq_update % 2
             f0 = [fi[ix0: ix1] for fi in f]
