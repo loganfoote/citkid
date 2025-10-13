@@ -213,6 +213,9 @@ class resSweepFitter:
             else:
                 self.xy_scatter[ix] = self.axs[0].axvline(xi, linestyle = '--', 
                                                           color = color)
+        ymin, ymax = min(y), max(y) 
+        offset = (ymax - ymin) * 0.05 
+        self.axs[0].set(ylim = (ymin - offset, ymax + offset))
  
         # redraw figure
         with self.out_swp:
@@ -271,6 +274,13 @@ class resSweepFitter:
                                     tooltip = tt,
                                     style = {'description_width': 'auto'},
                                     layout = Layout(width = 'auto'))
+        tt = 'Maintain current start/end/Qmult when changing datasets'
+        self.maintain_state_btn = ToggleButton(description = 'Maintain state',
+                                    button_style = '',
+                                    tooltip = tt,
+                                    style = {'description_width': 'auto'},
+                                    layout = Layout(width = 'auto'))
+        self.maintain_state_btn.observe(self._maintain_state_btn_click)
         self.status = Label(value = "Idle", layout = Layout(width = 'auto'),
                             style = {'description_width': 'auto'})
 
@@ -300,7 +310,8 @@ class resSweepFitter:
         vbox = VBox([
             HBox([self.btn_prev, self.btn_next, self.data_ix_label],
                  align_items = 'flex-start'),
-            HBox([self.dataset_selector, self.bad_iq_flag, self.apply_all_btn],
+            HBox([self.dataset_selector, self.bad_iq_flag, self.apply_all_btn,
+                  self.maintain_state_btn],
                  align_items = 'flex-start'),
             VBox([self.start_ix_slider, self.end_ix_slider,
                   self.q_mult_text, self.status],
@@ -323,9 +334,10 @@ class resSweepFitter:
             s = 'Cannot apply all unless all S21 sweeps are the same length!!!'
             self.status.value = s
             return
+        self.maintain_state_btn.value = True
         for sweep_ix in range(self.sweep_data_len):
             self.dataset_selector.value = sweep_ix
-            self._select_dataset(maintain_state = True)
+        self.maintain_state_btn.value = False
 
     def _rerun_fit(self, change = None):
         """
@@ -399,7 +411,7 @@ class resSweepFitter:
             d = display(fit_fig)
         self.status.value = status
 
-    def _select_dataset(self, change = None, maintain_state = False):
+    def _select_dataset(self, change = None):
         """
         Callback function to select the next dataset.
 
@@ -412,7 +424,7 @@ class resSweepFitter:
         if sweep_ix is None:
             sweep_ix = 0
         data_len = self.s21_data_lens[sweep_ix]
-        if not maintain_state:
+        if not self.maintain_state_btn.value:
             self.start_ix_slider.max = data_len
             self.end_ix_slider.max = data_len
             self.start_ix_slider.value = 0
@@ -427,8 +439,18 @@ class resSweepFitter:
         change (dict or None): widget change event dictionary (ignored, but
             required for ipywidgets.observe). Defaults to None.
         """
-        _update_bad_iq_color(change, self.bad_iq_flag)
+        _update_toggle_color(change, self.bad_iq_flag)
         self._rerun_fit(change)
+
+    def _maintain_state_btn_click(self, button):
+        """
+        Helper function for maintain_state_btn button click.
+
+        Parameters:
+        button (ipywidgets.Button): the button widget that triggered the callback.
+        """
+        _update_toggle_color({'new': self.maintain_state_btn.value}, 
+                             self.maintain_state_btn)
 
 ################################################################################
 ############################## Callback functions ##############################
@@ -461,7 +483,7 @@ def _on_next_clicked(b, rsf):
     plt.close(rsf.fig_sweep)
     rsf.load_data_ix()
 
-def _update_bad_iq_color(change, toggle):
+def _update_toggle_color(change, toggle):
     """
     Callback function for changing the toggle button color.
 
