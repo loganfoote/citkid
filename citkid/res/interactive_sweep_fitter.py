@@ -92,7 +92,7 @@ class resSweepFitter:
         self.out_directory = fix_path(out_directory)
         os.makedirs(self.out_directory, exist_ok = True)
         self.fig_fit = None
-        
+
     def run_fitter(self):
         """
         Run the main fitting code by setting up and displaying widgets.
@@ -179,12 +179,12 @@ class resSweepFitter:
         for ix, (xi, yi, f, z) in enumerate(zip(self.x, y,
                                                  self.ffs, self.zfs)):
             color = plt.cm.viridis(ix / (len(self.ffs) - 1))
-            # Scatter or vline on ax 0 
+            # Scatter or vline on ax 0
             if self.bad_iq_flags[ix]:
-                self.xy_scatter[ix] = self.axs[0].axvline(xi, linestyle = '--', 
+                self.xy_scatter[ix] = self.axs[0].axvline(xi, linestyle = '--',
                                                           color = color)
             else:
-                self.xy_scatter[ix] = self.axs[0].scatter(xi, yi, 
+                self.xy_scatter[ix] = self.axs[0].scatter(xi, yi,
                                             color = color, marker = 's')
             # Plot |S21| with offset on ax 1
             dB = 20 * np.log10(np.abs(z))
@@ -199,24 +199,27 @@ class resSweepFitter:
         """
         # Update scatter data
         if self.y_name == 'fr':
-            y = (self.y - self.y[0]) / self.y[0] * 1e6
+            i = 0
+            while i < len(self.y) - 1 and np.isnan(self.y[i]):
+                i += 1
+            y = (self.y - self.y[i]) / self.y[i] * 1e6
         elif self.y_name == 'Qr':
             y = self.y * 1e-3
         else:
-            y = self.y 
+            y = self.y
         for ix, (xi, yi, scatter) in enumerate(zip(self.x, y, self.xy_scatter)):
             color = plt.cm.viridis(ix / (len(self.ffs) - 1))
             scatter.remove()
             if not self.bad_iq_flags[ix]:
-                self.xy_scatter[ix] = self.axs[0].scatter(xi, yi, 
+                self.xy_scatter[ix] = self.axs[0].scatter(xi, yi,
                                             color = color, marker = 's')
             else:
-                self.xy_scatter[ix] = self.axs[0].axvline(xi, linestyle = '--', 
+                self.xy_scatter[ix] = self.axs[0].axvline(xi, linestyle = '--',
                                                           color = color)
-        ymin, ymax = min(y), max(y) 
-        offset = (ymax - ymin) * 0.05 
+        ymin, ymax = np.nanmin(y), np.nanmax(y)
+        offset = (ymax - ymin) * 0.05
         self.axs[0].set(ylim = (ymin - offset, ymax + offset))
- 
+
         # redraw figure
         with self.out_swp:
             self.out_swp.clear_output(wait = True)
@@ -386,6 +389,7 @@ class resSweepFitter:
                 out_row = pd.Series({key: np.nan for key in fitrow_keys})
                 fit_fig = None
                 status = 'Fit failed, idle...'
+                raise e
 
         # Save fit output as CSV
         self.bad_iq_flags[self.sweep_ix] = int(self.bad_iq_flag.value)
@@ -417,7 +421,7 @@ class resSweepFitter:
 
         change (dict or None): widget change event dictionary (ignored, but
             required for ipywidgets.observe). Defaults to None.
-        maintain_state (bool): If True, maintains the current start and end 
+        maintain_state (bool): If True, maintains the current start and end
             sliders and q_mult.
         """
         sweep_ix = self.dataset_selector.value
@@ -449,7 +453,7 @@ class resSweepFitter:
         Parameters:
         button (ipywidgets.Button): the button widget that triggered the callback.
         """
-        _update_toggle_color({'new': self.maintain_state_btn.value}, 
+        _update_toggle_color({'new': self.maintain_state_btn.value},
                              self.maintain_state_btn)
 
 ################################################################################
