@@ -67,6 +67,7 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
     xcal_data (tuple): x vs theta calibration data. Not cut to theta_range
         x (np.array): fractional frequency shift data
         theta (np.array): theta data
+    popt_circle (np.array, float): circle fit parameters (A, B, R).
     figs (tuple): plots
         fig_cal (plt.figure): plot of the IQ loop with noise balls and
             calibration
@@ -150,7 +151,7 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
         xcal_data = [None]
     figs = (fig_cal, fig_timestream, fig_psd)
     return psd_onres, psd_offres, timestream_onres, timestream_offres,\
-           cr_indices, theta_range, poly, xcal_data, figs
+           cr_indices, theta_range, poly, xcal_data, popt_circle, figs
 
 def compute_psd_simple(ffine, zfine, fnoise, znoise, dt, deglitch_nstd = 5,
                        offres = False):
