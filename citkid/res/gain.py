@@ -84,8 +84,12 @@ def fit_gain(f, z, fr_spans, plotq = False):
     ### Check parameters
     f = np.asarray(f, dtype = np.float64)
     z = np.asarray(z, dtype = np.complex128)
-    assert f.shape == z.shape, 'f and z must be the same length'
+
+    shape_check = (f.shape == z.shape) 
+    shape_check = shape_check or (f.shape == tuple()) or (z.shape == tuple())
+    assert shape_check, 'f and z must be the same length'
     assert len(f) >= 4, 'len(f) must be at least 3'
+
     for r in fr_spans:
         if not(len(r) == 2):
             raise ValueError('Incorrect fr_spans format')
@@ -117,7 +121,6 @@ def fit_gain(f, z, fr_spans, plotq = False):
     ### Convert to dB, phase
     dB = 20 * np.log10(np.abs(z))
     phase = np.unwrap(2 * np.angle(z)) / 2
-    phase0 = phase.copy()
 
     ### Fit
     try:
@@ -138,12 +141,16 @@ def fit_gain(f, z, fr_spans, plotq = False):
                     dlens.append(N)
         # Choose phase fits with the highest number of points
         pps, dlens = np.asarray(pps), np.asarray(dlens)
-        for i in range(101, 1, -10):
+        for i in range(101, 0, -10):
             pps0 = pps[dlens > i]
             if len(pps0):
                 break
         pps0 = [p[np.isfinite(p)] for p in pps0]
-        p_phase = np.mean(pps0, axis = 0)
+        if len(pps0):
+            p_phase = np.mean(pps0, axis = 0)
+        else:
+            p_phase = np.array([np.nan,np.nan])
+            warnings.warn('No phase data to fit, returning NAN')
     except Exception as e:
         p_amp = np.array([np.nan,np.nan,np.nan])
         p_phase = np.array([np.nan,np.nan])

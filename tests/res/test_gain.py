@@ -15,6 +15,7 @@ z2[2] = np.nan
 @pytest.mark.parametrize("f,z,p_amp,p_phase,expected", [
     (f0, z0, [0, 0, 0, 0], [0, 0, 0], z0),
     (1e9, z0, [0, 0, 0, 0], [0, 0, 0], z0),
+    (f0, z0[0], [0, 0, 0, 0], [0, 0, 0], np.ones(f0.shape) * z0[0]),
     (f0, z0, [0], [0], z0),
     (f1, z1, [20], [0], z1 / 10),
     (f1, z1, [0], [np.pi], z1 * -1),
@@ -25,7 +26,9 @@ z2[2] = np.nan
 ])
 def test_remove_gain(f, z, p_amp, p_phase, expected):
     z_rmvd = gain.remove_gain(f, z, p_amp, p_phase)
-    assert z_rmvd.shape == np.asarray(z).shape
+    check_out_shape = (z_rmvd.shape == np.asarray(z).shape) 
+    check_out_shape = check_out_shape or (z_rmvd.shape == np.asarray(f).shape)
+    assert  check_out_shape
     assert z_rmvd.dtype == np.complex128
     np.testing.assert_allclose(z_rmvd, expected)
 
@@ -37,12 +40,10 @@ def test_remove_gain_numerical_stability():
     assert np.all(np.isfinite(z_rmvd))
 
 @pytest.mark.parametrize("f,z,p_amp,p_phase", [
-    (1, [], [], []),
-    ([], 1, [], []),
     ([], [], 1, []),
     ([], [], [], 1),
     (['a'], [0], [0], [0]),
-    ([0], [0, 1], [0], [0])
+    ([0, 1], [0, 1, 2], [0], [0])
 ])
 def test_remove_gain_invalid_input(f, z, p_amp, p_phase):
     with pytest.raises(Exception):
@@ -53,14 +54,22 @@ def test_remove_gain_invalid_input(f, z, p_amp, p_phase):
 ################################################################################
 @pytest.mark.parametrize("f,z,fr_spans,plotq,p_amp_exp,p_phase_exp", [
     ([0, 1, 2, 3, 4], [1, 1, 1, 1, 1], [], False, [0, 0, 0], [0, 0]),
+    ([0, 1, 2, 3, 4], [1, 1, 1, 1, 1], [], True, [0, 0, 0], [0, 0]),
+    ([0, 1, 2, 3, 4], [1, 1, 1, 1, 1], [(2, 1)], False, [0, 0, 0], [0, 0]),
+    ([0, 1, 2, 3, 4], [1, 1, 5, 1, 1], [(2, 1)], False, [0, 0, 0], [0, 0]),
+    ([0, 1, 2, 3, 4], [10, 10, 10, 10, 10], [(2, 1)], False, [0, 0, 20], [0, 0]),
+    ([0, 1, 2, 3, 4], None, [(2, 1)], False, [0, 20, 0], [0, 0]),
 ])
-def test_remove_gain(f, z, fr_spans, plotq, p_amp_exp, p_phase_exp):
+def test_fit_gain(f, z, fr_spans, plotq, p_amp_exp, p_phase_exp):
+    if z is None:
+        z = 10 ** (np.polyval(p_amp_exp, f) / 20) 
+        z *= np.exp(1j * np.polyval(p_phase_exp, f))
     p_amp, p_phase, (fig, axs) = gain.fit_gain(f, z, fr_spans, plotq)
     if plotq:
-        assert type(fig) == plt.figure
+        assert isinstance(fig, plt.Figure)
         assert len(axs) == 2
         for ax in axs:
-            assert type(ax) == plt.axis
+            assert isinstance(ax, plt.Axes)
         plt.close(fig)
     else:
         assert fig is None
@@ -69,5 +78,5 @@ def test_remove_gain(f, z, fr_spans, plotq, p_amp_exp, p_phase_exp):
     assert p_phase.dtype == np.float64
     assert p_amp.shape == (3,)
     assert p_phase.shape == (2,)
-    np.testing.assert_allclose(p_amp, p_amp_exp)
-    np.testing.assert_allclose(p_phase, p_phase_exp)
+    np.testing.assert_allclose(p_amp, p_amp_exp, atol = 1e-12)
+    np.testing.assert_allclose(p_phase, p_phase_exp, atol = 1e-12)
