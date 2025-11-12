@@ -55,7 +55,6 @@ def remove_gain(f, z, p_amp, p_phase):
     z = np.asarray(z, dtype = np.complex128)
     p_amp = np.asarray(p_amp, dtype = np.float64)
     p_phase = np.asarray(p_phase, dtype = np.float64)
-    assert f.shape == z.shape, 'f and z must be the same shape'
 
     z_rmvd = z / 10 ** (np.polyval(p_amp, f) / 20)
     z_rmvd = z_rmvd / np.exp(1j * np.polyval(p_phase, f))

@@ -14,6 +14,7 @@ z2 = np.ones(3, dtype = np.complex128)
 z2[2] = np.nan
 @pytest.mark.parametrize("f,z,p_amp,p_phase,expected", [
     (f0, z0, [0, 0, 0, 0], [0, 0, 0], z0),
+    (1e9, z0, [0, 0, 0, 0], [0, 0, 0], z0),
     (f0, z0, [0], [0], z0),
     (f1, z1, [20], [0], z1 / 10),
     (f1, z1, [0], [np.pi], z1 * -1),
