@@ -18,8 +18,10 @@ class peakFinder:
             exists, raises an error.
         """
         outpath = fix_path(outpath)
-        if os.path.exists(outpath) and not overwrite:
-            raise FileExistsError(f'{outpath} already exists')
+        if os.path.exists(outpath):
+            s = input('Output file already exists, proceed? (y/n)')
+            if s.lower() != 'y':
+                raise FileExistsError('Output file already exists!')
         self.control_is_held = False
         self.shift_is_held = False
         self.x_data = np.array(x_data)
