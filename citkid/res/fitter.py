@@ -10,7 +10,8 @@ from .data_io import make_fit_row
 
 def fit_nonlinear_iq_with_gain(fgain, zgain, ffine, zfine, frs, Qrs,
                                downward = True, plotq = False,
-                               return_dataframe = False, **kwargs):
+                               return_dataframe = False, floats_only=False,
+                               **kwargs):
     """
     Fits IQ data with gain amplitudes and phase correction from a gain scan.
     Cuts resonance frequencies from the gain scan in spans of fr / Qr around fr,
@@ -31,6 +32,9 @@ def fit_nonlinear_iq_with_gain(fgain, zgain, ffine, zfine, frs, Qrs,
     plotq (bool): If True, plots the fits.
     return_dataframe (bool): if True, returns the output of
         .data_io.make_fit_row instead of the separated data
+    floats_only (bool): Set to True to only keep columns in the 
+        dataframe whose values can be represented as floats, 
+        i.e. don't store columns for sweep_direction or plotpath.
     **kwargs: other arguments for fit_nonlinear_iq
 
     Returns:
@@ -64,7 +68,8 @@ def fit_nonlinear_iq_with_gain(fgain, zgain, ffine, zfine, frs, Qrs,
         fig = None
     if return_dataframe:
         row = make_fit_row(p_amp, p_phase, p0, popt, perr, res,
-                           downward = downward, plot_path = '', prefix = 'iq')
+                           downward = downward, plot_path = '', prefix = 'iq',
+                           floats_only = floats_only)
         return row, fig
     return p_amp, p_phase, p0, popt, perr, res, fig
 
@@ -160,7 +165,7 @@ def fit_nonlinear_iq(f, z, bounds = None, p0 = None, fr_guess = None,
     p0 = np.array(p0)
     return p0, popt, perr, res, figax
 
-def fit_iq_circle(z, plotq = False):
+def fit_iq_circle(z, x0=None, plotq = False):
     """
     Fits an IQ loop to a circle. The function describing the circle is
 
@@ -170,6 +175,8 @@ def fit_iq_circle(z, plotq = False):
 
     Parameters:
     z (np.array): complex S21 data
+    x0: Initial guess for the fit parameters (A, B, R).
+        If x0 == None, this function will generate its own guess.
     plotq (bool): if True, plots the fit and data
 
     Returns:
@@ -178,8 +185,9 @@ def fit_iq_circle(z, plotq = False):
     """
 
     I, Q = np.real(z), np.imag(z)
-    x0 = [(max(I) + min(I))/2, (max(Q) + min(Q))/2]
-    x0.append((max(I) - min(I) + max(Q) - min(Q)) / 4)
+    if x0 is None:
+        x0 = [(max(I) + min(I))/2, (max(Q) + min(Q))/2]
+        x0.append((max(I) - min(I) + max(Q) - min(Q)) / 4)
     args = (I, Q)
     popt = optimize.fmin(circle_objective, x0, args, disp=0)
 

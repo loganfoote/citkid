@@ -1,0 +1,10 @@
+### --------------------------------------- ###
+### R E D U C T I O N   P A R A M E T E R S ###
+### --------------------------------------- ###
+
+
+# List of indices of detectors to analyze
+DETECTORS_TO_ANALYZE: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+
+# Sample rate of noise data
+NOISE_SAMPLE_RATE: 1192.0928955078125
