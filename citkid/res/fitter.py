@@ -176,17 +176,18 @@ def fit_iq_circle(z, plotq = False):
     popt (list): fit parameters (A, B, R).
     fig, ax (pyplot figure and axis): fit figure and axis, or None if not plotq
     """
-
-    I, Q = np.real(z), np.imag(z)
-    x0 = [(max(I) + min(I))/2, (max(Q) + min(Q))/2]
-    x0.append((max(I) - min(I) + max(Q) - min(Q)) / 4)
-    args = (I, Q)
-    popt = optimize.fmin(circle_objective, x0, args, disp=0)
+    z = np.asarray(z, dtype = np.complex128)
+    if not np.all(np.isfinite(z)):
+        raise ValueError("Input data contains non-finite values.")
+    i, q = z.real, z.imag
+    x0 = [(max(i) + min(i))/2, (max(q) + min(q))/2]
+    x0.append((max(i) - min(i) + max(q) - min(q)) / 4)
+    popt = optimize.fmin(circle_objective, x0, (i, q), disp = 0)
 
     if plotq:
-        fig, ax = plot_circle(z, *popt)
+        fig, _ = plot_circle(z, *popt)
     else:
-        fig, ax = None, None
+        fig = None
     return popt, fig
 
 ################################################################################

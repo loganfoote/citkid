@@ -2,6 +2,8 @@ from citkid.res import gain
 import pytest
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use("Agg")
 
 ################################################################################
 ################################# remove_gain ##################################
@@ -59,11 +61,13 @@ def test_remove_gain_invalid_input(f, z, p_amp, p_phase):
     ([0, 1, 2, 3, 4], [1, 1, 5, 1, 1], [(2, 1)], False, [0, 0, 0], [0, 0]),
     ([0, 1, 2, 3, 4], [10, 10, 10, 10, 10], [(2, 1)], False, [0, 0, 20], [0, 0]),
     ([0, 1, 2, 3, 4], None, [(2, 1)], False, [0, 20, 0], [0, 0]),
+    ([0, 1, 2, 3, 4], None, [(2, 1)], False, [0, 20, 0], [0, 1e-8]),
+    ([0, 1, 2, 3, 4], None, [(2, 1)], False, [0, 20, 0], [1e-8, -1e-8]),
 ])
 def test_fit_gain(f, z, fr_spans, plotq, p_amp_exp, p_phase_exp):
     if z is None:
-        z = 10 ** (np.polyval(p_amp_exp, f) / 20) 
-        z *= np.exp(1j * np.polyval(p_phase_exp, f))
+        z = 10 ** (np.polyval(p_amp_exp, f) / 20)
+        z = z * np.exp(1j * np.polyval(p_phase_exp, f))
     p_amp, p_phase, (fig, axs) = gain.fit_gain(f, z, fr_spans, plotq)
     if plotq:
         assert isinstance(fig, plt.Figure)
@@ -80,3 +84,13 @@ def test_fit_gain(f, z, fr_spans, plotq, p_amp_exp, p_phase_exp):
     assert p_phase.shape == (2,)
     np.testing.assert_allclose(p_amp, p_amp_exp, atol = 1e-12)
     np.testing.assert_allclose(p_phase, p_phase_exp, atol = 1e-12)
+
+@pytest.mark.parametrize("f,z,fr_spans,plotq", [
+    ([0, 1, 2, 3, 4], [10, 10, 10, 10, 10], [1], False),  # fr_spans not list of tuples
+    ([0, 1, 2], [1, 1], [], False),                       # f and z different lengths
+    (['a'], [0], [], False),                              # f not numeric
+    ([0], ['a'], [], False),                              # z not numeric
+])
+def test_fit_gain_invalid_input(f, z, fr_spans, plotq):
+    with pytest.raises(Exception):
+        gain.fit_gain(f, z, fr_spans, plotq)
