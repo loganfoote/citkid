@@ -163,4 +163,37 @@ def test_get_spar_sper_invalid_input(theta, A, radius, dt, get_freqs):
     with pytest.raises(Exception):
         cal.get_spar_sper(theta, A, radius, dt, get_freqs)
 
+################################################################################
+################################# get_xcal_ix #################################
+################################################################################
+# Need to write tests with different fine sweep sorting / ordering 
+ffine = np.arange(0, 100, 1, dtype = np.float64)
+tfine = ffine.copy()
+tnoise = np.random.permutation(np.linspace(40, 60, 100))
+tnoise_glitch = np.concatenate([tnoise, [1e3]])
+m = "ffine,tfine,tnoise,ix0_offset,ix1_offset,std_cutoff,ix_exp"
+@pytest.mark.parametrize(m, [
+    (ffine, tfine, [20.5], 1, 1, None, np.arange(19, 23, 1, dtype = np.int32)),
+    (ffine, tfine, [20.5], 0, 0, None, np.arange(20, 22, 1, dtype = np.int32)),
+    (ffine, tfine, [20.5], 1, -100, None, np.array([], dtype = np.int32)),
+    (ffine, tfine, [20.5], -100, 0, None, np.array([], dtype = np.int32)),
+    (ffine, tfine, [20.5], 100, 1, None, np.arange(0, 23, 1, dtype = np.int32)),
+    (ffine, tfine, [20.5], 1, 100, None, np.arange(19, 100, dtype = np.int32)),
+    (ffine, tfine, [20.5, 21.5], 0, 0, None, np.arange(20, 23, 1, 
+                                                       dtype = np.int32)),
+    (ffine, tfine, [20, 22], 0, 0, None, np.arange(19, 24, 1, 
+                                                       dtype = np.int32)),
+    (ffine, tfine, tnoise, 0, 0, None, np.arange(39, 62, 1, dtype = np.int32)),
+    (ffine, tfine, tnoise_glitch, 0, 0, 3, np.arange(39, 62, 1, 
+                                                     dtype = np.int32)),
+    (ffine, tfine, tnoise_glitch, 0, 0, 11, np.arange(39, 100, 1, 
+                                                      dtype = np.int32)),
+])
+def test_get_xcal_ix(ffine, tfine, tnoise, ix0_offset, ix1_offset, 
+                     std_cutoff, ix_exp):
+    ix = cal.get_xcal_ix(ffine, tfine, tnoise, 
+                         ix0_offset, ix1_offset, std_cutoff)
+    assert isinstance(ix, np.ndarray)
+    assert ix.dtype == np.int32
+    assert np.allclose(ix, ix_exp)
     
