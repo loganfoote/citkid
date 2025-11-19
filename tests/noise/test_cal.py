@@ -166,7 +166,7 @@ def test_get_spar_sper_invalid_input(theta, A, radius, dt, get_freqs):
 ################################################################################
 ################################# get_xcal_ix #################################
 ################################################################################
-# Current function only works for increasing theta
+# Need to add empty list
 ffine = np.arange(0, 100, 1, dtype = np.float64)
 tfine = ffine.copy()
 tnoise = np.random.permutation(np.linspace(40, 60, 100))
@@ -195,7 +195,13 @@ ffine2, tfine2 = np.flip(ffine), np.flip(tfine)
     (ffine[ix], tfine[ix], [20.5], 1, 1, None, np.arange(19, 23, 1, dtype = np.int32)),
     (ffine, tfine1, [20.5], 0, 0, None, np.arange(9, 23, 1, dtype = np.int32)),
     (ffine2, tfine2, [20.5], 1, 1, None, np.arange(19, 23, 1, dtype = np.int32)),
-    (ffine, tfine2, [20.5], 1, 1, None, np.arange(48, 52, 1, dtype = np.int32)),
+    (ffine, tfine2, [20.5], 1, 1, None, np.arange(77, 81, 1, dtype = np.int32)),
+    (ffine, tfine2, tnoise, 0, 0, None, np.arange(38, 61, 1, dtype = np.int32)),
+    (ffine, tfine2, tnoise_glitch, 0, 0, None, np.arange(0, 61, 1, dtype = np.int32)),
+    (ffine, tfine2, tnoise_glitch, 0, 0, 3, np.arange(38, 61, 1, dtype = np.int32)),
+    (ffine, tfine2, tnoise_glitch, 0, 0, 11, np.arange(0, 61, 1, dtype = np.int32)),
+    (ffine, tfine1, tnoise, 0, 0, None, np.arange(39, 62, 1, dtype = np.int32)),
+    ([], [], [2.5], 0, 0, None, np.array([], dtype = np.int32)),
 ])
 def test_get_xcal_ix(ffine, tfine, tnoise, ix0_offset, ix1_offset, 
                      std_cutoff, ix_exp):
@@ -204,4 +210,20 @@ def test_get_xcal_ix(ffine, tfine, tnoise, ix0_offset, ix1_offset,
     assert isinstance(ix, np.ndarray)
     assert ix.dtype == np.int32
     assert np.allclose(ix, ix_exp)
+    
+
+@pytest.mark.parametrize("ffine,tfine,tnoise,ix0_offset,ix1_offset,std_cutoff", [
+    (['a', 1, 2], [1, 2, 3], [2], 1, 1, None),  # non-numeric ffine
+    ([1, 2, 3], ['a', 2, 3], [2], 1, 1, None),  # non-numeric tfine
+    ([1, 2, 3], [1, 2, 3], ['a', 2], 1, 1, None),  # non-numeric tnoise
+    ([1, 2, 3], [1, 2], [2], 1, 1, None),  # mismatched ffine and tfine lengths
+    ([1, 2, 3], [1, 2, 3], [2], 1.5, 1, None),  # non-integer ix0_offset
+    ([1, 2, 3], [1, 2, 3], [2], 1, 'a', None),  # non-integer ix1_offset
+    ([1, 2, 3], [1, 2, 3], [2], 1, 1, -1),  # negative std_cutoff
+])  
+def test_get_xcal_ix_invalid_input(ffine, tfine, tnoise, ix0_offset, 
+                                   ix1_offset, std_cutoff):
+    with pytest.raises(Exception):
+        cal.get_xcal_ix(ffine, tfine, tnoise, 
+                        ix0_offset, ix1_offset, std_cutoff)
     

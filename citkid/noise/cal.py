@@ -127,18 +127,16 @@ def get_xcal_ix(ffine, tfine, tnoise, ix0_offset = 7, ix1_offset = 5,
         tnoise = tnoise[np.abs(tnoise - tnoise_mean) < std_cutoff * tnoise_std]
     tmin, tmax = np.min(tnoise), np.max(tnoise)
 
-    # determine indices
-    ix0 = np.where(tfine >= tmin)[0]
-    if len(ix0):
-        ix0 = ix0[0] - 1
-    else:
-        ix0 = 0
-    ix1 = np.where(tfine <= tmax)[0]
-    if len(ix1):
-        ix1 = ix1[-1] + 1
-    else:
-        ix1 = len(tfine) - 1
+    # Get ix0, ix1
+    ix = []
+    ix.extend(np.where((tfine >= tmin) & (tfine <= tmax))[0])
+    s = tfine - tmin
+    ix.extend(np.where(s[:-1] * s[1:] <= 0)[0] + 1)
+    t = tfine - tmax
+    ix.extend(np.where(t[:-1] * t[1:] <= 0)[0] + 1)
+    ix0, ix1 = min(ix) - 1, max(ix)
 
+    # extend ix0, ix1 by offsets
     ix0 = max(0, ix0 - ix0_offset)
     ix1 = min(len(tfine) - 1, ix1 + ix1_offset)
     if ix1 < ix0:
