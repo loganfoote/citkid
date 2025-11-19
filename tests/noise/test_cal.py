@@ -166,12 +166,16 @@ def test_get_spar_sper_invalid_input(theta, A, radius, dt, get_freqs):
 ################################################################################
 ################################# get_xcal_ix #################################
 ################################################################################
-# Need to write tests with different fine sweep sorting / ordering 
+# Current function only works for increasing theta
 ffine = np.arange(0, 100, 1, dtype = np.float64)
 tfine = ffine.copy()
 tnoise = np.random.permutation(np.linspace(40, 60, 100))
 tnoise_glitch = np.concatenate([tnoise, [1e3]])
 m = "ffine,tfine,tnoise,ix0_offset,ix1_offset,std_cutoff,ix_exp"
+ix = np.random.permutation(np.arange(100))
+tfine1 = tfine.copy() 
+tfine1[10], tfine1[21] = tfine1[21], tfine1[10]
+ffine2, tfine2 = np.flip(ffine), np.flip(tfine)
 @pytest.mark.parametrize(m, [
     (ffine, tfine, [20.5], 1, 1, None, np.arange(19, 23, 1, dtype = np.int32)),
     (ffine, tfine, [20.5], 0, 0, None, np.arange(20, 22, 1, dtype = np.int32)),
@@ -188,6 +192,10 @@ m = "ffine,tfine,tnoise,ix0_offset,ix1_offset,std_cutoff,ix_exp"
                                                      dtype = np.int32)),
     (ffine, tfine, tnoise_glitch, 0, 0, 11, np.arange(39, 100, 1, 
                                                       dtype = np.int32)),
+    (ffine[ix], tfine[ix], [20.5], 1, 1, None, np.arange(19, 23, 1, dtype = np.int32)),
+    (ffine, tfine1, [20.5], 0, 0, None, np.arange(9, 23, 1, dtype = np.int32)),
+    (ffine2, tfine2, [20.5], 1, 1, None, np.arange(19, 23, 1, dtype = np.int32)),
+    (ffine, tfine2, [20.5], 1, 1, None, np.arange(48, 52, 1, dtype = np.int32)),
 ])
 def test_get_xcal_ix(ffine, tfine, tnoise, ix0_offset, ix1_offset, 
                      std_cutoff, ix_exp):
