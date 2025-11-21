@@ -1,5 +1,5 @@
 import numpy as np
-from ..res.fitter import fit_iq_circle
+from ..xcal.circle import fit_iq_circle
 from .plot import plot_cal, plot_timestream, plot_psd
 from .psd import *
 from .cosmic_rays import remove_cosmic_rays
@@ -85,7 +85,7 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
         radius = 1
         popt_circle = [np.nan, np.nan, np.nan]
     else:
-        popt_circle, _ = fit_iq_circle(zfine, plotq = False)
+        popt_circle = fit_iq_circle(zfine)
         origin = popt_circle[0] + 1j * popt_circle[1]
         radius = popt_circle[2]
     # Extract theta and x
@@ -185,7 +185,7 @@ def compute_psd_simple(ffine, zfine, fnoise, znoise, dt, deglitch_nstd = 5,
     znoise = np.asarray(znoise).copy()
     # Fit circle
     if not offres:
-        popt_circle, _ = fit_iq_circle(zfine, plotq = False)
+        popt_circle = fit_iq_circle(zfine)
         origin = popt_circle[0] + 1j * popt_circle[1]
         radius = popt_circle[2]
     else:
@@ -221,7 +221,7 @@ def calibrate_timestreams(origin, ffine, zfine, fnoise, znoise, dt,
                           xcal_weight_theta0 = 0.0, **cr_kwargs):
     """
     Calculates theta and x timestreams given complex IQ noise timestreams.
-    1) calculate theta of the sweep data an noise timestream
+    1) calculate theta of the scan data an noise timestream
     2) flag and remove cosmic rays
     3) deglitch data and perform polynomial fit to get x from theta, if not
        offres
@@ -245,7 +245,7 @@ def calibrate_timestreams(origin, ffine, zfine, fnoise, znoise, dt,
     **cr_kwargs: kwargs for cosmic ray removal
 
     Returns:
-    theta_fine (np.array): theta of the complex sweep data
+    theta_fine (np.array): theta of the complex scan data
     theta (np.array): theta timestream
     # If not offres:
     theta_range (np.array): [lower, upper] bound on theta used in the polynomial

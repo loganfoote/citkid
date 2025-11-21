@@ -163,20 +163,20 @@ class CRS:
             max_ntones = max([len(f) for f in self.fres_dict.values()])
             return max_ntones
 
-    async def sweep(self, frequencies, ares, nsamps = 10, return_dbc = True,
-                    verbose = True, pbar_description = 'Sweeping'):
+    async def scan(self, frequencies, ares, nsamps = 10, return_dbc = True,
+                    verbose = True, pbar_description = 'Scanning'):
         """
-        Performs a frequency sweep and returns the complex S21 value at each
-        frequency. Performs sweeps over axis 0 of frequencies simultaneously.
+        Performs a frequency scan and returns the complex S21 value at each
+        frequency. Performs scans over axis 0 of frequencies simultaneously.
 
         Parameters:
         frequencies (M X N array-like float): the first index M is the channel
             index (max len 1024) and the second index N is the frequency in Hz
-            for a single point in the sweep
+            for a single point in the scan
         ares (M array-like float): amplitudes in dBm for each channel
         nsamps (int): number of samples to average per point
         return_dbc (bool): If True, divides the output by the tone power
-        verbose (bool): If True, displays a progress bar while sweeping
+        verbose (bool): If True, displays a progress bar while scanning
         pbar_description (str): description for the progress bar
         """
         frequencies, ares = np.asarray(frequencies), np.asarray(ares)
@@ -218,52 +218,52 @@ class CRS:
         # Set fir_stage
         fir_stage = 6
         await self.d.set_decimation(fir_stage)
-        # Sweep
-        sweep_f, sweep_z = {}, {}
+        # scan
+        scan_f, scan_z = {}, {}
         modules = get_modules(self.d, list(self.frequencies_dict.keys()))
-        await modules.sweep(self.nco_freq_dict, self.frequencies_dict,
-                            self.ares_dict, sweep_f, sweep_z, nsamps = nsamps,
+        await modules.scan(self.nco_freq_dict, self.frequencies_dict,
+                            self.ares_dict, scan_f, scan_z, nsamps = nsamps,
                             verbose = verbose,
                             pbar_description = pbar_description)
-        # Create f, z from sweep results
+        # Create f, z from scan results
         nres = frequencies.shape[0]
         f = np.empty(frequencies.shape, dtype = float)
         z = np.empty(frequencies.shape, dtype = complex)
         for res_index in range(nres):
             module_index, ch_index = find_key_and_index(self.ch_ix_dict,
                                                         res_index)
-            f[res_index] = sweep_f[module_index][ch_index]
-            z[res_index] = sweep_z[module_index][ch_index]
+            f[res_index] = scan_f[module_index][ch_index]
+            z[res_index] = scan_z[module_index][ch_index]
         if return_dbc:
             z /= 10 ** (ares[:, np.newaxis] / 20)
         return f, z
 
-    async def sweep_linear(self, fres, ares, bw = 20e3, npoints = 10,
+    async def scan_linear(self, fres, ares, bw = 20e3, npoints = 10,
                            nsamps = 10, return_dbc = True, center_fres = True,
                            downward = True, verbose = True,
-                           pbar_description = 'Sweeping'):
+                           pbar_description = 'Scanning'):
         """
-        Performs a frequency sweep where each channel is swept over the same
+        Performs a frequency scan where each channel is swept over the same
         frequency span.
 
         Parameters:
         fres (array-like): center frequencies in Hz.
         ares (array-like): amplitudes in dBm.
-        bw (float): span around each frequency to sweep in Hz.
-        npoints (int): number of sweep points per channel.
+        bw (float): span around each frequency to scan in Hz.
+        npoints (int): number of scan points per channel.
         nsamps (int): number of samples to average per point.
         return_dbc (bool): If True, divides the output by the tone power.
         center_fres (bool): If True, fres is the center of each band. Else,
             fres is the starting frequency.
-        downward (bool): if True, sweeps from high to low frequency. Else,
-            sweeps from low to high frequency.
-        verbose (bool): If True, displays a progress bar while sweeping.
+        downward (bool): if True, scans from high to low frequency. Else,
+            scans from low to high frequency.
+        verbose (bool): If True, displays a progress bar while scanning.
         pbar_description (str): description for the progress bar.
 
 
         Returns:
         f (M X N np.array): array of frequencies where M is the channel index
-            and N is the index of each point in the sweep
+            and N is the index of each point in the scan
         z (M X N np.array): array of complex S21 data corresponding to f
         """
         fres, ares = np.asarray(fres), np.asarray(ares)
@@ -277,55 +277,55 @@ class CRS:
                 f = np.linspace(fres + bw, fres, npoints).T
             else:
                 f = np.linspace(fres, fres + bw, npoints).T
-        f, z = await self.sweep(f, ares, nsamps = nsamps,
+        f, z = await self.scan(f, ares, nsamps = nsamps,
                                 return_dbc = return_dbc, verbose = verbose,
                                 pbar_description = pbar_description)
         return f, z
 
-    async def sweep_qres(self, fres, ares, qres, npoints = 10, nsamps = 10,
+    async def scan_qres(self, fres, ares, qres, npoints = 10, nsamps = 10,
                          return_dbc = True, verbose = True,
-                         pbar_description = 'Sweeping'):
+                         pbar_description = 'Scanning'):
         """
-        Performs a frequency sweep where the span around each frequency is set
+        Performs a frequency scan where the span around each frequency is set
         equal to fres / qres.
 
         Parameters:
         fres (array-like): center frequencies in Hz.
         ares (array-like): amplitudes in dBm.
-        qres (array): sweep spans in Q-like form. Spans of each sweep are
+        qres (array): scan spans in Q-like form. Spans of each scan are
             fres / qres.
-        npoints (int): number of sweep points per channel.
+        npoints (int): number of scan points per channel.
         nsamps (int): number of samples to average per point.
         return_dbc (bool): If True, divides the output by the tone power.
-        verbose (bool): If True, displays a progress bar while sweeping.
+        verbose (bool): If True, displays a progress bar while scanning.
         pbar_description (str): description for the progress bar.
 
         Returns:
         f (M X N np.array): array of frequencies where M is the channel index
-            and N is the index of each point in the sweep.
+            and N is the index of each point in the scan.
         z (M X N np.array): array of complex S21 data corresponding to f.
         """
         fres, ares, qres = np.asarray(fres), np.asarray(ares), np.asarray(qres)
         spans = fres / qres
         f = np.linspace(fres + spans / 2, fres - spans / 2, npoints).T
-        f, z = await self.sweep(f, ares, nsamps = nsamps,
+        f, z = await self.scan(f, ares, nsamps = nsamps,
                                 return_dbc = return_dbc, verbose = verbose,
                                 pbar_description = pbar_description)
         return f, z
 
-    async def sweep_full(self, amplitude, npoints = 10, nsamps = 10,
+    async def scan_full(self, amplitude, npoints = 10, nsamps = 10,
                          return_dbc = True, verbose = True,
-                         pbar_description = 'Sweeping'):
+                         pbar_description = 'Scanning'):
         """
-        Performs a frequency sweep over the full bandwidth around the NCO
+        Performs a frequency scan over the full bandwidth around the NCO
         frequency.
 
         Parameters:
         amplitude (float): amplitude in dBm.
-        npoints (int): number of sweep points per channel.
+        npoints (int): number of scan points per channel.
         nsamps (int): number of samples to average per point.
         return_dbc (bool): If True, divides the output by the tone power.
-        verbose (bool): If True, displays a progress bar while sweeping.
+        verbose (bool): If True, displays a progress bar while scanning.
         pbar_description (str): description for the progress bar.
 
         Returns:
@@ -341,7 +341,7 @@ class CRS:
                                            1024) for nco in ncos])
         ares = amplitude * np.ones(len(fres))
         # Left off here
-        f, z = await self.sweep_linear(fres, ares, bw = bw - spacing,
+        f, z = await self.scan_linear(fres, ares, bw = bw - spacing,
                                        npoints = npoints, nsamps = nsamps,
                                        return_dbc = return_dbc,
                                        verbose = verbose,
@@ -593,12 +593,12 @@ async def write_tones(module, nco_freq_dict, fres_dict, ares_dict):
             await ctx()
 
 @rfmux.macro(rfmux.ReadoutModule, register=True)
-async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
-                sweep_z, nsamps = 10, verbose = True,
-                pbar_description = 'Sweeping'):
+async def scan(module, nco_freq_dict, frequencies_dict, ares_dict, scan_f,
+                scan_z, nsamps = 10, verbose = True,
+                pbar_description = 'Scanning'):
         """
-        Performs a frequency sweep and returns the complex S21 value at each
-        frequency. Performs sweeps over axis 0 of frequencies simultaneously.
+        Performs a frequency scan and returns the complex S21 value at each
+        frequency. Performs scans over axis 0 of frequencies simultaneously.
 
         Parameters:
         module (rfmux.ReadoutModule): readout module object.
@@ -607,11 +607,11 @@ async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
         frequencies_dict (dict): keys (int) are module indices and values
             (M X N array-like float) are arrays where the first index M is the
             channel index (max len 1024) and the second index N is the frequency
-            in Hz for a single point in the sweep.
+            in Hz for a single point in the scan.
         ares_dict (dict): keys (int) are module indices and values
             (M array-like float) are amplitudes in dBm for each channel.
         nsamps (int): number of samples to average per point.
-        verbose (bool): If True, displays a progress bar while sweeping.
+        verbose (bool): If True, displays a progress bar while scanning.
         pbar_description (str): description for the progress bar.
 
         Returns:
@@ -641,11 +641,11 @@ async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
             pbar = tqdm(pbar, total = n_points, leave = False)
             pbar.set_description(pbar_description)
 
-        for sweep_index in pbar:
+        for scan_index in pbar:
             # Write frequencies
             async with d.tuber_context() as ctx:
                 for ch in range(n_channels):
-                    f = frequencies[ch, sweep_index]
+                    f = frequencies[ch, scan_index]
                     ctx.set_frequency(f - nco_freq, channel = ch + 1,
                                       module = module_index)
                 await ctx()
@@ -657,9 +657,9 @@ async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
             # format and average data
             zi = np.asarray(samples.mean.i) + 1j * np.asarray(samples.mean.q)
             zi = zi[:n_channels] * rfmux.core.transferfunctions.VOLTS_PER_ROC / np.sqrt(2)
-            z[:, sweep_index] = zi
+            z[:, scan_index] = zi
 
         # Turn off channels
         await d.clear_channels(module = module_index)
-        sweep_f[module_index] = frequencies
-        sweep_z[module_index] = z
+        scan_f[module_index] = frequencies
+        scan_z[module_index] = z

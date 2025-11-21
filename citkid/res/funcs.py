@@ -18,16 +18,8 @@ def get_y(y0, a, largest = True):
     y (float or np.array): largest or smallest real root of the above equation
     """
     y = cardan(4.0, -4.0 * y0, 1.0, -(y0 + a), largest)
+    # Built-in numpy function can do this, but it is not compilable with numba
     return y
-    # We may want to switch to the numpy method below, but I haven't had time
-    # to test it yet
-    # p = np.polynomial.Polynomial([-y0 - a, 1, -4 * y0, 4]) 
-    # all_roots = p.roots()
-    # real_roots = real_only(all_roots)
-    # if largest:
-    #     return max(real_roots)
-    # else:
-    #     return min(real_roots)
 
 @njit(complex128[:](float64[:], float64, float64, float64, float64,
                  float64, float64, float64, float64, boolean), cache = True)
@@ -58,8 +50,8 @@ def nonlinear_iq(f, fr, Qr, amp, phi, a, i0, q0, tau, downward = True):
     q0 (float): Q gain factor
         i0 + j * q0 describes the overall constant gain and phase offset
     tau(float): cable delay in seconds
-    downward (bool): If True, solves the equation for a downward sweep. If
-        False, solves for an upward sweep.
+    downward (bool): If True, solves the equation for a downward scan. If
+        False, solves for an upward scan.
 
     Returns:
     z (np.array): array of complex IQ data corresponding to f

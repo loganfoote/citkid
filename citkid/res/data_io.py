@@ -18,8 +18,8 @@ def make_fit_row(p_amp, p_phase, p0, popt, perr, res, downward, plot_path = '',
     popt (np.array): fit parameters. See p0 parameter
     perr (np.array): standard errors on fit parameters
     res (float): fit residuals
-    downward (bool): True corresponds to a downward sweep, False corresponds to
-        an upward sweep
+    downward (bool): True corresponds to a downward scan, False corresponds to
+        an upward scan
     plot_path (str): path to the saved plot, or empty string if it does not
         exists
     prefix (str): prefix for the column names. default is 'iq'
@@ -44,9 +44,9 @@ def make_fit_row(p_amp, p_phase, p0, popt, perr, res, downward, plot_path = '',
     for i, pi in enumerate(p_phase):
         row[prefix + f'pphase_{i:02d}'] = pi
     if downward:
-        row[prefix + 'sweep_direction'] = 'downward'
+        row[prefix + 'scan_direction'] = 'downward'
     else:
-        row[prefix + 'sweep_direction'] = 'upward'
+        row[prefix + 'scan_direction'] = 'upward'
     row[prefix + 'res'] = res
     row[prefix + 'plotpath'] = plot_path
     return row
@@ -65,8 +65,8 @@ def separate_fit_row(row, prefix = 'iq'):
     p0 (np.array): fit parameter guess.
     popt (np.array): fit parameters. See p0 parameter
     perr (np.array): standard errors on fit parameters
-    downward (bool): True corresponds to a downward sweep, False corresponds to
-        an upward sweep
+    downward (bool): True corresponds to a downward scan, False corresponds to
+        an upward scan
     res (float): fit residuals
     plot_path (str): path to the saved plot, or empty string if it does not
         exists
@@ -96,7 +96,7 @@ def separate_fit_row(row, prefix = 'iq'):
         p_phase.append(row[key])
     res = row[prefix + 'res']
     plot_path = row[prefix + 'plotpath']
-    if row[prefix + 'sweep_direction'] == 'downward':
+    if row[prefix + 'scan_direction'] == 'downward':
         downward = True
     else:
         downward = False

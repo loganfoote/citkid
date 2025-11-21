@@ -46,8 +46,8 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
     plotq (bool): If True, plots IQ fits and saves them
     plot_factor (int): for plotting a subset of resonators. Plots every
         plot_factor resonators
-    downward (bool): If True, solves the equation for a downward sweep. If
-        False, solves for an upward sweep.
+    downward (bool): If True, solves the equation for a downward scan. If
+        False, solves for an upward scan.
     cut_to_qres (bool): If True, cuts the fine scan data to the span of fres / qres
     overwrite (bool): if not True, raises an exception if the output data file
         already exists
@@ -278,7 +278,7 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
         elif circfit_mode == 'nearest_z':
             # Take the n points closest to the median of the noise by
             # checking the 2D distance in z.  Helps exclude large
-            # IQ sweep jumps next to noise balls.
+            # IQ scan jumps next to noise balls.
             zfine_dist = np.abs(zfine - np.nanmedian(znoise))
             i_nearest = np.argsort(zfine_dist)[:circfit_npoints]
             ffine, zfine = ffine[i_nearest], zfine[i_nearest]

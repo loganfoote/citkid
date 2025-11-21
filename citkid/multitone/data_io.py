@@ -19,9 +19,9 @@ def import_iq_noise(directory, file_suffix, noise_index = 0, import_noiseq = Tru
     fres_all (np.array): full list of resonance frequencies in Hz 
     qres_all (np.array): full list of resonance Qs for cutting data 
     fcal_indices (np.array): calibration tone indices
-    frough, zrough (np.array): rough sweep frequency and complex S21 data
-    fgain, zgain (np.array): gain sweep frequency and complex S21 data
-    ffine, zfine (np.array): fine sweep frequency and complex S21 data
+    frough, zrough (np.array): rough scan frequency and complex S21 data
+    fgain, zgain (np.array): gain scan frequency and complex S21 data
+    ffine, zfine (np.array): fine scan frequency and complex S21 data
     znoise (np.array): complex S21 noise timestream array
     noise_dt (float): noise sample time in s
     """
@@ -48,7 +48,7 @@ def import_iq_noise(directory, file_suffix, noise_index = 0, import_noiseq = Tru
     else:
         qres_all = np.delete(qres, fcal_indices)
     
-    # sweeps
+    # scans
     path = directory + f's21_rough{file_suffix}.npy'
     if os.path.exists(path):
         frough, irough, qrough = np.load(path)

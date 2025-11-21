@@ -117,7 +117,7 @@ def cardan(a, b, c, d, largest = True):
     where_real = np.where(np.abs(np.imag(roots)) < 1e-15)
     if D > 0:
         # two stable real roots: return the max. The other solution is the min
-        # max solution corresponds to a downward sweep. An upward sweep is more
+        # max solution corresponds to a downward scan. An upward scan is more
         # complicated to calculate. It will stay at the min to a certain point,
         # then jump to the max. See Swenson et al. 2013 for details
         if largest:

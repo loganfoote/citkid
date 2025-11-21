@@ -19,7 +19,7 @@ def plot_cal(ffine, zfine, origin, radius, v, theta_range, theta_fine, p_amp, p_
         zfine_rmvd from the origin
     theta_range (tuple): [lower, upper] range of theta over which the fit was
         performed
-    theta_fine (np.array): fine sweep theta data
+    theta_fine (np.array): fine scan theta data
     p_amp (np.array): polynomial fit parameters to gain amplitude
     p_phase (np.array): polynomial fit parameters to gain phase
     p_x (np.array): x vs theta polynomial fit parameters

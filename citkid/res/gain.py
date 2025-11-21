@@ -1,39 +1,7 @@
 import numpy as np
 import warnings
 from .plot import plot_gain_fit
-
-def fit_and_remove_gain_phase(fgain, zgain, ffine, zfine, frs = [], Qrs = [],
-                              plotq = False):
-    """
-    Removes the gain-scan fit parameters from the fine scan data.
-
-    Qrs should be no higher than 10 X Qr of the resonances.
-
-    Parameters:
-    fgain (np.array): gain sweep frequency data.
-    zgain (np.array): gain sweep complex S21 data.
-    ffine (np.array): fine sweep frequency data.
-    zfine (np.array): fine sweep complex S21 data.
-    frs (list of float): resonance frequencies to cut from the gain scan.
-    Qrs (list of float): Qrs to cut from the gain scan.
-    plotq (bool): If True, also plots fits to the gain scan
-        and corrections to the fine-scan.
-
-    Returns:
-    p_amp (np.array): 2nd-order polynomial fit parameters to dB.
-    p_phase (np.array): 1st-order polynomial fit parameters to phase.
-    z_rmvd (np.array): zfine with gain amplitude and phase removed.
-    fig, axs (pyplot figure and axes, or None): if plotq, returns a plot of the
-        gain amplitude and phase fits. Otherwise, returns (None, None).
-    """
-    fgain, zgain = np.array(fgain), np.array(zgain)
-    ffine, zfine = np.array(ffine), np.array(zfine)
-    fr_spans = []
-    for fr, Qr in zip(frs, Qrs):
-        fr_spans.append((fr, fr / Qr))
-    p_amp, p_phase, (fig_gain, axs_gain) = fit_gain(fgain, zgain, fr_spans, plotq)
-    z_rmvd = remove_gain(ffine, zfine, p_amp, p_phase)
-    return p_amp, p_phase, z_rmvd, (fig_gain, axs_gain)
+import xcal.gain as xcal_gain
 
 def remove_gain(f, z, p_amp, p_phase):
     """
@@ -51,6 +19,9 @@ def remove_gain(f, z, p_amp, p_phase):
     z_rmvd (np.array, complex128, (N,)): complex S21 data with gain amplitude
         and phase removed.
     """
+    warnings.warn('citkid.xcal.gain.remove_gain is deprecated. '
+                  'Please use citkid.res.gain.remove_gain instead.', 
+                  DeprecationWarning)
     f = np.asarray(f, dtype = np.float64)
     z = np.asarray(z, dtype = np.complex128)
     p_amp = np.asarray(p_amp, dtype = np.float64)
@@ -81,11 +52,14 @@ def fit_gain(f, z, fr_spans, plotq = False):
     fig, axs (pyplot figure and axes, or None): if plotq, returns a plot of the
         gain amplitude and phase fits. Otherwise, returns (None, None).
     """
+    warnings.warn('citkid.xcal.gain.fit_gain is deprecated. '
+                  'Please use citkid.res.gain.fit_gain instead.',      
+                    DeprecationWarning)
     ### Check parameters
     f = np.asarray(f, dtype = np.float64)
     z = np.asarray(z, dtype = np.complex128)
 
-    shape_check = (f.shape == z.shape) 
+    shape_check = (f.shape == z.shape)
     shape_check = shape_check or (f.shape == tuple()) or (z.shape == tuple())
     assert shape_check, 'f and z must be the same length'
     assert len(f) >= 4, 'len(f) must be at least 3'
@@ -163,3 +137,45 @@ def fit_gain(f, z, fr_spans, plotq = False):
     else:
         fig, axs = None, None
     return p_amp, p_phase, (fig, axs)
+
+def fit_and_remove_gain_phase(fgain, zgain, ffine, zfine, frs = [], Qrs = [],
+                              plotq = False, legacy_fit = True):
+    """
+    Removes the gain-scan fit parameters from the fine scan data.
+
+    Qrs should be no higher than 10 X Qr of the resonances.
+
+    Parameters:
+    fgain (np.array): gain scan frequency data.
+    zgain (np.array): gain scan complex S21 data.
+    ffine (np.array): fine scan frequency data.
+    zfine (np.array): fine scan complex S21 data.
+    frs (list of float): resonance frequencies to cut from the gain scan.
+    Qrs (list of float): Qrs to cut from the gain scan.
+    plotq (bool): If True, also plots fits to the gain scan
+        and corrections to the fine-scan.
+    legacy_fit (bool): If True, uses the legacy fitting functions from
+        citkid.res.gain. If False, uses the current functions from 
+        citkid.xcal.gain.
+
+    Returns:
+    p_amp (np.array): 2nd-order polynomial fit parameters to dB.
+    p_phase (np.array): 1st-order polynomial fit parameters to phase.
+    z_rmvd (np.array): zfine with gain amplitude and phase removed.
+    fig, axs (pyplot figure and axes, or None): if plotq, returns a plot of the
+        gain amplitude and phase fits. Otherwise, returns (None, None).
+    """
+    fgain, zgain = np.array(fgain), np.array(zgain)
+    ffine, zfine = np.array(ffine), np.array(zfine)
+    fr_spans = []
+    for fr, Qr in zip(frs, Qrs):
+        fr_spans.append((fr, fr / Qr))
+    if legacy_fit:
+        f = fit_gain
+        warnings.warn('citkid.xcal.gain.fit_and_remove_gain_phase legacy_fit is depreciated.', 
+                      DeprecationWarning)
+    else:   
+        f = xcal_gain.fit_gain
+    p_amp, p_phase, (fig_gain, axs_gain) = f(fgain, zgain, fr_spans, plotq)
+    z_rmvd = xcal_gain.remove_gain(ffine, zfine, p_amp, p_phase)
+    return p_amp, p_phase, z_rmvd, (fig_gain, axs_gain)

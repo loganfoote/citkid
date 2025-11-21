@@ -15,10 +15,10 @@ def make_random_resonance_data(get_noise = False, nnoise_points = 1000,
             in the frequency and dissipation directions
         nnoise_points (int): number of points in the noise timestream
     Returns:
-        ffine (np.array): fine sweep frequency data in Hz
-        zfine (np.array): fine sweep complex S21 data
-        fgain (np.array): gain sweep frequecy data in Hz
-        zgain (np.array): gain sweep complex S21 data
+        ffine (np.array): fine scan frequency data in Hz
+        zfine (np.array): fine scan complex S21 data
+        fgain (np.array): gain scan frequecy data in Hz
+        zgain (np.array): gain scan complex S21 data
         p (np.array): resonator parameters [fr, Qr, amp, phi, a]
         f0 (float): frequency at which noise was taken
         znoise (np.array): complex S21 noise timestream
@@ -27,11 +27,11 @@ def make_random_resonance_data(get_noise = False, nnoise_points = 1000,
 
     fr, Qr = p[2], p[3]
     span = np.random.uniform(2, 100) * fr / Qr
-    # Rough sweep
+    # Rough scan
     frough = np.linspace(fr - span / 2, fr + span / 2, npoints_fine)
     zrough = get_resonance_s21(frough, *p)
     f0 = update_fr_distance(frough, zrough)
-    # Fine sweep
+    # Fine scan
     ffine = np.linspace(f0 - span / 2, f0 + span / 2, npoints_fine)
     zfine = get_resonance_s21(ffine, *p)
     fgain = np.linspace(f0 - 10 * span / 2, f0 + 10 * span / 2, npoints_gain)
@@ -125,7 +125,7 @@ def polyval(p, x):
 @jit(nopython=True)
 def update_fr_distance(f, z):
     """
-    Give a single resonator rough sweep dataset, return the updated resonance
+    Give a single resonator rough scan dataset, return the updated resonance
     frequency by finding the furthest point from the off-resonance data. This
     function will perform better if the cable delay is first removed.
 

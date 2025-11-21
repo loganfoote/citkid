@@ -1,12 +1,37 @@
-from citkid.noise import cal
 import pytest
 import numpy as np
+from citkid.xcal import circle
 from citkid.noise.psd import get_psd
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use("Agg")
+
+################################################################################
+################################# fit_iq_circle ################################
+################################################################################
+@pytest.mark.parametrize("z,popt_exp", [
+    ([1, 1j, -1, -1j], [0, 0, 1]),
+    ([2, 1 + 1j, 0, 1 - 1j], [1, 0, 1]),
+    ([1 + 1j, 2j, -1 + 1j, 0], [0, 1, 1]),
+    ([1e30, 1e30j, -1e30, -1e30j], [0, 0, 1e30]),
+    ([1e-30, 1e-30j, -1e-30, -1e-30j], [0, 0, 1e-30]),
+])
+def test_fit_iq_circle_gain(z, popt_exp):
+    popt = circle.fit_iq_circle(z)
+    assert np.allclose(popt, popt_exp)
+    
+@pytest.mark.parametrize("z", [
+    ([]),  # empty input
+    ([np.nan, 1, -1, 1j]),  # nan input
+    (['a', 1, -1, 1j]),  # non-numeric input
+])
+def test_fit_iq_circle_invalid_input(z):
+    with pytest.raises(Exception):
+        circle.fit_iq_circle(z)
 
 ################################################################################
 ################################# cent_rot_s21 #################################
 ################################################################################
-
 @pytest.mark.parametrize("z,center,phase,z_exp", [
     ([1], 0, 0, [1]),
     (1, 0, 0, 1),
@@ -21,7 +46,7 @@ from citkid.noise.psd import get_psd
     ([], 0, 0, []),  # empty input
 ])
 def test_cent_rot_s21(z, center, phase, z_exp):
-    z_rot = cal.cent_rot_s21(z, center, phase)
+    z_rot = circle.cent_rot_s21(z, center, phase)
     if isinstance(z_rot, np.ndarray):
         assert z_rot.dtype == np.complex128
     else:
@@ -38,7 +63,7 @@ def test_cent_rot_s21(z, center, phase, z_exp):
 ])
 def test_cent_rot_s21_invalid_input(z, center, phase):
     with pytest.raises(Exception):
-        cal.cent_rot_s21(z, center, phase)
+        circle.cent_rot_s21(z, center, phase)
 
 
 ################################################################################
@@ -60,7 +85,7 @@ t0 = np.linspace(0, 6 * np.pi, 100)
     ([], True, []),  # empty input
 ])
 def test_convert_to_theta(z, unwrap, theta_exp):
-    theta = cal.convert_to_theta(z, unwrap)
+    theta = circle.convert_to_theta(z, unwrap)
     if isinstance(theta, np.ndarray):
         assert theta.dtype == np.float64
     else:
@@ -73,7 +98,7 @@ def test_convert_to_theta(z, unwrap, theta_exp):
 ])
 def test_convert_to_theta_invalid_input(z):
     with pytest.raises(Exception):
-        cal.convert_to_theta(z, False)
+        circle.convert_to_theta(z, False)
 
 ################################################################################
 ################################ convert_to_A ##################################
@@ -90,7 +115,7 @@ def test_convert_to_theta_invalid_input(z):
     ([], []),  # empty input
 ])
 def test_convert_to_A(z, A_exp):
-    A = cal.convert_to_A(z)
+    A = circle.convert_to_A(z)
     if isinstance(A, np.ndarray):
         assert A.dtype == np.float64
     else:
@@ -103,7 +128,7 @@ def test_convert_to_A(z, A_exp):
 ])
 def test_convert_to_A_invalid_input(z):
     with pytest.raises(Exception):
-        cal.convert_to_A(z)
+        circle.convert_to_A(z)
 
 ################################################################################
 ############################### get_spar_sper ##################################
@@ -124,7 +149,7 @@ m = "theta,A,radius,dt,get_freqs,freq_exp,spar_exp,sper_exp"
 ])
 def test_get_spar_sper(theta, A, radius, dt, get_freqs, 
                        freq_exp, spar_exp, sper_exp):    
-    freq, spar, sper = cal.get_spar_sper(theta, A, radius, dt, get_freqs)
+    freq, spar, sper = circle.get_spar_sper(theta, A, radius, dt, get_freqs)
 
     assert isinstance(spar, np.ndarray)
     assert isinstance(sper, np.ndarray)
@@ -161,69 +186,4 @@ def test_get_spar_sper(theta, A, radius, dt, get_freqs,
 ])
 def test_get_spar_sper_invalid_input(theta, A, radius, dt, get_freqs):
     with pytest.raises(Exception):
-        cal.get_spar_sper(theta, A, radius, dt, get_freqs)
-
-################################################################################
-################################# get_xcal_ix #################################
-################################################################################
-# Need to add empty list
-ffine = np.arange(0, 100, 1, dtype = np.float64)
-tfine = ffine.copy()
-tnoise = np.random.permutation(np.linspace(40, 60, 100))
-tnoise_glitch = np.concatenate([tnoise, [1e3]])
-m = "ffine,tfine,tnoise,ix0_offset,ix1_offset,std_cutoff,ix_exp"
-ix = np.random.permutation(np.arange(100))
-tfine1 = tfine.copy() 
-tfine1[10], tfine1[21] = tfine1[21], tfine1[10]
-ffine2, tfine2 = np.flip(ffine), np.flip(tfine)
-@pytest.mark.parametrize(m, [
-    (ffine, tfine, [20.5], 1, 1, None, np.arange(19, 23, 1, dtype = np.int32)),
-    (ffine, tfine, [20.5], 0, 0, None, np.arange(20, 22, 1, dtype = np.int32)),
-    (ffine, tfine, [20.5], 1, -100, None, np.array([], dtype = np.int32)),
-    (ffine, tfine, [20.5], -100, 0, None, np.array([], dtype = np.int32)),
-    (ffine, tfine, [20.5], 100, 1, None, np.arange(0, 23, 1, dtype = np.int32)),
-    (ffine, tfine, [20.5], 1, 100, None, np.arange(19, 100, dtype = np.int32)),
-    (ffine, tfine, [20.5, 21.5], 0, 0, None, np.arange(20, 23, 1, 
-                                                       dtype = np.int32)),
-    (ffine, tfine, [20, 22], 0, 0, None, np.arange(19, 24, 1, 
-                                                       dtype = np.int32)),
-    (ffine, tfine, tnoise, 0, 0, None, np.arange(39, 62, 1, dtype = np.int32)),
-    (ffine, tfine, tnoise_glitch, 0, 0, 3, np.arange(39, 62, 1, 
-                                                     dtype = np.int32)),
-    (ffine, tfine, tnoise_glitch, 0, 0, 11, np.arange(39, 100, 1, 
-                                                      dtype = np.int32)),
-    (ffine[ix], tfine[ix], [20.5], 1, 1, None, np.arange(19, 23, 1, dtype = np.int32)),
-    (ffine, tfine1, [20.5], 0, 0, None, np.arange(9, 23, 1, dtype = np.int32)),
-    (ffine2, tfine2, [20.5], 1, 1, None, np.arange(19, 23, 1, dtype = np.int32)),
-    (ffine, tfine2, [20.5], 1, 1, None, np.arange(77, 81, 1, dtype = np.int32)),
-    (ffine, tfine2, tnoise, 0, 0, None, np.arange(38, 61, 1, dtype = np.int32)),
-    (ffine, tfine2, tnoise_glitch, 0, 0, None, np.arange(0, 61, 1, dtype = np.int32)),
-    (ffine, tfine2, tnoise_glitch, 0, 0, 3, np.arange(38, 61, 1, dtype = np.int32)),
-    (ffine, tfine2, tnoise_glitch, 0, 0, 11, np.arange(0, 61, 1, dtype = np.int32)),
-    (ffine, tfine1, tnoise, 0, 0, None, np.arange(39, 62, 1, dtype = np.int32)),
-    ([], [], [2.5], 0, 0, None, np.array([], dtype = np.int32)),
-])
-def test_get_xcal_ix(ffine, tfine, tnoise, ix0_offset, ix1_offset, 
-                     std_cutoff, ix_exp):
-    ix = cal.get_xcal_ix(ffine, tfine, tnoise, 
-                         ix0_offset, ix1_offset, std_cutoff)
-    assert isinstance(ix, np.ndarray)
-    assert ix.dtype == np.int32
-    assert np.allclose(ix, ix_exp)
-    
-
-@pytest.mark.parametrize("ffine,tfine,tnoise,ix0_offset,ix1_offset,std_cutoff", [
-    (['a', 1, 2], [1, 2, 3], [2], 1, 1, None),  # non-numeric ffine
-    ([1, 2, 3], ['a', 2, 3], [2], 1, 1, None),  # non-numeric tfine
-    ([1, 2, 3], [1, 2, 3], ['a', 2], 1, 1, None),  # non-numeric tnoise
-    ([1, 2, 3], [1, 2], [2], 1, 1, None),  # mismatched ffine and tfine lengths
-    ([1, 2, 3], [1, 2, 3], [2], 1.5, 1, None),  # non-integer ix0_offset
-    ([1, 2, 3], [1, 2, 3], [2], 1, 'a', None),  # non-integer ix1_offset
-    ([1, 2, 3], [1, 2, 3], [2], 1, 1, -1),  # negative std_cutoff
-])  
-def test_get_xcal_ix_invalid_input(ffine, tfine, tnoise, ix0_offset, 
-                                   ix1_offset, std_cutoff):
-    with pytest.raises(Exception):
-        cal.get_xcal_ix(ffine, tfine, tnoise, 
-                        ix0_offset, ix1_offset, std_cutoff)
-    
+        circle.get_spar_sper(theta, A, radius, dt, get_freqs)

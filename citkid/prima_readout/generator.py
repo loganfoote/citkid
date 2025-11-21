@@ -11,33 +11,33 @@ def generate_data(npoints_fine = 600, npoints_gain = 50, noise_factor = 1,
     from the point of max spacing. I can add other options if desired.
 
     Parameters:
-    npoints_fine (int): number of points in the fine sweep
-    npoints_gain (int): number of points in the gain sweep
+    npoints_fine (int): number of points in the fine scan
+    npoints_gain (int): number of points in the gain scan
     noise_factor (float): factor that scales the noise. Lower this for lower
         noise, or raise for higher noise
 
     Returns:
-    ffine (np.array): fine sweep frequency data in Hz
-    zfine (np.array): fine sweep complex S21 data
-    fgain (np.array): gain sweep frequency data in Hz
-    zgain (np.array): gain sweep complex S21 data
+    ffine (np.array): fine scan frequency data in Hz
+    zfine (np.array): fine scan complex S21 data
+    fgain (np.array): gain scan frequency data in Hz
+    zgain (np.array): gain scan complex S21 data
     """
     fr, Qr, amp, phi, a, p_amp, p_phase, fine_bw, f_noise_std, a_noise_std =\
                                                  generate_resonance_parameters()
     f_noise_std *= noise_factor
     a_noise_std *= noise_factor
-    # Rough sweep
+    # Rough scan
     f = np.linspace(fr - fine_bw / 2, fr + fine_bw / 2, 400)
     f_noisy = f + np.random.normal(0, f_noise_std, len(f))
     z = nonlinear_iq_simple(f_noisy, fr, Qr, amp, phi, a, p_amp, p_phase)
     z *= np.random.normal(1, a_noise_std, len(z))
     f0 = update_fr_spacing(f, z)
-    # Fine sweep
+    # Fine scan
     ffine = np.linspace(f0 - fine_bw / 2, f0 + fine_bw / 2, npoints_fine)
     f_noisy = ffine + np.random.normal(0, f_noise_std, len(ffine))
     zfine = nonlinear_iq_simple(f_noisy, fr, Qr, amp, phi, a, p_amp, p_phase)
     zfine *= np.random.normal(1, a_noise_std, len(zfine))
-    # Gain sweep
+    # Gain scan
     fgain = np.linspace(f0 - 5 * fine_bw, f0 + 5 * fine_bw, npoints_gain)
     f_noisy = fgain + np.random.normal(0, f_noise_std, len(fgain))
     zgain = nonlinear_iq_simple(f_noisy, fr, Qr, amp, phi, a, p_amp, p_phase)
@@ -65,7 +65,7 @@ def generate_resonance_parameters():
         a = 4 * sqrt(3) / 9 ~ 0.77.  Sometimes referred to as a_nl
     p_amp (array-like): gain polynomial coefficients
     p_phase (array-like): phase polynomial coefficients
-    fine_bw (float): fine sweep bandwidth in Hz
+    fine_bw (float): fine scan bandwidth in Hz
     f_noise_std (float): frequency noise standard deviation
     a_noise_std (float): amplitude noise standard deviation
     """
@@ -166,8 +166,8 @@ def get_y(yg, a, largest = True):
     yg (float or np.array): unmodified resonance shift
         yg = Qr * (f - fr) / fr
     a (float): nonlinearity parameter
-    largest (bool): If True, solves the equation for a downward sweep. If
-        False, solves for an upward sweep.
+    largest (bool): If True, solves the equation for a downward scan. If
+        False, solves for an upward scan.
 
     Returns:
     y (float or np.array): largest or smallest real root of the above equation
@@ -183,8 +183,8 @@ def cardan(a, b, c, d, largest = True):
 
     Parameters:
     a, b, c, d (float): polynomial coefficients
-    largest(bool): If True, solves the equation for a downward sweep. If
-        False, solves for an upward sweep.
+    largest(bool): If True, solves the equation for a downward scan. If
+        False, solves for an upward scan.
 
     Returns:
     root (float): largest or smallest real root
@@ -227,7 +227,7 @@ def cardan(a, b, c, d, largest = True):
 @jit(nopython=True)
 def update_fr_spacing(f, z):
     """
-    Give a single resonator rough sweep dataset, return the updated resonance
+    Give a single resonator rough scan dataset, return the updated resonance
     frequency by finding the max spacing between adjacent IQ points
 
     Parameters:

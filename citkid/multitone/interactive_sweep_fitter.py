@@ -18,7 +18,7 @@ class resSweepFitter:
 
         Parameters:
         get_res_data (func): function that takes parameter <data_ix (int)> and
-            returns sweep data for a single resonator:
+            returns scan data for a single resonator:
             res_ix (int): resonator index.
             x (array-like (N,)): values (numeric) are the sweep parameter. N is
                 the number of sweep points.
@@ -26,22 +26,22 @@ class resSweepFitter:
                 parameter for each dataset, corresponding to the values in x.
                 For example, one may set x to temperature and y to fr.
             ffs (array-like, (N, M)): values (array-like) are arrays of
-                frequencies for the fine S21 sweeps. M is the length of the S21
-                sweep.
+                frequencies for the fine S21 scans. M is the length of the S21
+                scan.
             zfs (array-like, (N, M)): values (array-like) are arrays of
-                complex S21 for the fine S21 sweeps.
+                complex S21 for the fine S21 scans.
             fgs (array-like, (N, K)): values (array-like) are arrays of
-                frequencies for the gain S21 sweeps. K is the length of the S21
-                sweep.
+                frequencies for the gain S21 scans. K is the length of the S21
+                scan.
             zgs (array-like, (N, K)): values (array-like) are arrays of
-                complex S21 for the gain S21 sweeps.
+                complex S21 for the gain S21 scans.
             fres_alls (array-like, (N, L)): values (array-like) are arrays of
                 resonant frequencies consisting of all resonant frequencies in
-                the array, for gain sweep removal. L is the number of resonances
+                the array, for gain scan removal. L is the number of resonances
                 in the array.
             qres_alls (array-like, (N, L)): values (array-like) are arrays of
                 quality-factor-like parameters for removing resonances from the
-                gain sweep, corresponding to the resonant frequencies in
+                gain scan, corresponding to the resonant frequencies in
                 fres_alls.
         resfit_param (str): resonator fit parameter name corresponding to the
             y data. Must be in ['fr', 'Qr', 'amp', 'phi', 'a', 'i0', 'q0',
@@ -87,7 +87,7 @@ class resSweepFitter:
         self.nres = nres
         self.x_name, self.x_label, self.x_unit = x_name, x_name, x_unit
         self.x_df_name = x_df_name
-        # initialize sweep length to 500 until data is loaded
+        # initialize scan length to 500 until data is loaded
         self.s21_data_lens = [500]
         self.out_directory = fix_path(out_directory)
         os.makedirs(self.out_directory, exist_ok = True)
@@ -237,17 +237,17 @@ class resSweepFitter:
 
         self.dataset_selector = Dropdown(options=[("Select", None)],
                                          description = self.x_name,
-                                         tooltip = 'Select sweep to modify',
+                                         tooltip = 'Select scan to modify',
                                          layout = Layout(width = 'auto'),
                                          style = {'description_width': 'auto'})
-        tt = 'Select S21 sweep start index for fitting'
+        tt = 'Select S21 scan start index for fitting'
         self.start_ix_slider = IntSlider(description = "Start", min = 0,
                                          max = npoints - 1, step = 1,
                                          value = 0, continuous_update = False,
                                          tooltip = tt,
                                          layout = Layout(width = 'auto'),
                                          style = {'description_width': 'auto'})
-        tt = 'Select S21 sweep end index for fitting'
+        tt = 'Select S21 scan end index for fitting'
         self.end_ix_slider = IntSlider(description = "End", min = 1,
                                        max = npoints, step = 1,
                                        value = npoints,
@@ -256,13 +256,13 @@ class resSweepFitter:
                                        layout = Layout(width = 'auto'),
                                        style = {'description_width': 'auto'})
         tt = 'value by which qres_all is multiplied '
-        tt += 'before fitting the gain sweep'
+        tt += 'before fitting the gain scan'
         self.q_mult_text = FloatText(description = "qres multiplier",
                                      value = 1.0, step = 0.1,
                                      tooltip = tt,
                                      layout = Layout(width = '200px'),
                                      style = {'description_width': 'auto'})
-        tt = 'Flag the current sweep data as bad'
+        tt = 'Flag the current scan data as bad'
         self.bad_iq_flag = ToggleButton(value = False,
                                         description = 'Bad data flag',
                                         button_style = '',
@@ -334,7 +334,7 @@ class resSweepFitter:
             required for ipywidgets.observe). Defaults to None.
         """
         if not all([di == self.s21_data_lens[0] for di in self.s21_data_lens]):
-            s = 'Cannot apply all unless all S21 sweeps are the same length!!!'
+            s = 'Cannot apply all unless all S21 scans are the same length!!!'
             self.status.value = s
             return
         self.maintain_state_btn.value = True
@@ -509,4 +509,4 @@ fitrow_keys = ['iq_fr_guess', 'iq_Qr_guess', 'iq_amp_guess', 'iq_phi_guess',
        'iq_Qc', 'iq_Qi', 'iq_fr_err', 'iq_Qr_err', 'iq_amp_err', 'iq_phi_err',
        'iq_a_err', 'iq_i0_err', 'iq_q0_err', 'iq_tau_err', 'iq_pamp_00',
        'iq_pamp_01', 'iq_pamp_02', 'iq_pphase_00', 'iq_pphase_01',
-       'iq_sweep_direction', 'iq_res', 'iq_plotpath']
+       'iq_scan_direction', 'iq_res', 'iq_plotpath']

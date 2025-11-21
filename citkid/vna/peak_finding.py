@@ -56,9 +56,9 @@ def find_peaks_highpass(f, z, fcut, height = 0.2, width = 10e3, distance = 50e3,
     with scipy.signal.find_peaks.
 
     Parameters:
-    f (np.array, float64): array of vna sweep frequencies.
+    f (np.array, float64): array of vna scan frequencies.
     z (np.array, complex128): complex S21 or absolute value |S21| data of
-        vna sweep.
+        vna scan.
     fcut (float): cutoff "wavelength" for highpassing the vna scan. Should be in
         the same frequency units as fvna.
     height (float): peak height for scipy.signal.find_peaks.
