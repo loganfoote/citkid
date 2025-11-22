@@ -9,13 +9,13 @@ from ..noise.psd import get_psd
 @njit(float64(float64[:], float64[:], float64[:]), cache = True)
 def circle_objective(params, x, y):
     """
-    Objective for circle fitting
+    Objective for circle fitting.
 
     Parameters:
     params (A: float, B: float, R: float): circle fit parameters. (A, B) is the
         origin and R is the radius
-    x (np.array): x data
-    y (np.array): y data
+    x (np.array, float64): x data
+    y (np.array, float64): y data
 
     Returns:
     error (float): error for minimization
@@ -33,10 +33,10 @@ def fit_iq_circle(z):
        where the origin is (A, B) and the radius is R.
 
     Parameters:
-    z (np.array): complex S21 data
+    z (np.array, complex128): complex S21 data.
 
     Returns:
-    popt (list): fit parameters (A, B, R).
+    popt (np.array, float64): fit parameters (A, B, R).
     """
     z = np.asarray(z, dtype = np.complex128)
     if not np.all(np.isfinite(z)):

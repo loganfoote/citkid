@@ -1,12 +1,6 @@
 import numpy as np
 from tqdm.auto import tqdm
-from .timestream_filter import lowpass_filter, highpass_filter
-import warnings
-
-warnings.warn('The citkid.noise.corr_removal module is deprecated and will be '\
-              'removed in a future release. Please use the citkid.xcal.corr '\
-              'module for timestream processing functions.', 
-              DeprecationWarning)
+from .ts_filt import lowpass_filter, highpass_filter
 
 def find_common_modes(x, N_comp, N_iter, dt, lowpass_f, lowpass_order,
                       highpass_params):

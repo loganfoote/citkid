@@ -1,5 +1,10 @@
-import numpy as np
 from scipy.signal import butter, filtfilt
+import warnings
+
+warnings.warn('The citkid.noise.timestream_filter module is deprecated and will be '\
+              'removed in a future release. Please use the citkid.xcal.ts_filt '\
+              'module for timestream processing functions.', 
+              DeprecationWarning)
 
 def bandpass_filter(x, dt, f_low, f_high, order=8):
     """
