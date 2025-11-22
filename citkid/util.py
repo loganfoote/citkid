@@ -123,7 +123,6 @@ def to_scientific_notation(number):
     if number == 0:
         return (0.0, 0)  # Handle the special case where the number is zero
 
-    # Use Python's scientific notation formatting to get the exponent and mantissa
     exponent = int(np.floor(np.log10(abs(number))))
     mantissa = number / (10 ** exponent)
 
