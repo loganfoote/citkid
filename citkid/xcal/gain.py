@@ -28,10 +28,10 @@ def remove_gain(f, z, p_amp, p_phase):
 
 def get_res_mask(f, fr_spans):
     """
-    Creates a mask for cutting resonances out of a gain scan. 
+    Creates a mask for cutting resonances out of a gain sweep. 
 
     Parameters:
-    f (np.array, float64): gain scan frequency data in Hz. 
+    f (np.array, float64): gain sweep frequency data in Hz. 
     fr_spans (list): values are tuples (float64, float64) where the first value.
         is the resonant frequency in Hz and the second is the span. These 
         frequency ranges are removed from the gain data.

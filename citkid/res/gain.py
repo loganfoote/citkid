@@ -141,19 +141,19 @@ def fit_gain(f, z, fr_spans, plotq = False):
 def fit_and_remove_gain_phase(fgain, zgain, ffine, zfine, frs = [], Qrs = [],
                               plotq = False, legacy_fit = True):
     """
-    Removes the gain-scan fit parameters from the fine scan data.
+    Removes the gain-sweep fit parameters from the fine sweep data.
 
     Qrs should be no higher than 10 X Qr of the resonances.
 
     Parameters:
-    fgain (np.array): gain scan frequency data.
-    zgain (np.array): gain scan complex S21 data.
-    ffine (np.array): fine scan frequency data.
-    zfine (np.array): fine scan complex S21 data.
-    frs (list of float): resonance frequencies to cut from the gain scan.
-    Qrs (list of float): Qrs to cut from the gain scan.
-    plotq (bool): If True, also plots fits to the gain scan
-        and corrections to the fine-scan.
+    fgain (np.array): gain sweep frequency data.
+    zgain (np.array): gain sweep complex S21 data.
+    ffine (np.array): fine sweep frequency data.
+    zfine (np.array): fine sweep complex S21 data.
+    frs (list of float): resonance frequencies to cut from the gain sweep.
+    Qrs (list of float): Qrs to cut from the gain sweep.
+    plotq (bool): If True, also plots fits to the gain sweep
+        and corrections to the fine-sweep.
     legacy_fit (bool): If True, uses the legacy fitting functions from
         citkid.res.gain. If False, uses the current functions from 
         citkid.xcal.gain.

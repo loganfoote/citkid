@@ -6,19 +6,19 @@ from .plot import plot_cal
 
 def make_x_cal(ffine, zfine, fgain, zgain, fs, Qs, plotq = False):
     """
-    Given fine scan data, produce the calibration data to convert complex S21
+    Given fine sweep data, produce the calibration data to convert complex S21
     data to theta
 
     Parameters:
-    ffine (array-like): fine scan frequency data in Hz
-    zfine (array-like): fine scan complex S21 data
-    fgain (array-like): gain scan frequency data in Hz
-    zgain (array-like): gain scan complex S21 data
-    fs (array-like): resonance frequencies to remove from gain scans when
+    ffine (array-like): fine sweep frequency data in Hz
+    zfine (array-like): fine sweep complex S21 data
+    fgain (array-like): gain sweep frequency data in Hz
+    zgain (array-like): gain sweep complex S21 data
+    fs (array-like): resonance frequencies to remove from gain sweeps when
         fitting gain data
-    Qs (array-like): scaled resonance quality factors to remove from gain scans
+    Qs (array-like): scaled resonance quality factors to remove from gain sweeps
         when fitting gain data. frequency ranges of width fs / Qs centered on fs
-        are removed from the gain scan data
+        are removed from the gain sweep data
     plotq (bool): if True, creates plots of the calibration
 
     Returns:
@@ -27,12 +27,12 @@ def make_x_cal(ffine, zfine, fgain, zgain, fs, Qs, plotq = False):
     origin (complex): origin of the IQ circle
     v (complex): unit vector pointing from the origin to the furthest point in
         zfine_rmvd from the origin
-    theta_fine (np.array): fine scan theta data corresponding to the values in
+    theta_fine (np.array): fine sweep theta data corresponding to the values in
         zfine
     p_x (array-like): polynomial fit parameters to x versus theta
-    fig_gain (pyplot.figure or None): gain scan calibration plot if plotq,
+    fig_gain (pyplot.figure or None): gain sweep calibration plot if plotq,
         else None
-    fig_fine (pyplot.figure or None): fine scan calibration plot if plotq,
+    fig_fine (pyplot.figure or None): fine sweep calibration plot if plotq,
         else None
     fig_x (pyplot.figure or None): theta to x calibration plot if plotq,
         else None
@@ -52,19 +52,19 @@ def make_x_cal(ffine, zfine, fgain, zgain, fs, Qs, plotq = False):
 
 def make_theta_cal(ffine, zfine, fgain, zgain, fs, Qs, plotq = False):
     """
-    Given fine scan data, produce the calibration data to convert complex S21
+    Given fine sweep data, produce the calibration data to convert complex S21
     data to theta
 
     Parameters:
-    ffine (array-like): fine scan frequency data in Hz
-    zfine (array-like): fine scan complex S21 data
-    fgain (array-like): gain scan frequency data in Hz
-    zgain (array-like): gain scan complex S21 data
-    fs (array-like): resonance frequencies to remove from gain scans when
+    ffine (array-like): fine sweep frequency data in Hz
+    zfine (array-like): fine sweep complex S21 data
+    fgain (array-like): gain sweep frequency data in Hz
+    zgain (array-like): gain sweep complex S21 data
+    fs (array-like): resonance frequencies to remove from gain sweeps when
         fitting gain data
-    Qs (array-like): scaled resonance quality factors to remove from gain scans
+    Qs (array-like): scaled resonance quality factors to remove from gain sweeps
         when fitting gain data. frequency ranges of width fs / Qs centered on fs
-        are removed from the gain scan data
+        are removed from the gain sweep data
     plotq (bool): if True, creates plots of the calibration
 
     Returns:
@@ -74,9 +74,9 @@ def make_theta_cal(ffine, zfine, fgain, zgain, fs, Qs, plotq = False):
     radius (float): radius of the IQ circle
     v (complex): unit vector pointing from the origin to the furthest point in
         zfine_rmvd from the origin
-    theta_fine (np.array): fine scan theta data corresponding to the values in
+    theta_fine (np.array): fine sweep theta data corresponding to the values in
         zfine
-    fig_gain, fig_fine (pyplot.figure or None): gain and fine scan calibration
+    fig_gain, fig_fine (pyplot.figure or None): gain and fine sweep calibration
         plots if plotq, else (None, None)
     """
     # Fit gain
@@ -86,7 +86,7 @@ def make_theta_cal(ffine, zfine, fgain, zgain, fs, Qs, plotq = False):
     zfine_rmvd = remove_gain(ffine, zfine, p_amp, p_phase)
     # Theta vector
     origin, radius, v, fig_fine = get_theta_vec(zfine_rmvd, plotq = plotq)
-    # fine-scan theta
+    # fine-sweep theta
     theta_fine = calculate_theta(ffine, zfine, p_amp, p_phase, origin, v)
     return p_amp, p_phase, origin, radius, v, theta_fine, (fig_gain, fig_fine)
 
@@ -96,7 +96,7 @@ def get_theta_vec(zfine_rmvd, plotq = False):
     circle and the unit vector that points from the origin to theta = 0
 
     Parameters:
-    zfine_rmvd (np.array): fine scan complex S21 data with gain removed
+    zfine_rmvd (np.array): fine sweep complex S21 data with gain removed
 
     Returns:
     origin (complex): origin of the IQ circle

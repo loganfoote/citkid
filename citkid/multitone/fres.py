@@ -6,11 +6,11 @@ def update_fres(fs, zs, fres, qres, fcal_indices, method = 'distance',
                 cable_delay = 0, plotq = False, res_indices = None, 
                 plot_directory = ''):
     """
-    Update resonance frequencies given fine scan data
+    Update resonance frequencies given fine sweep data
 
     Parameters:
-    fs (array-like): fine scan frequency data in Hz for each resonator in fres
-    zs (array-like): fine scan complex S21 data for each resonator in fres
+    fs (array-like): fine sweep frequency data in Hz for each resonator in fres
+    zs (array-like): fine sweep complex S21 data for each resonator in fres
     fcal_indices (array-like): list of calibrations tone indices (index into
         fs, zs, fres, Qres). Calibration tone frequencies will not be updated
     method (str): 'mins21' to update using the minimum of |S21|. 'spacing' to
@@ -22,7 +22,7 @@ def update_fres(fs, zs, fres, qres, fcal_indices, method = 'distance',
     fres (np.array or None): list of resonance frequencies in Hz
     qres (np.array or None): list of quality factors to cut if
         cut_other_resonators, or None. Cuts spans of fres / Qres from each
-        scan
+        sweep
     plotq (bool): If True, plots all of the updated frequencies in batches
     res_indices (array-like): resonator indices for plotting
     plot_directory (str): directory to save plots
@@ -49,7 +49,7 @@ def update_fres(fs, zs, fres, qres, fcal_indices, method = 'distance',
     for index, (fi, zi) in enumerate(zip(fs, zs)):
         if index not in fcal_indices:
             spans = fres / qres / 1.5
-            fi, zi = cut_fine_scan(fi, zi, fres, spans)
+            fi, zi = cut_fine_sweep(fi, zi, fres, spans)
             fres_new.append(update(fi, zi))
         else:
             fres_new.append(np.mean(fi))
@@ -59,7 +59,7 @@ def update_fres(fs, zs, fres, qres, fcal_indices, method = 'distance',
 
 def update_fr_minS21(f, z):
     """
-    Give a single resonator rough scan dataset, return the updated resonance
+    Give a single resonator rough sweep dataset, return the updated resonance
     frequency by finding the minimum of |S21| with a linear fit subtracted
 
     Parameters:
@@ -77,7 +77,7 @@ def update_fr_minS21(f, z):
 
 def update_fr_spacing(f, z):
     """
-    Give a single resonator rough scan dataset, return the updated resonance
+    Give a single resonator rough sweep dataset, return the updated resonance
     frequency by finding the max spacing between adjacent IQ points
 
     Parameters:
@@ -96,7 +96,7 @@ def update_fr_spacing(f, z):
 
 def update_fr_distance(f, z):
     """
-    Give a single resonator rough scan dataset, return the updated resonance
+    Give a single resonator rough sweep dataset, return the updated resonance
     frequency by finding the furthest point from the off-resonance data. This
     function will perform better if the cable delay is first removed.
 
@@ -118,12 +118,12 @@ def update_fr_distance(f, z):
         fr = f[ix]
     return fr
 
-def cut_fine_scan(f, z, fres, spans):
+def cut_fine_sweep(f, z, fres, spans):
     """
-    Cuts resonance frequencies out of a single set of fine scan data
+    Cuts resonance frequencies out of a single set of fine sweep data
 
     Parameters:
-    f, z (np.array, np.array): fine scan frequency in Hz and complex S21 data
+    f, z (np.array, np.array): fine sweep frequency in Hz and complex S21 data
     fres (np.array): array of frequencies to cut in Hz
     spans (np.array): array of frequency spans in Hz to cut
     """
@@ -134,5 +134,5 @@ def cut_fine_scan(f, z, fres, spans):
     for fr, sp in zip(fres, spans):
         ix = (np.abs(f - fr) > sp) | (np.abs(f - fr_keep) < sp_keep)
         f, z = f[ix], z[ix]
-    # Needs to leave the current scan
+    # Needs to leave the current sweep
     return f, z

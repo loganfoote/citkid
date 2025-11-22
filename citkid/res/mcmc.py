@@ -19,8 +19,8 @@ def run_mcmc(f, z_stacked, popt, nsteps = 2000, nwalkers = 256,
     nwalkers (int): number of MCMC walkers. 256 is recommended
     ndiscard (int): number of samples to discard
     nthin (int): factor by which the samples are thinned
-    downward (bool): If True, solves the equation for a downward scan. If
-        False, solves for an upward scan. 
+    downward (bool): If True, solves the equation for a downward sweep. If
+        False, solves for an upward sweep. 
     plotq (bool): If True, returns a corner plot
     verbose (bool): If True, tracks progress with a progress bar. If False,
         does not track progress.
@@ -79,8 +79,8 @@ def get_log_probability(f, popt, downward = True):
     f (np.array): frequency data
     popt (array-like): optimal parameters, found using least-squares or other
         fitting method
-    downward (bool): If True, solves the equation for a downward scan. If
-        False, solves for an upward scan.
+    downward (bool): If True, solves the equation for a downward sweep. If
+        False, solves for an upward sweep.
 
     Returns:
     log_probability (func): log probability function
@@ -123,8 +123,8 @@ def get_log_probability(f, popt, downward = True):
         x (array-like): model x data
         y (array-like): model y data
         sigma (float): standard deviation of the observational uncertainties
-        downward (bool): True corresponds to a downward scan, False corresponds
-            to an upward scan
+        downward (bool): True corresponds to a downward sweep, False corresponds
+            to an upward sweep
 
         Returns:
         (float): log of the posterior probability
@@ -142,8 +142,8 @@ def model(f, params, downward = True):
     Parameters:
     f (np.array): frequency data
     params (list): list of parameter inputs to nonlinear_iq_for_fitter
-    downward (bool): If True, solves the equation for a downward scan. If
-        False, solves for an upward scan.
+    downward (bool): If True, solves the equation for a downward sweep. If
+        False, solves for an upward sweep.
 
     Returns:
     z (np.array): horizontally stacked complex IQ data
@@ -159,8 +159,8 @@ def log_likelihood(params, x, y, sigma, downward = True):
     x (array-like): model x data
     y (array-like): model y data
     sigma (float): standard deviation of the observational uncertainties
-    downward (bool): If True, solves the equation for a downward scan. If
-        False, solves for an upward scan.
+    downward (bool): If True, solves the equation for a downward sweep. If
+        False, solves for an upward sweep.
 
     Returns:
     ll (float): log likelihood value

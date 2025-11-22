@@ -6,7 +6,7 @@ from ..util import fix_path
 
 class peakFinder:
     def __init__(self, x_data, y_data, fr_initial, outpath, overwrite = False):
-        """Interactive peak finder for a full vna scan.
+        """Interactive peak finder for a full vna sweep.
 
         Parameters:
         x_data (np.array): Frequency data in Hz
@@ -316,8 +316,8 @@ class qresFinderSingle:
                  span_outpath, x_data_previous = None, y_data_previous = None,
                  fres_previous = None):
         """
-        Interactive quality factor finder for a single resonance target scan.
-        Use this to confirm and adjust ranges for fitting fine scan data.
+        Interactive quality factor finder for a single resonance target sweep.
+        Use this to confirm and adjust ranges for fitting fine sweep data.
 
         Parameters:
         x_data (array-like): Frequency data in Hz
@@ -713,8 +713,8 @@ class qresFinder(qresFinderSingle):
                  titles = None, titles_previous = None,
                  x_datas_previous = None, y_datas_previous = None, fress_previous = None):
         """
-        Interactive qres finder to loop over single resonance target scans.
-        Use this to confirm and adjust ranges for fitting fine scan data.
+        Interactive qres finder to loop over single resonance target sweeps.
+        Use this to confirm and adjust ranges for fitting fine sweep data.
         All parameters are lists of parameters passed into qresFinderSingle
 
         Parameters:

@@ -14,8 +14,8 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
     Computes parallel and perpendicular noise PSDs, as well as Sxx
 
     Parameters:
-    ffine (array-like): fine scan frequency data in Hz
-    zfine (array-like): fine scan complex S21 data, with gain removed
+    ffine (array-like): fine sweep frequency data in Hz
+    zfine (array-like): fine sweep complex S21 data, with gain removed
     fnoise (float): on-resonance noise tone frequency in Hz
     znoise (array-like or None): on-resonance complex noise data, with gain
         removed. For off-resonance noise only, set this to None
@@ -74,7 +74,7 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
         fig_psd (plt.figure): plot of the PSDs
         fig_timestream (plt.figure): plot of the timestream data
     """
-    assert len(zfine), "No fine scan points provided to compute_psd"
+    assert len(zfine), "No fine sweep points provided to compute_psd"
     # Prepare data
     ffine, zfine= np.array(ffine), np.array(zfine)
     ix = np.argsort(ffine)
@@ -160,8 +160,8 @@ def compute_psd_simple(ffine, zfine, fnoise, znoise, dt, deglitch_nstd = 5,
     by rotating the noise data to 0, 0 and returning PSDs of I, Q
 
     Parameters:
-    ffine (array-like): fine scan frequency data in Hz
-    zfine (array-like): fine scan complex S21 data, with gain removed
+    ffine (array-like): fine sweep frequency data in Hz
+    zfine (array-like): fine sweep complex S21 data, with gain removed
     fnoise (float): on-resonance noise tone frequency in Hz
     znoise (array-like or None): on-resonance complex noise data, with gain
         removed. For off-resonance noise only, set this to None
@@ -221,7 +221,7 @@ def calibrate_timestreams(origin, ffine, zfine, fnoise, znoise, dt,
                           xcal_weight_theta0 = 0.0, **cr_kwargs):
     """
     Calculates theta and x timestreams given complex IQ noise timestreams.
-    1) calculate theta of the scan data an noise timestream
+    1) calculate theta of the sweep data an noise timestream
     2) flag and remove cosmic rays
     3) deglitch data and perform polynomial fit to get x from theta, if not
        offres
@@ -245,7 +245,7 @@ def calibrate_timestreams(origin, ffine, zfine, fnoise, znoise, dt,
     **cr_kwargs: kwargs for cosmic ray removal
 
     Returns:
-    theta_fine (np.array): theta of the complex scan data
+    theta_fine (np.array): theta of the complex sweep data
     theta (np.array): theta timestream
     # If not offres:
     theta_range (np.array): [lower, upper] bound on theta used in the polynomial
@@ -254,7 +254,7 @@ def calibrate_timestreams(origin, ffine, zfine, fnoise, znoise, dt,
     x (np.array): deglitched x timestream
     cr_indices (np.array): cosmic ray indices
     """
-    assert len(zfine), "No fine scan points provided to calibrate_timestreams"
+    assert len(zfine), "No fine sweep points provided to calibrate_timestreams"
     theta_fine, theta, A = calculate_theta_A(zfine, znoise, origin)
     if offres:
         znoise_clean = deglitch_timestream(znoise, deglitch_nstd)
@@ -288,11 +288,11 @@ def calibrate_x(ffine, theta_fine, theta_clean, poly_deg = 3,
                 min_cal_points = 5, weight_sigma = None,
                 weight_theta0 = 0.0):
     """
-    Fit fine scan frequency to phase
+    Fit fine sweep frequency to phase
 
     Parameters:
-    ffine (np.array): fine scan frequency data in Hz
-    theta_fine (np.array): fine scan theta data
+    ffine (np.array): fine sweep frequency data in Hz
+    theta_fine (np.array): fine sweep theta data
     theta_clean (np.array): deglitched theta noise timestream data
     poly_deg (int): degree of the polynomial fit
     min_cal_points (int): minimum number of points for the polynomial fit
@@ -369,16 +369,16 @@ def calculate_theta_A(zfine, znoise, origin):
     Convert an IQ loop and timestream to theta using the origin of the circle
 
     Parameters:
-    zfine (np.array): fine scan complex S21 data
+    zfine (np.array): fine sweep complex S21 data
     znoise (np.array): complex S21 noise timestream
     origin (complex): center of the IQ loop
 
     Returns:
-    theta_fine (np.array): values of theta corresponding to the fine scan data
+    theta_fine (np.array): values of theta corresponding to the fine sweep data
     theta_noise (np.array): theta timestream corresponding the the noise data
     A_noise (np.array): amplitude timestream corresponding to the noise data
     """
-    assert len(zfine), "No fine scan points provided to calculate_theta_A"
+    assert len(zfine), "No fine sweep points provided to calculate_theta_A"
     zn_mean = np.mean(znoise)
     # Get x, y basic vectors, where x is the vector that passes through the
     # origin of the circle and the mean of the noise ball, and y is
@@ -388,13 +388,13 @@ def calculate_theta_A(zfine, znoise, origin):
     y_complex = 1j * x_complex
     x_vec = np.array([np.real(x_complex), np.imag(x_complex)])
     y_vec = np.array([np.real(y_complex), np.imag(y_complex)])
-    # Calculate theta of the fine scan
+    # Calculate theta of the fine sweep
     zfine_vec = np.transpose(np.array([np.real(zfine - origin),
                                        np.imag(zfine - origin)]))
     zfine_z = np.dot(zfine_vec, x_vec) + 1j * np.dot(zfine_vec, y_vec)
     theta_fine = np.angle(zfine_z)
     extrapolate_mode = (min(theta_fine) > 0) or (max(theta_fine) < 0)
-    # Unwrap fine scan theta
+    # Unwrap fine sweep theta
     #theta_fine = np.unwrap(2 * theta_fine) / 2
     theta_fine = np.unwrap(theta_fine)
     if not extrapolate_mode:
@@ -408,7 +408,7 @@ def calculate_theta_A(zfine, znoise, origin):
     noise_z = np.dot(noise_vec, x_vec) + 1j * np.dot(noise_vec, y_vec)
     theta_noise = np.angle(noise_z)
     A_noise = np.abs(noise_z)
-    # Make sure the range of theta matches the range of the fine scan
+    # Make sure the range of theta matches the range of the fine sweep
     theta_noise = np.where(theta_noise > 1, theta_noise - 2 * np.pi,
                            theta_noise)
     return theta_fine, theta_noise, A_noise

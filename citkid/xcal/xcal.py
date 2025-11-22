@@ -1,19 +1,19 @@
 import numpy as np 
 
 ################################################################################
-##################### Cut fine scan for fitting x vs theta #####################
+##################### Cut fine sweep for fitting x vs theta ####################
 ################################################################################
 def get_xcal_ix(ffine, tfine, tnoise, ix0_offset = 7, ix1_offset = 5,
                 std_cutoff = 12):
     """
-    Get incides of the fine s21 scan over which x vs theta should be fit to 
+    Get incides of the fine s21 sweep over which x vs theta should be fit to 
     produce the x calibration. Chooses the indices where tfine (after glitch 
     removal) falls within the min and max values of tnoise, with optional 
     offsets.
 
     Parameters:
-    ffine (array-like, float64): frequency values from the fine s21 scan in Hz.
-    tfine (array-like, float64): theta values from the fine s21 scan.
+    ffine (array-like, float64): frequency values from the fine s21 sweep in Hz.
+    tfine (array-like, float64): theta values from the fine s21 sweep.
     tnoise (array-like, float64): theta values from the noise measurement.
     ix0_offset (int): number of indices to offset below the start index.
         The data is sorted such that the start index corresponds to the lowest

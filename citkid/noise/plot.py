@@ -11,8 +11,8 @@ def plot_cal(ffine, zfine, popt_circle, fnoise, znoise, znoise_offres,
     plot is the theta to x calibration, if on-resonance noise is provided.
 
     Parameters:
-    ffine (array-like): fine scan frequency data in Hz
-    zfine (array-like): fine scan complex S21 data, with gain removed
+    ffine (array-like): fine sweep frequency data in Hz
+    zfine (array-like): fine sweep complex S21 data, with gain removed
     popt_circle (np.array): circle fit parameters
     fnoise (float): on-resonance noise tone frequency in Hz
     znoise (array-like or None): on-resonance complex noise data
@@ -21,7 +21,7 @@ def plot_cal(ffine, zfine, popt_circle, fnoise, znoise, znoise_offres,
     theta (np.array): theta noise timestream
     theta_range (tuple): [lower, upper] range of theta over which the fit was
         performed
-    theta_fine (np.array): fine scan theta data
+    theta_fine (np.array): fine sweep theta data
     poly (np.array): x vs theta polynomial fit parameters
 
     Returns:

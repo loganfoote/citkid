@@ -80,15 +80,15 @@ def plot_gain_fit(f, z, mask, p_amp, p_phase):
 
 def plot_s21(f, z, zt = None, fg = None, zg = None):
     """
-    Plots complex S21 scan and optional timestream data in IQ plane and as 
+    Plots complex S21 sweep and optional timestream data in IQ plane and as 
     |S21| vs frequency.
      
     Parameters:
-    f (np.array, float64): fine scan frequency data in Hz.
-    z (np.array, complex128): fine scan complex S21 data.
-    fg (np.array, float64 or None): gain scan frequency data in Hz, or None to 
+    f (np.array, float64): fine sweep frequency data in Hz.
+    z (np.array, complex128): fine sweep complex S21 data.
+    fg (np.array, float64 or None): gain sweep frequency data in Hz, or None to 
         omit from plots.
-    zg (np.array, complex128 or None): gain scan complex S21 data, or None to 
+    zg (np.array, complex128 or None): gain sweep complex S21 data, or None to 
         omit from plots.
     zt (np.array, complex128 or None): timestream complex S21 data, or None to 
         omit from plots.
@@ -109,7 +109,7 @@ def plot_s21(f, z, zt = None, fg = None, zg = None):
     axs[0].set(xlabel = xlbl, ylabel = r'$S_{21}$ (dB)')
     axs[1].set(xlabel = 'I', ylabel = 'Q', aspect = 'equal')
 
-    # Plot gain scan data
+    # Plot gain sweep data
     if fg is not None:
         fg = np.asarray(fg, dtype = np.float64)
         zg = np.asarray(zg, dtype = np.complex128)
@@ -117,13 +117,13 @@ def plot_s21(f, z, zt = None, fg = None, zg = None):
         axs[0].plot((fg - fmean) / 1e3, 20 * np.log10(np.abs(zg)), 'o', 
                     color = plt.cm.viridis(0.33), aa = False)
         axs[1].plot(zg.real, zg.imag, 'o', color = plt.cm.viridis(0.33), 
-                    aa = False, label = 'gain scan')
+                    aa = False, label = 'gain sweep')
         
-    # Plot fine scan data
+    # Plot fine sweep data
     axs[0].plot((f - fmean) / 1e3, 20 * np.log10(np.abs(z)), 'o', 
                 color = plt.cm.viridis(0.), aa = False)
     axs[1].plot(z.real, z.imag, 'o', color = plt.cm.viridis(0.), aa = False,
-                label = 'fine scan')
+                label = 'fine sweep')
 
     # Plot timestream data
     if zt is not None:

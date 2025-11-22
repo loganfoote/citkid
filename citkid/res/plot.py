@@ -11,8 +11,8 @@ def plot_nonlinear_iq(f, z, popt, p0, downward = True, plot_guess = False):
     z (np.array): complex iq data
     popt (list): fit parameters
     p0 (list): initial guess parameters
-    downward (bool): If True, plots the equation for a downward scan. If
-        False, plots for an upward scan.
+    downward (bool): If True, plots the equation for a downward sweep. If
+        False, plots for an upward sweep.
     plot_guess (bool): If True, also plots the guess curve
 
     Returns:

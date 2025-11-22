@@ -3,7 +3,7 @@ from scipy.signal import butter, sosfilt, sosfiltfilt, find_peaks
 
 def butter_highpass_filter(data, fcut, fs, order = 1, direction = 'forward'):
     """
-    Highpass filter for VNA scans to remove gain fluctuations.
+    Highpass filter for VNA sweeps to remove gain fluctuations.
 
     Parameters:
     data (np.array): data to filter.
@@ -27,7 +27,7 @@ def butter_highpass_filter(data, fcut, fs, order = 1, direction = 'forward'):
 
 def butter_lowpass_filter(data, fcut, fs, order = 1, direction = 'forward'):
     """
-    Lowpass filter for VNA scans to remove gain fluctuations.
+    Lowpass filter for VNA sweeps to remove gain fluctuations.
 
     Parameters:
     data (np.array): data to filter.
@@ -52,14 +52,14 @@ def butter_lowpass_filter(data, fcut, fs, order = 1, direction = 'forward'):
 def find_peaks_highpass(f, z, fcut, height = 0.2, width = 10e3, distance = 50e3,
                         order = 1, fcut_lowpass = False):
     '''
-    Highpasses a VNA scan to get rid of gain fluctuations, then finds resonances
+    Highpasses a VNA sweep to get rid of gain fluctuations, then finds resonances
     with scipy.signal.find_peaks.
 
     Parameters:
-    f (np.array, float64): array of vna scan frequencies.
+    f (np.array, float64): array of vna sweep frequencies.
     z (np.array, complex128): complex S21 or absolute value |S21| data of
-        vna scan.
-    fcut (float): cutoff "wavelength" for highpassing the vna scan. Should be in
+        vna sweep.
+    fcut (float): cutoff "wavelength" for highpassing the vna sweep. Should be in
         the same frequency units as fvna.
     height (float): peak height for scipy.signal.find_peaks.
     width (float): peak width, in same frequency units as fvna.
