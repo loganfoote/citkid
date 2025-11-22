@@ -218,7 +218,7 @@ class CRS:
         # Set fir_stage
         fir_stage = 6
         await self.d.set_decimation(fir_stage)
-        # Sweep
+        # sweep
         sweep_f, sweep_z = {}, {}
         modules = get_modules(self.d, list(self.frequencies_dict.keys()))
         await modules.sweep(self.nco_freq_dict, self.frequencies_dict,

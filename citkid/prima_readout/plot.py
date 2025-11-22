@@ -11,8 +11,8 @@ def plot_cal(ffine, zfine, origin, radius, v, theta_range, theta_fine, p_amp, p_
     plot is the theta to x calibration, if on-resonance noise is provided.
 
     Parameters:
-    ffine (array-like): fine scan frequency data in Hz
-    zfine (array-like): fine scan complex S21 data
+    ffine (array-like): fine sweep frequency data in Hz
+    zfine (array-like): fine sweep complex S21 data
     origin (complex): center of the IQ circle
     radius (float): radius of the IQ circle
     v (complex): unit vector pointing from the origin to the furthest point in

@@ -49,7 +49,7 @@ def update_fres(fs, zs, fres, qres, fcal_indices, method = 'distance',
     for index, (fi, zi) in enumerate(zip(fs, zs)):
         if index not in fcal_indices:
             spans = fres / qres / 1.5
-            fi, zi = cut_fine_scan(fi, zi, fres, spans)
+            fi, zi = cut_fine_sweep(fi, zi, fres, spans)
             fres_new.append(update(fi, zi))
         else:
             fres_new.append(np.mean(fi))
@@ -118,12 +118,12 @@ def update_fr_distance(f, z):
         fr = f[ix]
     return fr
 
-def cut_fine_scan(f, z, fres, spans):
+def cut_fine_sweep(f, z, fres, spans):
     """
-    Cuts resonance frequencies out of a single set of fine scan data
+    Cuts resonance frequencies out of a single set of fine sweep data
 
     Parameters:
-    f, z (np.array, np.array): fine scan frequency in Hz and complex S21 data
+    f, z (np.array, np.array): fine sweep frequency in Hz and complex S21 data
     fres (np.array): array of frequencies to cut in Hz
     spans (np.array): array of frequency spans in Hz to cut
     """
@@ -134,5 +134,5 @@ def cut_fine_scan(f, z, fres, spans):
     for fr, sp in zip(fres, spans):
         ix = (np.abs(f - fr) > sp) | (np.abs(f - fr_keep) < sp_keep)
         f, z = f[ix], z[ix]
-    # Needs to leave the current scan
+    # Needs to leave the current sweep
     return f, z

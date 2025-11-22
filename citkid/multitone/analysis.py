@@ -12,7 +12,7 @@ from ..res.gain import remove_gain
 from ..noise.analysis import compute_psd
 from ..noise.data_io import save_psd
 from .data_io import import_iq_noise
-from .fres import cut_fine_scan
+from .fres import cut_fine_sweep
 from rfmux.core.transferfunctions import compensate_psd_for_cics
 import matplotlib
 matplotlib.use('Agg')
@@ -23,7 +23,7 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
            downward = True, cut_to_qres = False, overwrite = False,
            verbose = True, catch_exceptions = False):
     """
-    Fits all IQ loops in a target scan
+    Fits all IQ loops in a target sweep
 
     Parameters:
     directory (str): directory containing the data for logging
@@ -38,7 +38,7 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
         cryostat should be taken into account here
     temperature_index (int): temperature index for logging
     temperature (float): temperature in K for logging
-    rejected_points (array-like): indices to discard from fine scan data before
+    rejected_points (array-like): indices to discard from fine sweep data before
         fitting
     extra_fitdata_values (dict): keys (str) are data column names and values
         (single value or np.array with same length as number of targets) are set
@@ -48,7 +48,7 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
         plot_factor resonators
     downward (bool): If True, solves the equation for a downward sweep. If
         False, solves for an upward sweep.
-    cut_to_qres (bool): If True, cuts the fine scan data to the span of fres / qres
+    cut_to_qres (bool): If True, cuts the fine sweep data to the span of fres / qres
     overwrite (bool): if not True, raises an exception if the output data file
         already exists
     verbose (bool): If True, displays a progress bar as data is taken
@@ -96,7 +96,7 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
         fr, Qr = fres[pbar_index], qres[pbar_index]
         # Cut adjacent resonators from data before fitting
         if pbar_index not in fcal_indices:
-            ffine, zfine = cut_fine_scan(ffine, zfine, fres, fres / qres)
+            ffine, zfine = cut_fine_sweep(ffine, zfine, fres, fres / qres)
         if cut_to_qres:
             ix = np.abs(ffine - fr) < fr / Qr
             ffine, zfine = ffine[ix], zfine[ix]
@@ -285,7 +285,7 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
         else:
             raise ValueError("Invalid value for circfit_mode: " + str(circfit_mode))
 
-        assert len(zfine), "No fine scan points remain after trim"
+        assert len(zfine), "No fine sweep points remain after trim"
 
         try:
             if data_index in fcal_indices:

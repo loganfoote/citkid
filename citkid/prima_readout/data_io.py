@@ -38,9 +38,9 @@ def save_x_cal(data_directory, filename, p_amp, p_phase, origin, v, p_x, figs,
         zfine_rmvd from the origin
     p_x (array-like): polynomial fit parameters to x versus theta
     figs:
-        fig_gain (pyplot.figure or None): gain scan calibration plot if plotq,
+        fig_gain (pyplot.figure or None): gain sweep calibration plot if plotq,
             else None
-        fig_fine (pyplot.figure or None): fine scan calibration plot if plotq,
+        fig_fine (pyplot.figure or None): fine sweep calibration plot if plotq,
             else None
         fig_x (pyplot.figure or None): theta to x calibration plot if plotq,
             else None

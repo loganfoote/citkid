@@ -121,7 +121,7 @@ async def take_iq_noise(inst, fres, ares, qres, fcal_indices, res_indices,
         await inst.write_tones(fres, ares)
         np.save(out_directory + f'fres{file_suffix}.npy', fres)
 
-    # Gain Sweep
+    # Gain sweep
     filename = f's21_gain{file_suffix}.npy'
     f, z = await inst.sweep_qres(fres, ares, qres0 / gain_span_factor,
                                  npoints = npoints_gain, nsamps = nsamps,
@@ -129,7 +129,7 @@ async def take_iq_noise(inst, fres, ares, qres, fcal_indices, res_indices,
                                  pbar_description = 'Gain sweep')
     np.save(out_directory + filename, [f, np.real(z), np.imag(z)])
 
-    # Fine Sweep
+    # Fine sweep
     filename = f's21_fine{file_suffix}.npy'
     f, z = await inst.sweep_qres(fres, ares, qres0, npoints = npoints_fine,
                                  nsamps = nsamps, verbose = verbose,
@@ -287,7 +287,7 @@ async def optimize_ares(inst, out_directory, fres, ares, qres, fcal_indices, res
     a_nls = []
     for idx0 in pbar0:
         if verbose:
-            pbar0.set_description('sweeping')
+            pbar0.set_description('Sweeping')
         file_suffix = f'{idx0:02d}'
         if not skip_first or idx0 != start_index:
             await take_iq_noise(inst, fres, ares, qres, fcal_indices, res_indices, out_directory, file_suffix,
@@ -379,7 +379,7 @@ async def optimize_ares_noise(inst, out_directory, fres, ares, qres, fcal_indice
     a_nls = []
     for idx0 in pbar0:
         if verbose:
-            pbar0.set_description('sweeping')
+            pbar0.set_description('Sweeping')
         file_suffix = f'{idx0:02d}'
         if not skip_first or idx0 != start_index:
             await take_iq_noise(inst, fres, ares, qres, fcal_indices, res_indices, out_directory, file_suffix,

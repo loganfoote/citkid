@@ -7,13 +7,15 @@ def get_psd(x, dt, get_frequencies = False):
     Calculates the unilateral power spectral density magnitude of a timestream
 
     Parameters:
-    x (np.array): timeseries data
+    x (np.array, float64): timeseries data
     dt (float): sample rate of timeseries
     get_frequencies (bool): If True, also returns a list of frequencies
 
     Returns:
-    psd (np.array): power spectral density
+    f (np.array, float64): frequency data in Hz if get_frequencies is True.
+    psd (np.array, float64): power spectral density
     """
+    x = np.asarray(x, dtype = np.float64)
     a = pyfftw.interfaces.numpy_fft.rfft(x)
     psd = 2 * np.abs(a) ** 2 * dt / len(x)
     if not get_frequencies:

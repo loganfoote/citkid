@@ -1,9 +1,10 @@
 import numpy as np
 from scipy import optimize
+import warnings
 from .funcs import nonlinear_iq_for_fitter, nonlinear_iq, circle_objective
 from .util import bounds_check, calculate_residuals
 from .gain import fit_and_remove_gain_phase
-from .plot import plot_nonlinear_iq, plot_gain_fit, plot_circle
+from .plot import plot_nonlinear_iq, plot_circle
 from ..util import  combine_figures_vertically
 from citkid.res import guess
 from .data_io import make_fit_row
@@ -13,20 +14,20 @@ def fit_nonlinear_iq_with_gain(fgain, zgain, ffine, zfine, frs, Qrs,
                                return_dataframe = False, floats_only=False,
                                **kwargs):
     """
-    Fits IQ data with gain amplitudes and phase correction from a gain scan.
-    Cuts resonance frequencies from the gain scan in spans of fr / Qr around fr,
+    Fits IQ data with gain amplitudes and phase correction from a gain sweep.
+    Cuts resonance frequencies from the gain sweep in spans of fr / Qr around fr,
     where fr is an item in frs and Qr is a corresponding quality factor in Qrs
 
-    The optimal fine scan width is 6 * fr / Qr
-    The optimal gain scan width is 100 * fr / Qr
+    The optimal fine sweep width is 6 * fr / Qr
+    The optimal gain sweep width is 100 * fr / Qr
 
     Parameters:
     fgain (np.array): gain sweep frequency data
     zgain (np.array): gain sweep complex S21 data
     ffine (np.array): fine sweep frequency data
     zfine (np.array): fine sweep complex S21 data
-    frs (list of float): resonance frequencies to cut from the gain scan
-    Qrs (list of float): spans of frs / Qrs are cut from the gain scan
+    frs (list of float): resonance frequencies to cut from the gain sweep
+    Qrs (list of float): spans of frs / Qrs are cut from the gain sweep
     downward (bool): If True, fits the equation for a downward sweep. If
         False, fits for an upward sweep.
     plotq (bool): If True, plots the fits.
@@ -165,7 +166,7 @@ def fit_nonlinear_iq(f, z, bounds = None, p0 = None, fr_guess = None,
     p0 = np.array(p0)
     return p0, popt, perr, res, figax
 
-def fit_iq_circle(z, x0=None, plotq = False):
+def fit_iq_circle(z, x0 = None, plotq = False):
     """
     Fits an IQ loop to a circle. The function describing the circle is
 
@@ -183,18 +184,22 @@ def fit_iq_circle(z, x0=None, plotq = False):
     popt (list): fit parameters (A, B, R).
     fig, ax (pyplot figure and axis): fit figure and axis, or None if not plotq
     """
+    warnings.warn("fit_iq_circle is deprecated. Use citkid.xcal.circle.fit_iq_circle instead.", 
+                  DeprecationWarning)
+    z = np.asarray(z, dtype = np.complex128)
+    if not np.all(np.isfinite(z)):
+        raise ValueError("Input data contains non-finite values.")
+    i, q = z.real, z.imag
 
-    I, Q = np.real(z), np.imag(z)
     if x0 is None:
-        x0 = [(max(I) + min(I))/2, (max(Q) + min(Q))/2]
-        x0.append((max(I) - min(I) + max(Q) - min(Q)) / 4)
-    args = (I, Q)
-    popt = optimize.fmin(circle_objective, x0, args, disp=0)
+        x0 = [(max(i) + min(i))/2, (max(q) + min(q))/2]
+        x0.append((max(i) - min(i) + max(q) - min(q)) / 4)
+    popt = optimize.fmin(circle_objective, x0, (i, q), disp = 0)
 
     if plotq:
-        fig, ax = plot_circle(z, *popt)
+        fig, _ = plot_circle(z, *popt)
     else:
-        fig, ax = None, None
+        fig = None
     return popt, fig
 
 ################################################################################

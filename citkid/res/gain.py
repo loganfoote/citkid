@@ -1,153 +1,181 @@
 import numpy as np
+import warnings
 from .plot import plot_gain_fit
-
-def fit_and_remove_gain_phase(fgain, zgain, ffine, zfine, frs = [], Qrs = [],
-                              plotq=False):
-    """
-    Removes the gain-scan fit parameters from the fine scan data
-
-    Qrs should be no higher than 10 X Qr of the resonances
-
-    Parameters:
-    fgain (np.array): gain sweep frequency data
-    zgain (np.array): gain sweep complex S21 data
-    ffine (np.array): fine sweep frequency data
-    zfine (np.array): fine sweep complex S21 data
-    frs (list of float): resonance frequencies to cut from the gain scan
-    Qrs (list of float): Qrs to cut from the gain scan.
-    plotq (bool): If True, also plots fits to the gain scan
-        and corrections to the fine-scan.
-
-    Returns:
-    p_amp (np.array): 2nd-order polynomial fit parameters to dB
-    p_phase (np.array): 1st-order polynomial fit parameters to phase
-    z_rmvd (np.array): zfine with gain amplitude and phase removed
-    fig, axs (pyplot figure and axes, or None): if plotq, returns a plot of the
-        gain amplitude and phase fits. Otherwise, returns (None, None)
-    """
-    fgain, zgain = np.array(fgain), np.array(zgain)
-    ffine, zfine = np.array(ffine), np.array(zfine)
-    fr_spans = []
-    for fr, Qr in zip(frs, Qrs):
-        fr_spans.append((fr, fr / Qr))
-    p_amp, p_phase, (fig_gain, axs_gain) = fit_gain(fgain, zgain, fr_spans, plotq)
-    z_rmvd = remove_gain(ffine, zfine, p_amp, p_phase)
-    return p_amp, p_phase, z_rmvd, (fig_gain, axs_gain)
+import xcal.gain as xcal_gain
 
 def remove_gain(f, z, p_amp, p_phase):
     """
-    Removes the gain amplitude and phase from data
+    Removes the gain amplitude and phase from complex S21 data, given the raw
+    data
 
     Parameters:
-    f (np.array): frequency data in Hz
-    z (np.array): complex S21 data
-    p_amp (np.array): polynomial fit parameters to gain amplitude
-    p_phase (np.array): polynomial fit parameters to gain phase
+    f (np.array, float64, (N,)): frequency data in Hz.
+    z (np.array, complex128, (N,)): complex S21 data.
+    p_amp (np.array, float64, (K,)): polynomial fit parameters to gain
+        amplitude.
+    p_phase (np.array, float64, (L,)): polynomial fit parameters to gain phase.
 
     Returns:
-    z_rmvd (np.array): complex S21 data with gain amplitude and phase removed
+    z_rmvd (np.array, complex128, (N,)): complex S21 data with gain amplitude
+        and phase removed.
     """
+    warnings.warn('citkid.xcal.gain.remove_gain is deprecated. '
+                  'Please use citkid.res.gain.remove_gain instead.', 
+                  DeprecationWarning)
+    f = np.asarray(f, dtype = np.float64)
+    z = np.asarray(z, dtype = np.complex128)
+    p_amp = np.asarray(p_amp, dtype = np.float64)
+    p_phase = np.asarray(p_phase, dtype = np.float64)
+
     z_rmvd = z / 10 ** (np.polyval(p_amp, f) / 20)
     z_rmvd = z_rmvd / np.exp(1j * np.polyval(p_phase, f))
     return z_rmvd
 
 def fit_gain(f, z, fr_spans, plotq = False):
     """
-    Fits the amplitude and phase of gain data. Amplitude is fit to a 2nd order
-    polynomial and phase is fit to a 1st order polynomial
+    Fits the amplitude and phase of gain data. Amplitude is fit to a 2nd order.
+    polynomial and phase is fit to a 1st order polynomial.
 
     Parameters:
-    f <np.array>: gain frequency array
-    z <np.array>: gain complex S21 array
-    fr_spans (list): values are tuples (<float>,<float>) where the first value
+    f (np.array, float64, (N,)): gain frequency array.
+    z (np.array, complex128, (N,)): gain complex S21 array.
+    fr_spans (list): values are tuples (float64, float64) where the first value.
         is the resonance frequency and the second is the span. These frequencies
-        are removed from the gain data
-    plotq (bool): If True, plots the fits and returns the figure
+        are removed from the gain data.
+    plotq (bool): If True, plots the fits and returns the figure.
 
     Returns:
-    p_amp (np.array): 2nd-order polynomial fit parameters to gain amplitude
-    p_phase (np.array): 1st-order polynomial fit parameters to gain phase
+    p_amp (np.array, float64): 2nd-order polynomial fit parameters to gain
+        amplitude.
+    p_phase (np.array, float64): 1st-order polynomial fit parameters to gain
+        phase.
     fig, axs (pyplot figure and axes, or None): if plotq, returns a plot of the
-        gain amplitude and phase fits. Otherwise, returns (None, None)
+        gain amplitude and phase fits. Otherwise, returns (None, None).
     """
+    warnings.warn('citkid.xcal.gain.fit_gain is deprecated. '
+                  'Please use citkid.res.gain.fit_gain instead.',      
+                    DeprecationWarning)
+    ### Check parameters
+    f = np.asarray(f, dtype = np.float64)
+    z = np.asarray(z, dtype = np.complex128)
+
+    shape_check = (f.shape == z.shape)
+    shape_check = shape_check or (f.shape == tuple()) or (z.shape == tuple())
+    assert shape_check, 'f and z must be the same length'
+    assert len(f) >= 4, 'len(f) must be at least 3'
+
     for r in fr_spans:
         if not(len(r) == 2):
             raise ValueError('Incorrect fr_spans format')
         if r[1] < 0:
             raise ValueError('Span must be positive')
-    dB = 20 * np.log10(abs(z))
     if plotq:
         f0, z0 = f.copy(), z.copy()
-        dB0 = dB.copy()
-    # Remove resonances from span data
 
-    def cut_scans(f, z, dB, fr_spans):
-        fcuts = [] # frequencies at which data is cut
-        f1, z1, dB1 = f, z, dB
-        for fr, span in fr_spans:
-            ix0 = f1 < fr - span
-            ix1 = f1 > fr + span
-            ix = ix0|ix1
-            fix = f1[~ix]
-            if len(fix):
-                fcuts.append(np.mean(fix)) 
-            f1, z1, dB1 = f1[ix], z1[ix], dB1[ix]
-        return f1, z1, dB1, fcuts 
-    f1, z1, dB1, fcuts = cut_scans(f, z, dB, fr_spans)
-    if len(f1) < 3:
-        
-        f1, z1, dB1, fcuts = cut_scans(f, z, dB, 
-                        [[d[0], d[1] / 1.5] for d in fr_spans])
-    f, z, dB = f1, z1, dB1
-    phase = np.angle(z)
-    phase = np.unwrap(2 * phase) / 2
-    phase0 = phase.copy()
-    if plotq:
-        f1 = f.copy()
+    ### Remove resonances from span data
+    intervals = np.array([(c - s / 2, c + s / 2) for c, s in fr_spans])
+    if intervals.shape[0]:
+        intervals = intervals[np.argsort(intervals[:, 0])]
+    merged = [] # merge intervals
+    for start, end in intervals:
+        if not merged or start > merged[-1][1]:
+            merged.append([start, end])
+        else:
+            merged[-1][1] = max(merged[-1][1], end)
+    merged = np.array(merged)
 
-    # reject outliers and fit
-    ix = abs(dB - np.mean(dB)) < 5 * np.std(dB)
-    f, z, dB, phase = f[ix], z[ix], dB[ix], phase[ix] 
+    mask = np.zeros_like(f, dtype = bool)
+    for start, end in merged:
+        mask |= (f >= start) & (f <= end)
+    f, z = f[~mask], z[~mask]
+    # find indices in the center of False regions of the mask for phase fitting
+    false_groups = np.flatnonzero(np.diff(np.r_[True, mask, True]))
+    cut_ixs = false_groups.reshape(-1, 2)
+
+    ### Convert to dB, phase
+    dB = 20 * np.log10(np.abs(z))
+    phase = np.unwrap(2 * np.angle(z)) / 2
+
+    ### Fit
     try:
         p_amp = np.polyfit(f, dB, 2)
-        # Fit to each cut portion of phase separately, to avoid unwrapping problems
-        fcuts = [0] + fcuts + [np.inf]
-        fcuts = [[fcuts[i], fcuts[i + 1]] for i in range(len(fcuts) - 1)]
+        # Fit to each cut portion of phase separately to avoid unwrapping issues
         pps, dlens = [], []
-        for fcut in fcuts:
-            ix = (f >= fcut[0]) & (f <= fcut[1])
-            if len(f[ix]) >= 4:
-                pps.append(np.polyfit(f[ix], phase[ix], 1))
-                dlens.append(len(f[ix])) 
-        
-        if not len(pps): 
-            # If there aren't any consecutive sets of 4 points, try again with 2 points as the limit
-            # this won't do a very good job but it's better than throwing away the data 
-            # Better solution is longer fine scan
-            # warnings.warn("No consecutive groups of 4+ points in the gain scan. Try increasing the span or reducing the resonator cut spans", UserWarning)
-            for fcut in fcuts:
-                ix = (f >= fcut[0]) & (f <= fcut[1])
-                if len(f[ix]) >= 2:
-                    pps.append(np.polyfit(f[ix], phase[ix], 1))
-                    dlens.append(len(f[ix])) 
-        # Need to reject fits with few data points if there are 
-        # other fits to make up for them  
+        for ix0, ix1 in cut_ixs:
+            N = len(f[ix0:ix1])
+            if N >= 4:
+                pps.append(np.polyfit(f[ix0:ix1], phase[ix0:ix1], 1))
+                dlens.append(N)
+        if not len(pps):
+            # Allow N = 2 if necessary
+            for ix0, ix1 in cut_ixs:
+                N = len(f[ix0:ix1])
+                if N >= 2:
+                    pps.append(np.polyfit(f[ix0:ix1], phase[ix0:ix1], 1))
+                    dlens.append(N)
+        # Choose phase fits with the highest number of points
         pps, dlens = np.asarray(pps), np.asarray(dlens)
-        i = len(f) // 5 
-        pps0 = pps[dlens > i]
-        while not len(pps0):
-            i -= 1
-            pps0 = pps[dlens > i] 
-            if i < 1:
-                raise Exception('No phase data to fit')
+        for i in range(101, 0, -10):
+            pps0 = pps[dlens > i]
+            if len(pps0):
+                break
         pps0 = [p[np.isfinite(p)] for p in pps0]
-        p_phase = np.mean(pps0, axis = 0)
+        if len(pps0):
+            p_phase = np.mean(pps0, axis = 0)
+        else:
+            p_phase = np.array([np.nan,np.nan])
+            warnings.warn('No phase data to fit, returning NAN')
     except Exception as e:
         p_amp = np.array([np.nan,np.nan,np.nan])
         p_phase = np.array([np.nan,np.nan])
+        warnings.warn('Gain fit failed, returning NAN')
 
+    ### Plot
     if plotq:
+        dB0 = 20 * np.log10(np.abs(z0))
         fig, axs = plot_gain_fit(f0, dB0, f, dB, phase, p_amp, p_phase)
     else:
         fig, axs = None, None
     return p_amp, p_phase, (fig, axs)
+
+def fit_and_remove_gain_phase(fgain, zgain, ffine, zfine, frs = [], Qrs = [],
+                              plotq = False, legacy_fit = True):
+    """
+    Removes the gain-sweep fit parameters from the fine sweep data.
+
+    Qrs should be no higher than 10 X Qr of the resonances.
+
+    Parameters:
+    fgain (np.array): gain sweep frequency data.
+    zgain (np.array): gain sweep complex S21 data.
+    ffine (np.array): fine sweep frequency data.
+    zfine (np.array): fine sweep complex S21 data.
+    frs (list of float): resonance frequencies to cut from the gain sweep.
+    Qrs (list of float): Qrs to cut from the gain sweep.
+    plotq (bool): If True, also plots fits to the gain sweep
+        and corrections to the fine-sweep.
+    legacy_fit (bool): If True, uses the legacy fitting functions from
+        citkid.res.gain. If False, uses the current functions from 
+        citkid.xcal.gain.
+
+    Returns:
+    p_amp (np.array): 2nd-order polynomial fit parameters to dB.
+    p_phase (np.array): 1st-order polynomial fit parameters to phase.
+    z_rmvd (np.array): zfine with gain amplitude and phase removed.
+    fig, axs (pyplot figure and axes, or None): if plotq, returns a plot of the
+        gain amplitude and phase fits. Otherwise, returns (None, None).
+    """
+    fgain, zgain = np.array(fgain), np.array(zgain)
+    ffine, zfine = np.array(ffine), np.array(zfine)
+    fr_spans = []
+    for fr, Qr in zip(frs, Qrs):
+        fr_spans.append((fr, fr / Qr))
+    if legacy_fit:
+        f = fit_gain
+        warnings.warn('citkid.xcal.gain.fit_and_remove_gain_phase legacy_fit is depreciated.', 
+                      DeprecationWarning)
+    else:   
+        f = xcal_gain.fit_gain
+    p_amp, p_phase, (fig_gain, axs_gain) = f(fgain, zgain, fr_spans, plotq)
+    z_rmvd = xcal_gain.remove_gain(ffine, zfine, p_amp, p_phase)
+    return p_amp, p_phase, z_rmvd, (fig_gain, axs_gain)

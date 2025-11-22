@@ -30,9 +30,9 @@ def make_x_cal(ffine, zfine, fgain, zgain, fs, Qs, plotq = False):
     theta_fine (np.array): fine sweep theta data corresponding to the values in
         zfine
     p_x (array-like): polynomial fit parameters to x versus theta
-    fig_gain (pyplot.figure or None): gain scan calibration plot if plotq,
+    fig_gain (pyplot.figure or None): gain sweep calibration plot if plotq,
         else None
-    fig_fine (pyplot.figure or None): fine scan calibration plot if plotq,
+    fig_fine (pyplot.figure or None): fine sweep calibration plot if plotq,
         else None
     fig_x (pyplot.figure or None): theta to x calibration plot if plotq,
         else None
@@ -76,7 +76,7 @@ def make_theta_cal(ffine, zfine, fgain, zgain, fs, Qs, plotq = False):
         zfine_rmvd from the origin
     theta_fine (np.array): fine sweep theta data corresponding to the values in
         zfine
-    fig_gain, fig_fine (pyplot.figure or None): gain and fine scan calibration
+    fig_gain, fig_fine (pyplot.figure or None): gain and fine sweep calibration
         plots if plotq, else (None, None)
     """
     # Fit gain
@@ -86,7 +86,7 @@ def make_theta_cal(ffine, zfine, fgain, zgain, fs, Qs, plotq = False):
     zfine_rmvd = remove_gain(ffine, zfine, p_amp, p_phase)
     # Theta vector
     origin, radius, v, fig_fine = get_theta_vec(zfine_rmvd, plotq = plotq)
-    # fine-scan theta
+    # fine-sweep theta
     theta_fine = calculate_theta(ffine, zfine, p_amp, p_phase, origin, v)
     return p_amp, p_phase, origin, radius, v, theta_fine, (fig_gain, fig_fine)
 

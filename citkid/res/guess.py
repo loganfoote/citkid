@@ -1,5 +1,5 @@
 import numpy as np
-import citkid.res.fitter as fitter
+from ..xcal import circle
 from .util import get_peak_fwhm
 from scipy.ndimage import gaussian_filter
 
@@ -135,7 +135,7 @@ def guess_phi_amp(z, z0):
     phi_guess (float): phi guess
     amp_guess (float): amp guess
     """
-    popt, _ = fitter.fit_iq_circle(z, plotq = False)
+    popt = circle.fit_iq_circle(z)
     xc, yc, R = popt
     # angle between center of circle and off resonance point
     x1, y1, = -np.real(z0), -np.imag(z0)

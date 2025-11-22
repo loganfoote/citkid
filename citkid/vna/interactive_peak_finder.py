@@ -18,8 +18,10 @@ class peakFinder:
             exists, raises an error.
         """
         outpath = fix_path(outpath)
-        if os.path.exists(outpath) and not overwrite:
-            raise FileExistsError(f'{outpath} already exists')
+        if os.path.exists(outpath):
+            s = input('Output file already exists, proceed? (y/n)')
+            if s.lower() != 'y':
+                raise FileExistsError('Output file already exists!')
         self.control_is_held = False
         self.shift_is_held = False
         self.x_data = np.array(x_data)
@@ -315,7 +317,7 @@ class qresFinderSingle:
                  fres_previous = None):
         """
         Interactive quality factor finder for a single resonance target sweep.
-        Use this to confirm and adjust ranges for fitting fine scan data.
+        Use this to confirm and adjust ranges for fitting fine sweep data.
 
         Parameters:
         x_data (array-like): Frequency data in Hz
@@ -712,7 +714,7 @@ class qresFinder(qresFinderSingle):
                  x_datas_previous = None, y_datas_previous = None, fress_previous = None):
         """
         Interactive qres finder to loop over single resonance target sweeps.
-        Use this to confirm and adjust ranges for fitting fine scan data.
+        Use this to confirm and adjust ranges for fitting fine sweep data.
         All parameters are lists of parameters passed into qresFinderSingle
 
         Parameters:
