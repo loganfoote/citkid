@@ -1,8 +1,7 @@
 import pandas as pd
 import numpy as np
 
-def create_dataset_df(ID, temperature, cooldown, readout_system, 
-                            other = {}):
+def create_dataset_df(ID, temperature, cooldown, readout_system, other = {}):
     """
     Creates per-dataset metadata DataFrame.
 
