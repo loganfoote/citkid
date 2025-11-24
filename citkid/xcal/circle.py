@@ -55,7 +55,7 @@ def cent_rot_s21(z, center, phase):
     Apply centering and rotation to S21 data.
 
     Parameters:
-    z (array-like, complex128): complex S21 data points.
+    z (array-like, complex128): complex S21 data with gain removed.
     center (complex): IQ circle center for centering the data.
     phase (float): phase angle in radians for rotation.
 
@@ -70,7 +70,7 @@ def convert_to_theta(z, unwrap = False):
     Convert complex S21 data points to phase angles (theta).
 
     Parameters:
-    z (array-like, complex128): complex S21 data points.
+    z (array-like, complex128): complex S21 data after centering and rotation.
     unwrap (bool): whether to unwrap the phase angles.
 
     Returns:
@@ -87,7 +87,7 @@ def convert_to_A(z):
     Convert complex S21 data points to amplitude (A).
 
     Parameters:
-    z (array-like, complex128): complex S21 data points.
+    z (array-like, complex128): complex S21 data after centering and rotation.
 
     Returns:
     (array-like, float64): amplitudes.

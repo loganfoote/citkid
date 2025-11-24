@@ -65,4 +65,6 @@ def test_get_xcal_ix_invalid_input(ffine, tfine, tnoise, ix0_offset,
     with pytest.raises(Exception):
         xcal.get_xcal_ix(ffine, tfine, tnoise, 
                         ix0_offset, ix1_offset, std_cutoff)
+        
+
     

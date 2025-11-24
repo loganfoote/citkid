@@ -3,7 +3,7 @@ import numpy as np
 from citkid.xcal import corr 
 
 ################################################################################
-################################# test_corr.py #################################
+################################### calc_cm ####################################
 ################################################################################
 # This does not test the math in detail, but ensures that the functions run and
 # return arrays of the correct shape. 
@@ -22,11 +22,10 @@ m = "x,N_comp,N_iter,dt,lowpass_params,highpass_params,verbose"
     # different x format
     (y, 2, 3, 0.1, (0.1, 4), (0.5, 4), False)
 ])
-def test_calc_common_modes(x, N_comp, N_iter, dt, lowpass_params, 
-                           highpass_params, verbose):
-    a, A, sig_iter, a_full = corr.calc_common_modes(x, N_comp, N_iter, dt, 
-                                                    lowpass_params, 
-                                                    highpass_params, verbose)
+def test_calc_cm(x, N_comp, N_iter, dt, lowpass_params,  highpass_params, 
+                 verbose):
+    a, A, sig_iter, a_full = corr.calc_cm(x, N_comp, N_iter, dt, lowpass_params, 
+                                          highpass_params, verbose)
     # check shapes
     assert a.shape == (x.shape[0], N_comp)
     assert A.shape == (N_comp, x.shape[1])
@@ -62,13 +61,11 @@ def test_calc_common_modes(x, N_comp, N_iter, dt, lowpass_params,
     # negative N_iter
     (x, 2, -1, 0.1, (1.0, 4), (0.5, 2), False),
 ])
-def test_find_common_modes_invalid(x, N_comp, N_iter, dt, lowpass_params, 
-                                   highpass_params, verbose):
+def test_find_cm_invalid(x, N_comp, N_iter, dt, lowpass_params, highpass_params, 
+                         verbose):
     with pytest.raises(Exception):
-        corr.calc_common_modes(
-            x, N_comp, N_iter, dt, lowpass_params, highpass_params, verbose
-        )
-
+        corr.calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params, 
+                     verbose)
 
 ################################################################################
 ################################## calc_sigma ##################################
@@ -100,7 +97,8 @@ def test_calc_sigma_invalid(x):
 ################################################################################
 # This does not check all the pca math, but ensures that shapes and basic 
 # matrix properties are correct
-x = np.array([[1, 2, 3, 4, 5, 6, 7], [2, 4, 6, 8, 10, 12, 14]], dtype = np.float64)
+x = np.array([[1, 2, 3, 4, 5, 6, 7], [2, 4, 6, 8, 10, 12, 14]], 
+             dtype = np.float64)
 @pytest.mark.parametrize("x,sig,highpass_params", [    
     ([[1, 2, 3, 4, 5], [2, 4, 6, 8, 10]], None, None),
     ([[1, 0, 0], [0, 1, 0], [0, 0, 1]], None, None),
@@ -172,3 +170,186 @@ def test_calc_a(x, A, a_exp):
 def test_calc_a_invalid(x, A):
     with pytest.raises(Exception):
         corr.calc_a(x, A)
+
+################################################################################
+################################ calc_cm_complex ###############################
+################################################################################
+x = np.random.randn(5, 100) + 1j * np.random.randn(5, 100)
+y = np.random.randn(1000, 100) + 1j * np.random.randn(1000, 100)
+m = "z,theta,N_comp,N_iter,dt,lowpass_params,highpass_params,verbose"
+@pytest.mark.parametrize(m, [
+    # basic test
+    (x, None, 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    # custom theta 
+    (x, np.zeros(x.shape[0]), 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    # N_comp = 0
+    (x, None, 0, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    # N_iter = 1
+    (x, None, 2, 1, 0.1, (1.0, 4), (0.5, 2), False),
+    # verbose = True
+    (x, None, 2, 3, 0.1, (1.0, 4), (0.5, 2), True),
+    # different x format
+    (y, None, 2, 3, 0.1, (0.1, 4), (0.5, 4), False)
+])
+def test_calc_cm_complex(z, theta, N_comp, N_iter, dt, lowpass_params, 
+                         highpass_params, verbose):
+    aI, aQ, AI, AQ, sigI_iter, sigQ_iter, aI_full, aQ_full, theta_out = \
+        corr.calc_cm_complex(z, theta, N_comp, N_iter, dt, lowpass_params, 
+                             highpass_params, verbose)
+    # check shapes
+    assert aI.shape == (z.shape[0], N_comp)
+    assert AI.shape == (N_comp, z.shape[1])
+    assert sigI_iter.shape == (N_iter, z.shape[0], N_comp)
+    assert aI_full.shape == (z.shape[0], z.shape[0]) 
+    assert aQ.shape == (z.shape[0], N_comp)
+    assert AQ.shape == (N_comp, z.shape[1])
+    assert sigQ_iter.shape == (N_iter, z.shape[0], N_comp)
+    assert aQ_full.shape == (z.shape[0], z.shape[0])
+    # check theta output
+    if theta is None:
+        theta_exp = np.angle(np.median(z, axis = 1))
+        np.testing.assert_allclose(theta_out, theta_exp, equal_nan = True)
+    else:
+        np.testing.assert_allclose(theta_out, theta, equal_nan = True)
+
+m = "z,theta,N_comp,N_iter,dt,lowpass_params,highpass_params,verbose"
+@pytest.mark.parametrize(m, [
+    # invalid x (1D)    
+    (np.random.randn(100), None, 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    # empty x     
+    ([[]], None, 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    # non-numeric x    
+    ([['A', 'B'], ['C', 'D']], None, 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    # negative dt
+    (x, None, 2, 3, -0.1, (1.0, 4), (0.5, 2), False),
+    # non-numeric dt
+    (x, None, 2, 3, 'a', (1.0, 4), (0.5, 2), False),
+    # zero dt
+    (x, None, 2, 3, 0.0, (1.0, 4), (0.5, 2), False),
+    # invalid filter parameters
+    (x, None, 2, 3, 0.1, (1.0,), (0.5, 2), False),
+    (x, None, 2, 3, 0.1, (1.0, 4), (0.5,), False), 
+    (x, None, 2, 3, 0.1, (), (0.5, 2), False),
+    (x, None, 2, 3, 0.1, (1.0, 4), (), False), 
+    (x, None, 2, 3, 0.1, (1.0,), (0.5, 2), False),
+    (x, None, 2, 3, 0.1, (1.0, 4), (0.5,), False), 
+    (x, None, 2, 3, 0.1, (1.0,2.0,3.0), (0.5, 2), False),
+    (x, None, 2, 3, 0.1, (1.0, 4), (0.5,2.0,4.0), False), 
+    # negative N_comp   
+    (x, None, -1, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    # N_comp > N
+    (x, None, 6, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    # negative N_iter
+    (x, None, 2, -1, 0.1, (1.0, 4), (0.5, 2), False),
+    # invalid theta shape  
+    (x, [0, 1], 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    (x, np.array([[0, 1]]), 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+])
+def test_calc_cm_complex_invalid(z, theta, N_comp, N_iter, dt, lowpass_params, 
+                                 highpass_params, verbose):
+    with pytest.raises(Exception):
+        corr.calc_cm_complex(z, theta, N_comp, N_iter, dt, lowpass_params, 
+                             highpass_params, verbose)
+        
+################################################################################
+################################## remove_cm ###################################
+################################################################################
+x = np.array([10, 10, 10, 10, 10], dtype = np.float64)
+a = np.array([[2, 3], [4, 5], [6, 7], [8, 9], [10, 11]], dtype = np.float64)
+A = np.array([[1, 0, 1, 0, 1], [0, 1, 0, 1, 0]], dtype = np.float64)
+@pytest.mark.parametrize("x,a,A,idx,y_exp", [
+    (x, a, A, 0, [8, 7, 8, 7, 8]),
+    (x, a, A, 1, [6, 5, 6, 5, 6]),
+    ([x], a, A, [0], [[8, 7, 8, 7, 8]]),
+    ([x, x], a, A, [0, 1], [[8, 7, 8, 7, 8], [6, 5, 6, 5, 6]]),
+])
+def test_remove_cm(x, a, A, idx, y_exp):
+    x = np.array(x, dtype = np.float64)
+    a = np.array(a, dtype = np.float64)
+    A =  np.array(A, dtype = np.float64)
+    y_exp = np.array(y_exp, dtype = np.float64)
+    y = corr.remove_cm(x, a, A, idx)
+    np.testing.assert_allclose(y, y_exp, equal_nan = True)
+
+@pytest.mark.parametrize("x,a,A,idx", [
+    (1, a, A, 0), # 0D x 
+    ([[1, 2, 3]], a, A, 0), # x with length mismatch
+    (x, 1, A, 0), # 0D a
+    ([x], a, A, 0), # idx dimension doesn't match x
+    (x, [[1]], A, 0), # a with shape mismatch
+    (x, a, 1, 0), # 0D A    
+    (x, a, [[1, 2, 3]], 0), # A with shape mismatch
+    (x, a, A, [0, 5]), # invalid idx
+    (x, a, A, -1), # negative idx
+    (x, a, A, [0, -1])
+])
+def test_remove_cm_invalid(x, a, A, idx):
+    with pytest.raises(Exception):
+        corr.remove_cm(x, a, A, idx)
+
+################################################################################
+################################ remove_cm_complex #############################
+################################################################################
+z = np.array([10 + 1j * 5, 0 + 1j * 0, -10 + 1j * -5], dtype = np.complex128)
+aI = np.array([[2, 3], [4, 5], [6, 7]], dtype = np.float64)
+aQ = np.array([[1, 1], [1, 1], [1, 1]], dtype = np.float64)
+AI = np.array([[1, 0, 1], [0, 1, 0]], dtype = np.float64)
+AQ = np.array([[0, 1, 0], [1, 0, 1]], dtype = np.float64)
+@pytest.mark.parametrize("z,aI,aQ,AI,AQ,idx,theta,y_exp", [
+    # single timestream, 1D input
+    (z, aI, aQ, AI, AQ, 0, None, [8 + 1j * 4, -3 + 1j * -1, -12 + 1j * -6]),
+    # Single timestream, 2D input
+    ([z], aI, aQ, AI, AQ, [0], None, 
+     [[8 + 1j * 4, -3 + 1j * -1, -12 + 1j * -6]]),
+    # Multiple timestreams
+    ([z, z], aI, aQ, AI, AQ, [0, 1], None, 
+     [[8 + 1j * 4, -3 + 1j * -1, -12 + 1j * -6],
+      [6 + 1j * 4, -5 + 1j * -1, -14 + 1j * -6]]),
+    # Single timestream, idx = 1
+    (z, aI, aQ, AI, AQ, 1, None, [6 + 1j * 4, -5 + 1j * -1, -14 + 1j * -6]),
+    # Custom theta
+    (z, aI, aQ, AI, AQ, 0, np.zeros(z.shape[0]), 
+     [8 + 1j * 4, -3 + 1j * -1, -12 + 1j * -6]),
+    (z, aI, aQ, AI, AQ, 1, np.zeros(z.shape[0]), 
+     [6 + 1j * 4, -5 + 1j * -1, -14 + 1j * -6]),
+    
+])  
+def test_remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta, y_exp):
+    z = np.array(z, dtype = np.complex128)
+    aI = np.array(aI, dtype = np.float64)
+    aQ = np.array(aQ, dtype = np.float64)
+    AI =  np.array(AI, dtype = np.float64)
+    AQ =  np.array(AQ, dtype = np.float64)
+    y_exp = np.array(y_exp, dtype = np.complex128)
+    y, theta_out = corr.remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta)
+    np.testing.assert_allclose(y, y_exp, equal_nan = True)
+    print(theta_out)
+    if theta is None:
+        if len(z.shape) == 1:
+            assert isinstance(theta_out, float) or theta_out.shape == ()
+        else:
+            assert theta_out.shape == (z.shape[0],)
+    else:
+        np.testing.assert_allclose(theta, theta_out, equal_nan = True)
+
+@pytest.mark.parametrize("z,aI,aQ,AI,AQ,idx,theta", [
+    (1, aI, aQ, AI, AQ, 0, None), # 0D z 
+    ([z], aI, aQ, AI, AQ, 0, None), # idx dimension doesn't match z
+    ([[1 + 1j * 1]], aI, aQ, AI, AQ, 0, None), # z with length mismatch
+    (z, 1, aQ, AI, AQ, 0, None), # 0D aI
+    (z, [[1]], aQ, AI, AQ, 0, None), # aI with shape mismatch
+    (z, aI, 1, AI, AQ, 0, None), # 0D aQ
+    (z, aI, [[1]], AI, AQ, 0, None), # aQ with shape mismatch
+    (z, aI, aQ, 1, AQ, 0, None), # 0D AI    
+    (z, aI, aQ, [[1, 2, 3]], AQ, 0, None), # AI with shape mismatch
+    (z, aI, aQ, AI, 1, 0, None), # 0D AQ    
+    (z, aI, aQ, AI, [[1, 2, 3]], 0, None), # AQ with shape mismatch
+    (z, aI, aQ, AI, AQ, [0, 5], None), # invalid idx
+    (z, aI, aQ, AI, AQ, -1, None), # negative idx
+    (z, aI, aQ, AI, AQ, [0, -1], None),
+    (z, aI, aQ, AI, AQ, 0, [0, 1]), # invalid theta shape
+    (z, aI, aQ, AI, AQ, 0, np.array([[0, 1]])),
+])  
+def test_remove_cm_complex_invalid(z, aI, aQ, AI, AQ, idx, theta):
+    with pytest.raises(Exception):
+        corr.remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta)
