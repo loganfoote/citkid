@@ -89,7 +89,7 @@ def calc_a(x, A):
 ####################### Iterative common mode algorithm ########################
 ################################################################################
 def calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params, 
-                      verbose = True):
+            verbose = True):
     """
     Iteratively find common modes in multiple timestreams. In each iteration,
     performs a PCA normalized by the variance of the timestreams with the
@@ -122,7 +122,7 @@ def calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params,
     sig_iter (array-like, (N_iter, N, N_comp)): sigma values for each iteration.
     a_full (array-like, (N, N)): scaling factors from all components A -> x.
     """
-    x = np.asarray(x).copy()
+    x = np.asarray(x, copy = True)
     assert len(x.shape) == 2, "x must be 2D array-like"
     assert N_iter > 0, "N_iter must be positive"
     assert len(lowpass_params) == 2, "lowpass_params must be (frequency, order)"
@@ -186,7 +186,7 @@ def calc_cm_complex(z, theta = None, *calc_cm_params):
     # Rotate each timestream median to real axis
     if theta is None:
         theta = np.angle(np.median(z, axis = 1))
-    z = z * np.exp(-1j * theta[:, np.newaxis]) 
+    z *= np.exp(-1j * theta[:, np.newaxis]) 
 
     # Calculate real and imaginary common modes
     aI, AI, sigI_iter, aI_full =\
@@ -259,14 +259,14 @@ def remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta = None):
     theta (array-like, (N,)): rotation angles used to rotate each timestream to 
         the real axis.
     """
-    z = np.asarray(z, dtype = np.complex128)
+    z = np.asarray(z, dtype = np.complex128, copy = True)
     # Rotate each timestream median to real axis
     if theta is None:
         if len(z.shape) == 1:
             theta = np.angle(np.median(z))
         else:
             theta = np.angle(np.median(z, axis = 1))[:, np.newaxis]
-    z = z * np.exp(-1j * theta)
+    z *= np.exp(-1j * theta)
     # Calculate common modes
     y_real = remove_cm(z.real, aI, AI, idx)
     y_imag = remove_cm(z.imag, aQ, AQ, idx)
