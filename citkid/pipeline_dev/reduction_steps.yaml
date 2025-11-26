@@ -8,7 +8,7 @@ RED_STEPS:
     params:
       path_to_file: /Users/elijahkane/Documents/GitHub/citkid/citkid/pipeline_dev/analysis_functions.py
   2 :
-    task: fit_nonlinear_iq_with_gain
+    task: fit_gain
     params:
       save: True
       downward: True

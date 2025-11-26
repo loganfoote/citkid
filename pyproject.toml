@@ -14,11 +14,13 @@ license = {file = "LICENSE.txt"}
 keywords = ["kinetic inductance detector"]
 
   authors = [
-    {name = "Logan Foote", email = "lfoote@caltech.edu"}
+    {name = "Logan Foote", email = "lfoote@caltech.edu"},
+    {name = "Elijah Kane", email = "ekane@caltech.edu"}
   ]
 
   maintainers = [
-    {name = "Logan Foote", email = "lfoote@caltech.edu"}
+    {name = "Logan Foote", email = "lfoote@caltech.edu"},
+    {name = "Elijah Kane", email = "ekane@caltech.edu"}
   ]
 
 classifiers = [

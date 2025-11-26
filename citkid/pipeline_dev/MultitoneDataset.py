@@ -5,6 +5,8 @@ import yaml
 import importlib.util
 from importlib.metadata import version
 import sys
+import os
+import shutil
 
 from .util import printc
 from .analysis_functions import *
@@ -41,11 +43,39 @@ class MultitoneDataset():
 
 		self.data_path = data_path
 		self.results_path = results_path
-		self.ixs_to_analyze = config_params['DETECTORS_TO_ANALYZE']
+		self.ixs_to_analyze = eval(str(config_params['DETECTORS_TO_ANALYZE']))
 		self.ixs_to_analyze = np.array(self.ixs_to_analyze, dtype=int)
+		self.gain_fit_Q = np.array(config_params['GAIN_FIT_Q'])
+		if not self.gain_fit_Q.shape:
+			self.gain_fit_Q = np.full(len(self.ixs_to_analyze), self.gain_fit_Q)
 		self.noise_sample_rate = config_params['NOISE_SAMPLE_RATE']
+		self.overwrite = config_params['OVERWRITE']
 		self.previous_result_path = None
 		self.unsaved_tasks = []
+
+	def __getattr__(self, name):
+		"""
+		Reconstructs an attribute and returns it if it does not already exist.
+
+		Parameters:
+			name (str): name of attribute to get
+		Returns:
+			attr: Attribute which was loaded
+		"""
+		if name in ['circle_fits', 'iq_fits']:
+			self.previous_result_path = self.results_path+name+'.zarr'
+			root = zarr.open_group(self.previous_result_path, mode='r')
+			columns = root['result/columns'][:]
+			fitdata = root['result/fitdata'][:]
+			data = {columns[ii]: fitdata[:, ii] for ii in range(len(columns))}
+			attr = pd.DataFrame(data=data)
+		elif name == 'polys':
+			self.previous_result_path = self.results_path+'x_calibrations.zarr'
+			root = zarr.open_group(self.previous_result_path, mode='r')
+			attr = root['result/polys'][:,:]
+		elif name == 'x_noises':
+			attr = calculate_x_pipeline(self.polys, self.theta_noises)
+		return attr
 
 
 	def add_pipeline_history(self, function_name, root):
@@ -95,10 +125,64 @@ class MultitoneDataset():
 		self.unsaved_tasks = []
 
 
+	def save_outputs(self, data, task, save, overwrite):
+		"""
+		Function to either save the outputs of the current pipeline task,
+		or add the task to the list of unsaved outputs.
 
-	# R U N   R E D U C T I O N
-	# -------------------------
-	def run_reduction(self, reduction_file):
+		Parameters:
+			data: The pipeline outputs to be saved
+			task (str): The name of the pipeline task
+			save (bool): Whether to save the outputs
+			overwrite (bool): Whether to overwrite the existing outputs
+		"""
+
+		name_table = {
+			'fit_gain': 'iq_fits',
+			'fit_nonlinear_iq_with_gain': 'iq_fits',
+			'fit_iq_circle': 'circle_fits',
+			'calibrate_x': 'x_calibrations'
+		}
+
+		if save:
+			filename = name_table[task]
+			store_path = self.results_path+filename+'.zarr'
+
+			if os.path.exists(store_path):
+				if overwrite:
+					shutil.rmtree(store_path, ignore_errors=True)
+				else:
+					printc(f'Output file already exists!', 'fail')
+					raise Exception('Use a new output path or set OVERWRITE to True in the config file.')
+
+			root = zarr.open_group(store_path, mode='w')
+			result = root.create_group(name='result')
+
+			if task == 'fit_gain' or task == 'fit_nonlinear_iq_with_gain':
+				fitdata = result.create_array(name='fitdata', data=data.to_numpy())
+				columns = np.array(data.columns)
+				fit_columns = result.create_array(name='columns', shape=len(columns),
+												dtype=zarr.dtype.VariableLengthUTF8())
+				fit_columns[:] = columns
+			elif task == 'fit_iq_circle':
+				fitdata = result.create_array(name='fitdata', data=data)
+				columns = np.array(['A', 'B', 'R'])
+				fit_columns = result.create_array(name='columns', shape=len(columns),
+												dtype=zarr.dtype.VariableLengthUTF8())
+				fit_columns[:] = columns
+			elif task == 'calibrate_x':
+				polys = result.create_array(name='polys', data=data)
+
+			self.add_pipeline_history(task, root)
+			self.previous_result_path = store_path
+		
+		else:
+			self.unsaved_tasks = np.append(self.unsaved_tasks, task)
+
+	# ------------------------- #
+	# R U N   R E D U C T I O N #
+	# ------------------------- #
+	def run_reduction(self, reduction_file, overwrite=False):
 		"""
 		Run data reduction steps.
 		
@@ -153,110 +237,75 @@ class MultitoneDataset():
 				self.znoises = znoises
 				self.fcal_indices = fcal_indices
 				
+			elif task == 'fit_gain':
+				data = fit_gain_pipeline(self.ixs_to_analyze, self.fgains, self.zgains, 
+							  self.fnoises, self.gain_fit_Q, self.fcal_indices, keys_dict['downward'])
+
+				self.save_outputs(data, task, keys_dict['save'], self.overwrite)
+			
 			elif task == 'fit_nonlinear_iq_with_gain':
-				downward = keys_dict['downward']
-				Qrs = [5000 for _ in self.fnoises]
-				data = fit_iq_pipeline(self.ffines, self.zfines, self.fgains, self.zgains, 
-							  self.fnoises, Qrs, self.fcal_indices, downward)
-				
-				self.iq_fits = data
-				if keys_dict['save']:
-					
-					store_path = self.results_path+'iq_fits.zarr'
-					root = zarr.open_group(store_path, mode='w')
+				data = fit_iq_pipeline(self.ixs_to_analyze, self.ffines, self.zfines, self.fgains, self.zgains, 
+							  self.fnoises, self.gain_fit_Q, self.fcal_indices, keys_dict['downward'])
 
-					result = root.create_group(name='result')
-					fitdata = result.create_array(name='fitdata', data=self.iq_fits.to_numpy())
-					columns = np.array(self.iq_fits.columns)
-					fit_columns = result.create_array(name='columns', shape=len(columns),
-													dtype=zarr.dtype.VariableLengthUTF8())
-					fit_columns[:] = columns
-
-					self.add_pipeline_history(task, root)
-					self.previous_result_path = store_path
-				else:
-					self.unsaved_tasks = np.append(self.unsaved_tasks, task)
+				self.save_outputs(data, task, keys_dict['save'], self.overwrite)
 
 			elif task == 'remove_gain':
-				root = zarr.open_group(self.previous_result_path, mode='r')
-				columns = root['result/columns'][:]
-				res_ixs = np.array(root['result/fitdata'][:, np.where(columns=='res_ix')[0]].T[0], dtype=int)
+				iq_fits = self.iq_fits
+				columns = iq_fits.columns
+				res_ixs = np.array(iq_fits.res_ix, dtype=int)
 				ixs_in_arr = np.searchsorted(res_ixs, self.ixs_to_analyze)
-				p_amps = np.full((len(ixs_in_arr), 3), np.nan)
-				p_phases = np.full((len(ixs_in_arr), 2), np.nan)
 
-				for ii0 in range(len(ixs_in_arr)):
-					for ii1 in range(3):
-						p_amp_ix = np.where(columns==f'iq_pamp_{ii1:02d}')[0]
-						p_amps[ii0, ii1] = root['result/fitdata'][ixs_in_arr[ii0], p_amp_ix]
-					for ii1 in range(2):
-						p_phase_ix = np.where(columns==f'iq_pphase_{ii1:02d}')[0]
-						p_phases[ii0, ii1] = root['result/fitdata'][ixs_in_arr[ii0], p_phase_ix]
+				p_amps = np.array([iq_fits.iq_pamp_00, 
+								iq_fits.iq_pamp_01, 
+								iq_fits.iq_pamp_02]).T[ixs_in_arr]
+				p_phases = np.array([iq_fits.iq_pphase_00, 
+								iq_fits.iq_pphase_01]).T[ixs_in_arr]
 
 				self.zfines, self.znoises = remove_gain_pipeline(self.ffines, self.zfines, 
 														self.fnoises, self.znoises, 
 														p_amps, p_phases)
 
-				self.unsaved_tasks = np.append(self.unsaved_tasks, task)
+				data = [self.zfines, self.znoises]
+
+				self.save_outputs(data, task, keys_dict['save'], self.overwrite)
 
 			elif task == 'deglitch_noise':
-				nstd = keys_dict['nstd']
-				self.znoises = deglitch_noise_pipeline(self.znoises, nstd)
+				self.znoises = deglitch_noise_pipeline(self.znoises, keys_dict['nstd'])
 
-				self.unsaved_tasks = np.append(self.unsaved_tasks, task)
+				data = self.znoises
+
+				self.save_outputs(data, task, keys_dict['save'], self.overwrite)
 
 			elif task == 'fit_iq_circle':
-				self.circle_fits = fit_iq_circle_pipeline(self.zfines)
+				data = fit_iq_circle_pipeline(self.zfines)
 
-				if keys_dict['save']:
-					store_path = self.results_path+'circle_fits.zarr'
-					root = zarr.open_group(store_path, mode='w')
-
-					result = root.create_group(name='result')
-					fitdata = result.create_array(name='fitdata', data=self.circle_fits)
-					columns = np.array(['A', 'B', 'R'])
-					fit_columns = result.create_array(name='columns', shape=len(columns),
-													dtype=zarr.dtype.VariableLengthUTF8())
-					fit_columns[:] = columns
-
-					self.add_pipeline_history(task, root)
-					self.previous_result_path = store_path
-				else:
-					self.unsaved_tasks = np.append(self.unsaved_tasks, task)
-
+				self.save_outputs(data, task, keys_dict['save'], self.overwrite)
 
 			elif task == 'calculate_theta_A':
 				self.theta_fines, self.theta_noises, self.A_noises = \
 					calculate_theta_A_pipeline(self.zfines, self.znoises, self.circle_fits)
 
-				self.unsaved_tasks = np.append(self.unsaved_tasks, task)
+				data = [self.theta_fines, self.theta_noises, self.A_noises]
+
+				self.save_outputs(data, task, keys_dict['save'], self.overwrite)
 
 			elif task == 'calibrate_x':
 				poly_deg = keys_dict['poly_deg']
 				min_cal_points = keys_dict['min_cal_points']
 
-				self.polys, self.theta_fines = \
+				polys, self.theta_fines = \
 					calibrate_x_pipeline(self.ffines, self.theta_fines, self.theta_noises,
 										poly_deg, min_cal_points)
 
-				if keys_dict['save']:
-					store_path = self.results_path+'x_calibrations.zarr'
-					root = zarr.open_group(store_path, mode='w')
+				data = polys
 
-					result = root.create_group(name='result')
-					polys = result.create_array(name='polys', data=self.polys)
-
-					self.add_pipeline_history(task, root)
-					self.previous_result_path = store_path
-				else:
-					self.unsaved_tasks = np.append(self.unsaved_tasks, task)
+				self.save_outputs(data, task, keys_dict['save'], self.overwrite)
 
 
 			elif task == 'calculate_psd':
-				if not hasattr(self, 'x_noises'):
-					self.x_noises = calculate_x_pipeline(self.polys, self.theta_noises)
-
 				self.f_fft, self.sxxs = calculate_psd_pipeline(self.x_noises, self.noise_sample_rate)
 
-				self.unsaved_tasks = np.append(self.unsaved_tasks, task)
+				data = [self.f_fft, self.sxxs]
+
+				self.save_outputs(data, task, keys_dict['save'], self.overwrite)
 

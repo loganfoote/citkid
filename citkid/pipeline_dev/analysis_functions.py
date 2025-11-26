@@ -6,10 +6,11 @@ import zarr
 from importlib.metadata import version
 
 from citkid.res.fitter import fit_nonlinear_iq_with_gain, fit_iq_circle
-from citkid.res.gain import fit_gain, remove_gain
 from citkid.res.data_io import make_fit_row
 from citkid.noise.analysis import calculate_theta_A, calibrate_x
 from citkid.noise.psd import get_psd
+
+from citkid.xcal.gain import fit_gain, remove_gain
 
 
 def load_data(data_path, ixs_to_load):
@@ -56,12 +57,59 @@ def load_pipeline_history(zarr_path):
 	return history_df
 
 
-
-def fit_iq_pipeline(ffines, zfines, fgains, zgains, frs, Qrs, fcal_indices, downward):
+def fit_gain_pipeline(res_ixs, fgains, zgains, frs, Qrs, fcal_indices, downward):
 	"""
-	Fits IQ loops.
+	Fits gain and cable delay.
 
 	Parameters:
+		res_ixs: Array of resonator indices corresponding to the sweeps being fitted
+		fnoises: Array of readout frequencies where noise data was taken
+		znoises: Arrays of complex S21 noise data
+		frs: Array of center frequencies of resonances to cut out
+			during gain fitting
+		Qrs: Spans to cut out for gain fitting, relative to the frequencies frs
+		fcal_indices: Indices of off-resonance calibration tones
+		downward (bool): True if the scan went from high to low freq, 
+			False if from low to high.
+	Returns:
+		data (pandas.DataFrame): Object containing the fit data
+	"""
+	data = pd.DataFrame()
+	fr_spans = np.array([frs, frs/Qrs]).T
+
+	for ii in range(len(fgains)):
+
+		res_ix = res_ixs[ii]
+		fgain, zgain = fgains[ii], zgains[ii]
+
+		p_amp, p_phase, mask = \
+			fit_gain(fgain, zgain, fr_spans)
+
+		row = pd.Series(dtype = float)
+		row['iq_pamp_00'] = p_amp[0]
+		row['iq_pamp_01'] = p_amp[1]
+		row['iq_pamp_02'] = p_amp[2]
+		row['iq_pphase_00'] = p_phase[0]
+		row['iq_pphase_01'] = p_phase[1]
+		
+		if ii in fcal_indices:
+			row['fcal'] = 1
+		else:
+			row['fcal'] = 0
+		row['res_ix'] = res_ix
+			
+		fitdf = pd.DataFrame(row).T
+		data = pd.DataFrame(pd.concat([data, fitdf]))
+		
+	return data
+
+
+def fit_iq_pipeline(res_ixs, ffines, zfines, fgains, zgains, frs, Qrs, fcal_indices, downward):
+	"""
+	Fits IQ loops, including gain+cable delay.
+
+	Parameters:
+		res_ixs: Array of resonator indices corresponding to the sweeps being fitted
 		ffines: Arrays of fine scan frequencies
 		zfines: Arrays of fine scan complex S21
 		fnoises: Array of readout frequencies where noise data was taken
@@ -72,19 +120,22 @@ def fit_iq_pipeline(ffines, zfines, fgains, zgains, frs, Qrs, fcal_indices, down
 		fcal_indices: Indices of off-resonance calibration tones
 		downward (bool): True if the scan went from high to low freq, 
 			False if from low to high.
+	Returns:
+		data (pandas.DataFrame): Object containing the fit data
 	"""
 	
 	data = pd.DataFrame()
 	fr_spans = np.array([frs, frs/Qrs]).T
 	
-	for res_ix in range(len(ffines)):
+	for ii in range(len(ffines)):
 		
-		ffine, zfine = ffines[res_ix], zfines[res_ix]
-		fgain, zgain = fgains[res_ix], zgains[res_ix]
+		res_ix = res_ixs[ii]
+		ffine, zfine = ffines[ii], zfines[ii]
+		fgain, zgain = fgains[ii], zgains[ii]
 		
-		if res_ix in fcal_indices:
-			p_amp, p_phase, (fig, axs) = \
-				fit_gain(fgain, zgain, fr_spans, plotq = False)
+		if ii in fcal_indices:
+			p_amp, p_phase, mask = \
+				fit_gain(fgain, zgain, fr_spans)
 				
 			p = [np.nan] * 7
 			res = np.nan
@@ -200,7 +251,8 @@ def calculate_theta_A_pipeline(zfines, znoises, circle_fits):
 	theta_noises = np.full(znoises.shape, np.nan)
 	A_noises = np.full(znoises.shape, np.nan)
 	for ii in range(len(zfines)):
-		origin = circle_fits[ii][0] + 1j*circle_fits[ii][1]
+		row = circle_fits.iloc[ii]
+		origin = row.A + 1j*row.B
 		theta_fine, theta_noise, A_noise = \
 			calculate_theta_A(zfines[ii], znoises[ii], origin)
 		theta_fines[ii] = theta_fine

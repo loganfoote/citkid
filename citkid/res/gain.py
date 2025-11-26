@@ -1,7 +1,7 @@
 import numpy as np
 import warnings
 from .plot import plot_gain_fit
-import xcal.gain as xcal_gain
+from ..xcal import gain as xcal_gain
 
 def remove_gain(f, z, p_amp, p_phase):
     """
