@@ -7,6 +7,8 @@ RED_STEPS:
     task: load_data
     params:
       path_to_file: /Users/elijahkane/Documents/GitHub/citkid/citkid/pipeline_dev/analysis_functions.py
+      function_name: load_zarr
+      set_to_load: 0
   2 :
     task: fit_gain
     params:

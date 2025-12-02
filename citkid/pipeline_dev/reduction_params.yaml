@@ -17,8 +17,5 @@ DETECTORS_TO_ANALYZE: np.append(np.arange(20), np.arange(40,50))
 # the length of DETECTORS_TO_ANALYZE.
 GAIN_FIT_Q: 5000
 
-# Sample rate of noise data in Hz.
-NOISE_SAMPLE_RATE: 1192.0928955078125
-
 # Whether or not to overwrite existing pipeline outputs.
 OVERWRITE: True

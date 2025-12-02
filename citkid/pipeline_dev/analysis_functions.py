@@ -13,6 +13,23 @@ from citkid.noise.psd import get_psd
 from citkid.xcal.gain import fit_gain, remove_gain
 
 
+def load_zarr(data_path, ixs_to_load, set_to_load=0):
+	"""
+	Loads sweeps and noise data from a .zarr file.
+	"""
+	root = zarr.open_group(data_path, mode='r')
+	ffines, I, Q = root['finesweep'][:, ixs_to_load, :]
+	zfines = I+1j*Q
+	fgains, I, Q = root['gainsweep'][:, ixs_to_load, :]
+	zgains = I+1j*Q
+	fnoises = root[f'ftimestream/{set_to_load}'][ixs_to_load]
+	znoises = root[f'ztimestream/{set_to_load}'][ixs_to_load, :]
+	fcal_indices = root['fcal_indices'][:]
+	fsample = root['fsample'][set_to_load]
+
+	return ffines, zfines, fgains, zgains, fnoises, znoises, fsample, fcal_indices
+
+
 def load_data(data_path, ixs_to_load):
 	"""
 	Example function to load IQ scan and noise data from .npy files.
@@ -30,8 +47,9 @@ def load_data(data_path, ixs_to_load):
 	res_indices = np.load(data_path+'res_indices.npy', mmap_mode='r')
 	res_indices = res_indices[ixs_to_load]
 	fcal_indices = np.where(res_indices<0)[0]
+	fsample = 1/np.load(data_path+'noise_tsample.npy')
 	
-	return ffines, zfines, fgains, zgains, fnoises, znoises, fcal_indices
+	return ffines, zfines, fgains, zgains, fnoises, znoises, fsample, fcal_indices
 
 
 def load_pipeline_history(zarr_path):

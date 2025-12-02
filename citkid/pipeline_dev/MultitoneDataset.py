@@ -50,7 +50,6 @@ class MultitoneDataset():
 		self.gain_fit_Q = np.array(config_params['GAIN_FIT_Q'])
 		if not self.gain_fit_Q.shape:
 			self.gain_fit_Q = np.full(len(self.ixs_to_analyze), self.gain_fit_Q)
-		self.noise_sample_rate = config_params['NOISE_SAMPLE_RATE']
 		self.overwrite = config_params['OVERWRITE']
 		self.previous_result_path = None
 		self.unsaved_tasks = []
@@ -232,17 +231,22 @@ class MultitoneDataset():
 
 			# parameters
 			keys_dict = reduction_steps[step]['params']
+			param_names = keys_dict.keys()
 
 			# step name
 			if task == 'load_data':
 				path_to_file = keys_dict['path_to_file']
-				spec = importlib.util.spec_from_file_location("load_data", path_to_file)
+				function_name = keys_dict['function_name']
+				other_param_names = [param_name for param_name in param_names 
+									 if param_name not in ['path_to_file', 'function_name']]
+				other_params = [keys_dict[param_name] for param_name in other_param_names]
+				spec = importlib.util.spec_from_file_location(function_name, path_to_file)
 				load_data = importlib.util.module_from_spec(spec)
 				sys.modules["load_data"] = load_data
 				spec.loader.exec_module(load_data)
 				
-				ffines, zfines, fgains, zgains, fnoises, znoises, fcal_indices = \
-					load_data.load_data(self.data_path, self.ixs_to_analyze)
+				ffines, zfines, fgains, zgains, fnoises, znoises, fsample, fcal_indices = \
+					eval(f'load_data.{function_name}(self.data_path, self.ixs_to_analyze, *other_params)')
 				
 				self.ffines = ffines
 				self.zfines = zfines
@@ -250,6 +254,7 @@ class MultitoneDataset():
 				self.zgains = zgains
 				self.fnoises = fnoises
 				self.znoises = znoises
+				self.noise_sample_rate = fsample
 				self.fcal_indices = fcal_indices
 				
 			elif task == 'fit_gain':
