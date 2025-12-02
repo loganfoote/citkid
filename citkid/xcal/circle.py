@@ -24,7 +24,7 @@ def circle_objective(params, x, y):
     error = sum(((x - A) ** 2 + (y - B) ** 2 - R ** 2) ** 2)
     return error
 
-def fit_iq_circle(z):
+def fit_iq_circle(z, idx = None):
     """
     Fits an IQ loop to a circle. The function describing the circle is
 
@@ -34,18 +34,28 @@ def fit_iq_circle(z):
 
     Parameters:
     z (np.array, complex128): complex S21 data.
+    idx (np.array, int64 or None): indices of z to use for fitting. If None,
+        all data points are used.
 
     Returns:
-    popt (np.array, float64): fit parameters (A, B, R).
+    origin (complex): center of the fitted circle.
+    radius (float): radius of the fitted circle.
     """
     z = np.asarray(z, dtype = np.complex128)
+    if idx is not None:
+        idx = np.asarray(idx, dtype = np.uint32)
+        z = z[idx]
     if not np.all(np.isfinite(z)):
         raise ValueError("Input data contains non-finite values.")
+    if not len(z) >= 3:
+        raise ValueError("At least 3 data points are required for fitting.")
     i, q = z.real, z.imag
     x0 = [(max(i) + min(i))/2, (max(q) + min(q))/2]
     x0.append((max(i) - min(i) + max(q) - min(q)) / 4)
     popt = optimize.fmin(circle_objective, x0, (i, q), disp = 0)
-    return popt
+    origin = popt[0] + 1j * popt[1]
+    radius = popt[2]
+    return origin, radius
 
 ################################################################################
 ###################### Convert complex S21 to theta and A ######################
@@ -98,7 +108,7 @@ def convert_to_A(z):
 ################################################################################
 ############################### Spar and Sper ##################################
 ################################################################################
-def get_spar_sper(theta, A, radius, dt = 1, get_freqs = True):
+def get_spar_sper(theta, A, radius, dt, get_freqs = True):
     """
     Calculate the PSDs of parallel and perpendicular noise components.
     

@@ -9,25 +9,34 @@ matplotlib.use("Agg")
 ################################################################################
 ################################# fit_iq_circle ################################
 ################################################################################
-@pytest.mark.parametrize("z,popt_exp", [
-    ([1, 1j, -1, -1j], [0, 0, 1]),
-    ([2, 1 + 1j, 0, 1 - 1j], [1, 0, 1]),
-    ([1 + 1j, 2j, -1 + 1j, 0], [0, 1, 1]),
-    ([1e30, 1e30j, -1e30, -1e30j], [0, 0, 1e30]),
-    ([1e-30, 1e-30j, -1e-30, -1e-30j], [0, 0, 1e-30]),
+@pytest.mark.parametrize("z,idx,popt_exp", [
+    ([1, 1j, -1, -1j], None, [0, 0, 1]),
+    ([2, 1 + 1j, 0, 1 - 1j], None, [1, 0, 1]),
+    ([1 + 1j, 2j, -1 + 1j, 0], None, [0, 1, 1]),
+    ([1e30, 1e30j, -1e30, -1e30j], None, [0, 0, 1e30]),
+    ([1e-30, 1e-30j, -1e-30, -1e-30j], None, [0, 0, 1e-30]),
+    ([1, 1j, -1, -1j, 10], [0, 1, 2, 3], [0, 0, 1]),
+    ([10, 1, 1j, -1, -1j, 10], [1, 2, 3, 4], [0, 0, 1]),
+    ([10, 1, 1j, -1, -1j], [1, 2, 3, 4], [0, 0, 1]),
+    ([1, 10, 1j, -1, -1j, 10], [0, 2, 3, 4], [0, 0, 1]),
 ])
-def test_fit_iq_circle_gain(z, popt_exp):
-    popt = circle.fit_iq_circle(z)
-    assert np.allclose(popt, popt_exp)
+def test_fit_iq_circle_gain(z, idx, popt_exp):
+    origin, radius = circle.fit_iq_circle(z, idx)
+    assert np.allclose([origin.real, origin.imag, radius], popt_exp)
     
-@pytest.mark.parametrize("z", [
-    ([]),  # empty input
-    ([np.nan, 1, -1, 1j]),  # nan input
-    (['a', 1, -1, 1j]),  # non-numeric input
+@pytest.mark.parametrize("z,idx", [
+    ([], None),  # empty input
+    ([np.nan, 1, -1, 1j], None),  # nan input
+    (['a', 1, -1, 1j], None),  # non-numeric input
+    ([1, 1j], None),  # less than 3 points
+    ([1, 1j, -1, -1j], [0, 1]),  # less than 3 points with idx 
+    ([1, 1j, -1, -1j], ['a']),  # non-numeric idx
+    ([1, 1j, -1, -1j], [0, 5]),  # idx out of bounds
+    ([1, 1j, -1, -1j], [0, -1]) # negative idx
 ])
-def test_fit_iq_circle_invalid_input(z):
+def test_fit_iq_circle_invalid_input(z, idx):
     with pytest.raises(Exception):
-        circle.fit_iq_circle(z)
+        circle.fit_iq_circle(z, idx)
 
 ################################################################################
 ################################# cent_rot_s21 #################################
