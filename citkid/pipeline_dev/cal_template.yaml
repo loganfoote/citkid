@@ -1,0 +1,12 @@
+### ----------------------------- ###
+###      x calibration steps      ###
+### ----------------------------- ###
+
+
+CAL_STEPS:
+  1 :
+    task: load_data
+    1:
+      task: scale noise
+  2 :
+    task: remove_gain
