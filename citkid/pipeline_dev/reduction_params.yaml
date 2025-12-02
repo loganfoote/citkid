@@ -2,9 +2,11 @@
 ### R E D U C T I O N   P A R A M E T E R S ###
 ### --------------------------------------- ###
 
+# Path to local Git repository
+# from which citkid was installed.
+CITKID_REPO_PATH: /Users/elijahkane/Documents/GitHub/citkid/
 
 # List of indices of detectors to analyze.
-# Set to ALL to analyze all detectors.
 # You can type either a list of ints, e.g. [0,1,2,3,4,5],
 # or a string that evaluates to a list or array of ints,
 # e.g. np.append(np.arange(20), np.arange(40,50))

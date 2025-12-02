@@ -3,10 +3,10 @@ import numpy as np
 import zarr
 import yaml
 import importlib.util
-from importlib.metadata import version
 import sys
 import os
 import shutil
+import git
 
 from .util import printc
 from .analysis_functions import *
@@ -43,6 +43,8 @@ class MultitoneDataset():
 
 		self.data_path = data_path
 		self.results_path = results_path
+		self.citkid_repo_path = config_params['CITKID_REPO_PATH']
+		self.citkid_repo = git.Repo(self.citkid_repo_path)
 		self.ixs_to_analyze = eval(str(config_params['DETECTORS_TO_ANALYZE']))
 		self.ixs_to_analyze = np.array(self.ixs_to_analyze, dtype=int)
 		self.gain_fit_Q = np.array(config_params['GAIN_FIT_Q'])
@@ -77,7 +79,6 @@ class MultitoneDataset():
 			attr = calculate_x_pipeline(self.polys, self.theta_noises)
 		return attr
 
-
 	def add_pipeline_history(self, function_name, root):
 		"""
 		Adds a history of function calls to the .zarr result for the
@@ -88,39 +89,53 @@ class MultitoneDataset():
 			root: Root group for the current .zarr result
 		"""
 		history = root.create_group(name='history')
-		citkid_version = version("citkid")
 		function_names = np.append(self.unsaved_tasks, function_name)
+		head = self.citkid_repo.head.object.hexsha
+		patch = self.citkid_repo.git.diff(head)
+		heads = np.full(len(function_names), head)
+		patches = np.full(len(function_names), patch)
 
 		if self.previous_result_path is not None:
 			previous_root = zarr.open_group(self.previous_result_path, mode='r')
+			is_analyzed_data = previous_root['history/is_analyzed'][:,:]
 			res_ixs_data = previous_root['history/res_ix'][:]
+			citkid_diff_data = previous_root['history/citkid_diff'][:]
+			citkid_head_data = previous_root['history/citkid_head'][:]
+			pipeline_steps_data = previous_root['history/pipeline_steps'][:]
 
 			ixs_in_arr = np.searchsorted(res_ixs_data, self.ixs_to_analyze)
-			version_data = previous_root['history/versions'][:,:]
-			new_version_data = np.full((len(function_names), len(res_ixs_data)), '', dtype=object)
-			new_version_data[:, ixs_in_arr] = citkid_version
-			version_data = np.append(version_data, new_version_data, axis=0)
+			new_is_analyzed_data = np.full((len(function_names), len(res_ixs_data)), False)
+			new_is_analyzed_data[:, ixs_in_arr] = True
+			is_analyzed_data = np.append(is_analyzed_data, new_is_analyzed_data, axis=0)
 
-			column_data = previous_root['history/columns'][:]
-			column_data = np.append(column_data, function_names)
+			pipeline_steps_data = np.append(pipeline_steps_data, function_names)
+
+			citkid_diff_data = np.append(citkid_diff_data, patches)
+
+			citkid_head_data = np.append(citkid_head_data, heads)
 
 		else:
 			res_ixs_data = self.ixs_to_analyze
-
-			version_data = np.full((len(function_names), len(res_ixs_data)), '', dtype=object)
-			version_data[:,:] = citkid_version
-
-			column_data = function_names
+			is_analyzed_data = np.full((len(function_names), len(res_ixs_data)), True)
+			pipeline_steps_data = function_names
+			citkid_diff_data = np.array(patches)
+			citkid_head_data = np.array(heads)
 		
 		res_ixs = history.create_array(name='res_ix', data=res_ixs_data)
 
-		versions = history.create_array(name='versions', shape=version_data.shape,
-										dtype=zarr.dtype.VariableLengthUTF8())
-		versions[:,:] = version_data
+		is_analyzed = history.create_array(name='is_analyzed', data=is_analyzed_data)
 
-		columns = history.create_array(name='columns', shape=column_data.shape,
-										dtype=zarr.dtype.VariableLengthUTF8())
-		columns[:] = column_data
+		pipeline_steps = history.create_array(name='pipeline_steps', shape=pipeline_steps_data.shape,
+											  dtype=zarr.dtype.VariableLengthUTF8())
+		pipeline_steps[:] = pipeline_steps_data
+
+		citkid_diff = history.create_array(name='citkid_diff', shape=len(citkid_diff_data),
+										   dtype=zarr.dtype.VariableLengthUTF8())
+		citkid_diff[:] = citkid_diff_data
+
+		citkid_head = history.create_array(name='citkid_head', shape=len(citkid_head_data),
+										   dtype=zarr.dtype.VariableLengthUTF8())
+		citkid_head[:] = citkid_head_data
 
 		self.unsaved_tasks = []
 
