@@ -27,23 +27,23 @@ class plStep:
         self.return_names = return_names
         self.save = save
 
-    def run(self, PL, res_idx = None):
+    def run(self, PL, data_idx = None):
         """
         Executes the pipeline step.
 
         Parameters:
         PL (pipeline): the pipeline object to execute the step on.
-        res_idx (int, optional): resonator index, or None to pass in all 
+        data_idx (int, optional): data index, or None to pass in all 
             resonators. 
         """
-        params = [PL._get_attr_res_idx(name, res_idx) for name in self.param_names]
+        params = [PL._get_attr_data_idx(name, data_idx) for name in self.param_names]
         results = self.func(*params)
         if not isinstance(results, tuple):
             results = (results,)
         for name, value in zip(self.return_names, results):
-            PL._set_attr_res_idx(name, value, res_idx) 
+            PL._set_attr_data_idx(name, value, data_idx) 
         if self.save:
-            PL.save(self.return_names, res_idx = res_idx)
+            PL.save(self.return_names, data_idx = data_idx)
 
     def __repr__(self):
         s = f"Pipeline Step: {self.name}"

@@ -5,12 +5,13 @@
 
 CAL_STEPS:
   1 :
-    task: load_data
+    task: load_metadata
     T_STEPS:
       1:
-        task: scale_noise
+        task: load_data_t
       2:
         task: rmv_gain_t 
+        delete_input: [zt]
       3:
         task: center_t 
       4:
@@ -19,15 +20,18 @@ CAL_STEPS:
           1:
             task: get_A_t 
           2:
-            task: get_sparper
+            task: get_sparper      
       5:
         task: get_x_t
     F_STEPS:
       1:
-        task: rmv_gain_f 
+        task: load_data_f
       2:
-        task: center_f 
+        task: rmv_gain_f 
+        delete_input: [zf]
       3:
-        task: get_theta_f
+        task: center_f 
       4:
+        task: get_theta_f
+      5:
         task: get_x_f
