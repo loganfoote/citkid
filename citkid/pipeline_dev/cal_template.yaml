@@ -6,7 +6,28 @@
 CAL_STEPS:
   1 :
     task: load_data
-    1:
-      task: scale noise
-  2 :
-    task: remove_gain
+    T_STEPS:
+      1:
+        task: scale_noise
+      2:
+        task: rmv_gain_t 
+      3:
+        task: center_t 
+      4:
+        task: get_theta_t 
+        A_STEPS: 
+          1:
+            task: get_A_t 
+          2:
+            task: get_sparper
+      5:
+        task: get_x_t
+    F_STEPS:
+      1:
+        task: rmv_gain_f 
+      2:
+        task: center_f 
+      3:
+        task: get_theta_f
+      4:
+        task: get_x_f
