@@ -2,7 +2,6 @@
 ###      x calibration steps      ###
 ### ----------------------------- ###
 
-
 CAL_STEPS:
   1 :
     task: load_metadata
@@ -15,12 +14,12 @@ CAL_STEPS:
       3:
         task: center_t 
       4:
-        task: get_theta_t 
+        task: get_theta_t
         A_STEPS: 
           1:
             task: get_A_t 
           2:
-            task: get_sparper      
+            task: get_sparper        
       5:
         task: get_x_t
     F_STEPS:

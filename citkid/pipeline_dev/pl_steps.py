@@ -2,7 +2,8 @@ import numpy as np
 from citkid.xcal import gain, corr, circle, xcal
 
 class plStep:
-    def __init__(self, name, func, param_names, return_names, save = False):
+    def __init__(self, name, func, param_names, return_names, save = False,
+                 func_vectorized = False):
         """
         Class to represent a step in the analysis or calibration pipeline.
 
@@ -14,6 +15,8 @@ class plStep:
         return_names (list of str): Names of the attributes to store the 
             function's return values.
         save (bool): Whether to save the results after running the step.
+        func_vectorized (bool): Whether the function can handle vectorized 
+            inputs (multiple resonators at once).
         """
         assert type(name) == str 
         assert callable(func)
@@ -26,6 +29,7 @@ class plStep:
         self.param_names = param_names
         self.return_names = return_names
         self.save = save
+        self.func_vectorized = func_vectorized
 
     def run(self, PL, data_idx = None):
         """
@@ -44,6 +48,15 @@ class plStep:
             PL._set_attr_data_idx(name, value, data_idx) 
         if self.save:
             PL.save(self.return_names, data_idx = data_idx)
+
+        # if isinstance(data_idx, int):
+        # elif isinstance(data_idx, list):
+        #     if self.func_vectorized:
+        #         results = self.func(*params) 
+        #     else:
+        #         results = [] 
+        #         for di in data_idx:
+                    # ...
 
     def __repr__(self):
         s = f"Pipeline Step: {self.name}"
@@ -71,7 +84,7 @@ cal_steps =\
  ('rmv_gain_f', gain.remove_gain, 
   ['ff', 'zf', 'p_amp', 'p_phase'], ['zf_rmv'], False),
  ('rmv_gain_t', gain.remove_gain, 
-  ['ff', 'zt', 'p_amp', 'p_phase'], ['zt_rmv'], False),
+  ['ft', 'zt', 'p_amp', 'p_phase'], ['zt_rmv'], False),
  ('center_f', circle.cent_rot_s21, 
   ['zf_rmv', 'circ_origin', 'theta_phase_offset'], ['zf_cent'], False),
  ('center_t', circle.cent_rot_s21, 
@@ -85,6 +98,7 @@ cal_steps =\
  ('get_x_t', np.polyval, 
   ['theta_t', 'poly_x'], ['x_t'], True),
 # analysis steps
+ ('make_fr_spans', gain.make_fr_spans, ['fres_all', 'qres_all', 'fg'], ['fr_spans'], True),
  ('fit_gain', gain.fit_gain, 
   ['fg', 'zg', 'fr_spans'], ['pamp', 'pphase', 'gain_mask'], True),
  ('fit_circ', circle.fit_iq_circle, 
