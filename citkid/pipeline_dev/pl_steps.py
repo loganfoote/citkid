@@ -37,9 +37,13 @@ class plStep:
 
         Parameters:
         PL (pipeline): the pipeline object to execute the step on.
-        data_idx (int, optional): data index, or None to pass in all 
-            resonators. 
-        """
+        data_idx (int or array-like, optional): single data index, list of data
+            indices, or None to analyze all data indices.
+        """ 
+        if data_idx is None:
+            data_idx = np.arange(PL.nres, dtype = np.int32)
+        data_idx = np.asarray(data_idx, dtype = np.int32)
+        # Need to get data_idx parameters where relevant
         params = [PL._get_attr_data_idx(name, data_idx) for name in self.param_names]
         results = self.func(*params)
         if not isinstance(results, tuple):

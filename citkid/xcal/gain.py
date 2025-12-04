@@ -40,6 +40,13 @@ def get_res_mask(f, fr_spans):
     mask (np.array, bool): mask for f where False values are resonances to cut
         from the data. 
     """
+    f = np.asarray(f, dtype = np.float64)
+    for c, s in fr_spans:
+        assert isinstance(c, (int, float)), 'Resonant frequency must be numeric'
+        assert isinstance(s, (int, float)), 'Span must be numeric'
+        if s < 0:
+            raise ValueError('Span must be positive')
+        
     ### Calculate resonance mask
     intervals = np.array([(c - s / 2, c + s / 2) for c, s in fr_spans])
     if intervals.shape[0]:
@@ -137,3 +144,34 @@ def fit_gain(f, z, fr_spans):
         p_phase = np.array([np.nan,np.nan])
         warnings.warn('Gain fit failed, returning NAN')
     return p_amp, p_phase, mask
+
+def make_fr_spans(fres_all, qres_all, fg):
+    """
+    Makes resonance frequency spans for cutting resonances out of gain data.
+
+    Parameters:
+    fres_all (np.array, float64, (M,)): all resonant frequencies in Hz.
+    qres_all (np.array, float64, (M,)): all resonator quality factors.
+    fg (np.array, float64, (N,)): gain frequency data in Hz.
+
+    Returns:
+    fr_spans (list): values are tuples (float64, float64) where the first value.
+        is the resonant frequency in Hz and the second is the span. These 
+        frequency ranges are removed from the gain data.
+    """
+    fres_all = np.asarray(fres_all, dtype = np.float64)
+    qres_all = np.asarray(qres_all, dtype = np.float64)
+    m = 'fres_all and qres_all must be the same length'
+    assert fres_all.shape == qres_all.shape, m
+    fg = np.asarray(fg, dtype = np.float64)
+
+    fr_spans = []
+    for fr, qr in zip(fres_all, qres_all):
+        if qr <= 0:
+            continue
+        span = fr / qr
+        # ensure span is in fg range
+        if (fr + span / 2 < fg[0]) or (fr - span / 2 > fg[-1]):
+            continue
+        fr_spans.append((fr, span))
+    return fr_spans

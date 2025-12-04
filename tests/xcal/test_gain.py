@@ -91,3 +91,60 @@ def test_fit_gain(f, z, fr_spans, p_amp_exp, p_phase_exp, mask_exp):
 def test_fit_gain_invalid_input(f, z, fr_spans):
     with pytest.raises(Exception):
         gain.fit_gain(f, z, fr_spans)
+
+################################################################################
+################################## get_res_mask ################################
+################################################################################
+@pytest.mark.parametrize("f,fr_spans,mask_exp", [
+    ([0, 1, 2, 3, 4], [], [True] * 5),
+    ([0, 1, 2, 3, 4], [(2, 1)], [True, True, False, True, True]),
+    ([0, 1, 2, 3, 4], [(2, 1)], [True, True, False, True, True]),
+    ([0, 1, 2, 3, 4], [(1, 2)], [False, False, False, True, True]),
+    ([0, 1, 2 + 1e-9, 3, 4], [(1, 2)], [False, False, True, True, True]),
+    ([0, 1, 2, 3, 4], [(0, 5)], [False, False, False, True, True]),
+    ([0, 1, 2, 3, 4], [(0, 10)], [False, False, False, False, False]),
+    ([0, 1, 2, 3, 4], [(7, 1)], [True] * 5),
+    ([0, 1, 2, 3, 4], [(1, 1), (3, 1)], [True, False, True, False, True]),
+    ([0, 1, 2, 3, 4], [(1, 1), (2.5, 2)], [True, False, False, False, True]),
+    ([0, 1, 2, 3, 4], [(1, 3), (2, 2)], [False, False, False, False, True]),
+])
+def test_get_res_mask(f, fr_spans, mask_exp):
+    for m in [1e-12, 1, 1e6, 1e9, 1e12]:
+        mask = gain.get_res_mask([fi * m for fi in f], 
+                                [(f[0] * m, f[1] * m) for f in fr_spans])
+        np.testing.assert_array_equal(mask, mask_exp)
+
+@pytest.mark.parametrize("f,fr_spans", [
+    ([0, 1, 2], [1]),  # fr_spans not list of tuples
+    (['a'], []),       # f not numeric  
+    ([0], ['a']),      # fr_spans not numeric
+])
+def test_get_res_mask_invalid_input(f, fr_spans):
+    with pytest.raises(Exception):
+        gain.get_res_mask(f, fr_spans)
+
+################################################################################
+################################ make_fr_spans #################################
+################################################################################
+# Neet to finish writing tests here
+@pytest.mark.parametrize("fres_all,qres_all,fg,fr_spans_exp", [
+    ([1e9, 2e9], [1e9, 1e9], [1e9, 1.1e9], [[1e9, 1]]), 
+    ([1e9, 2e9, 3e9], [1e9, 2e9, 1e9], [1e9, 1.5e9, 2.5e9], [[1e9, 1], [2e9, 1]]), 
+    ([1e9], [1e9], [0.5e9, 1.5e9], [[1e9, 1]]), 
+    ([1e9], [1e9], [0.5e9, 0.9e9], []),
+    ([], [], [1e9, 1.1e9], []),
+    
+])
+def test_make_fr_spans(fres_all, qres_all, fg, fr_spans_exp):
+    fr_spans = gain.make_fr_spans(fres_all, qres_all, fg)
+    assert np.allclose(fr_spans, fr_spans_exp)
+
+@pytest.mark.parametrize("fres_all,qres_all,fg", [
+    ([1e9, 2e9], [1e9], [1e9, 1.1e9]),  # fres_all and qres_all different lengths
+    (['a'], [1e9], [1e9, 1.1e9]),     # fres_all not numeric
+    ([1e9], ['a'], [1e9, 1.1e9]),     # qres_all not numeric
+    ([1e9], [1e9], ['a']),            # fg not numeric  
+])
+def test_make_fr_spans_invalid_input(fres_all, qres_all, fg):
+    with pytest.raises(Exception):
+        gain.make_fr_spans(fres_all, qres_all, fg)
