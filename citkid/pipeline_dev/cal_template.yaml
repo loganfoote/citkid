@@ -4,7 +4,9 @@
 
 CAL_STEPS:
   1 :
-    task: load_metadata
+    task: load_global_data
+  2 :
+    task: load_global_res_data
     T_STEPS:
       1:
         task: load_data_t
