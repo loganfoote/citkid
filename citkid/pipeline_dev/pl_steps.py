@@ -5,7 +5,7 @@ from citkid.xcal import gain, corr, circle, xcal
 #################################### Steps #####################################
 ################################################################################
 class plStep:
-    def __init__(self, name, func, param_names, return_names, save = False,
+    def __init__(self, name, func, param_names, return_names, 
                  func_type = "per-row"):
         """
         Class to represent a step in the analysis or calibration pipeline.
@@ -17,7 +17,6 @@ class plStep:
             function.
         return_names (list of str): Names of the attributes to store the 
             function's return values.
-        save (bool): Whether to save the results after running the step.
         func_type (str): Type of function execution.
             "per-row": function acts on one data_idx.
             "vectorized": function can act on one or multiple data_idx.
@@ -35,7 +34,6 @@ class plStep:
         self.func = func
         self.param_names = param_names
         self.return_names = return_names
-        self.save = save
         self.func_type = func_type
         
 
@@ -123,56 +121,55 @@ class plStep:
 default_cal_steps =\
 (# calibration steps
  ('rmv_gain_f', gain.remove_gain, 
-  ['ff', 'zf', 'p_amp', 'p_phase'], ['zf_rmv'], False, 'per-row'),
+  ['ff', 'zf', 'p_amp', 'p_phase'], ['zf_rmv'], 'per-row'),
 
  ('rmv_gain_t', gain.remove_gain, 
-  ['ft', 'zt', 'p_amp', 'p_phase'], ['zt_rmv'], False, 'per-row'),
+  ['ft', 'zt', 'p_amp', 'p_phase'], ['zt_rmv'], 'per-row'),
 
  ('center_f', circle.cent_rot_s21, 
-  ['zf_rmv', 'circ_origin', 'theta_phase_offset'], ['zf_cent'], False, 'per-row'),
+  ['zf_rmv', 'circ_origin', 'theta_phase_offset'], ['zf_cent'], 'per-row'),
 
  ('center_t', circle.cent_rot_s21, 
-  ['zt_rmv', 'circ_origin', 'theta_phase_offset'], ['zt_cent'], False, 'per-row'),
+  ['zt_rmv', 'circ_origin', 'theta_phase_offset'], ['zt_cent'], 'per-row'),
 
  ('get_theta_f', circle.convert_to_theta, 
-  ['zf_cent', 'unwrap_theta_f'], ['theta_f'], False, 'per-row'),
+  ['zf_cent', 'unwrap_theta_f'], ['theta_f'], 'per-row'),
 
  ('get_theta_t', circle.convert_to_theta, 
-  ['zt_cent', 'unwrap_theta_t'], ['theta_t'], False, 'per-row'),
+  ['zt_cent', 'unwrap_theta_t'], ['theta_t'], 'per-row'),
 
  ('get_x_f', lambda ff, ft: 1 - ff / ft, 
-  ['ff', 'ft'], ['x_f'], False, 'per-row'),
+  ['ff', 'ft'], ['x_f'], 'per-row'),
 
  ('get_x_t', np.polyval, 
-  ['theta_t', 'poly_x'], ['x_t'], True, 'per-row'),
+  ['theta_t', 'poly_x'], ['x_t'], 'per-row'),
 # analysis steps
  ('make_fr_spans', gain.make_fr_spans, 
-  ['fres_all', 'qres_all', 'fg'], ['fr_spans'], True, 'per-row'),
+  ['fres_all', 'qres_all', 'fg'], ['fr_spans'], 'per-row'),
 
  ('fit_gain', gain.fit_gain, 
-  ['fg', 'zg', 'fr_spans'], ['pamp', 'pphase', 'gain_mask'], True, 'per-row'),
+  ['fg', 'zg', 'fr_spans'], ['pamp', 'pphase', 'gain_mask'], 'per-row'),
 
  ('fit_circ', circle.fit_iq_circle, 
-  ['zf_rmv', 'idx_circfit'], ['circ_origin', 'circ_radius'], True, 'per-row'),
+  ['zf_rmv', 'idx_circfit'], ['circ_origin', 'circ_radius'], 'per-row'),
 
  ('get_theta_phase_offset', np.median, 
-  ['zt_rmv'], ['theta_phase_offset'], True, 'per-row'),
+  ['zt_rmv'], ['theta_phase_offset'], 'per-row'),
 
  ('get_xcal_idx', xcal.get_xcal_idx,
   ['ff', 'theta_f', 'theta_t', 'xcal_idx0_offset', 'xcal_idx1_offset', 
-   'xcal_std_cutoff'], ['xcal_idx'], False, 'per-row'),
-
+   'xcal_std_cutoff'], ['xcal_idx'], 'per-row'),
  ('cut_xf', lambda x, t, idx: (x[idx], t[idx]), 
-  ['x_f', 'theta_f', 'xcal_idx'], ['x_f_cut', 'theta_f_cut'], False, 'per-row'),
+  ['x_f', 'theta_f', 'xcal_idx'], ['x_f_cut', 'theta_f_cut'], 'per-row'),
 
  ('fit_x_theta', np.polyfit, 
-  ['x_f_cut', 'theta_f_cut', 'poly_x_deg'], ['poly_x'], True, 'per-row'),
+  ['x_f_cut', 'theta_f_cut', 'poly_x_deg'], ['poly_x'], 'per-row'),
 # extra steps
  ('get_A_t', circle.convert_to_A, 
-  ['zt_cent'], ['A_t'], False, 'per-row'),
+  ['zt_cent'], ['A_t'], 'per-row'),
  ('get_sparper', circle.get_spar_sper, 
   ['theta_t', 'A_t', 'circ_radius', 'dt', 'sparper_get_freqs'], 
-  ['spar', 'sper'], False, 'per-row')
+  ['spar', 'sper'], 'per-row')
 )
 
 default_cal_steps = [plStep(*cs) for cs in default_cal_steps]
@@ -462,3 +459,31 @@ class LazyAttr:
 
         for r, v in zip(rows, value):
             self._cache[r] = v
+
+class IndexMappedParam:
+    def __init__(self, base_attr, index_map):
+        """
+        Wrapper to map indices from a base attribute to another set of indices.
+
+        Parameters:
+        base_attr (LazyAttr or np.ndarray): The base attribute to map from.
+        index_map (list or np.ndarray): The mapping from desired indices to base
+            attribute indices.
+        """
+        self.base = base_attr
+        self.map = index_map
+
+    def __getitem__(self, idx):
+        """
+        Get item(s) from the mapped attribute.
+        
+        Parameters:
+        idx (int, list, tuple, or np.ndarray): Index or indices to retrieve.
+        
+        Returns:
+        np.ndarray: Mapped value(s) from the base attribute.
+        """
+        if isinstance(idx, (list, tuple, np.ndarray)):
+            return np.array([self.base[self.map[i]] for i in idx])
+        else:
+            return self.base[self.map[int(idx)]]
