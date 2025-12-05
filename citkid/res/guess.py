@@ -136,7 +136,8 @@ def guess_phi_amp(z, z0):
     amp_guess (float): amp guess
     """
     popt = circle.fit_iq_circle(z)
-    xc, yc, R = popt
+    zc, R = popt
+    xc, yc = np.real(zc), np.imag(zc)
     # angle between center of circle and off resonance point
     x1, y1, = -np.real(z0), -np.imag(z0)
     x2, y2 = xc + x1, yc + y1

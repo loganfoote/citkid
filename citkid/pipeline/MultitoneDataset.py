@@ -54,6 +54,28 @@ class MultitoneDataset():
 		self.previous_result_path = None
 		self.unsaved_tasks = []
 
+
+	def _get_attr_res_idx(param_name, res_idx):
+		"""
+		Returns the value of a given pipeline parameter 
+		for specified resonator indices.
+
+		Parameters:
+			param_name (str): Name of parameter to get
+			res_idx (array-like or None): List of resonator indices to get
+				the parameter data for, or None to get all resonator indices.
+		Returns:
+			params: Array of parameters
+		"""
+		if res_idx is not None:
+			res_idx = np.array(res_idx)
+			ixs_in_arr = np.searchsorted(self.ixs_to_analyze, res_idx)
+		else:
+			ixs_in_arr = np.arange(len(self.ixs_to_analyze))
+		params = self.param_name[ixs_in_arr]
+		return params
+
+
 	def __getattr__(self, name):
 		"""
 		Reconstructs an attribute and returns it if it does not already exist.
@@ -63,7 +85,25 @@ class MultitoneDataset():
 		Returns:
 			attr: Attribute which was loaded
 		"""
-		if name in ['circle_fits', 'iq_fits']:
+		if name in ['p_amp', 'p_phase']:
+			iq_fits = self.iq_fits
+			columns = iq_fits.columns
+			res_ixs = np.array(iq_fits.res_ix, dtype=int)
+			ixs_in_arr = np.searchsorted(res_ixs, self.ixs_to_analyze)
+
+			if name == 'p_amp':
+				attr = np.array([iq_fits.iq_pamp_00, 
+								 iq_fits.iq_pamp_01, 
+								 iq_fits.iq_pamp_02]).T[ixs_in_arr]
+			elif name == 'p_phase':
+				attr = np.array([iq_fits.iq_pphase_00, 
+								 iq_fits.iq_pphase_01]).T[ixs_in_arr]
+		elif name == 'circ_origin':
+			circle_fits = self.circle_fits
+			res_ixs = np.array(circle_fits.res_ix, dtype=int)
+			ixs_in_arr = np.searchsorted(res_ixs, self.ixs_to_analyze)
+			attr = np.array(circle_fits.A+1j*self.circle_fits.B)
+		elif name in ['circle_fits', 'iq_fits']:
 			self.previous_result_path = self.results_path+name+'.zarr'
 			root = zarr.open_group(self.previous_result_path, mode='r')
 			columns = root['result/columns'][:]
@@ -180,7 +220,7 @@ class MultitoneDataset():
 				fit_columns[:] = columns
 			elif task == 'fit_iq_circle':
 				fitdata = result.create_array(name='fitdata', data=data)
-				columns = np.array(['A', 'B', 'R'])
+				columns = np.array(['res_ix', 'A', 'B', 'R'])
 				fit_columns = result.create_array(name='columns', shape=len(columns),
 												dtype=zarr.dtype.VariableLengthUTF8())
 				fit_columns[:] = columns
@@ -248,56 +288,46 @@ class MultitoneDataset():
 				ffines, zfines, fgains, zgains, fnoises, znoises, fsample, fcal_indices = \
 					eval(f'load_data.{function_name}(self.data_path, self.ixs_to_analyze, *other_params)')
 				
-				self.ffines = ffines
-				self.zfines = zfines
-				self.fgains = fgains
-				self.zgains = zgains
-				self.fnoises = fnoises
-				self.znoises = znoises
+				self.ff = ffines
+				self.zf = zfines
+				self.fg = fgains
+				self.zg = zgains
+				self.ft = fnoises
+				self.zt = znoises
 				self.noise_sample_rate = fsample
 				self.fcal_indices = fcal_indices
 				
 			elif task == 'fit_gain':
-				data = fit_gain_pipeline(self.ixs_to_analyze, self.fgains, self.zgains, 
-							  self.fnoises, self.gain_fit_Q, self.fcal_indices, keys_dict['downward'])
+				data = fit_gain_pipeline(self.ixs_to_analyze, self.fg, self.zg, 
+							  self.ft, self.gain_fit_Q, self.fcal_indices, keys_dict['downward'])
 
 				self.save_outputs(data, task, keys_dict['save'], self.overwrite)
 			
 			elif task == 'fit_nonlinear_iq_with_gain':
-				data = fit_iq_pipeline(self.ixs_to_analyze, self.ffines, self.zfines, self.fgains, self.zgains, 
-							  self.fnoises, self.gain_fit_Q, self.fcal_indices, keys_dict['downward'])
+				data = fit_iq_pipeline(self.ixs_to_analyze, self.ff, self.zf, self.fg, self.zg, 
+							  self.ft, self.gain_fit_Q, self.fcal_indices, keys_dict['downward'])
 
 				self.save_outputs(data, task, keys_dict['save'], self.overwrite)
 
 			elif task == 'remove_gain':
-				iq_fits = self.iq_fits
-				columns = iq_fits.columns
-				res_ixs = np.array(iq_fits.res_ix, dtype=int)
-				ixs_in_arr = np.searchsorted(res_ixs, self.ixs_to_analyze)
+				self.zf_rmv, self.zt_rmv = remove_gain_pipeline(self.ff, self.zf, 
+																self.ft, self.zt, 
+																self.p_amp, self.p_phase)
 
-				p_amps = np.array([iq_fits.iq_pamp_00, 
-								iq_fits.iq_pamp_01, 
-								iq_fits.iq_pamp_02]).T[ixs_in_arr]
-				p_phases = np.array([iq_fits.iq_pphase_00, 
-								iq_fits.iq_pphase_01]).T[ixs_in_arr]
-
-				self.zfines, self.znoises = remove_gain_pipeline(self.ffines, self.zfines, 
-														self.fnoises, self.znoises, 
-														p_amps, p_phases)
-
-				data = [self.zfines, self.znoises]
+				data = [self.zf_rmv, self.zt_rmv]
 
 				self.save_outputs(data, task, keys_dict['save'], self.overwrite)
 
 			elif task == 'deglitch_noise':
-				self.znoises = deglitch_noise_pipeline(self.znoises, keys_dict['nstd'])
+				self.zt = deglitch_noise_pipeline(self.zt, keys_dict['nstd'])
 
-				data = self.znoises
+				data = self.zt
 
 				self.save_outputs(data, task, keys_dict['save'], self.overwrite)
 
 			elif task == 'fit_iq_circle':
 				data = fit_iq_circle_pipeline(self.zfines)
+				data = np.insert(self.ixs_to_analyze, 0, data, axis=1)
 
 				self.save_outputs(data, task, keys_dict['save'], self.overwrite)
 

@@ -85,9 +85,8 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
         radius = 1
         popt_circle = [np.nan, np.nan, np.nan]
     else:
-        popt_circle = fit_iq_circle(zfine)
-        origin = popt_circle[0] + 1j * popt_circle[1]
-        radius = popt_circle[2]
+        origin, radius = fit_iq_circle(zfine)
+        popt_circle = (np.real(origin), np.imag(origin), radius)
     # Extract theta and x
     if znoise_offres is not None:
         znoise_offres = np.array(znoise_offres)
