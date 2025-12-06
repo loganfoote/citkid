@@ -42,10 +42,10 @@ ffine2, tfine2 = np.flip(ffine), np.flip(tfine)
     (ffine, tfine1, tnoise, 0, 0, None, np.arange(39, 62, 1, dtype = np.int32)),
     ([], [], [2.5], 0, 0, None, np.array([], dtype = np.int32)),
 ])
-def test_get_xcal_ix(ffine, tfine, tnoise, ix0_offset, ix1_offset, 
-                     std_cutoff, ix_exp):
-    ix = xcal.get_xcal_ix(ffine, tfine, tnoise, 
-                         ix0_offset, ix1_offset, std_cutoff)
+def test_get_xcal_idx(ffine, tfine, tnoise, ix0_offset, ix1_offset, 
+                      std_cutoff, ix_exp):
+    ix = xcal.get_xcal_idx(ffine, tfine, tnoise, 
+                           ix0_offset, ix1_offset, std_cutoff)
     assert isinstance(ix, np.ndarray)
     assert ix.dtype == np.int32
     assert np.allclose(ix, ix_exp)
@@ -60,11 +60,11 @@ def test_get_xcal_ix(ffine, tfine, tnoise, ix0_offset, ix1_offset,
     ([1, 2, 3], [1, 2, 3], [2], 1, 'a', None),  # non-integer ix1_offset
     ([1, 2, 3], [1, 2, 3], [2], 1, 1, -1),  # negative std_cutoff
 ])  
-def test_get_xcal_ix_invalid_input(ffine, tfine, tnoise, ix0_offset, 
-                                   ix1_offset, std_cutoff):
+def test_get_xcal_idx_invalid_input(ffine, tfine, tnoise, ix0_offset, 
+                                    ix1_offset, std_cutoff):
     with pytest.raises(Exception):
-        xcal.get_xcal_ix(ffine, tfine, tnoise, 
-                        ix0_offset, ix1_offset, std_cutoff)
+        xcal.get_xcal_idx(ffine, tfine, tnoise, 
+                          ix0_offset, ix1_offset, std_cutoff)
         
 
     

@@ -2,7 +2,6 @@ import pytest
 import numpy as np
 from citkid.xcal import circle
 from citkid.noise.psd import get_psd
-import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use("Agg")
 

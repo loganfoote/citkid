@@ -1,5 +1,6 @@
 import numpy as np
-from citkid.xcal import gain, corr, circle, xcal
+from ..xcal import gain, corr, circle, xcal
+from .framework import LazyAttr
 
 ################################################################################
 #################################### Steps #####################################
@@ -73,14 +74,17 @@ class plStep:
                         attr._cache[i] = v
                 else:
                     # create new LazyAttr for per-row output
-                    setattr(ds, name, LazyAttr.from_partial_array(ds, name, data_idx, val))
+                    setattr(ds, name, LazyAttr.from_partial_array(ds, name, 
+                                                                  data_idx, 
+                                                                  val))
 
         elif self.func_type == "per-row":
             results_per_row = [[] for _ in self.return_names]
 
             # params are already sliced to match data_idx
             for local_idx in range(len(data_idx)):
-                args_i = [p[local_idx] if isinstance(p, (list, np.ndarray)) else p for p in params]
+                args_i = [p[local_idx] if isinstance(p, (list, np.ndarray)) \
+                          else p for p in params]
                 out_i = self.func(*args_i)
                 if not isinstance(out_i, tuple):
                     out_i = (out_i,)
@@ -94,7 +98,9 @@ class plStep:
                     for r, v in zip(data_idx, val):
                         attr._cache[r] = v
                 else:
-                    setattr(ds, name, LazyAttr.from_partial_array(ds, name, data_idx, val))
+                    setattr(ds, name, LazyAttr.from_partial_array(ds, name, 
+                                                                  data_idx, 
+                                                                  val))
 
     def __repr__(self):
         s = f"Pipeline Step: {self.name}"
