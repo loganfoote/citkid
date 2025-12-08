@@ -1,154 +1,5 @@
 import numpy as np
-from .pl_steps import find_pl_path 
-import os
-import yaml 
-import importlib.util
-from .pl_steps import default_cal_steps, find_pl_path
-
-class dataset:
-    def __init__(self, directory, yaml_path):
-        """
-        Initialize the dataset with a calibration pipeline defined by a YAML file.  
-        
-        Parameters:
-        directory (str): The base directory for the dataset.
-        yaml_path (str): The path to the YAML configuration file.
-        """
-        # On import of yaml, check that all paths are valid
-        self.directory = os.path.normpath(directory)
-        self.yaml_path = os.path.normpath(yaml_path)
-
-        # Create list of possible steps
-        custom_module_path = os.path.join(self.directory, 'custom_steps.py')
-        if os.path.exists(custom_module_path):
-            spec = importlib.util.spec_from_file_location("custom_steps", 
-                                                          custom_module_path)
-            cs = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(cs)
-            custom_steps = cs.custom_steps
-        else:
-            custom_steps = []
-
-        self.steps = custom_steps 
-        for step in default_cal_steps: 
-            if step.name not in [s.name for s in self.steps]:
-                self.steps.append(step) 
-        
-        # Load YAML configuration
-        with open(self.yaml_path, 'r') as f:
-            yaml_dict = yaml.safe_load(f)
-        self.cal_pl = self.convert_yaml_to_steps(yaml_dict)
-
-        # Set nres 
-        # self.nres = len(self.res_idxs) # must be able to produce from pipeline
-        self.nres = 1600  # temporary hardcode until pipeline can produce res_idxs
-            
-    def convert_yaml_to_steps(self, pl_dict, key = None):
-        """
-        Converts YAML-defined path dictionary leaves to plStep objects.
-
-        Parameters:
-        pl_dict (dict or str): The YAML-defined path dictionary or leaf.
-        key (str): The key associated with the current pl_dict, used to identify
-            task names.
-
-        Returns:
-        dict or plStep: The converted paths with plStep objects.
-        """
-        if isinstance(pl_dict, dict):
-            for key, val in pl_dict.items():
-                pl_dict[key] = self.convert_yaml_to_steps(val, key)
-        if isinstance(pl_dict, str) and key == 'task':
-            x = [d for d in self.steps if d.name == pl_dict]
-            if not len(x):
-                m = f"Step '{pl_dict}' not found in available steps."
-                raise ValueError(m)
-            return x[0]
-        return pl_dict
-    
-    def confirm_valid_path(self, path):
-        """
-        Confirm that a list of plStep objects forms a valid path, where all 
-        inputs exist or can be generated from the Zarr file or from the path.
-
-        Parameters:
-        path (list): List of plStep objects forming the path.
-
-        Raises:
-        ValueError: If an input for any step is not found.
-        """
-        valid_inputs = [d for d in dir(self) if '__' not in d]
-        for step in path:
-            for inp in step.param_names:
-                if inp not in valid_inputs and inp != 'data_idx':
-                    m = f"Invalid path, input '{inp}' for step '{step.name}'"
-                    m += f" not found."
-                    raise ValueError(m)
-            valid_inputs.extend(step.return_names)
-
-    def execute_path(self, path, data_idx):
-        """
-        Execute a list of plStep objects in sequence for given data indices.
-
-        Parameters:
-        path (list): List of plStep objects forming the path.
-        data_idx (int or list): The data index or indices to process.
-        """
-        self.confirm_valid_path(path)
-        for step in path:
-            step.run(self, data_idx)
-
-    def __getattr__(self, name):
-        """
-        Custom attribute getter to handle LazyAttr creation for per-row
-        attributes.
-
-        Parameters:
-        name (str): The name of the attribute to get.
-
-        Returns:
-        Any: The requested attribute value or LazyAttr.
-        """
-        # Only run when normal lookup fails
-        cal_pl = object.__getattribute__(self, "cal_pl")
-
-        # Find the path to produce this attribute
-        path = find_pl_path(cal_pl, name)
-        if path is None:
-            raise AttributeError(name)
-
-        # Check if all steps are global or global-res 
-        if all(step.func_type in ["global", "global-res"] for step in path):
-            # Execute immediately, store result directly
-            self.execute_path(path, data_idx = None)
-            return object.__getattribute__(self, name)
-        
-        # Otherwise create LazyAttr for per-row/vectorized output
-        attr = LazyAttr(self, name)
-        object.__setattr__(self, name, attr)
-        return attr
-    
-    def _extract_param(ds, name, data_idx):
-        """
-        Extract parameter 'name' for data indices 'data_idx' from dataset 'ds'.
-        If the parameter is a LazyAttr (per-row), extract only relevant rows.
-        Otherwise, return the global scalar / non-row attribute.
-
-        Parameters:
-        ds (dataset): The dataset instance.
-        name (str): The name of the parameter to extract.
-        data_idx (int or list): The data index or indices to extract.
-
-        Returns:
-        np.ndarray or scalar: The extracted parameter value(s).
-        """
-        val = getattr(ds, name)
-        # If val is LazyAttr (per-row), extract only relevant rows
-        if isinstance(val, LazyAttr):
-            return val[data_idx]
-        else:
-            # global scalar / non-row attribute
-            return val
+from ..xcal import gain, circle, xcal
         
 ################################################################################
 ############################### Lazy Attribute #################################
@@ -162,7 +13,8 @@ class LazyAttr:
         DS (DataSet): The DataSet instance this attribute belongs to.
         name (str): The name of the attribute.
         """
-        assert isinstance(DS, dataset), "DS must be a dataset instance"
+        for a in ['cal_pl', 'execute_path', 'nres']:
+            assert hasattr(DS, a), f"DS must have '{a}' attribute"
         assert isinstance(name, str), "name must be a string"
         self.DS = DS
         self.name = name
@@ -291,3 +143,424 @@ class IndexMappedParam:
             return np.array([self.base[self.map[i]] for i in idx])
         else:
             return self.base[self.map[int(idx)]]
+
+################################################################################
+#################################### Steps #####################################
+################################################################################
+class plStep:
+    def __init__(self, name, func, param_names, return_names, 
+                 func_type = "per-row"):
+        """
+        Class to represent a step in the analysis or calibration pipeline.
+
+        Parameters:
+        name (str): Name of the pipeline step.
+        func (callable): Function to execute for this step.
+        param_names (list of str): Names of the parameters to pass to the 
+            function.
+        return_names (list of str): Names of the attributes to store the 
+            function's return values.
+        func_type (str): Type of function execution.
+            "per-row": function acts on one data_idx.
+            "vectorized": function can act on one or multiple data_idx.
+            "global": function acts on global data only.
+            "global-res": function loads per-resonator data only all-at-once.
+        """
+        assert type(name) == str 
+        assert callable(func)
+        assert type(param_names) == list
+        assert type(return_names) == list
+        assert all([type(p) == str for p in param_names])
+        assert all([type(r) == str for r in return_names])
+        assert func_type in ["per-row", "vectorized", "global", "global-res"]
+        self.name = name
+        self.func = func
+        self.param_names = param_names[:]
+        self.return_names = return_names[:]
+        self.func_type = func_type
+        
+    def run(self, DS, data_idx = None):
+        """
+        Run the pipeline step on the given dataset. 
+
+        Parameters:
+        DS (.dataset.DataSet): The dataset to operate on.
+        data_idx (int or list of int, optional): The data index or indices to 
+            process. For self.func_type == "global" or "global-res", data_idx is 
+            ignored. For self.func_type == "vectorized", the function is called 
+            on the data as indexed by data_idx (int or list). For 
+            self.func_type == "per-row", the function is called separately for 
+            each data index in data_idx if data_idx is a list. If data_idx is 
+            None, all data indices (0 to DS.nres - 1) are processed. 
+        """
+        if isinstance(data_idx, int):
+            data_idx = [data_idx]
+
+        # --- 1. Collect parameters ---
+        params = []
+        for p in self.param_names:
+            if p == 'data_idx':
+                params.append(data_idx)
+                continue
+            val = getattr(DS, p)
+            # Only slice LazyAttr for per-row or vectorized functions
+            if isinstance(val, LazyAttr) and self.func_type in ["per-row", 
+                                                                "vectorized"]:
+                val = val[data_idx]
+            params.append(val)
+
+        # --- 2. Execute function based on func_type ---
+        if self.func_type == "global" or self.func_type == "global-res":
+            # No difference here, but kept for clarity
+            results = self.func(*params)
+            if not isinstance(results, tuple):
+                results = (results,)
+            if len(self.return_names) != len(results):
+                raise ValueError("Function return length does not match "
+                                 "number of return names.")
+            for name, val in zip(self.return_names, results):
+                setattr(DS, name, val)  # store as normal attribute, no LazyAttr
+
+        elif self.func_type == "vectorized":
+            print(params)
+            results = self.func(*params)
+            if not isinstance(results, tuple):
+                results = (results,)
+            if len(self.return_names) != len(results):
+                raise ValueError("Function return length does not match "
+                                 "number of return names.")
+            for name, val in zip(self.return_names, results):
+                if not hasattr(DS, name):
+                    setattr(DS, name, LazyAttr(DS, name)) 
+                getattr(DS, name)[data_idx] = val
+
+        elif self.func_type == "per-row":
+            results_per_row = [[] for _ in self.return_names]
+
+            # params are already sliced to match data_idx
+            for local_idx in range(len(data_idx)):
+                args_i = [p[local_idx] if isinstance(p, (list, np.ndarray)) \
+                          else p for p in params]
+                out_i = self.func(*args_i)
+                if not isinstance(out_i, tuple):
+                    out_i = (out_i,)
+                for r, v in enumerate(out_i):
+                    results_per_row[r].append(v)
+
+            # Assign to LazyAttr
+            if len(self.return_names) != len(results_per_row):
+                raise ValueError("Function return length does not match "
+                                 "number of return names.")
+            for name, val in zip(self.return_names, results_per_row):
+                if not hasattr(DS, name):
+                    setattr(DS, name, LazyAttr(DS, name)) 
+                getattr(DS, name)[data_idx] = val
+
+    def __repr__(self):
+        s = f"Pipeline Step: {self.name}"
+        s += f", Function: {self.func.__module__}.{self.func.__name__}"
+        return s
+    
+    def __str__(self):
+        s = f"Pipeline Step: {self.name}"
+        s += f"\n\tFunction: {self.func.__module__}.{self.func.__name__}"
+        s += f"\n\tInput Parameters: {self.param_names}"
+        s += f"\n\tOutput Parameters: {self.return_names}"
+        s += f"\n\tFunction Type: {self.func_type}"
+        return s
+
+# Problem -> how to deal with the fact that offres cm removal needs to be run on 
+# bins of frequencies 
+# How to deal with parameters that need to be None on the first run, but maybe 
+# should be enforced later
+
+################################ Default steps #################################
+# name, function, input parameter names, output parameter names, 
+# save, func_vectorized
+default_cal_steps =\
+(# calibration steps
+ ('rmv_gain_f', gain.remove_gain, 
+  ['ff', 'zf', 'p_amp', 'p_phase'], ['zf_rmv'], 'per-row'),
+
+ ('rmv_gain_t', gain.remove_gain, 
+  ['ft', 'zt', 'p_amp', 'p_phase'], ['zt_rmv'], 'per-row'),
+
+ ('center_f', circle.cent_rot_s21, 
+  ['zf_rmv', 'circ_origin', 'theta_phase_offset'], ['zf_cent'], 'per-row'),
+
+ ('center_t', circle.cent_rot_s21, 
+  ['zt_rmv', 'circ_origin', 'theta_phase_offset'], ['zt_cent'], 'per-row'),
+
+ ('get_theta_f', circle.convert_to_theta, 
+  ['zf_cent', 'unwrap_theta_f'], ['theta_f'], 'per-row'),
+
+ ('get_theta_t', circle.convert_to_theta, 
+  ['zt_cent', 'unwrap_theta_t'], ['theta_t'], 'per-row'),
+
+ ('get_x_f', lambda ff, ft: 1 - ff / ft, 
+  ['ff', 'ft'], ['x_f'], 'per-row'),
+
+ ('get_x_t', np.polyval, 
+  ['theta_t', 'poly_x'], ['x_t'], 'per-row'),
+# analysis steps
+ ('make_fr_spans', gain.make_fr_spans, 
+  ['fres_all', 'qres_all', 'fg'], ['fr_spans'], 'per-row'),
+
+ ('fit_gain', gain.fit_gain, 
+  ['fg', 'zg', 'fr_spans'], ['pamp', 'pphase', 'gain_mask'], 'per-row'),
+
+ ('fit_circ', circle.fit_iq_circle, 
+  ['zf_rmv', 'idx_circfit'], ['circ_origin', 'circ_radius'], 'per-row'),
+
+ ('get_theta_phase_offset', np.median, 
+  ['zt_rmv'], ['theta_phase_offset'], 'per-row'),
+
+ ('get_xcal_idx', xcal.get_xcal_idx,
+  ['ff', 'theta_f', 'theta_t', 'xcal_idx0_offset', 'xcal_idx1_offset', 
+   'xcal_std_cutoff'], ['xcal_idx'], 'per-row'),
+ ('cut_xf', lambda x, t, idx: (x[idx], t[idx]), 
+  ['x_f', 'theta_f', 'xcal_idx'], ['x_f_cut', 'theta_f_cut'], 'per-row'),
+
+ ('fit_x_theta', np.polyfit, 
+  ['x_f_cut', 'theta_f_cut', 'poly_x_deg'], ['poly_x'], 'per-row'),
+# extra steps
+ ('get_A_t', circle.convert_to_A, 
+  ['zt_cent'], ['A_t'], 'per-row'),
+ ('get_sparper', circle.get_spar_sper, 
+  ['theta_t', 'A_t', 'circ_radius', 'dt', 'sparper_get_freqs'], 
+  ['spar', 'sper'], 'per-row')
+)
+
+default_cal_steps = [plStep(*cs) for cs in default_cal_steps]
+
+# ('rmv_cm_offres', corr.remove_cm_complex, 
+# ['zt_rmv', 'aI', 'aQ', 'AI', 'AQ', 'cm_offres_idx', 'theta_cm_offres'],
+# ['zt_cm_rmv']),
+
+# ('calc_cm_offres', corr.calc_cm_complex, 
+# ['zt_rmv', 'theta_cm_offres', 'N_comp_offres', 'N_iter_offres', 'dt', 
+# 'lowpass_params_offres', 'highpass_params_offres', 'verbose'],
+# ['aI', 'aQ', 'AI', 'AQ', 'sigI_iter', 'sigQ_iter', 'aI_full', 'aQ_full', 
+# 'theta_cm_offres']),
+
+################################################################################
+#################################### Paths #####################################
+################################################################################
+def find_pl_path(tree, return_name):
+    """
+    Given a pipeline tree (as imported from calibration yaml file) and an output
+    name, return the execution path that produces the output.
+
+    Parameters:
+    tree (dict): Pipeline tree structure that passes check_pl_tree_structure().
+    return_name (str): Name of the desired output.
+
+    Returns:
+    path (list[plStep] or None): If found, list of plStep instances that must be
+        executed in order to produce the desired output. If not found, returns
+        None.
+    """
+    def is_seq(d):
+        """
+        Check if the given dictionary represents a sequence, i.e., all keys 
+        are digits.
+
+        Parameters:
+        d (dict): Dictionary to check.
+
+        Returns:
+        bool: True if d is a sequence, False otherwise.
+        """
+        isd = isinstance(d, dict)
+        return isd and all(k is not None and str(k).isdigit() for k in d.keys())
+
+    def execute_full_stepnode(node):
+        """
+        Return full execution expansion of this stepnode: step + all descendant 
+        work.
+
+        Parameters:
+        node (dict): stepnode dictionary with "task" key and possibly child 
+            sequences.
+
+        Returns:
+        path (list[plStep]): Full execution path of this stepnode and 
+            descendants.
+        """
+        step = node["task"]
+        path = [step]
+        sort_key = lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0
+        for k, child in sorted(node.items(), key = sort_key):
+            if k == "task":
+                continue
+            if is_seq(child):
+                sort_key = lambda kv: int(kv[0])
+                for _, child_stepnode in sorted(child.items(), key = sort_key):
+                    path.extend(execute_full_stepnode(child_stepnode))
+        return path
+
+    def contains_path_stepnode(node):
+        """
+        If this stepnode contains the output in itself or descendants,
+        return path from this stepnode to the matching leaf (list[plStep]).
+        Otherwise return None.
+        """
+        step = node["task"]
+        if return_name in getattr(step, "return_names", []):
+            return [step]
+
+        # search each child sequence in natural order; if found, prepend 
+        # this step
+        def sort_key(kv):
+            if kv[0] == "task":
+                return 0
+            elif str(kv[0]).isdigit():
+                return int(kv[0])
+            else:
+                return 9999
+            
+        for k, child in sorted(node.items(), key = sort_key):
+            if k == "task":
+                continue
+            if is_seq(child):
+                seq_res = contains_path_sequence(child)
+                if seq_res is not None:
+                    return [step] + seq_res
+        return None
+
+    def contains_path_sequence(seq):
+        """
+        If this sequence contains the output in itself or descendants,
+        return path from this sequence to the matching leaf (list[plStep]).
+        Otherwise return None.
+
+        Parameters:
+        seq (dict): sequence dictionary with digit keys and stepnode values.
+
+        Returns:
+        path (list[plStep] or None): Execution path to matching leaf, or None
+            if not found.
+        """
+        keys = sorted(seq.items(), key = lambda kv: int(kv[0]))
+        for idx, (key, stepnode) in enumerate(keys):
+            res = contains_path_stepnode(stepnode)
+            if res is not None:
+                # prepend full execution of all earlier steps in this sequence
+                pref = []
+                for prev_key, prev_node in keys[:idx]:
+                    pref.extend(execute_full_stepnode(prev_node))
+                return pref + res
+        return None
+
+    # Check input datatypes
+    assert type(return_name) == str, "return_name must be a string"
+    check_pl_tree_structure(tree) # confirm that the structure is valid
+    if not all([type(k) == str and k.endswith('_STEPS') for k in tree.keys()]):
+        raise ValueError('root keys must end with "_STEPS"')
+    
+    # Top-level: walk root keys
+    for root_val in tree.values():
+        if is_seq(root_val):
+            out = contains_path_sequence(root_val)
+            if out is not None:
+                return out
+    return None
+
+def check_pl_tree_structure(tree):
+    """
+    Recursively check that pipeline tree structure is valid.
+
+    Parameters:
+    tree (dict): Pipeline tree node to check.
+
+    Raises:
+    ValueError: If the tree structure is invalid.
+    """
+    # this function only excepts dictionary arguments
+    if not isinstance(tree, dict):
+        m = 'Pipeline tree node must be a dict or plStep instance.'
+        raise ValueError(m)
+    
+    # check if keys are integer sequence starting from 1
+    keys = list(tree.keys()) 
+    key_types = [type(k) for k in keys]
+    if any([k == int for k in key_types]):
+        if not all([k == int for k in key_types]):
+            m = 'Pipeline tree node with integer keys cannot '
+            m += 'have other key types.'
+            raise ValueError(m)
+        if not (sorted(keys) == list(range(1, len(keys) + 1))):
+            m = 'Pipeline tree node integer keys must start from 1 '
+            m += 'with a step size of 1.'
+            raise ValueError(m)
+        for key, val in tree.items():
+            if type(val) != dict or 'task' not in val.keys():
+                m = 'Pipeline tree stepnode must have a "task" key.'
+                raise ValueError(m)
+            check_pl_tree_structure(val)
+
+    # Otherwise keys must all be strings
+    elif any([k == str for k in key_types]):
+        # If any keys are strings, they must all be strings
+        if not all([k == str for k in key_types]):
+            m = 'Pipeline tree node with string keys cannot '
+            m += 'have other key types.'
+            raise ValueError(m)
+        # Check if task key is present, and corresponds to valid plStep instance
+        if 'task' in keys:
+            if not isinstance(tree['task'], plStep):
+                m = f"Pipeline task <{tree['task']}> is not a valid "
+                m += "plStep instance."
+                raise ValueError(m)
+        # Check if delete_input key is present, 
+        # and corresponds to 'all' or list of strings
+        # Need to check that list elements are valid for task
+        if 'delete_input' in keys:
+            if 'task' not in keys:
+                m = 'Pipeline tree "delete_input" key requires '
+                m += 'a corresponding "task" key.'
+                raise ValueError(m)
+            val = tree['delete_input']
+            if isinstance(val, list):
+                for v in val:
+                    if not isinstance(v, str):
+                        m = 'Pipeline tree "delete_input" list elements '
+                        m += 'must be strings.'
+                        raise ValueError(m)
+                    if v not in tree['task'].param_names:
+                        m = f'Pipeline tree "delete_input" value "{v}" '
+                        m += f'not found in "{tree["task"].name}" input names.'
+                        raise ValueError(m)
+            elif val != 'all':
+                m = f"Pipeline tree <delete_input: {val}> is not a valid list"
+                m += " of input names or 'all'."
+                raise ValueError(m)
+            
+        # Otherwise, key should be <>_STEPS sequence 
+        checked_keys = ['task', 'delete_input']
+        for k in checked_keys:
+            if k in keys:
+                keys.remove(k)
+        for key in keys:
+            if not key.endswith('_STEPS'):
+                m = f'Pipeline tree string keys must be in {checked_keys}'
+                m += f' or end with "_STEPS". '
+                m += f'Found invalid key: {key}'
+                raise ValueError(m)
+            check_pl_tree_structure(tree[key])
+
+def print_pl_path(paths, indent = 0):
+    """
+    Print calibration paths in a readable format.
+
+    Parameters:
+    paths (dict or list): The calibration paths to print.
+    indent (int): Current indentation level for nested structures.
+    """
+    if isinstance(paths, dict):
+        for key, val in paths.items():
+            print(f"{'  ' * indent}{key}:")
+            print_pl_path(val, indent + 1)
+    else:
+        p = '\n' + paths.__str__() 
+        p = p.replace('\n', f'\n{"  " * (indent + 1)}')[2:]
