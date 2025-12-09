@@ -27,6 +27,23 @@ class LazyAttr:
         Parameters:
         rows (list of int): List of row indices to ensure are loaded.
         """
+        # Type checks
+        if isinstance(rows, np.ndarray):
+            rows = rows.tolist()
+        if isinstance(rows, list):
+            if not all(isinstance(r, (int, np.integer)) for r in rows):
+                raise ValueError("all rows must be integers") 
+        else:
+            if not isinstance(rows, (int, np.integer)):   
+                raise ValueError("row must be an integer")
+            rows = [rows] # wrap single int in list
+
+        for r in rows:
+            if not isinstance(r, (int, np.integer)):
+                raise ValueError("all rows must be integers")
+            assert 0 <= r < self.DS.nres, "row index out of bounds"
+
+        # Determine which rows are missing
         missing = [r for r in rows if r not in self._cache]
         if not missing:
             return
@@ -95,12 +112,25 @@ class LazyAttr:
             self._cache[int(row_key)] = row  # update cache
             return
         else:
-            rows = [int(key)]
+            rows = [key]
             value = [value]  # wrap single value for iteration
 
-        # If value is not iterable and multiple rows, broadcast
-        if len(rows) != len(value):
-            value = [value[0]] * len(rows)
+        # key type checks
+        if not all([isinstance(r, (int, np.integer)) \
+                    for r in rows]):
+            raise ValueError("all rows must be integers")
+        for idx, r in enumerate(rows):
+            if r < 0:
+                rows[idx] = self.DS.nres + r
+            assert 0 <= rows[idx] < self.DS.nres, f"row index {r} out of bounds"
+
+        # Ensure value is iterable and matches length of rows
+        try:
+            iter(value)
+        except TypeError:
+            value = [value] * len(rows)
+        if len(value) != len(rows):
+            raise ValueError("Length of value does not match number of rows.") 
 
         for r, v in zip(rows, value):
             self._cache[r] = v

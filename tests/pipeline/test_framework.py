@@ -210,15 +210,95 @@ step2 = {'task': pf.plStep('step2', lambda x: x + 1,
                            ['b'], ['c'], 'per-row')}
 cal_pl = {'CAL_STEPS': {1: step1, 2: step2}}
 def test_lazyattr_ensure_loaded():
-    assert False, "working on this"
+    # assert False, "working on this"
     DS = DummyDSWithExecute(cal_pl) 
     rows = [1, 2] 
     DS.c._ensure_loaded(rows) # c and b are created, data_idx 1, 2 are cached
     assert isinstance(DS.b, pf.LazyAttr)
     assert isinstance(DS.c, pf.LazyAttr)
-    assert DS.b[1:3] == [2, 3]
-    assert DS.c[1] == 3
-    assert DS.c[2] == 4
+    assert DS.c._cache == {1: 3, 2: 4}
+    assert DS.b._cache == {1: 2, 2: 3}
+    DS.c._ensure_loaded(4)
+    assert DS.c._cache == {1: 3, 2: 4, 4: 6}
+    assert DS.b._cache == {1: 2, 2: 3, 4: 5}
+
+def test_lazyattr_ensure_loaded_invalid():
+    DS = DummyDSWithExecute(cal_pl) 
+    LA = pf.LazyAttr(DS, 'c')
+    with pytest.raises(ValueError): # rows not list or int
+        LA._ensure_loaded("not_a_list_or_int")
+    with pytest.raises(ValueError): # rows contain non-int
+        LA._ensure_loaded([1, 'a', 3])
+    with pytest.raises(AssertionError): # rows out of bounds
+        LA._ensure_loaded([-15, 2])
+    with pytest.raises(AssertionError): # rows out of bounds
+        LA._ensure_loaded([0, 10])
+    with pytest.raises(AttributeError):
+        DS.d._ensure_loaded([1,2]) # no path to d
+
+# __setitem__
+@pytest.mark.parametrize("rows,values,expected_cache", [
+    (slice(0, 2), [10, 20], {0: 10, 1: 20}), # slice
+    ([2, 4, 6], [30, 50, 70], {2: 30, 4: 50, 6: 70}), # list of idx
+    (np.array([3, 5], dtype = np.int32), [40, 60], 
+     {3: 40, 5: 60}), # np.ndarray of idx
+    (0, 5, {0: 5}), # single index
+    ([1, 2, 3], 10, {1: 10, 2: 10, 3: 10}), # multiple idx set to single value
+    (slice(1, 3), 10, {1: 10, 2: 10}), # multiple idx set to single value)
+    (-1, 100, {9: 100}), # negative index 
+    ([0, -2], [1, 2], {0: 1, 8: 2}), # negative index in list 
+    (slice(-3, None), [7, 8, 9], {7: 7, 8: 8, 9: 9}), # negative slice 
+    (slice(0, None), np.arange(10), {i: i for i in range(10)}), # full slice 
+    (slice(0, 4, 2), [11, 13], {0: 11, 2: 13}), # slice with step   
+])
+def test_lazyattr_setitem(rows, values, expected_cache):
+    LA = pf.LazyAttr(DS, 'test_attr')
+    # slice 
+    LA[rows] = values
+    assert LA._cache == expected_cache
+
+def test_lazy_attr_tuple():
+    LA = pf.LazyAttr(DS, 'test_attr')
+    LA[0] = [1, 2] 
+    LA[0, 1] = 3  
+    k = list(LA._cache.keys())
+    assert k == [0]
+    assert np.array_equal(LA._cache[0], [1, 3]) 
+    # 2D array 
+    LA[0] = np.array([[0], [1], [2]]) 
+    LA[0, 1, 0] = 3 
+    k = list(LA._cache.keys())
+    assert k == [0] 
+    assert np.array_equal(LA._cache[0], np.array([[0], [3], [2]]))
+
+@pytest.mark.parametrize("rows,values", [
+    ("invalid", [10, 20]), # invalid rows type
+    ([1, 'a', 3], [10, 20, 30]), # non-int in rows
+    ([0, 10], [10, 20]), # row out of bounds
+    ([1, 2], [10, 20, 30]), # values length does not match rows length
+    (slice(0, 3), [10, 20]), # values length does not match rows length
+    ((0, 1), [10, 20]), # tuple called when internal array isn't initialized
+])
+def test_lazyattr_setitem_invalid(rows, values):
+    LA = pf.LazyAttr(DS, 'test_attr')
+    with pytest.raises((AssertionError, ValueError, TypeError, AttributeError)):
+        LA[rows] = values
+
+# __getitem__
+def test_lazyattr_getitem():
+    DS = DummyDSWithExecute(cal_pl) 
+    DS.c = pf.LazyAttr(DS, 'c')
+    # set up LazyAttr with some cached values
+    LA = pf.LazyAttr(DS, 'test_attr')
+    LA._cache = {0: 10, 1: 20, 2: 30, 3: 40, 4: 50}
+    assert False, 'Working on this'
+    # get single index
+
+    # get list of indices
+
+    # get list with repeated indices
+
+    # Ensure cached item is not recomputed
     
 
 
