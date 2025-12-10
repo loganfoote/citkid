@@ -10,7 +10,7 @@ dependencies:
   - tqdm=4.67.1
   - numpy=2.3.5
   - matplotlib=3.10.8
-  - python=3.13.9
+  - python=3.12
   - pyfftw=0.15.1
   - numba=0.62.1
   - ipywidgets=8.1.8
@@ -21,6 +21,7 @@ dependencies:
   - paramiko=4.0.0
   - redis=3.5.3
   - pip=25.3:
+  - pip:
     - -e .
   - pytest=9.0.1
-  - zarr=3.1.5
+  - zarr=2.18.6

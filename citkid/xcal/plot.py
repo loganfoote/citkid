@@ -3,28 +3,7 @@ import matplotlib.pyplot as plt
 import matplotlib 
 matplotlib.use('Agg')
 # use rasterized = True for noise 
-
-def plot_circle(z, A, B, R):
-    """
-    Plots IQ data with a circular fit
-
-    Parameters:
-    z (np.array): complex IQ data
-    A, B (float, float): circle origin
-    R (float): circle radius
-
-    Returns:
-    fig, ax (pyplot figure and axis): data and fit plot
-    """
-    z = np.asarray(z, dtype = np.complex128) 
-    fig, ax = plt.subplots(figsize = (3, 3), dpi = 72)
-    ax.set(xlabel = 'I', ylabel = 'Q')
-    ax.set_aspect('equal', adjustable = 'datalim')
-    ax.plot(np.real(z), np.imag(z), '.', color = plt.cm.viridis(0.5), 
-            aa = False)
-    cir = plt.Circle((A, B), R, color = 'k', fill = False, aa = False)
-    ax.add_patch(cir)
-    return fig, ax
+from ..noise.psd import bin_psd
 
 def plot_gain_fit(f, z, mask, p_amp, p_phase):
     """
@@ -104,10 +83,11 @@ def plot_s21(f, z, zt = None, fg = None, zg = None):
     fmean = np.mean(f) 
 
     # Set up plots
-    fig, axs = plt.subplots(1, 2, figsize = [6, 4], layout = 'tight', dpi = 72)
+    fig, axs = plt.subplots(1, 2, figsize = [6, 3], layout = 'tight', dpi = 72)
     xlbl = f'(f - {fmean / 1e6:.02f} MHz) (kHz)'
     axs[0].set(xlabel = xlbl, ylabel = r'$S_{21}$ (dB)')
-    axs[1].set(xlabel = 'I', ylabel = 'Q', aspect = 'equal')
+    axs[1].set(xlabel = 'I', ylabel = 'Q', aspect = 'equal', 
+               adjustable = 'datalim')
 
     # Plot gain sweep data
     if fg is not None:
@@ -131,4 +111,152 @@ def plot_s21(f, z, zt = None, fg = None, zg = None):
         axs[1].plot(zt.real, zt.imag, '.', color = plt.cm.viridis(0.67), 
                     aa = False, rasterized = True, label = 'Noise')
     axs[1].legend(loc = 'center', framealpha = 1)
+    return fig, axs
+
+def plot_circfit(z, origin, radius, zt = None, mask = None):
+    """
+    Plots IQ data with a circular fit.
+
+    Parameters:
+    z (np.array): complex IQ data.
+    origin (complex): circle origin.
+    radius (float): circle radius.
+    zt (np.array, complex128 or None): timestream complex S21 data, or None to 
+        omit from plot.
+    mask (np.array, bool or None): mask of z used for fitting. If None, all
+        data points were used.
+
+    Returns:
+    fig, ax (pyplot figure and axis): data and fit plot.
+    """
+    z = np.asarray(z, dtype = np.complex128) 
+    assert isinstance(origin, (complex, np.complexfloating, 
+                               np.floating, np.integer, float, int)), \
+        "origin must be complex."
+    assert isinstance(radius, (float, np.floating)), \
+        "radius must be float." 
+    if mask is not None:
+        mask = np.asarray(mask, dtype = np.bool_)
+        z_cut = z[mask]
+    else:
+        z_cut = None
+    
+    fig, ax = plt.subplots(figsize = (3, 3), layout = 'tight', dpi = 72)
+    ax.set(xlabel = 'I', ylabel = 'Q')
+    ax.set(aspect = 'equal', adjustable = 'datalim')
+    ax.plot(np.real(z), np.imag(z), 'o', color = plt.cm.viridis(0.), 
+            aa = False, label = 'data')
+    if z_cut is not None:
+        ax.plot(np.real(z_cut), np.imag(z_cut), 'o', 
+                color = plt.cm.viridis(0.33), aa = False, label = 'fit data')
+    
+    cir = plt.Circle((origin.real, origin.imag), radius, color = 'k', 
+                     fill = False, aa = False)
+    ax.add_patch(cir)
+    ax.plot([], [], '-k', label = 'fit')
+
+    if zt is not None:
+        zt = np.asarray(zt, dtype = np.complex128) 
+        ax.plot(zt.real, zt.imag, '.', color = plt.cm.viridis(0.67), 
+                aa = False, rasterized = True, label = 'Noise')
+        
+    ax.legend(loc = 'center', framealpha = 1)
+    return fig, ax
+
+def plot_sparper(f, spar, sper, nbins, fmin):
+    """
+    Plots binned parallel and perpendicular noise PSDs vs frequency.
+
+    Parameters:
+    f (np.array, float64): frequency data in Hz.
+    spar (np.array, float64): spar data in dB.
+    sper (np.array, float64): sper data in dB.
+    nbins (int): number of bins for sparper histogram.
+    fmin (float): minimum frequency for sparper histogram in Hz.
+
+    Returns:
+    fig, ax (pyplot figure and axis): sparper plot.
+    """
+    f = np.asarray(f, dtype = np.float64)
+    spar = np.asarray(spar, dtype = np.float64)
+    sper = np.asarray(sper, dtype = np.float64)
+    assert f.shape == spar.shape == sper.shape, \
+        "f, spar, and sper must be the same shape." 
+    
+    # bin PSDs 
+    f, spar, sper = bin_psd(f, [f, spar, sper], nbins = nbins, fmin = fmin)
+
+    # plot
+    fig, ax = plt.subplots(figsize = [5, 3], layout = 'tight', dpi = 72) 
+    ax.set(ylabel = 'S (dBc/Hz)', xlabel = 'Frequency (Hz)')
+    ax.set(xscale = 'log')
+    ax.plot(f, spar, color = plt.cm.viridis(0.33), aa = False, label = 'PAR')
+    ax.plot(f, sper, color = plt.cm.viridis(0.67), aa = False, label = 'PER')
+    ax.legend(framealpha = 1)
+    return fig, ax
+
+def plot_xcal(thetaf, xf, zf_cent, xcal_mask, poly_x, thetat = None, 
+              zt_cent = None):
+    """
+    Plots x vs theta calibration data and IQ data with fit overlayed. 
+
+    Parameters:
+    thetaf (np.array, float64): fine sweep theta data.
+    xf (np.array, float64): fine sweep x data.
+    zf_cent (np.array, complex128): fine sweep centered IQ data.
+    xcal_mask (np.array, bool): mask of fine sweep data used for x calibration.
+    poly_x (np.array, float64): polynomial fit parameters for x vs theta.
+    thetat (np.array, float64 or None): timestream theta data, or None to omit
+        from plot.
+    zt_cent (np.array, complex128 or None): timestream centered IQ data, or 
+        None to omit from plot.
+
+    Returns:
+    fig, axs (pyplot figure and axis): x vs theta and IQ data plot.
+    """
+    # check datatypes and shapes
+    thetaf = np.asarray(thetaf, dtype = np.float64)
+    xf = np.asarray(xf, dtype = np.float64)
+    xcal_mask = np.asarray(xcal_mask, dtype = np.bool_)
+    if thetat is not None:
+        thetat = np.asarray(thetat, dtype = np.float64)
+        assert thetat.ndim == 1
+    poly_x = np.asarray(poly_x, dtype = np.float64)
+    zf_cent = np.asarray(zf_cent, dtype = np.complex128)
+    if zt_cent is not None:
+        zt_cent = np.asarray(zt_cent, dtype = np.complex128)
+    assert thetaf.shape == xf.shape
+    assert np.all((xcal_mask >= 0) & (xcal_mask < len(thetaf)))
+    assert poly_x.ndim == 1
+   
+    # cut fine sweep data for fit
+    thetaf_cut, xf_cut = thetaf[xcal_mask], xf[xcal_mask]
+    zf_cut = zf_cent[xcal_mask]
+
+    # set up subplots
+    fig, axs = plt.subplots(1, 2, figsize = [6, 3], layout = 'tight', dpi = 72)
+    axs[0].set(xlabel = 'theta', ylabel = 'x (kHz / GHz)')
+    axs[1].set(xlabel = 'I', ylabel = 'Q', 
+               aspect = 'equal', adjustable = 'datalim')
+    
+    # plot x vs theta cal data
+    axs[0].plot(thetaf_cut, xf_cut * 1e6, 'o', color = plt.cm.viridis(0.33), 
+                aa = False)
+    tsamp = np.linspace(min(thetaf_cut), max(thetaf_cut), 60)
+    axs[0].plot(tsamp, np.polyval(poly_x, tsamp) * 1e6, '--k', aa = False)
+    if thetat is not None:
+        axs[0].plot(thetat, np.polyval(poly_x, thetat) * 1e6, '.', 
+                color = plt.cm.viridis(0.67), aa = False, rasterized = True)
+
+    # plot IQ data
+    axs[1].plot(zf_cent.real, zf_cent.imag, 'o', color = plt.cm.viridis(0.), 
+                aa = False, label = 'full fine sweep') 
+    axs[1].plot(zf_cut.real, zf_cut.imag, 'o', color = plt.cm.viridis(0.33), 
+                aa = False, label = 'fit fine sweep') 
+    if zt_cent is not None:
+        axs[1].plot(zt_cent.real, zt_cent.imag, '.', 
+                    color = plt.cm.viridis(0.67), aa = False, 
+                    rasterized = True, label = 'timestream')
+    axs[1].plot([], [], '--k', label = 'fit')
+    axs[1].legend(framealpha = 1)
     return fig, axs

@@ -3,10 +3,10 @@ import numpy as np
 ################################################################################
 ##################### Cut fine sweep for fitting x vs theta ####################
 ################################################################################
-def get_xcal_idx(ff, theta_f, theta_t, idx0_offset = 7, idx1_offset = 5,
-                std_cutoff = 12):
+def get_xcal_mask(ff, theta_f, theta_t, idx0_offset = 3, idx1_offset = 7,
+                  std_cutoff = 12):
     """
-    Get incides of the fine s21 sweep over which x vs theta should be fit to 
+    Get mask of the fine s21 sweep over which x vs theta should be fit to 
     produce the x calibration. Chooses the indices where theta_f (after glitch 
     removal) falls within the min and max values of theta_t, with optional 
     offsets.
@@ -24,7 +24,7 @@ def get_xcal_idx(ff, theta_f, theta_t, idx0_offset = 7, idx1_offset = 5,
             min values. If None, no cutoff is applied.
 
     Returns:
-    idx (array-like, int64): indices of theta_f.
+    mask (array-like, bool): mask of theta_f.
     """
     # format and sort inputs
     ff = np.asarray(ff, dtype = np.float64)
@@ -61,5 +61,6 @@ def get_xcal_idx(ff, theta_f, theta_t, idx0_offset = 7, idx1_offset = 5,
     idx1 = min(len(theta_f) - 1, idx1 + idx1_offset)
     if idx1 < idx0:
         idx1 = idx0 - 1
-    idx = np.arange(idx0, idx1 + 1, 1, dtype = np.int32)
-    return idx
+    mask = np.ones(len(ff), dtype = bool) * False 
+    mask[idx0:idx1 + 1] = True
+    return mask

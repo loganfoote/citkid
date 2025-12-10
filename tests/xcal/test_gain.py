@@ -144,6 +144,7 @@ def test_make_fr_spans(fres_all, qres_all, fg, fr_spans_exp):
     (['a'], [1e9], [1e9, 1.1e9]),     # fres_all not numeric
     ([1e9], ['a'], [1e9, 1.1e9]),     # qres_all not numeric
     ([1e9], [1e9], ['a']),            # fg not numeric  
+    ([2e9, 1e9], [1e9, 1e9], [1.1e9, 1e9]),  # fg not sorted
 ])
 def test_make_fr_spans_invalid_input(fres_all, qres_all, fg):
     with pytest.raises(Exception):

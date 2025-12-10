@@ -321,17 +321,17 @@ default_cal_steps =\
  ('center_t', circle.cent_rot_s21, 
   ['zt_rmv', 'circ_origin', 'theta_phase_offset'], ['zt_cent'], 'per-row'),
 
- ('get_theta_f', circle.convert_to_theta, 
-  ['zf_cent', 'unwrap_theta_f'], ['theta_f'], 'per-row'),
+ ('get_thetaf', circle.convert_to_theta, 
+  ['zf_cent', 'unwrap_thetaf'], ['thetaf'], 'per-row'),
 
- ('get_theta_t', circle.convert_to_theta, 
-  ['zt_cent', 'unwrap_theta_t'], ['theta_t'], 'per-row'),
+ ('get_thetat', circle.convert_to_theta, 
+  ['zt_cent', 'unwrap_thetat'], ['thetat'], 'per-row'),
 
- ('get_x_f', lambda ff, ft: 1 - ff / ft, 
-  ['ff', 'ft'], ['x_f'], 'per-row'),
+ ('get_xf', lambda ff, ft: 1 - ff / ft, 
+  ['ff', 'ft'], ['xf'], 'per-row'),
 
- ('get_x_t', np.polyval, 
-  ['theta_t', 'poly_x'], ['x_t'], 'per-row'),
+ ('get_xt', np.polyval, 
+  ['thetat', 'poly_x'], ['xt'], 'per-row'),
 # analysis steps
  ('make_fr_spans', gain.make_fr_spans, 
   ['fres_all', 'qres_all', 'fg'], ['fr_spans'], 'per-row'),
@@ -345,21 +345,21 @@ default_cal_steps =\
  ('get_theta_phase_offset', np.median, 
   ['zt_rmv'], ['theta_phase_offset'], 'per-row'),
 
- ('get_xcal_idx', xcal.get_xcal_idx,
-  ['ff', 'theta_f', 'theta_t', 'xcal_idx0_offset', 'xcal_idx1_offset', 
-   'xcal_std_cutoff'], ['xcal_idx'], 'per-row'),
- ('cut_xf', lambda x, t, idx: (x[idx], t[idx]), 
-  ['x_f', 'theta_f', 'xcal_idx'], ['x_f_cut', 'theta_f_cut'], 'per-row'),
-
+ ('get_xcal_mask', xcal.get_xcal_mask,
+  ['ff', 'thetaf', 'thetat', 'xcal_idx0_offset', 'xcal_idx1_offset', 
+   'xcal_std_cutoff'], ['xcal_mask'], 'per-row'),
+ ('cut_xf', lambda x, t, mask: (x[mask], t[mask]), 
+  ['xf', 'thetaf', 'xcal_mask'], ['xf_cut', 'thetaf_cut'], 'per-row'),
  ('fit_x_theta', np.polyfit, 
-  ['x_f_cut', 'theta_f_cut', 'poly_x_deg'], ['poly_x'], 'per-row'),
+  ['xf_cut', 'thetaf_cut', 'poly_x_deg'], ['poly_x'], 'per-row'),
 # extra steps
- ('get_A_t', circle.convert_to_A, 
-  ['zt_cent'], ['A_t'], 'per-row'),
+ ('get_At', circle.convert_to_A, 
+  ['zt_cent'], ['At'], 'per-row'),
  ('get_sparper', circle.get_spar_sper, 
-  ['theta_t', 'A_t', 'circ_radius', 'dt', 'sparper_get_freqs'], 
+  ['thetat', 'At', 'circ_radius', 'dt', 'sparper_get_freqs'], 
   ['spar', 'sper'], 'per-row')
 )
+
 
 default_cal_steps = [plStep(*cs) for cs in default_cal_steps]
 

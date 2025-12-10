@@ -152,7 +152,7 @@ def make_fr_spans(fres_all, qres_all, fg):
     Parameters:
     fres_all (np.array, float64, (M,)): all resonant frequencies in Hz.
     qres_all (np.array, float64, (M,)): all resonator quality factors.
-    fg (np.array, float64, (N,)): gain frequency data in Hz.
+    fg (np.array, float64, (N,)): gain frequency data in Hz. Must be sorted!
 
     Returns:
     fr_spans (list): values are tuples (float64, float64) where the first value.
@@ -163,6 +163,8 @@ def make_fr_spans(fres_all, qres_all, fg):
     qres_all = np.asarray(qres_all, dtype = np.float64)
     m = 'fres_all and qres_all must be the same length'
     assert fres_all.shape == qres_all.shape, m
+    if fg[0] > fg[-1]:
+        raise ValueError('fg must be sorted in ascending order')
     fg = np.asarray(fg, dtype = np.float64)
 
     fr_spans = []
@@ -174,4 +176,4 @@ def make_fr_spans(fres_all, qres_all, fg):
         if (fr + span / 2 < fg[0]) or (fr - span / 2 > fg[-1]):
             continue
         fr_spans.append((fr, span))
-    return fr_spans
+    return np.asarray(fr_spans, dtype = np.float64)

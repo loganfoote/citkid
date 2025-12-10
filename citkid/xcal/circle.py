@@ -24,7 +24,7 @@ def circle_objective(params, x, y):
     error = sum(((x - A) ** 2 + (y - B) ** 2 - R ** 2) ** 2)
     return error
 
-def fit_iq_circle(z, idx = None):
+def fit_iq_circle(z, mask = None):
     """
     Fits an IQ loop to a circle. The function describing the circle is
 
@@ -34,7 +34,7 @@ def fit_iq_circle(z, idx = None):
 
     Parameters:
     z (np.array, complex128): complex S21 data.
-    idx (np.array, int64 or None): indices of z to use for fitting. If None,
+    mask (np.array, bool or None): mask of z to use for fitting. If None,
         all data points are used.
 
     Returns:
@@ -42,9 +42,9 @@ def fit_iq_circle(z, idx = None):
     radius (float): radius of the fitted circle.
     """
     z = np.asarray(z, dtype = np.complex128)
-    if idx is not None:
-        idx = np.asarray(idx, dtype = np.uint32)
-        z = z[idx]
+    if mask is not None:
+        mask = np.asarray(mask, dtype = np.bool_)
+        z = z[mask]
     if not np.all(np.isfinite(z)):
         raise ValueError("Input data contains non-finite values.")
     if not len(z) >= 3:
