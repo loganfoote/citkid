@@ -28,17 +28,17 @@ def remove_gain(f, z, p_amp, p_phase):
 
 def get_res_mask(f, fr_spans):
     """
-    Creates a mask for cutting resonances out of a gain sweep. 
+    Creates a mask for cutting resonances out of a gain sweep.
 
     Parameters:
-    f (np.array, float64): gain sweep frequency data in Hz. 
+    f (np.array, float64): gain sweep frequency data in Hz.
     fr_spans (list): values are tuples (float64, float64) where the first value.
-        is the resonant frequency in Hz and the second is the span. These 
+        is the resonant frequency in Hz and the second is the span. These
         frequency ranges are removed from the gain data.
 
     Returns:
     mask (np.array, bool): mask for f where False values are resonances to cut
-        from the data. 
+        from the data.
     """
     f = np.asarray(f, dtype = np.float64)
     for c, s in fr_spans:
@@ -46,7 +46,7 @@ def get_res_mask(f, fr_spans):
         assert isinstance(s, (int, float)), 'Span must be numeric'
         if s < 0:
             raise ValueError('Span must be positive')
-        
+
     ### Calculate resonance mask
     intervals = np.array([(c - s / 2, c + s / 2) for c, s in fr_spans])
     if intervals.shape[0]:
@@ -74,7 +74,7 @@ def fit_gain(f, z, fr_spans):
     f (np.array, float64, (N,)): gain frequency array in Hz.
     z (np.array, complex128, (N,)): gain complex S21 array.
     fr_spans (list): values are tuples (float64, float64) where the first value.
-        is the resonant frequency in Hz and the second is the span. These 
+        is the resonant frequency in Hz and the second is the span. These
         frequency ranges are removed from the gain data.
 
     Returns:
@@ -98,7 +98,7 @@ def fit_gain(f, z, fr_spans):
             raise ValueError('Incorrect fr_spans format')
         if r[1] < 0:
             raise ValueError('Span must be positive')
-    
+
     # Cut out resonances
     mask = get_res_mask(f, fr_spans)
     f, z = f[mask], z[mask]
@@ -108,7 +108,7 @@ def fit_gain(f, z, fr_spans):
 
     ### Convert to dB, phase
     dB = 20 * np.log10(np.abs(z))
-    phase = np.unwrap(2 * np.angle(z)) / 2
+    phase = np.unwrap(np.angle(z))
 
     ### Fit
     try:
@@ -156,7 +156,7 @@ def make_fr_spans(fres_all, qres_all, fg):
 
     Returns:
     fr_spans (list): values are tuples (float64, float64) where the first value.
-        is the resonant frequency in Hz and the second is the span. These 
+        is the resonant frequency in Hz and the second is the span. These
         frequency ranges are removed from the gain data.
     """
     fres_all = np.asarray(fres_all, dtype = np.float64)
