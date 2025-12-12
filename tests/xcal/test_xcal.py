@@ -3,7 +3,7 @@ import pytest
 import numpy as np
 
 ################################################################################
-################################# get_xcal_ix #################################
+################################# get_xcal_mask #################################
 ################################################################################
 # Need to add empty list
 ffine = np.arange(0, 100, 1, dtype = np.float64)
@@ -42,15 +42,14 @@ ffine2, tfine2 = np.flip(ffine), np.flip(tfine)
     (ffine, tfine1, tnoise, 0, 0, None, np.arange(39, 62, 1, dtype = np.int32)),
     ([], [], [2.5], 0, 0, None, np.array([], dtype = np.int32)),
 ])
-def test_get_xcal_idx(ffine, tfine, tnoise, ix0_offset, ix1_offset, 
+def test_get_xcal_mask(ffine, tfine, tnoise, ix0_offset, ix1_offset, 
                       std_cutoff, ix_exp):
-    ix = xcal.get_xcal_idx(ffine, tfine, tnoise, 
-                           ix0_offset, ix1_offset, std_cutoff)
-    assert isinstance(ix, np.ndarray)
-    assert ix.dtype == np.int32
-    assert np.allclose(ix, ix_exp)
+    mask = xcal.get_xcal_mask(ffine, tfine, tnoise, 
+                              ix0_offset, ix1_offset, std_cutoff)
+    assert isinstance(mask, np.ndarray)
+    assert mask.dtype in (bool, np.bool_)
+    assert np.allclose(np.where(mask)[0], ix_exp)
     
-
 @pytest.mark.parametrize("ffine,tfine,tnoise,ix0_offset,ix1_offset,std_cutoff", [
     (['a', 1, 2], [1, 2, 3], [2], 1, 1, None),  # non-numeric ffine
     ([1, 2, 3], ['a', 2, 3], [2], 1, 1, None),  # non-numeric tfine

@@ -3,6 +3,7 @@ import numpy as np
 from citkid.pipeline import framework as pf 
 from citkid.pipeline import dataset as dataset
 
+# Finished LazyAttr, Paths. Need to finish Steps and do IndexMappedParam
 # Dummy DataSet class 
 class DummyDS():
     def __init__(self):
@@ -291,16 +292,45 @@ def test_lazyattr_getitem():
     # set up LazyAttr with some cached values
     LA = pf.LazyAttr(DS, 'test_attr')
     LA._cache = {0: 10, 1: 20, 2: 30, 3: 40, 4: 50}
-    assert False, 'Working on this'
-    # get single index
-
-    # get list of indices
-
-    # get list with repeated indices
-
-    # Ensure cached item is not recomputed
     
-
+    # get single index
+    assert LA[2] == 30 
+    assert DS.c[2] == 4 # executes 
+    DS.c._cache = {2: 5} 
+    assert DS.c[2] == 5 # from cache, doesn't execute again
+    DS.c._cache = {}
+    # get list of indices
+    assert np.array_equal(LA[[2, 3]], [30, 40])
+    assert np.array_equal(DS.c[[1, 2, 3]], [3, 4, 5]) 
+    DS.c._cache = {1: 4, 2: 5, 3: 6} 
+    assert np.array_equal(DS.c[[1, 2, 3]], [4, 5, 6])
+    DS.c._cache = {}
+    # negative index 
+    assert DS.c[-1] == 11 # index 9
+    # get np.ndarray of indices
+    assert np.array_equal(LA[np.array([2, 3])], [30, 40])
+    assert np.array_equal(DS.c[np.array([1, 2, 3])], [3, 4, 5]) 
+    DS.c._cache = {1: 4, 2: 5, 3: 6} 
+    assert np.array_equal(DS.c[np.array([3, 2, 1])], [6, 5, 4]) # reversed list 
+    DS.c._cache = {} 
+    # get list with repeated indices
+    assert np.array_equal(LA[[2, 2, 3]], [30, 30, 40])
+    assert np.array_equal(DS.c[[2, 2, 3]], [4, 4, 5])
+    # slice 
+    assert np.array_equal(LA[slice(2, 4)], [30, 40])
+    assert np.array_equal(DS.c[slice(1, 4)], [3, 4, 5]) 
+    assert np.array_equal(DS.c[slice(-4, None)], [8, 9, 10, 11])# negative slice
+    # full slice
+    assert np.array_equal(DS.c[slice(0, None)], 
+                          [2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+    # slice with step   
+    assert np.array_equal(LA[slice(0, 5, 2)], [10, 30, 50])
+    assert np.array_equal(DS.c[slice(0, 5, 2)], [2, 4, 6])
+    # tuple indexing
+    LA._cache = {0: [0, 1, 2, 3]}
+    assert LA[0, 2] == 2 
+    LA._cache = {0: np.array([[0, 1], [2, 3], [4, 5]])} # 2D array
+    assert LA[0, 1, 0] == 2
 
 ################################################################################
 ################################# find_pl_path #################################
@@ -380,5 +410,4 @@ def test_check_pl_tree_structure_invalid(path):
     with pytest.raises(ValueError):
         pf.check_pl_tree_structure(path)
 
-# find_pl_path
 # print_pl_path -> don't really need to test this 

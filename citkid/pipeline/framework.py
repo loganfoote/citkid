@@ -68,19 +68,29 @@ class LazyAttr:
         np.ndarray (N) or (M, N)): Retrieved value(s), where N is the length of 
         the data for a single row, and M is the number of rows requested.
         """
-        if isinstance(key, tuple):
-            row_key, inner_key = key[0], key[1]
-            row = self[row_key]          # load row normally
-            return row[inner_key]        # then index inside the row
-        elif isinstance(key, slice):
+        return_array = True
+        # Allow assignment to one row or multiple rows
+        if isinstance(key, slice):
             rows = list(range(*key.indices(self.DS.nres)))
-            return_array = True
         elif isinstance(key, (list, np.ndarray)):
             rows = list(key)
-            return_array = True
+        elif isinstance(key, tuple):
+            row_key, inner_key = key[0], key[1:]
+            if len(inner_key) == 1:
+                inner_key = inner_key[0]
+            return self[row_key][inner_key]
         else:
-            rows = [int(key)]
+            rows = [key]
             return_array = False
+
+        # key type checks
+        if not all([isinstance(r, (int, np.integer)) \
+                    for r in rows]):
+            raise ValueError("all rows must be integers")
+        for idx, r in enumerate(rows):
+            if r < 0:
+                rows[idx] = self.DS.nres + r
+            assert 0 <= rows[idx] < self.DS.nres, f"row index {r} out of bounds"
 
         self._ensure_loaded(rows)
 
@@ -106,7 +116,9 @@ class LazyAttr:
         elif isinstance(key, (list, np.ndarray)):
             rows = list(key)
         elif isinstance(key, tuple):
-            row_key, inner_key = key[0], key[1]
+            row_key, inner_key = key[0], key[1:]
+            if len(inner_key) == 1:
+                inner_key = inner_key[0]
             row = self[row_key]          # load row normally
             row[inner_key] = value       # then set inside the row
             self._cache[int(row_key)] = row  # update cache

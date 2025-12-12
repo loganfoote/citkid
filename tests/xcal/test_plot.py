@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
     (np.array([-1-1j, -2-2j, -3-3j]), 1.0, 1.0, 4.0),
 ])  
 def test_plot_circle(z, A, B, R):
-    fig, ax = plot.plot_circle(z, A, B, R)
+    fig, ax = plot.plot_circfit(z, A, B, R)
     assert fig is not None
     assert ax is not None   
     assert hasattr(fig, 'canvas')
@@ -29,7 +29,7 @@ def test_plot_circle(z, A, B, R):
 ])  
 def test_plot_circle_invalid_input(z, A, B, R):
     with pytest.raises(Exception):
-        plot.plot_circle(z, A, B, R)
+        plot.plot_circfit(z, A, B, R)
 
 ################################################################################
 ################################ plot_gain_fit #################################
