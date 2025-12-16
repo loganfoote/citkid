@@ -35,7 +35,7 @@ def get_xcal_mask(ff, theta_f, theta_t, idx0_offset = 3, idx1_offset = 7,
     assert len(ff) == len(theta_f), \
         "ff and theta_f must have the same length."
     if len(ff) == 0:
-        return np.array([], dtype = np.int32)
+        return np.array([], dtype = bool)
     idx = np.argsort(ff)
     ff, theta_f = ff[idx], theta_f[idx] 
 

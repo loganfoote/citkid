@@ -41,6 +41,7 @@ def fit_iq_circle(z, mask = None):
     origin (complex): center of the fitted circle.
     radius (float): radius of the fitted circle.
     """
+    # input validation and masking
     z = np.asarray(z, dtype = np.complex128)
     if mask is not None:
         mask = np.asarray(mask, dtype = np.bool_)
@@ -49,10 +50,16 @@ def fit_iq_circle(z, mask = None):
         raise ValueError("Input data contains non-finite values.")
     if not len(z) >= 3:
         raise ValueError("At least 3 data points are required for fitting.")
+    
+    # get x0
     i, q = z.real, z.imag
     x0 = [(max(i) + min(i))/2, (max(q) + min(q))/2]
     x0.append((max(i) - min(i) + max(q) - min(q)) / 4)
+
+    # perform minimization
     popt = optimize.fmin(circle_objective, x0, (i, q), disp = 0)
+
+    # decompose popt
     origin = popt[0] + 1j * popt[1]
     radius = popt[2]
     return origin, radius

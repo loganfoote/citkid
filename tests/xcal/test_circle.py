@@ -20,22 +20,26 @@ matplotlib.use("Agg")
     ([1, 10, 1j, -1, -1j, 10], [0, 2, 3, 4], [0, 0, 1]),
 ])
 def test_fit_iq_circle_gain(z, idx, popt_exp):
-    origin, radius = circle.fit_iq_circle(z, idx)
+    mask = np.ones(len(z), dtype = np.bool_)
+    if idx is not None:
+        mask[:] = False
+        mask[idx] = True
+    origin, radius = circle.fit_iq_circle(z, mask)
     assert np.allclose([origin.real, origin.imag, radius], popt_exp)
     
-@pytest.mark.parametrize("z,idx", [
+@pytest.mark.parametrize("z,mask", [
     ([], None),  # empty input
     ([np.nan, 1, -1, 1j], None),  # nan input
     (['a', 1, -1, 1j], None),  # non-numeric input
     ([1, 1j], None),  # less than 3 points
-    ([1, 1j, -1, -1j], [0, 1]),  # less than 3 points with idx 
-    ([1, 1j, -1, -1j], ['a']),  # non-numeric idx
-    ([1, 1j, -1, -1j], [0, 5]),  # idx out of bounds
-    ([1, 1j, -1, -1j], [0, -1]) # negative idx
+    ([1, 1j, -1, -1j], [True, True, False, False]),  # less than 3 points after 
+                                                     # masking
+    ([1, 1j, -1, -1j], [True] * 5),  # wrong length mask
+    ([1, 1j, -1, -1j], [True] * 2),  # wrong length mask
 ])
-def test_fit_iq_circle_invalid_input(z, idx):
+def test_fit_iq_circle_invalid_input(z, mask):
     with pytest.raises(Exception):
-        circle.fit_iq_circle(z, idx)
+        circle.fit_iq_circle(z, mask)
 
 ################################################################################
 ################################# cent_rot_s21 #################################

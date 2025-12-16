@@ -2,7 +2,7 @@ from scipy.signal import butter, filtfilt
 import warnings
 
 warnings.warn('The citkid.noise.timestream_filter module is deprecated and will be '\
-              'removed in a future release. Please use the citkid.xcal.ts_filt '\
+              'removed in a future release. Please use the citkid.signal.filter '\
               'module for timestream processing functions.', 
               DeprecationWarning)
 
