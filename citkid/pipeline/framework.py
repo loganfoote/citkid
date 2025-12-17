@@ -156,37 +156,6 @@ class LazyAttr:
         return s
 
 ################################################################################
-########################### Index Mapped Parameter #############################
-################################################################################
-class IndexMappedParam:
-    def __init__(self, base_attr, index_map):
-        """
-        Wrapper to map indices from a base attribute to another set of indices.
-
-        Parameters:
-        base_attr (LazyAttr or np.ndarray): The base attribute to map from.
-        index_map (list or np.ndarray): The mapping from desired indices to base
-            attribute indices.
-        """
-        self.base = base_attr
-        self.map = index_map
-
-    def __getitem__(self, idx):
-        """
-        Get item(s) from the mapped attribute.
-        
-        Parameters:
-        idx (int, list, tuple, or np.ndarray): Index or indices to retrieve.
-        
-        Returns:
-        np.ndarray: Mapped value(s) from the base attribute.
-        """
-        if isinstance(idx, (list, tuple, np.ndarray)):
-            return np.array([self.base[self.map[i]] for i in idx])
-        else:
-            return self.base[self.map[int(idx)]]
-
-################################################################################
 #################################### Steps #####################################
 ################################################################################
 class plStep:
@@ -235,8 +204,12 @@ class plStep:
             each data index in data_idx if data_idx is a list. If data_idx is 
             None, all data indices (0 to DS.nres - 1) are processed. 
         """
+        assert hasattr(DS, 'nres'), "DS must have 'nres' attribute"
         if isinstance(data_idx, int):
             data_idx = [data_idx]
+
+        if self.func_type in ["per-row", "vectorized"] and data_idx is None:
+            data_idx = list(range(DS.nres))
 
         # --- 1. Collect parameters ---
         params = []
@@ -246,8 +219,7 @@ class plStep:
                 continue
             val = getattr(DS, p)
             # Only slice LazyAttr for per-row or vectorized functions
-            if isinstance(val, LazyAttr) and self.func_type in ["per-row", 
-                                                                "vectorized"]:
+            if self.func_type in ["per-row", "vectorized"]:
                 val = val[data_idx]
             params.append(val)
 
@@ -264,7 +236,6 @@ class plStep:
                 setattr(DS, name, val)  # store as normal attribute, no LazyAttr
 
         elif self.func_type == "vectorized":
-            print(params)
             results = self.func(*params)
             if not isinstance(results, tuple):
                 results = (results,)
@@ -310,11 +281,6 @@ class plStep:
         s += f"\n\tOutput Parameters: {self.return_names}"
         s += f"\n\tFunction Type: {self.func_type}"
         return s
-
-# Problem -> how to deal with the fact that offres cm removal needs to be run on 
-# bins of frequencies 
-# How to deal with parameters that need to be None on the first run, but maybe 
-# should be enforced later
 
 ################################ Default steps #################################
 # name, function, input parameter names, output parameter names, 

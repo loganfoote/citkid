@@ -3,7 +3,6 @@ import numpy as np
 from citkid.pipeline import framework as pf 
 from citkid.pipeline import dataset as dataset
 
-# Finished LazyAttr, Paths. Need to finish Steps and do IndexMappedParam
 # Dummy DataSet class 
 class DummyDS():
     def __init__(self):
@@ -126,55 +125,186 @@ def test_steps_run_global_bad_input():
 
 def test_steps_run_vectorized():
     DS = DummyDS()
-    step = pf.plStep('vectorized_step', lambda x: np.asarray(x) * 2, 
+    def func(x):
+        # vectorized function that behaves differently for single value vs array
+        # note: plStep.run turns single index into list, so x will always be 
+        # list or np.ndarray
+        try:
+            x[0] 
+            return np.asarray(x) * 2
+        except Exception:
+            return np.asarray(x) * 3
+        
+    step = pf.plStep('vectorized_step', func, 
                      ['x'], ['result'], 'vectorized')
     
     # Test with list input
-    DS.x = [1, 2, 3, 4]
+    DS.x = np.array([1, 2, 3, 4])
     data_idx = [0, 1, 2, 3]
     step.run(DS, data_idx = data_idx) 
     assert type(DS.result) == pf.LazyAttr 
     assert np.array_equal(DS.result[data_idx], [2, 4, 6, 8])
+    DS.cal_pl = {'CAL_STEPS': {1: {'task': step}}}
     del DS.result
 
     # Test with numpy array input
     DS.x = np.array([10, 20, 30])
-    step.run(DS, data_idx = [0, 1, 2])
-    assert False, 'Error in LazyAttr._ensure_loaded, need to fix that first'
+    data_idx = [0, 1, 2]
+    step.run(DS, data_idx = data_idx)
+    # assert False, 'Error in LazyAttr._ensure_loaded, need to fix that first'
     assert type(DS.result) == pf.LazyAttr 
     assert np.array_equal(DS.result[data_idx], np.array([20, 40, 60]))
-    # del DS.result
+    del DS.result
 
     # different order of data_idx
-    # DS.x = np.array([10, 20, 30])
-    # step.run(DS, data_idx = [0, 2, 1])
-    # assert type(DS.result) == pf.LazyAttr 
-    # assert np.array_equal(DS.result[[0, 1, 2]], np.array([20, 40, 60]))
-    # del DS.result
+    DS.x = np.array([10, 20, 30])
+    step.run(DS, data_idx = [0, 2, 1])
+    assert type(DS.result) == pf.LazyAttr 
+    assert np.array_equal(DS.result[[0, 1, 2]], np.array([20, 40, 60]))
+    # order is mixed up here
+    del DS.result
 
-    # # Test with single index
-    # DS.x = [5, 10, 15]
-    # step.run(DS, data_idx = 1)
-    # assert type(DS.result) == pf.LazyAttr
-    # assert DS.result[1] == 20 
+    # Test with single index
+    DS.x = np.array([5, 10, 15])
+    step.run(DS, data_idx = 1)
+    assert type(DS.result) == pf.LazyAttr
+    assert DS.result[1] == 20 
 
-    # # Test with all indices
-    # DS.x = [3, 6, 9, 12]
-    # DS.nres = 4
-    # step.run(DS, data_idx = None)
-    # assert type(DS.result) == pf.LazyAttr
-    # assert np.array_equal(DS.result[[0, 1, 2, 3]], np.array([6, 12, 18, 24]))
-    # step.run(DS, data_idx = [1, 2, 3, 0])
-    # assert type(DS.result) == pf.LazyAttr
-    # assert np.array_equal(DS.result[[1, 2, 3, 0]], np.array([24, 6, 12, 18]))
+    # Test with all indices
+    DS.x = np.array([3, 6, 9, 12])
+    DS.nres = 4
+    step.run(DS, data_idx = None)
+    assert type(DS.result) == pf.LazyAttr
+    assert np.array_equal(DS.result[[0, 1, 2, 3]], np.array([6, 12, 18, 24]))
+    del DS.result
+    step.run(DS, data_idx = None)
+    assert type(DS.result) == pf.LazyAttr
+    assert np.array_equal(DS.result[[1, 2, 3, 0]], np.array([12, 18, 24, 6]))
 
+    # multiple outputs
+    def func(x):
+        return np.asarray(x) + 1, np.asarray(x) - 1
+    step = pf.plStep('vectorized_step', func, 
+                     ['x'], ['result1', 'result2'], 'vectorized')
+    DS.x = np.array([2, 4, 6])
+    data_idx = [0, 1, 2] 
+    step.run(DS, data_idx = data_idx) 
+    assert type(DS.result1) == pf.LazyAttr 
+    assert type(DS.result2) == pf.LazyAttr
+    assert np.array_equal(DS.result1[data_idx], np.array([3, 5, 7]))
+    assert np.array_equal(DS.result2[data_idx], np.array([1, 3, 5]))
 
-def test_steps_vectorized_bad_input():
-    pass
+@pytest.mark.parametrize("step_type", ['vectorized', 'per-row'])
+def test_steps_res_bad_input(step_type):
+    DS = DummyDS()
+    DS.nres = 10
+    step = pf.plStep('step0', lambda x: x * 2, 
+                        ['x'], ['result'], step_type)
 
+    # Missing DS attribute
+    with pytest.raises(AttributeError):
+        step.run(DS)
 
+    # Input of wrong length should raise error 
+    DS.x = np.array([1, 2])
+    with pytest.raises(IndexError):
+        step.run(DS)
 
-        
+    # wrong data_idx type
+    DS.x = np.array([1,2,3])
+    with pytest.raises(IndexError):
+        step.run(DS, data_idx = "not_a_list_or_int")
+    with pytest.raises(IndexError):
+        step.run(DS, data_idx = [1, 'a', 3])
+
+    # Wrong number of parameters
+    DS.y = np.array([1,2,3])
+    step = pf.plStep('step0', lambda x, y: x + y, 
+                    ['x'], ['result'], step_type)
+    with pytest.raises(TypeError):
+        step.run(DS, data_idx = [0, 1])
+    step = pf.plStep('step0', lambda x: x * 3, 
+                    [], ['result'], step_type)
+    with pytest.raises(TypeError):
+        step.run(DS, data_idx = [0, 1])
+    step = pf.plStep('step0', lambda x: x * 3, 
+                    ['x'], [], step_type)
+    with pytest.raises((ValueError, IndexError)):
+        step.run(DS, data_idx = [0, 1])
+
+    step = pf.plStep('step0', lambda x: x * 3, 
+                    ['x'], ['result1', 'result2'], step_type)
+    with pytest.raises(ValueError):
+        step.run(DS, data_idx = [0, 1])
+
+def test_steps_run_per_row():
+    DS = DummyDS()
+    def func(x):
+        # vectorized function that behaves differently for single value vs array
+        # "per-row" should only ever pass in a single value
+        try:
+            x[0] 
+            return np.asarray(x) * 3
+        except Exception:
+            return np.asarray(x) * 2
+    step = pf.plStep('per_row_step', func, 
+                     ['x'], ['result'], 'per-row') 
+    
+    # Test with list input
+    DS.x = np.array([1, 2, 3, 4])
+    data_idx = [0, 1, 2, 3]
+    step.run(DS, data_idx = data_idx) 
+    assert type(DS.result) == pf.LazyAttr 
+    assert np.array_equal(DS.result[data_idx], [2, 4, 6, 8])
+    DS.cal_pl = {'CAL_STEPS': {1: {'task': step}}}
+    del DS.result
+
+    # Test with numpy array input
+    DS.x = np.array([10, 20, 30])
+    data_idx = [0, 1, 2]
+    step.run(DS, data_idx = data_idx)
+    # assert False, 'Error in LazyAttr._ensure_loaded, need to fix that first'
+    assert type(DS.result) == pf.LazyAttr 
+    assert np.array_equal(DS.result[data_idx], np.array([20, 40, 60]))
+    del DS.result
+
+    # different order of data_idx
+    DS.x = np.array([10, 20, 30])
+    step.run(DS, data_idx = [0, 2, 1])
+    assert type(DS.result) == pf.LazyAttr 
+    assert np.array_equal(DS.result[[0, 1, 2]], np.array([20, 40, 60]))
+    # order is mixed up here
+    del DS.result
+
+    # Test with single index
+    DS.x = np.array([5, 10, 15])
+    step.run(DS, data_idx = 1)
+    assert type(DS.result) == pf.LazyAttr
+    assert DS.result[1] == 20 
+
+    # Test with all indices
+    DS.x = np.array([3, 6, 9, 12])
+    DS.nres = 4
+    step.run(DS, data_idx = None)
+    assert type(DS.result) == pf.LazyAttr
+    assert np.array_equal(DS.result[[0, 1, 2, 3]], np.array([6, 12, 18, 24]))
+    del DS.result
+    step.run(DS, data_idx = None)
+    assert type(DS.result) == pf.LazyAttr
+    assert np.array_equal(DS.result[[1, 2, 3, 0]], np.array([12, 18, 24, 6]))
+
+    # multiple outputs
+    def func(x):
+        return np.asarray(x) + 1, np.asarray(x) - 1
+    step = pf.plStep('vectorized_step', func, 
+                     ['x'], ['result1', 'result2'], 'vectorized')
+    DS.x = np.array([2, 4, 6])
+    data_idx = [0, 1, 2] 
+    step.run(DS, data_idx = data_idx) 
+    assert type(DS.result1) == pf.LazyAttr 
+    assert type(DS.result2) == pf.LazyAttr
+    assert np.array_equal(DS.result1[data_idx], np.array([3, 5, 7]))
+    assert np.array_equal(DS.result2[data_idx], np.array([1, 3, 5]))
 
 ################################################################################
 ################################### LazyAttr ###################################
@@ -211,7 +341,6 @@ step2 = {'task': pf.plStep('step2', lambda x: x + 1,
                            ['b'], ['c'], 'per-row')}
 cal_pl = {'CAL_STEPS': {1: step1, 2: step2}}
 def test_lazyattr_ensure_loaded():
-    # assert False, "working on this"
     DS = DummyDSWithExecute(cal_pl) 
     rows = [1, 2] 
     DS.c._ensure_loaded(rows) # c and b are created, data_idx 1, 2 are cached
@@ -245,6 +374,7 @@ def test_lazyattr_ensure_loaded_invalid():
      {3: 40, 5: 60}), # np.ndarray of idx
     (0, 5, {0: 5}), # single index
     ([1, 2, 3], 10, {1: 10, 2: 10, 3: 10}), # multiple idx set to single value
+    ([1, 3, 2], [20, 40, 30], {1: 20, 2: 30, 3: 40}), # out of order
     (slice(1, 3), 10, {1: 10, 2: 10}), # multiple idx set to single value)
     (-1, 100, {9: 100}), # negative index 
     ([0, -2], [1, 2], {0: 1, 8: 2}), # negative index in list 
@@ -253,6 +383,15 @@ def test_lazyattr_ensure_loaded_invalid():
     (slice(0, 4, 2), [11, 13], {0: 11, 2: 13}), # slice with step   
 ])
 def test_lazyattr_setitem(rows, values, expected_cache):
+    LA = pf.LazyAttr(DS, 'test_attr')
+    # slice 
+    LA[rows] = values
+    assert LA._cache == expected_cache
+
+def test_lazyattr_ordered():
+    rows = [1, 3, 2] 
+    values = [20, 40, 30] 
+    expected_cache = {1: 20, 2: 30, 3: 40}
     LA = pf.LazyAttr(DS, 'test_attr')
     # slice 
     LA[rows] = values
@@ -304,6 +443,7 @@ def test_lazyattr_getitem():
     assert np.array_equal(DS.c[[1, 2, 3]], [3, 4, 5]) 
     DS.c._cache = {1: 4, 2: 5, 3: 6} 
     assert np.array_equal(DS.c[[1, 2, 3]], [4, 5, 6])
+    assert np.array_equal(DS.c[[1, 3, 2]], [4, 6, 5])
     DS.c._cache = {}
     # negative index 
     assert DS.c[-1] == 11 # index 9
@@ -410,4 +550,4 @@ def test_check_pl_tree_structure_invalid(path):
     with pytest.raises(ValueError):
         pf.check_pl_tree_structure(path)
 
-# print_pl_path -> don't really need to test this 
+# print_pl_path -> not tested, simple function that uses recursion to print path
