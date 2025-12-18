@@ -1,8 +1,7 @@
-
 import os
 import yaml
 import importlib.util 
-from .framework import default_cal_steps, find_pl_path, LazyAttr
+from . import framework as pf
 
 class DataSet:
     def __init__(self, directory, yaml_path):
@@ -13,36 +12,53 @@ class DataSet:
         directory (str): The base directory for the dataset.
         yaml_path (str): The path to the YAML configuration file.
         """
-        # On import of yaml, check that all paths are valid
+        # Normalize paths 
         self.directory = os.path.normpath(directory)
         self.yaml_path = os.path.normpath(yaml_path)
 
-        # Create list of possible steps
-        custom_module_path = os.path.join(self.directory, 'custom_steps.py')
-        if os.path.exists(custom_module_path):
-            spec = importlib.util.spec_from_file_location("custom_steps", 
-                                                          custom_module_path)
-            cs = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(cs)
-            custom_steps = cs.custom_steps
-        else:
-            custom_steps = []
-
-        self.steps = custom_steps 
-        for step in default_cal_steps: 
+        # Load steps from custom_steps.py if it exists
+        self.steps = self._load_custom_steps()
+        # Add default calibration steps if not already present
+        for step in pf.default_cal_steps:
             if step.name not in [s.name for s in self.steps]:
-                self.steps.append(step) 
-        
-        # Load YAML configuration
-        with open(self.yaml_path, 'r') as f:
-            yaml_dict = yaml.safe_load(f)
-        self.cal_pl = self.convert_yaml_to_steps(yaml_dict)
+                self.steps.append(step)
+
+        # Load YAML and convert to calibration pipeline
+        yaml_dict = self._load_yaml()
+        self.cal_pl = self._convert_yaml_to_steps(yaml_dict)
 
         # Set nres 
         # self.nres = len(self.res_idxs) # must be able to produce from pipeline
         self.nres = 1600  # temporary hardcode until pipeline can produce res_idxs
+
+    def _load_custom_steps(self):
+        """
+        Load custom steps from 'custom_steps.py' in the dataset directory.
+
+        Returns:
+        list: A list of custom plStep objects.
+        """
+        custom_module_path = os.path.join(self.directory, 'custom_steps.py')
+        if not os.path.exists(custom_module_path):
+            return []
+
+        spec = importlib.util.spec_from_file_location("custom_steps", 
+                                                      custom_module_path)
+        cs = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cs)
+        return cs.custom_steps
+    
+    def _load_yaml(self):
+        """
+        Load the YAML configuration file. 
+
+        Returns:
+        dict: The loaded YAML configuration as a dictionary.
+        """
+        with open(self.yaml_path, 'r') as f:
+            return yaml.safe_load(f)
             
-    def convert_yaml_to_steps(self, pl_dict, key = None):
+    def _convert_yaml_to_steps(self, pl_dict, key = None):
         """
         Converts YAML-defined path dictionary leaves to plStep objects.
 
@@ -113,7 +129,7 @@ class DataSet:
         cal_pl = object.__getattribute__(self, "cal_pl")
 
         # Find the path to produce this attribute
-        path = find_pl_path(cal_pl, name)
+        path = pf.find_pl_path(cal_pl, name)
         if path is None:
             raise AttributeError(name)
 
@@ -124,28 +140,28 @@ class DataSet:
             return object.__getattribute__(self, name)
         
         # Otherwise create LazyAttr for per-row/vectorized output
-        attr = LazyAttr(self, name)
+        attr = pf.LazyAttr(self, name)
         object.__setattr__(self, name, attr)
         return attr
     
-    def _extract_param(ds, name, data_idx):
-        """
-        Extract parameter 'name' for data indices 'data_idx' from dataset 'ds'.
-        If the parameter is a LazyAttr (per-row), extract only relevant rows.
-        Otherwise, return the global scalar / non-row attribute.
+    # def _extract_param(ds, name, data_idx):
+    #     """
+    #     Extract parameter 'name' for data indices 'data_idx' from dataset 'ds'.
+    #     If the parameter is a LazyAttr (per-row), extract only relevant rows.
+    #     Otherwise, return the global scalar / non-row attribute.
 
-        Parameters:
-        ds (dataset): The dataset instance.
-        name (str): The name of the parameter to extract.
-        data_idx (int or list): The data index or indices to extract.
+    #     Parameters:
+    #     ds (dataset): The dataset instance.
+    #     name (str): The name of the parameter to extract.
+    #     data_idx (int or list): The data index or indices to extract.
 
-        Returns:
-        np.ndarray or scalar: The extracted parameter value(s).
-        """
-        val = getattr(ds, name)
-        # If val is LazyAttr (per-row), extract only relevant rows
-        if isinstance(val, LazyAttr):
-            return val[data_idx]
-        else:
-            # global scalar / non-row attribute
-            return val
+    #     Returns:
+    #     np.ndarray or scalar: The extracted parameter value(s).
+    #     """
+    #     val = getattr(ds, name)
+    #     # If val is LazyAttr (per-row), extract only relevant rows
+    #     if isinstance(val, pf.LazyAttr):
+    #         return val[data_idx]
+    #     else:
+    #         # global scalar / non-row attribute
+    #         return val

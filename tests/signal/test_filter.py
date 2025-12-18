@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-from citkid.signal import filter
+from citkid.signal import basic_filt
 
 ################################################################################
 # For the following functions, we will test that the output shape matches input 
@@ -23,7 +23,7 @@ z = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
     (np.array([z, z]), 0.1, 0.5, 2.0, 1), # data length = padlen + 1
 ])
 def test_bandpass_filter(x, dt, f_low, f_high, order):
-    filtered_x = filter.bandpass_filter(x, dt, f_low, f_high, order)
+    filtered_x = basic_filt.bandpass_filter(x, dt, f_low, f_high, order)
     assert filtered_x.shape == x.shape
 
 @pytest.mark.parametrize("x,dt,f_low,f_high,order", [  
@@ -44,7 +44,7 @@ def test_bandpass_filter(x, dt, f_low, f_high, order):
 ])
 def test_bandpass_filter_invalid_input(x, dt, f_low, f_high, order):
     with pytest.raises(Exception):
-        filter.bandpass_filter(x, dt, f_low, f_high, order)
+        basic_filt.bandpass_filter(x, dt, f_low, f_high, order)
     
 ################################################################################
 ################################# lowpass_filter ###############################
@@ -60,7 +60,7 @@ def test_bandpass_filter_invalid_input(x, dt, f_low, f_high, order):
     # Needs to work for both 1D and 2D inputs
 ])
 def test_lowpass_filter(x, dt, f_cutoff, order):
-    filtered_x = filter.lowpass_filter(x, dt, f_cutoff, order)
+    filtered_x = basic_filt.lowpass_filter(x, dt, f_cutoff, order)
     assert filtered_x.shape == x.shape
 
 @pytest.mark.parametrize("x,dt,f_cutoff,order", [
@@ -76,7 +76,7 @@ def test_lowpass_filter(x, dt, f_cutoff, order):
 ])
 def test_lowpass_filter_invalid_input(x, dt, f_cutoff, order):
     with pytest.raises(Exception):
-        filter.lowpass_filter(x, dt, f_cutoff, order)
+        basic_filt.lowpass_filter(x, dt, f_cutoff, order)
     
 ################################################################################
 ################################# highpass_filter ##############################
@@ -90,7 +90,7 @@ def test_lowpass_filter_invalid_input(x, dt, f_cutoff, order):
     (np.array([y, y]), 0.2, 1.0, 1), # data length = padlen + 1
 ])
 def test_highpass_filter(x, dt, f_cutoff, order):
-    filtered_x = filter.highpass_filter(x, dt, f_cutoff, order)
+    filtered_x = basic_filt.highpass_filter(x, dt, f_cutoff, order)
     assert filtered_x.shape == x.shape
 
 @pytest.mark.parametrize("x,dt,f_cutoff,order", [
@@ -106,7 +106,7 @@ def test_highpass_filter(x, dt, f_cutoff, order):
 ])
 def test_highpass_filter_invalid_input(x, dt, f_cutoff, order):
     with pytest.raises(Exception):
-        filter.highpass_filter(x, dt, f_cutoff, order)
+        basic_filt.highpass_filter(x, dt, f_cutoff, order)
 
 ################################################################################
 ################################# get_cutoff ###################################
@@ -116,7 +116,7 @@ def test_highpass_filter_invalid_input(x, dt, f_cutoff, order):
     (0.2, 0.5, 0.2),
 ])
 def test_get_cutoff(dt, f_cutoff, expected):
-    cutoff = filter.get_cutoff(dt, f_cutoff)
+    cutoff = basic_filt.get_cutoff(dt, f_cutoff)
     assert np.isclose(cutoff, expected)
 
 @pytest.mark.parametrize("dt,f_cutoff", [
@@ -125,4 +125,4 @@ def test_get_cutoff(dt, f_cutoff, expected):
 ])
 def test_get_cutoff_invalid_input(dt, f_cutoff):
     with pytest.raises(Exception):
-        filter.get_cutoff(dt, f_cutoff)
+        basic_filt.get_cutoff(dt, f_cutoff)

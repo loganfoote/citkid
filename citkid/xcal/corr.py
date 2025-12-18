@@ -1,6 +1,6 @@
 import numpy as np
 from tqdm.auto import tqdm
-from ..signal.filter import lowpass_filter, highpass_filter
+from ..signal.basic_filt import lowpass_filter, highpass_filter
 
 ################################################################################
 ############################## PCA and utilities ###############################
