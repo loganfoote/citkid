@@ -4,9 +4,9 @@
 
 CAL_STEPS:
   1 :
-    task: load_global_data
+    task: load_global_data # maybe this should be re-saved in zarr since it is small
   2 :
-    task: load_global_res_data
+    task: load_global_res_data # maybe this should be re-saved in zarr since it is small
     T_STEPS:
       1:
         task: load_data_t
@@ -26,7 +26,7 @@ CAL_STEPS:
         task: get_x_t
     F_STEPS:
       1:
-        task: load_data_f
+        task: load_data_f # must be sorted on axis 1
       2:
         task: rmv_gain_f 
         delete_input: [zf]

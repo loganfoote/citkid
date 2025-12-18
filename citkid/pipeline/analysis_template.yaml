@@ -1,0 +1,27 @@
+### ----------------------------- ###
+###         Analysis steps        ###
+### ----------------------------- ###
+
+ANALYSIS_STEPS:
+  1 :
+    task: load_global_data # maybe follow this by saving to zarr since it is small
+  2 :
+    task: load_global_res_data # maybe follow this by saving to zarr since it is small
+  3 : 
+    task: make_fr_spans 
+  4 : 
+    task: fit_gain
+  5 :
+    task: fit_iq_circle 
+  6 :
+    task: cent_rot_s21 
+    params:
+      phase: 0 
+  7 :
+    task: get_theta_phase_offset
+  8 :
+    task: get_sfactor # optional, useful for flagging 
+  9 :
+    task: get_xcal_mask 
+  10 :
+    task: fit_x_theta

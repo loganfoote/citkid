@@ -1,8 +1,19 @@
 import os
 import yaml
 import importlib.util 
+import numpy as np
 from . import framework as pf
 
+class LazyZarrArray:
+    def __init__(self, data, exists):
+        self.data = data          # zarr.Array
+        self.exists = exists      # zarr.Array (bool)
+
+    def __getitem__(self, key):
+        if self.exists[key].all():
+            return self.data[key]
+        return None
+    
 class DataSet:
     def __init__(self, directory, yaml_path):
         """
@@ -114,6 +125,57 @@ class DataSet:
         for step in path:
             step.run(self, data_idx)
 
+    def read_data(self, name, data_idx, run):
+        """
+        Read data attribute 'name' for data indices 'data_idx' from dataset.
+
+        Parameters:
+        name (str): The name of the data attribute to read.
+        data_idx (int or list): The data index or indices to read.
+        run (int): run index (placeholder for future use).
+
+        Returns:
+        np.ndarray or scalar: The requested data attribute value(s).
+        """
+        grp = self.root[f'run{run:d}']
+        return grp[name][:, data_idx]
+    
+    def write_data(self, name, value, data_idx, run, dtype = None):
+        """
+        Write data attribute 'name' for dataset.
+
+        Parameters:
+        name (str): The name of the data attribute to write.
+        value (np.ndarray or scalar): The data to write.
+        data_idx (int or list): The data index or indices to write.
+        run (int): run index (placeholder for future use).
+        dtype (np.dtype, optional): The data type to use when writing. Defaults 
+            to None (use value's dtype).
+        """
+        # ensure run group exists (create if missing)
+        key = f'run{run:d}'
+        grp = self.root.require_group(key)
+
+        # scalar → wrap as array
+        if not hasattr(value, 'shape'):
+            value = np.array([value])
+
+        # set dtype if not provided
+        if dtype is None:
+            dtype = value.dtype
+
+        # ensure dataset exists (create if missing)
+        # dataset shape: all value dims + row index at the end
+        shape = (*value.shape, 0)
+        chunks = (*value.shape, 1)  # last axis = 1 for single-row writes
+        grp.require_dataset(name, shape=shape, dtype=dtype, chunks=chunks)
+        exists = grp.require_dataset(f"{name}_exists", shape=shape, dtype=bool,
+                                     chunks=chunks, fill_value=False)
+
+        # write data at specified indices
+        grp[name][..., data_idx] = value
+        grp[f"{name}_exists"][..., data_idx] = True
+        
     def __getattr__(self, name):
         """
         Custom attribute getter to handle LazyAttr creation for per-row
@@ -125,6 +187,9 @@ class DataSet:
         Returns:
         Any: The requested attribute value or LazyAttr.
         """
+        run = 0
+        grp = self.root[f'run{run:d}']
+
         # Only run when normal lookup fails
         cal_pl = object.__getattribute__(self, "cal_pl")
 
