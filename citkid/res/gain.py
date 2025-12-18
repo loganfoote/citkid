@@ -3,6 +3,8 @@ import warnings
 from .plot import plot_gain_fit
 from ..xcal import gain as xcal_gain
 
+# legacy code - use xcal.gain instead
+
 def remove_gain(f, z, p_amp, p_phase):
     """
     Removes the gain amplitude and phase from complex S21 data, given the raw
