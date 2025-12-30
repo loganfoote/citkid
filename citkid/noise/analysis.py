@@ -216,7 +216,7 @@ def compute_psd_simple(ffine, zfine, fnoise, znoise, dt, deglitch_nstd = 5,
 
 def calibrate_timestreams(origin, ffine, zfine, fnoise, znoise, dt,
                           deglitch_nstd, flag_crs, offres = False,
-                          min_cal_points = 5, xcal_weight_sigma = None,
+                          poly_deg = 3, min_cal_points = 5, xcal_weight_sigma = None,
                           xcal_weight_theta0 = 0.0, **cr_kwargs):
     """
     Calculates theta and x timestreams given complex IQ noise timestreams.
@@ -276,7 +276,8 @@ def calibrate_timestreams(origin, ffine, zfine, fnoise, znoise, dt,
         theta_clean = theta.copy()
     # Calibrate x
     poly, theta_range, (ix0, ix1) = \
-        calibrate_x(ffine, theta_fine, theta_clean, min_cal_points = min_cal_points,
+        calibrate_x(ffine, theta_fine, theta_clean, poly_deg = poly_deg, 
+                    min_cal_points = min_cal_points, 
                     weight_sigma = xcal_weight_sigma, weight_theta0 = xcal_weight_theta0)
 
     fs_clean = np.polyval(poly, theta_clean)
