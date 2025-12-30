@@ -2,6 +2,7 @@ import os
 import yaml
 import importlib.util 
 import numpy as np
+import zarr
 from . import framework as pf
 
 class LazyZarrArray:
@@ -15,16 +16,19 @@ class LazyZarrArray:
         return None
     
 class DataSet:
-    def __init__(self, directory, yaml_path):
+    def __init__(self, directory, outpath, yaml_path):
         """
         Initialize the dataset with a calibration pipeline defined by a YAML file.  
         
         Parameters:
         directory (str): The base directory for the dataset.
+        outpath (str): The path to the zarr file containing the analysis outputs.
         yaml_path (str): The path to the YAML configuration file.
         """
         # Normalize paths 
         self.directory = os.path.normpath(directory)
+        self.outpath = os.path.normpath(outpath)
+        self.root = zarr.open_group(self.outpath, mode='a')
         self.yaml_path = os.path.normpath(yaml_path)
 
         # Load steps from custom_steps.py if it exists
@@ -37,6 +41,7 @@ class DataSet:
         # Load YAML and convert to calibration pipeline
         yaml_dict = self._load_yaml()
         self.cal_pl = self._convert_yaml_to_steps(yaml_dict)
+        self.cal_pl_list = self._convert_dict_to_list(self.cal_pl)
 
         # Set nres 
         # self.nres = len(self.res_idxs) # must be able to produce from pipeline
@@ -83,7 +88,7 @@ class DataSet:
         """
         if isinstance(pl_dict, dict):
             for key, val in pl_dict.items():
-                pl_dict[key] = self.convert_yaml_to_steps(val, key)
+                pl_dict[key] = self._convert_yaml_to_steps(val, key)
         if isinstance(pl_dict, str) and key == 'task':
             x = [d for d in self.steps if d.name == pl_dict]
             if not len(x):
@@ -91,6 +96,27 @@ class DataSet:
                 raise ValueError(m)
             return x[0]
         return pl_dict
+    
+    def _convert_dict_to_list(self, pl_dict, key = None):
+        """
+        Converts a path dictionary of plStep objects to a 1-D list.
+        
+        Parameters:
+        pl_dict (dict or plStep): The path dictionary or plStep object.
+        key (str): The key associated with the current pl_dict, used to identify
+            task names.
+
+        Returns:
+        list: The list of plStep objects.
+        """
+        pl_list = []
+        
+        if isinstance(pl_dict, dict):
+            for key, val in pl_dict.items():
+                pl_list.extend(self._convert_dict_to_list(val, key))
+        else:#if isinstance(pl_dict, pf.plStep) and key == 'task':
+            pl_list = [pl_dict]
+        return pl_list
     
     def confirm_valid_path(self, path):
         """
@@ -121,8 +147,9 @@ class DataSet:
         path (list): List of plStep objects forming the path.
         data_idx (int or list): The data index or indices to process.
         """
-        self.confirm_valid_path(path)
+        # self.confirm_valid_path(path)
         for step in path:
+            print(step)
             step.run(self, data_idx)
 
     def read_data(self, name, data_idx, run):
@@ -137,7 +164,8 @@ class DataSet:
         Returns:
         np.ndarray or scalar: The requested data attribute value(s).
         """
-        grp = self.root[f'run{run:d}']
+        attr_version = self.get_attr_version(name)
+        grp = self.root[str(attr_version)]
         return grp[name][:, data_idx]
     
     def write_data(self, name, value, data_idx, run, dtype = None):
@@ -153,7 +181,7 @@ class DataSet:
             to None (use value's dtype).
         """
         # ensure run group exists (create if missing)
-        key = f'run{run:d}'
+        key = str(run)
         grp = self.root.require_group(key)
 
         # scalar → wrap as array
@@ -176,6 +204,37 @@ class DataSet:
         grp[name][..., data_idx] = value
         grp[f"{name}_exists"][..., data_idx] = True
         
+    def get_attr_version(self, name):
+        """
+        Finds the most recent run version of a given attribute.
+        Returns None if the attribute does not exist in any run.
+        
+        Parameters:
+        name (str): Name of the attribute to search for.
+        
+        Returns:
+        attr_version (int): Most recent run version containing the attribute.
+        """
+        folders = list(self.root.keys())
+        runs = []
+        for folder in folders:
+            try:
+                int(folder)
+                runs.append(folder)
+            except ValueError:
+                pass
+        runs = np.array(runs, dtype=int)
+        runs = np.flip(np.sort(runs))
+        
+        attr_version = None
+        for run in runs:
+            grp = self.root[str(run)]
+            attrs = list(grp.keys())
+            if name in attrs:
+                attr_version = run
+                return attr_version
+        
+        
     def __getattr__(self, name):
         """
         Custom attribute getter to handle LazyAttr creation for per-row
@@ -187,8 +246,8 @@ class DataSet:
         Returns:
         Any: The requested attribute value or LazyAttr.
         """
-        run = 0
-        grp = self.root[f'run{run:d}']
+        # run = 0
+        # grp = self.root[f'run{run:d}']
 
         # Only run when normal lookup fails
         cal_pl = object.__getattribute__(self, "cal_pl")
@@ -207,6 +266,9 @@ class DataSet:
         # Otherwise create LazyAttr for per-row/vectorized output
         attr = pf.LazyAttr(self, name)
         object.__setattr__(self, name, attr)
+        
+        # attr = object.__getattribute__(self, name)
+        
         return attr
     
     # def _extract_param(ds, name, data_idx):
