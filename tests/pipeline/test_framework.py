@@ -194,6 +194,22 @@ def test_steps_run_vectorized():
     assert np.array_equal(DS.result1[data_idx], np.array([3, 5, 7]))
     assert np.array_equal(DS.result2[data_idx], np.array([1, 3, 5]))
 
+    # test function with array and float parameters
+    def func(x, y):
+        # vectorized function that behaves differently for single value vs array
+        # "per-row" should only ever pass in a single value
+        return np.asarray(x) * 2 + y
+    step = pf.plStep('per_row_step', func, 
+                     ['x', 'y'], ['result'], 'per-row') 
+    DS.x = np.array([1, 2, 3, 4])
+    DS.y = 0.5
+    data_idx = [0, 1, 2, 3]
+    step.run(DS, data_idx = data_idx) 
+    assert type(DS.result) == pf.LazyAttr 
+    assert np.array_equal(DS.result[data_idx], [2.5, 4.5, 6.5, 8.5])
+    DS.cal_pl = {'CAL_STEPS': {1: {'task': step}}}
+    del DS.result
+
 @pytest.mark.parametrize("step_type", ['vectorized', 'per-row'])
 def test_steps_res_bad_input(step_type):
     DS = DummyDS()
@@ -305,6 +321,22 @@ def test_steps_run_per_row():
     assert type(DS.result2) == pf.LazyAttr
     assert np.array_equal(DS.result1[data_idx], np.array([3, 5, 7]))
     assert np.array_equal(DS.result2[data_idx], np.array([1, 3, 5]))
+
+    # test function with array and float parameters
+    def func(x, y):
+        # vectorized function that behaves differently for single value vs array
+        # "per-row" should only ever pass in a single value
+        return np.asarray(x) * 2 + y
+    step = pf.plStep('per_row_step', func, 
+                     ['x', 'y'], ['result'], 'per-row') 
+    DS.x = np.array([1, 2, 3, 4])
+    DS.y = 0.5
+    data_idx = [0, 1, 2, 3]
+    step.run(DS, data_idx = data_idx) 
+    assert type(DS.result) == pf.LazyAttr 
+    assert np.array_equal(DS.result[data_idx], [2.5, 4.5, 6.5, 8.5])
+    DS.cal_pl = {'CAL_STEPS': {1: {'task': step}}}
+    del DS.result
 
 ################################################################################
 ################################### LazyAttr ###################################

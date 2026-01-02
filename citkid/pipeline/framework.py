@@ -218,10 +218,12 @@ class plStep:
                 params.append(data_idx)
                 continue
             val = getattr(DS, p)
-            ### vvv This fails for parameters which are not arrays, e.g. a directory string.
-            # # Only slice LazyAttr for per-row or vectorized functions
-            # if self.func_type in ["per-row", "vectorized"]:
-            #     val = val[data_idx]
+            # Only slice input for per-row or vectorized functions
+            if self.func_type in ["per-row", "vectorized"]:
+                try:
+                    val = val[data_idx]
+                except TypeError:
+                    pass
             params.append(val)
 
         # --- 2. Execute function based on func_type ---

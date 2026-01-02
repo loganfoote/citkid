@@ -16,19 +16,20 @@ class LazyZarrArray:
         return None
     
 class DataSet:
-    def __init__(self, directory, outpath, yaml_path):
+    def __init__(self, directory, yaml_path, zarr_path):
         """
         Initialize the dataset with a calibration pipeline defined by a YAML file.  
         
         Parameters:
         directory (str): The base directory for the dataset.
-        outpath (str): The path to the zarr file containing the analysis outputs.
+        zarr_path (str): The path to the zarr file containing the analysis 
+            outputs.
         yaml_path (str): The path to the YAML configuration file.
         """
         # Normalize paths 
         self.directory = os.path.normpath(directory)
-        self.outpath = os.path.normpath(outpath)
-        self.root = zarr.open_group(self.outpath, mode='a')
+        self.zarr_path = os.path.normpath(zarr_path)
+        self.root = zarr.open_group(self.zarr_path, mode = 'a')
         self.yaml_path = os.path.normpath(yaml_path)
 
         # Load steps from custom_steps.py if it exists
@@ -41,7 +42,7 @@ class DataSet:
         # Load YAML and convert to calibration pipeline
         yaml_dict = self._load_yaml()
         self.cal_pl = self._convert_yaml_to_steps(yaml_dict)
-        self.cal_pl_list = self._convert_dict_to_list(self.cal_pl)
+        self.cal_pl_list = _convert_dict_to_list(self.cal_pl)
 
         # Set nres 
         # self.nres = len(self.res_idxs) # must be able to produce from pipeline
@@ -97,27 +98,6 @@ class DataSet:
             return x[0]
         return pl_dict
     
-    def _convert_dict_to_list(self, pl_dict, key = None):
-        """
-        Converts a path dictionary of plStep objects to a 1-D list.
-        
-        Parameters:
-        pl_dict (dict or plStep): The path dictionary or plStep object.
-        key (str): The key associated with the current pl_dict, used to identify
-            task names.
-
-        Returns:
-        list: The list of plStep objects.
-        """
-        pl_list = []
-        
-        if isinstance(pl_dict, dict):
-            for key, val in pl_dict.items():
-                pl_list.extend(self._convert_dict_to_list(val, key))
-        else:#if isinstance(pl_dict, pf.plStep) and key == 'task':
-            pl_list = [pl_dict]
-        return pl_list
-    
     def confirm_valid_path(self, path):
         """
         Confirm that a list of plStep objects forms a valid path, where all 
@@ -147,7 +127,7 @@ class DataSet:
         path (list): List of plStep objects forming the path.
         data_idx (int or list): The data index or indices to process.
         """
-        # self.confirm_valid_path(path)
+        self.confirm_valid_path(path)
         for step in path:
             print(step)
             step.run(self, data_idx)
@@ -270,25 +250,24 @@ class DataSet:
         # attr = object.__getattribute__(self, name)
         
         return attr
-    
-    # def _extract_param(ds, name, data_idx):
-    #     """
-    #     Extract parameter 'name' for data indices 'data_idx' from dataset 'ds'.
-    #     If the parameter is a LazyAttr (per-row), extract only relevant rows.
-    #     Otherwise, return the global scalar / non-row attribute.
 
-    #     Parameters:
-    #     ds (dataset): The dataset instance.
-    #     name (str): The name of the parameter to extract.
-    #     data_idx (int or list): The data index or indices to extract.
+def _convert_dict_to_list(pl_dict, key = None):
+        """
+        Converts a path dictionary of plStep objects to a 1-D list.
+        
+        Parameters:
+        pl_dict (dict or plStep): The path dictionary or plStep object.
+        key (str): The key associated with the current pl_dict, used to identify
+            task names.
 
-    #     Returns:
-    #     np.ndarray or scalar: The extracted parameter value(s).
-    #     """
-    #     val = getattr(ds, name)
-    #     # If val is LazyAttr (per-row), extract only relevant rows
-    #     if isinstance(val, pf.LazyAttr):
-    #         return val[data_idx]
-    #     else:
-    #         # global scalar / non-row attribute
-    #         return val
+        Returns:
+        list: The list of plStep objects.
+        """
+        pl_list = []
+        
+        if isinstance(pl_dict, dict):
+            for key, val in pl_dict.items():
+                pl_list.extend(_convert_dict_to_list(val, key))
+        else:#if isinstance(pl_dict, pf.plStep) and key == 'task':
+            pl_list = [pl_dict]
+        return pl_list

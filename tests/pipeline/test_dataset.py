@@ -1,5 +1,4 @@
 import pytest 
-import numpy as np
 import os 
 from citkid.pipeline import dataset as pds
 
@@ -7,16 +6,26 @@ from citkid.pipeline import dataset as pds
 ################################### __init__ ###################################
 ################################################################################
 # __init__, _load_custom_steps, _load_yaml, _convert_yaml_to_steps
-def test_paths_are_normalized():
+def test_paths_are_normalized(monkeypatch):
     DS = pds.DataSet.__new__(pds.DataSet)
     DS._load_custom_steps = lambda: []  # Mock to avoid file dependency
     DS._load_yaml = lambda: {}  # Mock to avoid file dependency
     DS._convert_yaml_to_steps = lambda y: []  # Mock to avoid file dependency
 
-    DS.__init__("a//b/../c", "x//y.yaml")
+    # patch zarr.open_group loading
+    fake_root = object()
+    def fake_open_group(path, mode):
+        # optional: assert inside the fake
+        assert mode == "a"
+        return fake_root
+    monkeypatch.setattr("zarr.open_group", fake_open_group)
+
+    DS.__init__("a//b/../c", "x//y.yaml", "z//out.zarr")
 
     assert DS.directory == os.path.normpath("a//b/../c")
     assert DS.yaml_path == os.path.normpath("x//y.yaml")
+    assert DS.zarr_path == os.path.normpath("z//out.zarr")
+    assert DS.root == fake_root
 
 def test_load_custom_steps(tmp_path):
     module = tmp_path / "custom_steps.py"
@@ -92,23 +101,42 @@ def test_init_calls_convert(monkeypatch):
         pds.pf, "default_cal_steps", []
     )
 
-    DS = pds.DataSet("dir", "file.yaml")
+    # patch zarr.open_group loading
+    fake_root = object()
+    def fake_open_group(path, mode):
+        # optional: assert inside the fake
+        assert mode == "a"
+        return fake_root
+    monkeypatch.setattr("zarr.open_group", fake_open_group)
+
+    DS = pds.DataSet("dir", "file.yaml", "out.zarr")
 
     assert DS.cal_pl == f"converted-{fake_yaml}" 
 
 
-def test_init_invalid_path(tmp_path):
+def test_init_invalid_path(monkeypatch, tmp_path):
+    # patch zarr.open_group loading
+    fake_root = object()
+    def fake_open_group(path, mode):
+        # optional: assert inside the fake
+        assert mode == "a"
+        return fake_root
+    monkeypatch.setattr("zarr.open_group", fake_open_group)
+
     with pytest.raises(FileNotFoundError):
-        pds.DataSet(str(tmp_path), "nonexistent.yaml")
+        pds.DataSet("nonexistent_dir", "nonexistent.yaml", 'nonexistent_dir')
     
     with pytest.raises(FileNotFoundError):
-        pds.DataSet("nonexistent_dir", "file.yaml")
+        pds.DataSet(str(tmp_path), "nonexistent.yaml", 'fake_out.zarr')
+    
+    with pytest.raises(FileNotFoundError):
+        pds.DataSet("nonexistent_dir", "file.yaml", 'fake_out.zarr')
 
     with pytest.raises(TypeError):
-        pds.DataSet(123, "file.yaml")
+        pds.DataSet(123, "file.yaml", 'fake_out.zarr')
 
     with pytest.raises(TypeError):
-        pds.DataSet(tmp_path, 456)
+        pds.DataSet(tmp_path, 456, 'fake_out.zarr')
 
 ################################################################################
 ############################## confirm_valid_path ##############################
