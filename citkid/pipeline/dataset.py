@@ -213,8 +213,7 @@ class DataSet:
             if name in attrs:
                 attr_version = run
                 return attr_version
-        
-        
+              
     def __getattr__(self, name):
         """
         Custom attribute getter to handle LazyAttr creation for per-row

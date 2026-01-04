@@ -1,4 +1,5 @@
 import numpy as np
+import numbers 
 from numba import vectorize, float64, boolean
 from scipy import signal
 from scipy.interpolate import interp1d
@@ -6,38 +7,67 @@ from scipy.interpolate import interp1d
 def calc_qc_qi(qr, amp):
     """
     Calculates Qc and Qi from Qr and amp, where amp = Qr / Qc and
-    1 / Qr = 1 / Qc + 1 / Qi
+    1 / Qr = 1 / Qc + 1 / Qi.
 
     Parameters:
-    qr (float): total quality factor
-    amp (float): Qr / Qc
+    qr (float): total quality factor.
+    amp (float): Qr / Qc.
 
     Returns:
-    qc (float): coupling quality factor
-    qi (float): internal quality factor
+    qc (float): coupling quality factor.
+    qi (float): internal quality factor.
     """
+    # Input validation
+    if not (np.isscalar(qr) and isinstance(qr, numbers.Real)):
+        raise ValueError("qr must be a scalar")
+    if not (np.isscalar(amp) and isinstance(amp, numbers.Real)):
+        raise ValueError("amp must be a scalar") 
+    if qr <= 0:
+        raise ValueError("qr must be positive")
+    if amp < 0 or amp > 1:
+        raise ValueError("amp must be in [0, 1]")
+    
+    # Edge cases of amp = 0 or 1
+    if amp == 0:
+        return np.inf, qr 
+    elif amp == 1:
+        return qr, np.inf
+    
+    # General case
     qc = qr / amp
     qi = 1.0 / ((1.0 / qr) - (1.0 / qc))
     return qc, qi
+calc_qc_qi = np.vectorize(calc_qc_qi)
 
 def bounds_check(p0, bounds):
     """
-    Checks that p0 is strictly within the bounds. If not, modifies bounds to be
-    10% lower or higher than p0.
+    First flips bounds if they are reversed. Then, if p0 is not strictly within 
+    the bounds, modifies bounds to be 10% lower or higher than p0.
 
     Parameters:
-    p0 (np.array): initial guesses for all parameters
-    bounds (tuple): 2d tuple of low values bounds[0] the high values bounds[1]
-        to bound the fitting problem
+    p0 (np.array): initial guesses for all parameters.
+    bounds (tuple): 2d tuple of the format (lower_bounds, upper_bounds), where 
+        each is an array or list of the same length as p0.
 
     Returns:
-    new_bounds (tuple): modified bounds
+    new_bounds (tuple): modified bounds.
     """
-    # First, flip bounds if they are reversed
+    # Input validation
+    N = len(p0) 
+    if not isinstance(bounds, tuple):
+        raise ValueError("bounds must be a tuple")
+    if len(bounds) != 2:
+        raise ValueError("bounds must be a tuple of length 2")
+    if len(bounds[0]) != N or len(bounds[1]) != N:
+        raise ValueError("bounds must have the same length as p0")
+    bounds = (bounds[0].copy(), bounds[1].copy()) # avoid modifying input
+    
+    # Flip bounds if they are reversed
     for i, b1, b2 in zip(range(len(bounds[0])), bounds[0], bounds[1]):
         if b1 > b2:
             bounds[0][i] = b2
             bounds[1][i] = b1
+
     # Make sure p0 is within bounds
     lower_bounds = []
     upper_bounds = []
@@ -45,6 +75,8 @@ def bounds_check(p0, bounds):
         if p < lb:
             if p > 0:
                 lower_bounds.append(p * 0.9)
+            elif p == 0:
+                lower_bounds.append(-1.0)
             else:
                 lower_bounds.append(p * 1.1)
         else:
@@ -52,27 +84,37 @@ def bounds_check(p0, bounds):
         if p > ub:
             if p > 0:
                 upper_bounds.append(p * 1.1)
+            elif p == 0:
+                upper_bounds.append(1.0)
             else:
                 upper_bounds.append(p * 0.9)
         else:
             upper_bounds.append(ub)
     return lower_bounds, upper_bounds
 
-def calculate_residuals(z, z_fit):
+def calc_nrmse(z, z_fit):
     """
-    Given IQ data and fitted IQ data, return the chi squared value and p value
+    Given complex S21 data and values of the fit at the same frequencies, 
+    return the normalized root mean square error: 
+        nrmse = ||z - z_fit||^2 / ||z||^2. 
 
     Parameters:
-    z (np.array, complex): array of measured S21 data
-    z_fit (np.array, complex): array of fitted S21 data
+    z (np.array, complex): array of measured S21 data.
+    z_fit (np.array, complex): array of fitted S21 data.
 
     Returns:
-    chi_sq (float): chi squared value
+    nrmse (float): normalized root mean square error.
     """
-    z = np.hstack((np.real(z), np.imag(z)))
-    z_fit = np.hstack((np.real(z_fit), np.imag(z_fit)))
-    res = np.sqrt(sum((z - z_fit) ** 2)) / len(z)
-    return res
+    z = np.asarray(z, dtype = np.complex128)
+    z_fit = np.asarray(z_fit, dtype = np.complex128)
+    if z.shape != z_fit.shape:
+        raise ValueError("z and z_fit must have the same shape")
+    
+    # Calculate nrmse
+    resid = z - z_fit     
+    err = np.vdot(resid, resid).real
+    norm = np.vdot(z, z).real
+    return err / norm
 
 @vectorize([float64(float64, float64, float64, float64, boolean)], 
            nopython = True, cache = True)
@@ -114,7 +156,7 @@ def cardan(a, b, c, d, largest = True):
     else:
         v *= J
     roots = np.asarray((u + v - z0, u * J + v * Jc - z0, u * Jc + v * J - z0))
-    if D > 0: # 3 real roots
+    if D > -1e-10: # 3 real roots, D > 0 with numerical tolerance
         if largest:
             return np.max(roots.real)
         else:
@@ -124,18 +166,22 @@ def cardan(a, b, c, d, largest = True):
 
 def get_peak_fwhm(x, y):
     """
-    Gets the index and fwhm of a peak in (x, y) data. x data must be evenly
+    Gets the approximate index and fwhm of a peak in (x, y) data using 
+    scipy.signal.find_peaks and scipy.signal.peak_widths. x data must be evenly
     sampled.
 
     Parameters:
-    x (np.array): x data
-    y (np.array): y data
+    x (np.array): x data.
+    y (np.array): y data.
 
     Returns:
-    peak_index (int): index of the peak
-    fwhm (float): width in x units
+    x_peak (float): x value of the peak.
+    y_peak (float): y value of the peak.
+    fwhm (float): width in x units.
     """
-    x, y = np.asarray(x), np.asarray(y)
+    x, y = np.asarray(x, dtype = np.float64), np.asarray(y, dtype = np.float64)
+    if x.shape != y.shape:
+        raise ValueError("x and y must have the same shape")
     ix = np.argsort(x)
     x, y = x[ix], y[ix]
     interp_factor = 10

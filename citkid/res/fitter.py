@@ -2,7 +2,7 @@ import numpy as np
 from scipy import optimize
 import warnings
 from .funcs import nonlinear_iq_for_fitter, nonlinear_iq, circle_objective
-from .util import bounds_check, calculate_residuals
+from .util import bounds_check, cal_nrmse
 from .gain import fit_and_remove_gain_phase
 from .plot import plot_nonlinear_iq, plot_circle
 from ..util import  combine_figures_vertically
@@ -16,40 +16,40 @@ def fit_nonlinear_iq_with_gain(fgain, zgain, ffine, zfine, frs, Qrs,
     """
     Fits IQ data with gain amplitudes and phase correction from a gain sweep.
     Cuts resonance frequencies from the gain sweep in spans of fr / Qr around fr,
-    where fr is an item in frs and Qr is a corresponding quality factor in Qrs
+    where fr is an item in frs and Qr is a corresponding quality factor in Qrs.
 
-    The optimal fine sweep width is 6 * fr / Qr
-    The optimal gain sweep width is 100 * fr / Qr
+    The optimal fine sweep width is 6 * fr / Qr.
+    The optimal gain sweep width is 100 * fr / Qr.
 
     Parameters:
-    fgain (np.array): gain sweep frequency data
-    zgain (np.array): gain sweep complex S21 data
-    ffine (np.array): fine sweep frequency data
-    zfine (np.array): fine sweep complex S21 data
-    frs (list of float): resonance frequencies to cut from the gain sweep
-    Qrs (list of float): spans of frs / Qrs are cut from the gain sweep
+    fgain (np.array): gain sweep frequency data.
+    zgain (np.array): gain sweep complex S21 data.
+    ffine (np.array): fine sweep frequency data.
+    zfine (np.array): fine sweep complex S21 data.
+    frs (list of float): resonance frequencies to cut from the gain sweep.
+    Qrs (list of float): spans of frs / Qrs are cut from the gain sweep.
     downward (bool): If True, fits the equation for a downward sweep. If
         False, fits for an upward sweep.
     plotq (bool): If True, plots the fits.
     return_dataframe (bool): if True, returns the output of
-        .data_io.make_fit_row instead of the separated data
+        .data_io.make_fit_row instead of the separated data.
     floats_only (bool): Set to True to only keep columns in the 
         dataframe whose values can be represented as floats, 
         i.e. don't store columns for sweep_direction or plotpath.
-    **kwargs: other arguments for fit_nonlinear_iq
+    **kwargs: other arguments for fit_nonlinear_iq.
 
     Returns:
     if return_dataframe:
-        row (pd.Series): fit data as a pandas series
+        row (pd.Series): fit data as a pandas series.
     else:
-        p_amp (np.array): 2nd-order polynomial fit parameters to dB
-        p_phase (np.array): 1st-order polynomial fit parameters to phase
+        p_amp (np.array): 2nd-order polynomial fit parameters to dB.
+        p_phase (np.array): 1st-order polynomial fit parameters to phase.
         p0 (np.array): fit parameter guess.
-        popt (np.array): fit parameters. See p0 parameter
-        perr (np.array): standard errors on fit parameters
-        res (float): fit residuals
+        popt (np.array): fit parameters. See p0 parameter.
+        perr (np.array): standard errors on fit parameters.
+        nrmse (float): normalized root mean square error of the fit.
         fig (pyplot.figure or None): figure with gain fit and nonlinear IQ
-            fit if plotq, or None
+            fit if plotq, or None.
     """
     # Remove gain
     p_amp, p_phase, zfine_rmvd, (fig_gain, axs_gain) = \
@@ -60,7 +60,7 @@ def fit_nonlinear_iq_with_gain(fgain, zgain, ffine, zfine, frs, Qrs,
     zfine_rmvd *= np.exp(-1j * np.angle(zoff))
     p_phase[1] += np.angle(zoff)
     # Fit IQ
-    p0, popt, perr, res, (fig_fit, axs_fit) = fit_nonlinear_iq(ffine,
+    p0, popt, perr, nrmse, (fig_fit, axs_fit) = fit_nonlinear_iq(ffine,
                                             zfine_rmvd, plotq = plotq,
                                             downward = downward, **kwargs)
     if plotq:
@@ -68,11 +68,11 @@ def fit_nonlinear_iq_with_gain(fgain, zgain, ffine, zfine, frs, Qrs,
     else:
         fig = None
     if return_dataframe:
-        row = make_fit_row(p_amp, p_phase, p0, popt, perr, res,
+        row = make_fit_row(p_amp, p_phase, p0, popt, perr, nrmse,
                            downward = downward, plot_path = '', prefix = 'iq',
                            floats_only = floats_only)
         return row, fig
-    return p_amp, p_phase, p0, popt, perr, res, fig
+    return p_amp, p_phase, p0, popt, perr, nrmse, fig
 
 def fit_nonlinear_iq(f, z, bounds = None, p0 = None, fr_guess = None,
                      fit_tau = True, tau_guess = None, downward = True,
@@ -112,7 +112,7 @@ def fit_nonlinear_iq(f, z, bounds = None, p0 = None, fr_guess = None,
     p0 (np.array): fit parameter guess.
     popt (np.array): fit parameters. See p0 parameter
     perr (np.array): standard errors on fit parameters
-    res (float): fit residuals
+    nrmse (float): normalized root mean square error of the fit.
     fig, ax (pyplot figure and axes, or None): plot of data with fit if plotq,
         or None, None
     """
@@ -141,15 +141,15 @@ def fit_nonlinear_iq(f, z, bounds = None, p0 = None, fr_guess = None,
     # Check bounds
     bounds = bounds_check(p0, bounds)
     # fit
-    res_acceptable = False
+    nrmse_acceptable = False
     niter = 0
-    while not res_acceptable:
-        popt, perr, res = fit_util(np.array(p0), np.array(bounds), fit_tau, f,
+    while not nrmse_acceptable:
+        popt, perr, nrmse = fit_util(np.array(p0), np.array(bounds), fit_tau, f,
                                    z_stacked, z, downward)
-        if res < 1e-2 or niter > 1:
-            res_acceptable = True
-        elif res < 1e-1:
-            # If 1e-2 < res < 1e-1, the fit is close but not perfect
+        if nrmse < 1e-2 or niter > 1:
+            nrmse_acceptable = True
+        elif nrmse < 1e-1:
+            # If 1e-2 < nrmse < 1e-1, the fit is close but not perfect
             p0 = np.array(popt)
             niter += 1
         else:
@@ -164,7 +164,7 @@ def fit_nonlinear_iq(f, z, bounds = None, p0 = None, fr_guess = None,
     else:
         figax = None, None
     p0 = np.array(p0)
-    return p0, popt, perr, res, figax
+    return p0, popt, perr, nrmse, figax
 
 def fit_iq_circle(z, x0 = None, plotq = False):
     """
@@ -223,7 +223,7 @@ def fit_util(p0, bounds, fit_tau, f, z_stacked, z, downward = True):
     Returns:
     popt (np.array): fit parameters
     perr (np.array): fit parameter uncertainties
-    res (float): fit residuals
+    nrmse (float): normalized root mean square error of the fit.
     """
     #             fr,   Qr, amp, phi, a, i0, q0, tau
     scaler = [100e-6, 1e-4,   1,   1, 1,  1,  1, 1e6]
@@ -260,5 +260,5 @@ def fit_util(p0, bounds, fit_tau, f, z_stacked, z, downward = True):
     popt = [pi / s for pi, s in zip(popt, scaler)]
     perr = [pi / s for pi, s in zip(perr, scaler)]
     z_fit = nonlinear_iq(f, *popt, downward)
-    res = calculate_residuals(z, z_fit)
-    return popt, perr, res
+    nrmse = cal_nrmse(z, z_fit)
+    return popt, perr, nrmse
