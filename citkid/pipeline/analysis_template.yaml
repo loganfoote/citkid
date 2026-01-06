@@ -3,10 +3,10 @@
 ### ----------------------------- ###
 
 ANALYSIS_STEPS:
-  1 :
-    task: load_global_data # maybe follow this by saving to zarr since it is small
-  2 :
-    task: load_global_res_data # maybe follow this by saving to zarr since it is small
+  # 1 :
+  #   task: load_global_data # maybe follow this by saving to zarr since it is small
+  # 2 :
+  #   task: load_global_res_data # maybe follow this by saving to zarr since it is small
   3 : 
     task: make_fr_spans 
   4 : 

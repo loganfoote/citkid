@@ -42,7 +42,6 @@ class DataSet:
         # Load YAML and convert to calibration pipeline
         yaml_dict = self._load_yaml()
         self.cal_pl = self._convert_yaml_to_steps(yaml_dict)
-        self.cal_pl_list = _convert_dict_to_list(self.cal_pl)
 
         # Set nres 
         # self.nres = len(self.res_idxs) # must be able to produce from pipeline
@@ -97,7 +96,7 @@ class DataSet:
                 raise ValueError(m)
             return x[0]
         return pl_dict
-    
+        
     def confirm_valid_path(self, path):
         """
         Confirm that a list of plStep objects forms a valid path, where all 
@@ -111,7 +110,10 @@ class DataSet:
         """
         # Need to modify this to check if values are in zarr
         valid_inputs = [d for d in dir(self) if '__' not in d]
-        for step in path:
+        for step_ix, lst in enumerate(path):
+            step, param_dict = lst
+            keys = param_dict.keys()
+            valid_inputs.extend(keys)
             for inp in step.param_names:
                 if inp not in valid_inputs and inp != 'data_idx':
                     m = f"Invalid path, input '{inp}' for step '{step.name}'"
@@ -129,24 +131,25 @@ class DataSet:
         """
         self.confirm_valid_path(path)
         for step in path:
-            print(step)
             step.run(self, data_idx)
 
-    def read_data(self, name, data_idx, run):
+    def read_data(self, name, data_idx, run = None):
         """
         Read data attribute 'name' for data indices 'data_idx' from dataset.
 
         Parameters:
         name (str): The name of the data attribute to read.
         data_idx (int or list): The data index or indices to read.
-        run (int): run index (placeholder for future use).
+        run (int): run index, or None to find most recent run index
+            that produced the desired data attribute.
 
         Returns:
         np.ndarray or scalar: The requested data attribute value(s).
         """
-        attr_version = self.get_attr_version(name)
-        grp = self.root[str(attr_version)]
-        return grp[name][:, data_idx]
+        if run is None:
+            run = self.get_attr_version(name)
+        grp = self.root[str(run)]
+        return grp[name][data_idx, ...]
     
     def write_data(self, name, value, data_idx, run, dtype = None):
         """
@@ -160,29 +163,63 @@ class DataSet:
         dtype (np.dtype, optional): The data type to use when writing. Defaults 
             to None (use value's dtype).
         """
+        # Convert data_idx and value to numpy arrays
+        data_idx = np.array(data_idx)
+        value = np.array(value)
+        # Handle cases where data_idx or value are scalars
+        if data_idx.shape == ():
+            data_idx = np.array([data_idx])
+        if value.shape == ():
+            value = np.array([value])
+            
+        # Check if the length of name equals the length of data_idx.
+        if data_idx.shape[0] != value.shape[0]:
+            raise ValueError('name and data_idx must have the same length.')
+                    
         # ensure run group exists (create if missing)
         key = str(run)
         grp = self.root.require_group(key)
-
-        # scalar → wrap as array
-        if not hasattr(value, 'shape'):
-            value = np.array([value])
 
         # set dtype if not provided
         if dtype is None:
             dtype = value.dtype
 
+        # Get the per-element shape of the new value to be added.
+        element_shape = value.shape[1:]
+
         # ensure dataset exists (create if missing)
-        # dataset shape: all value dims + row index at the end
-        shape = (*value.shape, 0)
-        chunks = (*value.shape, 1)  # last axis = 1 for single-row writes
-        grp.require_dataset(name, shape=shape, dtype=dtype, chunks=chunks)
-        exists = grp.require_dataset(f"{name}_exists", shape=shape, dtype=bool,
-                                     chunks=chunks, fill_value=False)
+        # dataset shape: row index at the start + all value dims
+        if name not in grp:
+            shape = (0, *element_shape)
+            chunks = (1, *element_shape)  # first axis = 1 for single-row writes
+            values_arr = grp.create_array(name, shape=shape, dtype=dtype, chunks=chunks)
+            data_idxs = grp.create_array(f"{name}_idx", shape=(0,), dtype=int)
+            exists = grp.create_array(f"{name}_exists", shape=shape, dtype=bool,
+                                      chunks=chunks, fill_value=False)
+            expected_shape = element_shape
+        else:
+            values_arr = grp[name]
+            data_idxs = grp[f"{name}_idx"]
+            exists = grp[f"{name}_exists"]
+            expected_shape = values_arr.shape[1:]
+
+        # Check that shape of the elements of value match the
+        # shape of the elements of values_arr.
+        if element_shape != expected_shape:
+            raise ValueError(f"The shape of 'value' must match the shape of the existing zarr array, {name}.")
 
         # write data at specified indices
-        grp[name][..., data_idx] = value
-        grp[f"{name}_exists"][..., data_idx] = True
+        n = values_arr.shape[0]
+        n_add = data_idx.shape[0]
+        n_new = n + n_add
+        new_shape = (n_new, *expected_shape)
+        values_arr.resize(new_shape)
+        data_idxs.resize((n_new))
+        exists.resize(new_shape)
+        values_arr[-n_add:, ...] = value
+        data_idxs[-n_add:] = data_idx
+        exists[-n_add:, ...] = True
+        
         
     def get_attr_version(self, name):
         """
@@ -249,24 +286,3 @@ class DataSet:
         # attr = object.__getattribute__(self, name)
         
         return attr
-
-def _convert_dict_to_list(pl_dict, key = None):
-        """
-        Converts a path dictionary of plStep objects to a 1-D list.
-        
-        Parameters:
-        pl_dict (dict or plStep): The path dictionary or plStep object.
-        key (str): The key associated with the current pl_dict, used to identify
-            task names.
-
-        Returns:
-        list: The list of plStep objects.
-        """
-        pl_list = []
-        
-        if isinstance(pl_dict, dict):
-            for key, val in pl_dict.items():
-                pl_list.extend(_convert_dict_to_list(val, key))
-        else:#if isinstance(pl_dict, pf.plStep) and key == 'task':
-            pl_list = [pl_dict]
-        return pl_list

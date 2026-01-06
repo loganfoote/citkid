@@ -318,7 +318,7 @@ default_cal_steps =\
   ['fres_all', 'qres_all', 'fg'], ['fr_spans'], 'per-row'),
 
  ('fit_gain', gain.fit_gain, 
-  ['fg', 'zg', 'fr_spans'], ['pamp', 'pphase', 'gain_mask'], 'per-row'),
+  ['fg', 'zg', 'fr_spans'], ['p_amp', 'p_phase', 'gain_mask'], 'per-row'),
 
  ('fit_circ', circle.fit_iq_circle, 
   ['zf_rmv', 'idx_circfit'], ['circ_origin', 'circ_radius'], 'per-row'),
