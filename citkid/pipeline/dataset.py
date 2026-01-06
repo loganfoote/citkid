@@ -110,10 +110,7 @@ class DataSet:
         """
         # Need to modify this to check if values are in zarr
         valid_inputs = [d for d in dir(self) if '__' not in d]
-        for step_ix, lst in enumerate(path):
-            step, param_dict = lst
-            keys = param_dict.keys()
-            valid_inputs.extend(keys)
+        for step in path:
             for inp in step.param_names:
                 if inp not in valid_inputs and inp != 'data_idx':
                     m = f"Invalid path, input '{inp}' for step '{step.name}'"
@@ -146,10 +143,13 @@ class DataSet:
         Returns:
         np.ndarray or scalar: The requested data attribute value(s).
         """
+        data_idx = np.array(data_idx)
+        if data_idx.shape == ():
+            data_idx = np.array([data_idx])
         if run is None:
             run = self.get_attr_version(name)
         grp = self.root[str(run)]
-        return grp[name][data_idx, ...]
+        return grp[name].oindex[data_idx]
     
     def write_data(self, name, value, data_idx, run, dtype = None):
         """
@@ -159,7 +159,7 @@ class DataSet:
         name (str): The name of the data attribute to write.
         value (np.ndarray or scalar): The data to write.
         data_idx (int or list): The data index or indices to write.
-        run (int): run index (placeholder for future use).
+        run (int): run index.
         dtype (np.dtype, optional): The data type to use when writing. Defaults 
             to None (use value's dtype).
         """
@@ -172,10 +172,10 @@ class DataSet:
         if value.shape == ():
             value = np.array([value])
             
-        # Check if the length of name equals the length of data_idx.
+        # Check if the length of value equals the length of data_idx.
         if data_idx.shape[0] != value.shape[0]:
-            raise ValueError('name and data_idx must have the same length.')
-                    
+            raise ValueError('value and data_idx must have the same length.')
+        
         # ensure run group exists (create if missing)
         key = str(run)
         grp = self.root.require_group(key)
@@ -250,7 +250,24 @@ class DataSet:
             if name in attrs:
                 attr_version = run
                 return attr_version
-              
+    
+    def run_exists(self, name, run):
+        """
+        Returns True if data under "name" exists for a specified run,
+        otherwise return False.
+        
+        Parameters:
+        name (str): Name of the attribute to search for.
+        run (int): run index.
+        """
+        data_exists = False
+        try:
+            self.root[f'{run}/{name}']
+            data_exists = True
+        except:
+            pass
+        return data_exists
+    
     def __getattr__(self, name):
         """
         Custom attribute getter to handle LazyAttr creation for per-row
