@@ -161,6 +161,8 @@ def make_fr_spans(fres_all, qres_all, fg):
     """
     fres_all = np.asarray(fres_all, dtype = np.float64)
     qres_all = np.asarray(qres_all, dtype = np.float64)
+    fres_all = np.atleast_1d(fres_all)
+    qres_all = np.atleast_1d(qres_all)
     m = 'fres_all and qres_all must be the same length'
     assert fres_all.shape == qres_all.shape, m
     if fg[0] > fg[-1]:
@@ -169,11 +171,6 @@ def make_fr_spans(fres_all, qres_all, fg):
 
     fr_spans = []
     for fr, qr in zip(fres_all, qres_all):
-        if qr <= 0:
-            continue
-        span = fr / qr
-        # ensure span is in fg range
-        if (fr + span / 2 < fg[0]) or (fr - span / 2 > fg[-1]):
-            continue
+        span = np.abs(fr / qr)
         fr_spans.append((fr, span))
     return np.asarray(fr_spans, dtype = np.float64)

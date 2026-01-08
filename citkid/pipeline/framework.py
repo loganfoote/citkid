@@ -313,7 +313,15 @@ default_cal_steps =\
 
  ('get_xt', np.polyval, 
   ['thetat', 'poly_x'], ['xt'], 'per-row'),
-# analysis steps
+ # extra steps
+ ('get_At', circle.convert_to_A, 
+  ['zt_cent'], ['At'], 'per-row'),
+ ('get_sparper', circle.get_spar_sper, 
+  ['thetat', 'At', 'circ_radius', 'dt', 'sparper_get_freqs'], 
+  ['spar', 'sper'], 'per-row')
+)
+default_analysis_steps =\
+(# analysis steps
  ('make_fr_spans', gain.make_fr_spans, 
   ['fres_all', 'qres_all', 'fg'], ['fr_spans'], 'per-row'),
 
@@ -333,16 +341,12 @@ default_cal_steps =\
   ['xf', 'thetaf', 'xcal_mask'], ['xf_cut', 'thetaf_cut'], 'per-row'),
  ('fit_x_theta', np.polyfit, 
   ['xf_cut', 'thetaf_cut', 'poly_x_deg'], ['poly_x'], 'per-row'),
-# extra steps
- ('get_At', circle.convert_to_A, 
-  ['zt_cent'], ['At'], 'per-row'),
- ('get_sparper', circle.get_spar_sper, 
-  ['thetat', 'At', 'circ_radius', 'dt', 'sparper_get_freqs'], 
-  ['spar', 'sper'], 'per-row')
 )
 
 
 default_cal_steps = [plStep(*cs) for cs in default_cal_steps]
+default_analysis_steps = [plStep(*ans) for ans in default_analysis_steps]
+
 
 # ('rmv_cm_offres', corr.remove_cm_complex, 
 # ['zt_rmv', 'aI', 'aQ', 'AI', 'AQ', 'cm_offres_idx', 'theta_cm_offres'],
