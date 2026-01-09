@@ -39,13 +39,46 @@ class DataSet:
             if step.name not in [s.name for s in self.steps]:
                 self.steps.append(step)
 
+        # Check that we can load nres (number of tones in the data set).
+        steps_returning_nres = []
+        for step in self.steps:
+            if 'nres' in step.return_names:
+                steps_returning_nres.append(step)
+        
+        # Check that there is only one step that returns nres.
+        if len(steps_returning_nres) != 1:
+            m = "There must be exactly one plStep object in the "
+            m += "custom_cal_steps list within custom_steps.py "
+            m += "which returns a parameter named 'nres'. "
+            m += f"{len(steps_returning_nres)} such plStep objects "
+            m += "were provided."
+            raise ValueError(m)
+        
+        # Check that nres is the only returned name.
+        step = steps_returning_nres[0]
+        if step.return_names != ['nres']:
+            m = f"The function named '{step.name}' in "
+            m += "custom_steps.py must only return 'nres'."
+            raise ValueError(m)
+        
+        # Check that the step returning nres has func_type = 'global'.
+        if step.func_type != 'global':
+            m = f"The function named '{step.name}' in "
+            m += "custom_steps.py must have return_type = 'global'."
+            raise ValueError(m)
+        
+        # Load nres, and check that it is integer-valued and > 0.
+        step.run(self)
+        if not (type(self.nres) is int and self.nres > 0):
+            m = "The return parameter 'nres' from the step named "
+            m += f"'{step.name}' in custom_steps.py must be "
+            m += "integer-valued and > 0."
+            raise ValueError(m)
+                
         # Load YAML and convert to calibration pipeline
         yaml_dict = self._load_yaml()
         self.cal_pl = self._convert_yaml_to_steps(yaml_dict)
-
-        # Set nres 
-        # self.nres = len(self.res_idxs) # must be able to produce from pipeline
-        self.nres = 1600  # temporary hardcode until pipeline can produce res_idxs
+        
 
     def _load_custom_steps(self):
         """
@@ -212,13 +245,10 @@ class DataSet:
             chunks = (1, *element_shape)  # first axis = 1 for single-row writes
             values_arr = grp.create_array(name, shape=shape, dtype=dtype, chunks=chunks)
             data_idxs = grp.create_array(f"{name}_idx", shape=(0,), dtype=int)
-            exists = grp.create_array(f"{name}_exists", shape=shape, dtype=bool,
-                                      chunks=chunks, fill_value=False)
             expected_shape = element_shape
         else:
             values_arr = grp[name]
             data_idxs = grp[f"{name}_idx"]
-            exists = grp[f"{name}_exists"]
             expected_shape = values_arr.shape[1:]
 
         # Check that shape of the elements of value match the
@@ -233,11 +263,9 @@ class DataSet:
         new_shape = (n_new, *expected_shape)
         values_arr.resize(new_shape)
         data_idxs.resize((n_new))
-        exists.resize(new_shape)
         values_arr[-n_add:, ...] = value
         data_idxs[-n_add:] = data_idx
-        exists[-n_add:, ...] = True
-        
+                
         
     def get_attr_version(self, name):
         """

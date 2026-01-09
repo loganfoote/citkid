@@ -203,14 +203,17 @@ class plStep:
             self.func_type == "per-row", the function is called separately for 
             each data index in data_idx if data_idx is a list. If data_idx is 
             None, all data indices (0 to DS.nres - 1) are processed. 
-        """
-        assert hasattr(DS, 'nres'), "DS must have 'nres' attribute"
-        if isinstance(data_idx, int):
-            data_idx = [data_idx]
+        """        
+        # Make sure that we don't try to access DS.nres
+        # if the current step's job is to load nres.
+        if self.return_names != ['nres']:
+            assert hasattr(DS, 'nres'), "DS must have 'nres' attribute"
+            if isinstance(data_idx, int):
+                data_idx = [data_idx]
 
-        if self.func_type in ["per-row", "vectorized"] and data_idx is None:
-            data_idx = list(range(DS.nres))
-
+            if self.func_type in ["per-row", "vectorized"] and data_idx is None:
+                data_idx = list(range(DS.nres))
+                
         # --- 1. Collect parameters ---
         params = []
         for p in self.param_names:
