@@ -204,6 +204,20 @@ class DataSet:
         data_idx = np.atleast_1d(data_idx)
         if run_idx is None:
             run_idx = self.get_attr_version(name)
+            # If the run index was not specified, and the
+            # data does not exist in any run, raise an error.
+            if run_idx is None:
+                m = f"'{name}' was not found under any run index "
+                m += "in the zarr file."
+                raise ValueError(m)
+        else:
+            # If the data does not exist in the user-specified
+            # run index, raise an error.
+            if not self.run_exists(name, run_idx):
+                m = f"'{name}' was not found under run index {run_idx} "
+                m += "in the zarr file."
+                raise ValueError(m)
+                
         grp = self.root[str(run_idx)]
         return grp[name].oindex[data_idx]
     
@@ -314,6 +328,11 @@ class DataSet:
             pass
         return data_exists
     
+    
+    # ***EK - The zarr loading is causing inconsistent behavior where
+    # the outputs of a plStep.run call will be stored as a LazyAttr,
+    # but loading the same result from the zarr file is just 
+    # stored as a zarr file.
     def __getattr__(self, name):
         """
         Custom attribute getter to handle LazyAttr creation for per-row
@@ -325,8 +344,15 @@ class DataSet:
         Returns:
         Any: The requested attribute value or LazyAttr.
         """
-        # run = 0
-        # grp = self.root[f'run{run:d}']
+        # Look up the attribute in the zarr file.
+        try:
+            # ***NEED TO IMPLEMENT DYNAMIC RUN INDEX FINDER
+            run_idx = 0
+            grp = self.root[str(run_idx)]
+            attr = grp[name]
+            return attr
+        except:
+            pass
 
         # Only run when normal lookup fails
         cal_pl = object.__getattribute__(self, "cal_pl")
