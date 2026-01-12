@@ -260,5 +260,5 @@ def fit_util(p0, bounds, fit_tau, f, z_stacked, z, downward = True):
     popt = [pi / s for pi, s in zip(popt, scaler)]
     perr = [pi / s for pi, s in zip(perr, scaler)]
     z_fit = nonlinear_iq(f, *popt, downward)
-    nrmse = cal_nrmse(z, z_fit)
+    nrmse = calc_nrmse(z, z_fit)
     return popt, perr, nrmse
