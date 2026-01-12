@@ -17,21 +17,24 @@ def remove_gain(f, z, p_amp, p_phase):
     z_rmvd (np.array, complex128, (N,)): complex S21 data with gain amplitude
         and phase removed.
     """
+    # Input validation
     f = np.asarray(f, dtype = np.float64)
     z = np.asarray(z, dtype = np.complex128)
     p_amp = np.asarray(p_amp, dtype = np.float64)
     p_phase = np.asarray(p_phase, dtype = np.float64)
 
+    # Remove amplitude and phase
     z_rmvd = z / 10 ** (np.polyval(p_amp, f) / 20)
     z_rmvd = z_rmvd / np.exp(1j * np.polyval(p_phase, f))
     return z_rmvd
 
-def get_res_mask(f, fr_spans):
+def get_res_mask(fg, fr_spans):
     """
     Creates a mask for cutting resonances out of a gain sweep.
 
     Parameters:
-    f (np.array, float64): gain sweep frequency data in Hz.
+    fg (np.array, float64): gain sweep frequency data in Hz. Must be sorted in 
+        ascending order.
     fr_spans (list): values are tuples (float64, float64) where the first value.
         is the resonant frequency in Hz and the second is the span. These
         frequency ranges are removed from the gain data.
@@ -40,28 +43,44 @@ def get_res_mask(f, fr_spans):
     mask (np.array, bool): mask for f where False values are resonances to cut
         from the data.
     """
-    f = np.asarray(f, dtype = np.float64)
+    # Input validation
+    fg = np.asarray(fg, dtype = np.float64)
+    if not np.all(fg[:-1] <= fg[1:]):
+        raise ValueError('fg must be sorted in ascending order.')
+    if len(fr_spans) and \
+        not all(a[0] <= b[0] for a, b in zip(fr_spans, fr_spans[1:])):
+        m = 'fr_spans must be sorted in ascending order. Make sure '
+        m += 'fres_all and qres_all are sorted.'
+        raise ValueError(m)
+    
     for c, s in fr_spans:
-        assert isinstance(c, (int, float)), 'Resonant frequency must be numeric'
-        assert isinstance(s, (int, float)), 'Span must be numeric'
+        if not isinstance(c, (int, float)): 
+            raise ValueError('Resonant frequency must be numeric')
+        if not isinstance(s, (int, float)):
+            raise ValueError('Span must be numeric')
         if s < 0:
             raise ValueError('Span must be positive')
+    
+    # Cut fr_spans that are outside fg range and create intervals
+    intervals = [] 
+    for c, s in fr_spans: # assumes fr_spans is sorted by resonant frequency
+        start, end = c - s / 2, c + s / 2 
+        if end < fg[0] or start > fg[-1]: # assumes fg is sorted ascending
+            continue
+        intervals.append((start, end))
 
-    ### Calculate resonance mask
-    intervals = np.array([(c - s / 2, c + s / 2) for c, s in fr_spans])
-    if intervals.shape[0]:
-        intervals = intervals[np.argsort(intervals[:, 0])]
+    # Merge overlapping intervals
     merged = [] # merge intervals
     for start, end in intervals:
         if not merged or start > merged[-1][1]:
             merged.append([start, end])
         else:
             merged[-1][1] = max(merged[-1][1], end)
-    merged = np.array(merged)
 
-    mask = np.zeros_like(f, dtype = bool)
+    # Create mask for frequencies outside merged intervals
+    mask = np.zeros_like(fg, dtype = bool)
     for start, end in merged:
-        mask |= (f >= start) & (f <= end)
+        mask |= (fg >= start) & (fg <= end)
     mask = ~mask
     return mask
 
@@ -84,14 +103,16 @@ def fit_gain(f, z, fr_spans):
         phase.
     mask (np.array, bool): mask for cutting resonances from f and z.
     """
-    ### Check parameters
+    # Input validation
     f = np.asarray(f, dtype = np.float64)
     z = np.asarray(z, dtype = np.complex128)
 
     shape_check = (f.shape == z.shape)
     shape_check = shape_check or (f.shape == tuple()) or (z.shape == tuple())
-    assert shape_check, 'f and z must be the same length'
-    assert len(f) >= 4, 'len(f) must be at least 3'
+    if not shape_check:
+        raise ValueError('f and z must be the same length')
+    if len(f) < 4:
+        raise ValueError('len(f) must be at least 4')
 
     for r in fr_spans:
         if not(len(r) == 2):
@@ -106,11 +127,11 @@ def fit_gain(f, z, fr_spans):
     false_groups = np.flatnonzero(np.diff(np.r_[True, ~mask, True]))
     cut_ixs = false_groups.reshape(-1, 2)
 
-    ### Convert to dB, phase
+    # Convert to dB, phase
     dB = 20 * np.log10(np.abs(z))
     phase = np.unwrap(np.angle(z))
 
-    ### Fit
+    # Fit
     try:
         p_amp = np.polyfit(f, dB, 2)
         # Fit to each cut portion of phase separately to avoid unwrapping issues
@@ -145,32 +166,30 @@ def fit_gain(f, z, fr_spans):
         warnings.warn('Gain fit failed, returning NAN')
     return p_amp, p_phase, mask
 
-def make_fr_spans(fres_all, qres_all, fg):
+def make_fr_spans(fres_all, qres_all):
     """
-    Makes resonance frequency spans for cutting resonances out of gain data.
+    Makes resonance frequency spans for cutting resonances out of gain data. 
 
     Parameters:
-    fres_all (np.array, float64, (M,)): all resonant frequencies in Hz.
+    fres_all (np.array, float64, (M,)): all resonant frequencies in Hz. Must be 
+        sorted in ascending order for get_res_mask.
     qres_all (np.array, float64, (M,)): all resonator quality factors.
-    fg (np.array, float64, (N,)): gain frequency data in Hz. Must be sorted!
 
     Returns:
     fr_spans (list): values are tuples (float64, float64) where the first value.
         is the resonant frequency in Hz and the second is the span. These
         frequency ranges are removed from the gain data.
     """
+    # Input validation
     fres_all = np.asarray(fres_all, dtype = np.float64)
     qres_all = np.asarray(qres_all, dtype = np.float64)
-    # fres_all = np.atleast_1d(fres_all)
-    # qres_all = np.atleast_1d(qres_all)
-    m = 'fres_all and qres_all must be the same length'
-    assert fres_all.shape == qres_all.shape, m
-    if fg[0] > fg[-1]:
-        raise ValueError('fg must be sorted in ascending order')
-    fg = np.asarray(fg, dtype = np.float64)
-
-    fr_spans = []
-    for fr, qr in zip(fres_all, qres_all):
-        span = np.abs(fr / qr)
-        fr_spans.append((fr, span))
+    if not np.all(qres_all > 0):
+        raise ValueError('All quality factors must be positive') 
+    if fres_all.shape != qres_all.shape:
+        raise ValueError('fres_all and qres_all must be the same length')
+    if any(fres_all[1:] < fres_all[:-1]):
+        raise ValueError('fres_all must be sorted in ascending order')
+    
+    # Make resonance frequency spans
+    fr_spans = [(fr, fr / qr) for fr, qr in zip(fres_all, qres_all)]
     return np.asarray(fr_spans, dtype = np.float64)

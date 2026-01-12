@@ -19,6 +19,7 @@ z2[2] = np.nan
     (f0, z0[0], [0, 0, 0, 0], [0, 0, 0], np.ones(f0.shape) * z0[0]),
     (f0, z0, [0], [0], z0),
     (f1, z1, [20], [0], z1 / 10),
+    (np.flip(f1), np.flip(z1), [20], [0], np.flip(z1) / 10), # flipped input
     (f1, z1, [0], [np.pi], z1 * -1),
     (f1, z1, [0], [np.pi / 2], z1 * np.exp(-1j * np.pi / 2)),
     (f1, z1, [0], [np.pi, 0], [1, -1, 1]),
@@ -68,6 +69,8 @@ def test_remove_gain_invalid_input(f, z, p_amp, p_phase):
      [True, True, False, True, True]),
     ([0, 1, 2, 3, 4], None, [(2, 1)], [0, 20, 0], [1e-8, -1e-8],
      [True, True, False, True, True]),
+     ([0, 1, 2, 3, 4], None, [(3, 1)], [0, 20, 0], [1e-8, -1e-8],
+     [True, True, True, False, True]),
 ])
 def test_fit_gain(f, z, fr_spans, p_amp_exp, p_phase_exp, mask_exp):
     if z is None:
@@ -87,6 +90,8 @@ def test_fit_gain(f, z, fr_spans, p_amp_exp, p_phase_exp, mask_exp):
     ([0, 1, 2], [1, 1], []),                       # f and z different lengths
     (['a'], [0], []),                              # f not numeric
     ([0], ['a'], []),                              # z not numeric
+    ([4, 3, 2, 1, 0], [10, 10, 10, 10, 10], [(3, 1)]),  # f not sorted
+    ([0, 1, 2, 4, 3], [10, 10, 10, 10, 10], [(3, 1)]),  # f not sorted
 ])
 def test_fit_gain_invalid_input(f, z, fr_spans):
     with pytest.raises(Exception):
@@ -98,6 +103,11 @@ def test_fit_gain_invalid_input(f, z, fr_spans):
 @pytest.mark.parametrize("f,fr_spans,mask_exp", [
     ([0, 1, 2, 3, 4], [], [True] * 5),
     ([0, 1, 2, 3, 4], [(2, 1)], [True, True, False, True, True]),
+    ([0, 1, 2, 3, 4], [(2, 1), (5, 1)], [True, True, False, True, True]),
+    ([0, 1, 2, 3, 4], [(5, 2)], [True, True, True, True, False]),
+    ([2, 3, 4, 5, 6], [(1, 1)], [True, True, True, True, True]),
+    ([2, 3, 4, 5, 6], [(1, 2)], [False, True, True, True, True]),
+    ([0, 1, 2, 3, 4], [(10, 2)], [True, True, True, True, True]),
     ([0, 1, 2, 3, 4], [(2, 1)], [True, True, False, True, True]),
     ([0, 1, 2, 3, 4], [(1, 2)], [False, False, False, True, True]),
     ([0, 1, 2 + 1e-9, 3, 4], [(1, 2)], [False, False, True, True, True]),
@@ -118,6 +128,9 @@ def test_get_res_mask(f, fr_spans, mask_exp):
     ([0, 1, 2], [1]),  # fr_spans not list of tuples
     (['a'], []),       # f not numeric  
     ([0], ['a']),      # fr_spans not numeric
+    ([0, 1, 2, 4, 3], [(1, 3), (2, 2)]),  # f not sorted
+    ([4, 3, 2, 1, 0], [(1, 3), (2, 2)]),  # f not sorted
+    ([0, 1, 2, 3, 4], [(2, 1), (1, 1)]),  # fr_spans not sorted
 ])
 def test_get_res_mask_invalid_input(f, fr_spans):
     with pytest.raises(Exception):
@@ -127,25 +140,24 @@ def test_get_res_mask_invalid_input(f, fr_spans):
 ################################ make_fr_spans #################################
 ################################################################################
 # Neet to finish writing tests here
-@pytest.mark.parametrize("fres_all,qres_all,fg,fr_spans_exp", [
-    ([1e9, 2e9], [1e9, 1e9], [1e9, 1.1e9], [[1e9, 1]]), 
-    ([1e9, 2e9, 3e9], [1e9, 2e9, 1e9], [1e9, 1.5e9, 2.5e9], [[1e9, 1], [2e9, 1]]), 
-    ([1e9], [1e9], [0.5e9, 1.5e9], [[1e9, 1]]), 
-    ([1e9], [1e9], [0.5e9, 0.9e9], []),
-    ([], [], [1e9, 1.1e9], []),
-    
+@pytest.mark.parametrize("fres_all,qres_all", [
+    ([1e9, 2e9], [1e9, 1e9]),  
+    ([1e9], [1e9]), 
+    ([], []),
+    ([1e9, 2e9, 3e9], [1e6, 2e6, 3e6]),
 ])
-def test_make_fr_spans(fres_all, qres_all, fg, fr_spans_exp):
-    fr_spans = gain.make_fr_spans(fres_all, qres_all, fg)
+def test_make_fr_spans(fres_all, qres_all):
+    fr_spans = gain.make_fr_spans(fres_all, qres_all)
+    fr_spans_exp = [(fr, fr / qr) for fr, qr in zip(fres_all, qres_all)]
     assert np.allclose(fr_spans, fr_spans_exp)
 
-@pytest.mark.parametrize("fres_all,qres_all,fg", [
-    ([1e9, 2e9], [1e9], [1e9, 1.1e9]),  # fres_all and qres_all different lengths
-    (['a'], [1e9], [1e9, 1.1e9]),     # fres_all not numeric
-    ([1e9], ['a'], [1e9, 1.1e9]),     # qres_all not numeric
-    ([1e9], [1e9], ['a']),            # fg not numeric  
-    ([2e9, 1e9], [1e9, 1e9], [1.1e9, 1e9]),  # fg not sorted
+@pytest.mark.parametrize("fres_all,qres_all", [
+    ([1e9, 2e9], [1e9]),  # fres_all and qres_all different lengths
+    (['a'], [1e9]),     # fres_all not numeric
+    ([1e9], ['a']),     # qres_all not numeric
+    ([3e9, 2e9, 1e9], [1e6, 2e6, 3e6]), # fres_all not sorted
+    ([1e9, 2e9, 1e9], [1e6, 2e6, 3e6]) # fres_all not sorted
 ])
-def test_make_fr_spans_invalid_input(fres_all, qres_all, fg):
+def test_make_fr_spans_invalid_input(fres_all, qres_all):
     with pytest.raises(Exception):
-        gain.make_fr_spans(fres_all, qres_all, fg)
+        gain.make_fr_spans(fres_all, qres_all)

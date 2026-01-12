@@ -64,7 +64,7 @@ def test_steps_init(name, func, param_names, return_names, func_type):
     ('step5', lambda x: x+1, ['x'], ['y'], 'invalid_type'), # invalid func_type
 ])
 def test_steps_init_invalid(name, func, param_names, return_names, func_type):
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         pf.plStep(name, func, param_names, return_names, func_type)
 
 # test run method for different func_types
@@ -74,11 +74,10 @@ def test_steps_run_global():
         DS = DummyDS()
         step = pf.plStep('global_step', lambda: 42, [], ['result'], func_type)
         
-        # should be independent of data_idx 
-        for data_idx in [None, 0, 1, [1,2,3]]:
-            step.run(DS, data_idx = data_idx) 
-            assert DS.result == 42 
-            del DS.result 
+        # data_idx must be None
+        step.run(DS, data_idx = None) 
+        assert DS.result == 42 
+        del DS.result 
 
         # Should take inputs successfully 
         step.param_names = ['x']
@@ -97,6 +96,11 @@ def test_steps_run_global_bad_input():
                          ['x'], ['result'], func_type)
         with pytest.raises(AttributeError):
             step.run(DS)
+
+        # data_idx must be None
+        DS.x = 1 
+        with pytest.raises(ValueError):
+            step.run(DS, data_idx = 0)
 
         # Input of wrong length should raise error (no vectorized support)
         DS.x = [1,2,3]
@@ -361,9 +365,9 @@ def test_lazyattr_init():
     assert str(LA) == s, "__str__ output incorrect with cached rows"
 
 def test_lazyattr_init_invalid():
-    with pytest.raises(AssertionError): # incorrect DS datatype
+    with pytest.raises(AttributeError): # DS missing attribute
         pf.LazyAttr("not_a_dataset", 'test_attr')
-    with pytest.raises(AssertionError): # incorrect name datatype
+    with pytest.raises(ValueError): # incorrect name datatype
         pf.LazyAttr(DS, 123)
 
 # _ensure_loaded 
@@ -391,9 +395,9 @@ def test_lazyattr_ensure_loaded_invalid():
         LA._ensure_loaded("not_a_list_or_int")
     with pytest.raises(ValueError): # rows contain non-int
         LA._ensure_loaded([1, 'a', 3])
-    with pytest.raises(AssertionError): # rows out of bounds
+    with pytest.raises(ValueError): # rows out of bounds
         LA._ensure_loaded([-15, 2])
-    with pytest.raises(AssertionError): # rows out of bounds
+    with pytest.raises(ValueError): # rows out of bounds
         LA._ensure_loaded([0, 10])
     with pytest.raises(AttributeError):
         DS.d._ensure_loaded([1,2]) # no path to d
@@ -536,7 +540,7 @@ def test_find_pl_path(tree, return_name, expected_path):
 
 # don't need to check invalid tree input, handled in check_pl_tree_structure
 def test_find_pl_path_invalid_input():
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         pf.find_pl_path({}, 123) # name not str
     with pytest.raises(ValueError):
         pf.find_pl_path({1: step1}, 'test') # root keys must end in '_STEPS'

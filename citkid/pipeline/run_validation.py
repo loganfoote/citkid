@@ -19,8 +19,10 @@ def _get_most_recent_run(name, saved):
     int: The most recent run index where the parameter exists, or -1 if not 
         found.
     """
-    assert isinstance(name, str), "Parameter name must be a string" 
-    assert isinstance(saved, dict), "Saved runs must be a dictionary" 
+    if not isinstance(name, str):
+        raise ValueError("Parameter name must be a string") 
+    if not isinstance(saved, dict):
+        raise ValueError("Saved runs must be a dictionary")
 
     for k in sorted(saved, reverse = True):
         if any(t[0] == name for t in saved[k]):
@@ -46,14 +48,18 @@ def _get_sub_dependencies(name, run_idx, saved):
     dict: A dictionary of dependencies for the given parameter, where keys are
         parameter names and values are their corresponding run indices.
     """
-    assert isinstance(name, str), "Parameter name must be a string"
-    assert isinstance(run_idx, int), "Run index must be an integer"
-    assert isinstance(saved, dict), "Saved runs must be a dictionary"
+    if not isinstance(name, str):
+        raise ValueError("Parameter name must be a string")
+    if not isinstance(run_idx, int):
+        raise ValueError("Run index must be an integer")
+    if not isinstance(saved, dict):
+        raise ValueError("Saved runs must be a dictionary")
 
     prev_deps = [s for s in saved[run_idx] if s[0] == name] 
     if len(prev_deps) == 0:
         return LookupError(f"No entry for {name} in run {run_idx}")
-    assert len(prev_deps) == 1, f"Multiple entries for {name} in run {run_idx}"
+    if len(prev_deps) != 1:
+        raise ValueError(f"Multiple entries for {name} in run {run_idx}")
     # prev_deps is a list with one element: (name, dependencies dict)
     return prev_deps[0][1] 
 
@@ -75,8 +81,11 @@ def _get_lowest_runs(sub_dependencies):
     conflicts (bool): True if any parameter has different runs in different 
         sub_dependencies, False otherwise.
     """
-    assert isinstance(sub_dependencies, dict), \
-        "Sub-dependencies must be a dictionary"
+    if not isinstance(sub_dependencies, dict):
+        raise ValueError("Sub-dependencies must be a dictionary")
+    for d in sub_dependencies.values():
+        if not isinstance(d, dict):
+            raise ValueError("Each sub-dependency must be a dictionary")
     
     lowest_runs, conflicts = {}, False
     for d in sub_dependencies.values(): 
@@ -155,8 +164,9 @@ def _get_dependencies(param_names, saved):
         warnings.warn(msg)
 
     # Sanity check: ensure no input names depend on subfunction input names
-    assert not any([k in dependencies.keys() for k in lowest_runs.keys()]), \
-        "Function input names cannot depend on subfunction input names"
+    if any([k in dependencies.keys() for k in lowest_runs.keys()]):
+        m = "Function input names cannot depend on subfunction input names"
+        raise ValueError(m)
 
     # Merge sub-dependencies of each parameter into dependencies
     dependencies.update(lowest_runs)

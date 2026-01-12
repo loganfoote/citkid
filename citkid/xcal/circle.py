@@ -41,7 +41,7 @@ def fit_iq_circle(z, mask = None):
     origin (complex): center of the fitted circle.
     radius (float): radius of the fitted circle.
     """
-    # input validation and masking
+    # Input validation and masking
     z = np.asarray(z, dtype = np.complex128)
     if mask is not None:
         mask = np.asarray(mask, dtype = np.bool_)
@@ -51,15 +51,15 @@ def fit_iq_circle(z, mask = None):
     if not len(z) >= 3:
         raise ValueError("At least 3 data points are required for fitting.")
     
-    # get x0
+    # Get x0
     i, q = z.real, z.imag
     x0 = [(max(i) + min(i))/2, (max(q) + min(q))/2]
     x0.append((max(i) - min(i) + max(q) - min(q)) / 4)
 
-    # perform minimization
+    # Perform minimization
     popt = optimize.fmin(circle_objective, x0, (i, q), disp = 0)
 
-    # decompose popt
+    # Decompose popt
     origin = popt[0] + 1j * popt[1]
     radius = popt[2]
     return origin, radius
@@ -87,7 +87,8 @@ def convert_to_theta(z, unwrap = False):
     Convert complex S21 data points to phase angles (theta).
 
     Parameters:
-    z (array-like, complex128): complex S21 data after centering and rotation.
+    z (array-like, complex128): complex S21 data after centering and rotation. 
+        Must be sorted in ascending or descending order of frequency.
     unwrap (bool): whether to unwrap the phase angles.
 
     Returns:
@@ -120,8 +121,8 @@ def get_spar_sper(theta, A, radius, dt, get_freqs = True):
     Calculate the PSDs of parallel and perpendicular noise components.
     
     Parameters:
-    theta (array-like, float64): noise phase angle in radians.
-    A (array-like, float64): noise amplitude.
+    theta (array-like, float64): phase noise timestream in radians.
+    A (array-like, float64): amplitude noise timestream in normalized units.
     radius (float): radius of the IQ circle.
     dt (float): sample time in s. 
     get_freqs (bool): whether to return the frequency array.
@@ -134,16 +135,21 @@ def get_spar_sper(theta, A, radius, dt, get_freqs = True):
         - sper (array-like, float64): PSD of perpendicular noise component in 
                                       dBc.
     """
+    # Input validation
     theta = np.asarray(theta, dtype = np.float64)
     A = np.asarray(A, dtype = np.float64)
+    if not np.isfinite(radius): 
+        raise ValueError("radius must be a finite number")
+    if not (np.isfinite(dt) and dt > 0):
+        raise ValueError("dt must be a positive finite number")
+    if not np.all(np.isfinite(theta)):
+        raise ValueError("theta contains non-finite values")
+    if not np.all(np.isfinite(A)):
+        raise ValueError("A contains non-finite values")
+    if theta.shape != A.shape:
+        raise ValueError("theta and A must have the same shape")
 
-    assert np.isfinite(radius), "radius must be a finite number"
-    assert np.isfinite(dt) and dt > 0, "dt must be a positive finite number"
-    assert np.all(np.isfinite(theta)), "theta contains non-finite values"
-    assert np.all(np.isfinite(A)), "A contains non-finite values"
-    assert theta.shape == A.shape, "theta and A must have the same shape"
-
-    # compute PSDs
+    # Compute PSDs
     spar = get_psd(theta * radius, dt, get_frequencies = False)
     if get_freqs:
         freq, sper = get_psd(A, dt, get_frequencies = True)

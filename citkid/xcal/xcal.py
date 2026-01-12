@@ -12,7 +12,8 @@ def get_xcal_mask(ff, theta_f, theta_t, idx0_offset = 3, idx1_offset = 7,
     offsets.
 
     Parameters:
-    ff (array-like, float64): frequency values from the fine s21 sweep in Hz.
+    ff (array-like, float64): frequency values from the fine s21 sweep in Hz. 
+        Must be sorted in ascending order.
     theta_f (array-like, float64): theta values from the fine s21 sweep.
     theta_t (array-like, float64): theta values from the noise measurement.
     idx0_offset (int): number of indices to offset below the start index.
@@ -26,20 +27,21 @@ def get_xcal_mask(ff, theta_f, theta_t, idx0_offset = 3, idx1_offset = 7,
     Returns:
     mask (array-like, bool): mask of theta_f.
     """
-    # format and sort inputs
+    # Input validation
     ff = np.asarray(ff, dtype = np.float64)
     theta_f = np.asarray(theta_f, dtype = np.float64)
     theta_t = np.asarray(theta_t, dtype = np.float64)
-    assert (type(idx0_offset) == int) and (type(idx1_offset) == int), \
-        "idx0_offset and idx1_offset must be integers."
-    assert len(ff) == len(theta_f), \
-        "ff and theta_f must have the same length."
+    if not isinstance(idx0_offset, (int, np.integer)) or \
+        not isinstance(idx1_offset, (int, np.integer)):
+        raise ValueError("idx0_offset and idx1_offset must be integers.")
+    if len(ff) != len(theta_f):
+        raise ValueError("ff and theta_f must have the same length.")
     if len(ff) == 0:
         return np.array([], dtype = bool)
-    idx = np.argsort(ff)
-    ff, theta_f = ff[idx], theta_f[idx] 
+    if not all(ff[1:] >= ff[:-1]):
+        raise ValueError("ff must be sorted in ascending order.")
 
-    # apply cutoff to theta_t
+    # Apply cutoff to theta_t
     if std_cutoff is not None:
         # determine signal cutoff
         theta_t_std = np.std(theta_t)

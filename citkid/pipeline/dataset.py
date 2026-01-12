@@ -16,21 +16,37 @@ class LazyZarrArray:
         return None
     
 class DataSet:
-    def __init__(self, directory, yaml_path, zarr_path):
+    def __init__(self, custom_path, yaml_path, zarr_path):
         """
-        Initialize the dataset with a calibration pipeline defined by a YAML file.  
+        Initialize the dataset with a calibration pipeline defined by a YAML 
+        file.  
         
         Parameters:
-        directory (str): The base directory for the dataset.
+        custom_path (str): Directory to the .py file containing custom 
+            calibration functions.
         zarr_path (str): The path to the zarr file containing the analysis 
             outputs.
         yaml_path (str): The path to the YAML configuration file.
         """
         # Normalize paths 
-        self.directory = os.path.normpath(directory)
+        if custom_path is not None:
+            self.custom_path = os.path.normpath(custom_path)
+        else:
+            self.custom_path = None
         self.zarr_path = os.path.normpath(zarr_path)
         self.root = zarr.open_group(self.zarr_path, mode = 'a')
         self.yaml_path = os.path.normpath(yaml_path)
+
+        # Input validation 
+        if self.custom_path is not None and \
+            not self.custom_path.endswith('.py'):
+            raise ValueError("custom_path must point to a .py file.")
+        if not self.zarr_path.endswith('.zarr'):
+            raise ValueError("zarr_path must point to a .zarr file.")
+        is_yaml = self.yaml_path.endswith('.yaml') 
+        is_yaml = is_yaml or self.yaml_path.endswith('.yml')
+        if not is_yaml:
+            raise ValueError("yaml_path must point to a .yaml or .yml file.")
 
         # Load steps from custom_steps.py if it exists
         self.steps = self._load_custom_steps()
@@ -39,47 +55,16 @@ class DataSet:
             if step.name not in [s.name for s in self.steps]:
                 self.steps.append(step)
 
-        # Check that we can load nres (number of tones in the data set).
-        steps_returning_nres = []
-        for step in self.steps:
-            if 'nres' in step.return_names:
-                steps_returning_nres.append(step)
-        
-        # Check that there is only one step that returns nres.
-        if len(steps_returning_nres) != 1:
-            m = "There must be exactly one plStep object in the "
-            m += "custom_cal_steps list within custom_steps.py "
-            m += "which returns a parameter named 'nres'. "
-            m += f"{len(steps_returning_nres)} such plStep objects "
-            m += "were provided."
-            raise ValueError(m)
-        
-        # Check that nres is the only returned name.
-        step = steps_returning_nres[0]
-        if step.return_names != ['nres']:
-            m = f"The function named '{step.name}' in "
-            m += "custom_steps.py must only return 'nres'."
-            raise ValueError(m)
-        
-        # Check that the step returning nres has func_type = 'global'.
-        if step.func_type != 'global':
-            m = f"The function named '{step.name}' in "
-            m += "custom_steps.py must have return_type = 'global'."
-            raise ValueError(m)
-        
-        # Load nres, and check that it is integer-valued and > 0.
-        step.run(self)
-        if not (type(self.nres) is int and self.nres > 0):
-            m = "The return parameter 'nres' from the step named "
-            m += f"'{step.name}' in custom_steps.py must be "
-            m += "integer-valued and > 0."
-            raise ValueError(m)
+        # hard-coded nres for now
+        self.nres = 1600
                 
         # Load YAML and convert to calibration pipeline
         yaml_dict = self._load_yaml()
         self.cal_pl = self._convert_yaml_to_steps(yaml_dict)
-        
 
+        # confirm that the cal_plstructure is valid
+        pf.check_pl_tree_structure(self.cal_pl) 
+        
     def _load_custom_steps(self):
         """
         Load custom steps from 'custom_steps.py' in the dataset directory.
@@ -87,12 +72,15 @@ class DataSet:
         Returns:
         list: A list of custom plStep objects.
         """
-        custom_module_path = os.path.join(self.directory, 'custom_steps.py')
-        if not os.path.exists(custom_module_path):
+        if self.custom_path is None:
             return []
+        
+        if not os.path.exists(self.custom_path):
+            m = f"Custom path '{self.custom_path}' does not exist."
+            raise FileNotFoundError(m)
 
         spec = importlib.util.spec_from_file_location("custom_cal_steps", 
-                                                      custom_module_path)
+                                                      self.custom_path)
         cs = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cs)
         return cs.custom_cal_steps
@@ -375,4 +363,27 @@ class DataSet:
         attr = object.__getattribute__(self, name)
         
         return attr
+    
+    def _validate_nres(self):
+        path = pf.find_pl_path(self.cal_pl, 'nres')
+        step = path[-1] 
+
+        # Check that nres is the only returned name.
+        if len(step.return_names) != 1:
+            m = f"The function named '{step.name}' in "
+            m += "custom_steps.py must only return 'nres'."
+            raise ValueError(m)
+        
+        # Check that the step returning nres has func_type = 'global'.
+        if step.func_type != 'global':
+            m = f"The function named '{step.name}' in "
+            m += "custom_steps.py must have return_type = 'global'."
+            raise ValueError(m)
+        
+        # Load nres, and check that it is integer-valued and > 0.
+        if not (type(self.nres) is int and self.nres > 0):
+            m = "The return parameter 'nres' from the step named "
+            m += f"'{step.name}' in custom_steps.py must be "
+            m += "integer-valued and > 0."
+            raise ValueError(m)
 

@@ -19,24 +19,29 @@ def plot_gain_fit(f, z, mask, p_amp, p_phase):
     Returns:
     fig, axs (pyplot figure and axis): data and fit plot
     """
+    # Input validation 
     f = np.asarray(f, dtype = np.float64)
     z = np.asarray(z, dtype = np.complex128)
     mask = np.asarray(mask, dtype = bool)
-    assert f.shape == z.shape == mask.shape
+    if not f.shape == z.shape == mask.shape:
+        raise ValueError("f, z, and mask must have the same shape.")
+    p_amp = np.asarray(p_amp, dtype = np.float64)
+    p_phase = np.asarray(p_phase, dtype = np.float64)
+    
+    # Create cut arrays
     f_cut, z_cut =  f[mask], z[mask]
     dB = 20 * np.log10(np.abs(z))
     dB_cut = 20 * np.log10(np.abs(z_cut))
     phase_cut = np.angle(z_cut)
-    p_amp = np.asarray(p_amp, dtype = np.float64)
-    p_phase = np.asarray(p_phase, dtype = np.float64)
-
     fmean = np.mean(f)
 
+    # Setup plot
     fig, axs = plt.subplots(1, 2, figsize = [6, 3], dpi = 72, layout = 'tight')
     xlbl = f'(f - {fmean / 1e6:.04f} MHz) (kHz)'
     axs[1].set(ylabel = 'Phase', xlabel = xlbl)
     axs[0].set(ylabel = '|S21| (dB)', xlabel = xlbl)
 
+    # Plot amplitude data
     c0, c1 = plt.cm.viridis(0.33), plt.cm.viridis(0.67)
     axs[0].plot((f - fmean) * 1e-3, dB, '.', color = c1, 
                 label = 'Raw data', aa = False)
@@ -47,6 +52,7 @@ def plot_gain_fit(f, z, mask, p_amp, p_phase):
         axs[0].plot((fsamp - fmean) * 1e-3, np.polyval(p_amp, fsamp), '--k', 
                     label = 'Fit', aa = False)
 
+    # Plot phase data
     axs[1].plot([], [], '.', color = c1, label = 'Raw data', aa = False)
     axs[1].plot((f_cut - fmean) * 1e-3, phase_cut, '.', color = c0, 
                 label = 'Fitted data', aa = False)
@@ -54,6 +60,7 @@ def plot_gain_fit(f, z, mask, p_amp, p_phase):
         axs[1].plot((fsamp - fmean) * 1e-3, np.polyval(p_phase, fsamp), '--k', 
                     label = 'Fit', aa = False)
 
+    # Add legend and return figure and axes
     axs[1].legend(framealpha = 1, loc = 'lower left')
     return fig, axs
 
@@ -77,9 +84,11 @@ def plot_s21(f, z, zt = None, fg = None, zg = None):
     axs (list, pyplot.axis): pyplot axes.axs[0] is the |S21| vs frequency plot 
         and axs[1] is the IQ plot.
     """
+    # Input validation
     f = np.asarray(f, dtype = np.float64)
     z = np.asarray(z, dtype = np.complex128)
-    assert f.shape == z.shape, 'f and z must be the same shape'
+    if f.shape != z.shape:
+        raise ValueError('f and z must be the same shape')
     fmean = np.mean(f) 
 
     # Set up plots
@@ -93,7 +102,8 @@ def plot_s21(f, z, zt = None, fg = None, zg = None):
     if fg is not None:
         fg = np.asarray(fg, dtype = np.float64)
         zg = np.asarray(zg, dtype = np.complex128)
-        assert fg.shape == zg.shape, 'fg and zg must be the same shape'
+        if fg.shape != zg.shape:
+            raise ValueError('fg and zg must be the same shape')
         axs[0].plot((fg - fmean) / 1e3, 20 * np.log10(np.abs(zg)), 'o', 
                     color = plt.cm.viridis(0.33), aa = False)
         axs[1].plot(zg.real, zg.imag, 'o', color = plt.cm.viridis(0.33), 
@@ -129,37 +139,45 @@ def plot_circfit(z, origin, radius, zt = None, mask = None):
     Returns:
     fig, ax (pyplot figure and axis): data and fit plot.
     """
+    # Input validation
     z = np.asarray(z, dtype = np.complex128) 
-    assert isinstance(origin, (complex, np.complexfloating, 
-                               np.floating, np.integer, float, int)), \
-        "origin must be complex."
-    assert isinstance(radius, (float, np.floating)), \
-        "radius must be float." 
+    if not isinstance(origin, (complex, np.complexfloating, 
+                               np.floating, np.integer, float, int)):
+        raise ValueError("origin must be complex.")
+    if not isinstance(radius, (float, np.floating)):
+        raise ValueError("radius must be float.") 
+
+    # Create cut array based on mask
     if mask is not None:
         mask = np.asarray(mask, dtype = np.bool_)
         z_cut = z[mask]
     else:
         z_cut = None
     
+    # Setup plot
     fig, ax = plt.subplots(figsize = (3, 3), layout = 'tight', dpi = 72)
     ax.set(xlabel = 'I', ylabel = 'Q')
     ax.set(aspect = 'equal', adjustable = 'datalim')
+    # Plot data
     ax.plot(np.real(z), np.imag(z), 'o', color = plt.cm.viridis(0.), 
             aa = False, label = 'data')
     if z_cut is not None:
         ax.plot(np.real(z_cut), np.imag(z_cut), 'o', 
                 color = plt.cm.viridis(0.33), aa = False, label = 'fit data')
-    
+        
+    # Plot circle fit
     cir = plt.Circle((origin.real, origin.imag), radius, color = 'k', 
                      fill = False, aa = False)
     ax.add_patch(cir)
     ax.plot([], [], '-k', label = 'fit')
 
+    # Plot timestream data
     if zt is not None:
         zt = np.asarray(zt, dtype = np.complex128) 
         ax.plot(zt.real, zt.imag, '.', color = plt.cm.viridis(0.67), 
                 aa = False, rasterized = True, label = 'Noise')
         
+    # Add legend and return figure and axis
     ax.legend(loc = 'center', framealpha = 1)
     return fig, ax
 
@@ -177,21 +195,28 @@ def plot_sparper(f, spar, sper, nbins, fmin):
     Returns:
     fig, ax (pyplot figure and axis): sparper plot.
     """
+    # Input validation
     f = np.asarray(f, dtype = np.float64)
     spar = np.asarray(spar, dtype = np.float64)
     sper = np.asarray(sper, dtype = np.float64)
-    assert f.shape == spar.shape == sper.shape, \
-        "f, spar, and sper must be the same shape." 
+    if not f.shape == spar.shape == sper.shape:
+        raise ValueError("f, spar, and sper must be the same shape.") 
+    if not all(f[1:] - f[:-1] >= 0):
+        raise ValueError("f must be sorted in ascending order.")
     
-    # bin PSDs 
+    # Bin PSDs 
     f, spar, sper = bin_psd(f, [f, spar, sper], nbins = nbins, fmin = fmin)
 
-    # plot
+    # Setup plot
     fig, ax = plt.subplots(figsize = [5, 3], layout = 'tight', dpi = 72) 
     ax.set(ylabel = 'S (dBc/Hz)', xlabel = 'Frequency (Hz)')
     ax.set(xscale = 'log')
+
+    # Plot PSDs
     ax.plot(f, spar, color = plt.cm.viridis(0.33), aa = False, label = 'PAR')
     ax.plot(f, sper, color = plt.cm.viridis(0.67), aa = False, label = 'PER')
+
+    # Add legend and return figure and axis
     ax.legend(framealpha = 1)
     return fig, ax
 
@@ -214,32 +239,38 @@ def plot_xcal(thetaf, xf, zf_cent, xcal_mask, poly_x, thetat = None,
     Returns:
     fig, axs (pyplot figure and axis): x vs theta and IQ data plot.
     """
-    # check datatypes and shapes
+    # Input validation
     thetaf = np.asarray(thetaf, dtype = np.float64)
     xf = np.asarray(xf, dtype = np.float64)
     xcal_mask = np.asarray(xcal_mask, dtype = np.bool_)
     if thetat is not None:
         thetat = np.asarray(thetat, dtype = np.float64)
-        assert thetat.ndim == 1
+        if not thetat.ndim == 1:
+            raise ValueError("thetat must be 1-dimensional")
     poly_x = np.asarray(poly_x, dtype = np.float64)
     zf_cent = np.asarray(zf_cent, dtype = np.complex128)
     if zt_cent is not None:
         zt_cent = np.asarray(zt_cent, dtype = np.complex128)
-    assert thetaf.shape == xf.shape
-    assert np.all((xcal_mask >= 0) & (xcal_mask < len(thetaf)))
-    assert poly_x.ndim == 1
+    if thetaf.shape != xf.shape:
+        raise ValueError("thetaf and xf must have the same shape.")
+    if not np.all((xcal_mask >= 0) & (xcal_mask < len(thetaf))):
+        raise ValueError("xcal_mask must be within the range of thetaf.")
+    if poly_x.ndim != 1:
+        raise ValueError("poly_x must be 1-dimensional.")
+    if zf_cent.shape != thetaf.shape:
+        raise ValueError("zf_cent must have the same shape as thetaf.")
    
-    # cut fine sweep data for fit
+    # Cut fine sweep data for fit
     thetaf_cut, xf_cut = thetaf[xcal_mask], xf[xcal_mask]
     zf_cut = zf_cent[xcal_mask]
 
-    # set up subplots
+    # Setup plot
     fig, axs = plt.subplots(1, 2, figsize = [6, 3], layout = 'tight', dpi = 72)
     axs[0].set(xlabel = 'theta', ylabel = 'x (kHz / GHz)')
     axs[1].set(xlabel = 'I', ylabel = 'Q', 
                aspect = 'equal', adjustable = 'datalim')
     
-    # plot x vs theta cal data
+    # Plot x vs theta cal data
     axs[0].plot(thetaf_cut, xf_cut * 1e6, 'o', color = plt.cm.viridis(0.33), 
                 aa = False)
     tsamp = np.linspace(min(thetaf_cut), max(thetaf_cut), 60)
@@ -248,7 +279,7 @@ def plot_xcal(thetaf, xf, zf_cent, xcal_mask, poly_x, thetat = None,
         axs[0].plot(thetat, np.polyval(poly_x, thetat) * 1e6, '.', 
                 color = plt.cm.viridis(0.67), aa = False, rasterized = True)
 
-    # plot IQ data
+    # Plot IQ data
     axs[1].plot(zf_cent.real, zf_cent.imag, 'o', color = plt.cm.viridis(0.), 
                 aa = False, label = 'full fine sweep') 
     axs[1].plot(zf_cut.real, zf_cut.imag, 'o', color = plt.cm.viridis(0.33), 
@@ -258,5 +289,7 @@ def plot_xcal(thetaf, xf, zf_cent, xcal_mask, poly_x, thetat = None,
                     color = plt.cm.viridis(0.67), aa = False, 
                     rasterized = True, label = 'timestream')
     axs[1].plot([], [], '--k', label = 'fit')
+
+    # Add legend and return figure and axis
     axs[1].legend(framealpha = 1)
     return fig, axs
