@@ -161,8 +161,8 @@ def make_fr_spans(fres_all, qres_all, fg):
     """
     fres_all = np.asarray(fres_all, dtype = np.float64)
     qres_all = np.asarray(qres_all, dtype = np.float64)
-    fres_all = np.atleast_1d(fres_all)
-    qres_all = np.atleast_1d(qres_all)
+    # fres_all = np.atleast_1d(fres_all)
+    # qres_all = np.atleast_1d(qres_all)
     m = 'fres_all and qres_all must be the same length'
     assert fres_all.shape == qres_all.shape, m
     if fg[0] > fg[-1]:
