@@ -2,7 +2,7 @@ import numpy as np
 from scipy import optimize
 import warnings
 from .funcs import nonlinear_iq_for_fitter, nonlinear_iq, circle_objective
-from .util import bounds_check, cal_nrmse
+from .util import bounds_check, calc_nrmse
 from .gain import fit_and_remove_gain_phase
 from .plot import plot_nonlinear_iq, plot_circle
 from ..util import  combine_figures_vertically
