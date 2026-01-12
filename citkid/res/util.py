@@ -105,6 +105,7 @@ def calc_nrmse(z, z_fit):
     Returns:
     nrmse (float): normalized root mean square error.
     """
+    # Input validation
     z = np.asarray(z, dtype = np.complex128)
     z_fit = np.asarray(z_fit, dtype = np.complex128)
     if z.shape != z_fit.shape:
@@ -132,6 +133,7 @@ def cardan(a, b, c, d, largest = True):
     Returns:
     root (float): largest, smallest, or only real root.
     """
+    # Calculate roots using Cardan's method
     J = np.exp(2j * np.pi / 3)
     Jc = 1 / J
     u = np.empty(2, np.complex128)
@@ -156,6 +158,7 @@ def cardan(a, b, c, d, largest = True):
     else:
         v *= J
     roots = np.asarray((u + v - z0, u * J + v * Jc - z0, u * Jc + v * J - z0))
+    # Select the appropriate root based on D and largest flag
     if D > -1e-10: # 3 real roots, D > 0 with numerical tolerance
         if largest:
             return np.max(roots.real)
@@ -179,24 +182,35 @@ def get_peak_fwhm(x, y):
     y_peak (float): y value of the peak.
     fwhm (float): width in x units.
     """
+    # Input validation and sorting
     x, y = np.asarray(x, dtype = np.float64), np.asarray(y, dtype = np.float64)
     if x.shape != y.shape:
         raise ValueError("x and y must have the same shape")
-    ix = np.argsort(x)
-    x, y = x[ix], y[ix]
+    if x.size < 4:
+        raise ValueError("x and y must not be empty")
+    if not all(x[1:] >= x[:-1]):
+        ix = np.argsort(x)
+        x, y = x[ix], y[ix]
+
+    # Interpolate data for higher resolution
     interp_factor = 10
     x_interp = np.linspace(min(x), max(x), len(x) * interp_factor)
     interp_func = interp1d(x, y, kind = 'cubic')
     y_interp = interp_func(x_interp)
     x, y = x_interp, y_interp
 
+    # Find peak and its width
     peak_index, _ = signal.find_peaks(y, height = (max(y) + min(y)) / 8)
     if not len(peak_index):
+        # If no peak was found, use the middle point and 1/8 the span
         peak_index = len(y) // 2
-        width  = len(y) / 8 # Need to modify this later
+        width  = len(y) / 8
     else:
-        peak_index = peak_index[len(peak_index) // 2]
+        # if peaks were found, use the highest peak
+        ix = np.argsort(y[peak_index])
+        peak_index = peak_index[ix[-1]]
         width = signal.peak_widths(y, [peak_index], rel_height = 0.5)[0][0]
 
+    # Calculate FWHM and return results
     fwhm = np.median(x[1:] - x[:-1]) * width
     return x[peak_index], y[peak_index], fwhm

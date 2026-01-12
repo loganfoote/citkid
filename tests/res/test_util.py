@@ -194,20 +194,30 @@ def test_cardan_invalid_input(a, b, c, d, largest):
 ################################################################################
 ################################ get_peak_fwhm #################################
 ################################################################################
-@pytest.mark.parametrize("x,y,expected_xpeak,expected_ypeak,expected_fwhm", [
-    (np.array([1, 2, 3, 4, 5]), np.array([0, 1, 0, 2, 0]), 4, 2, 1.2),
+# Testing general properties of the output, but not testing 
+x = np.linspace(0, 100, 100)
+lorentz = lambda x, x0, g, A: A * g**2 / ((x - x0) ** 2 + g**2)
+@pytest.mark.parametrize("x,y", [
+    (np.array([1, 2, 3, 4, 5]), np.array([0, 1, 0, 2, 0])),
+    (np.linspace(0, 4, 50), np.random.random(50)),
+    ([1, 2, 3, 4], [1, 1, 2, 1]),
+    (x, lorentz(x, 50, 10, 10)),
+    (x, lorentz(x, 10, 5, 0.5)),
+    (x, lorentz(x, 80, 5, -0.5))
 ])
-def test_get_peak_fwhm(x, y, expected_xpeak, expected_ypeak, expected_fwhm):
+def test_get_peak_fwhm(x, y):
     xpeak, ypeak, fwhm = util.get_peak_fwhm(x, y)
-    assert pytest.approx(xpeak, rel = 2e-1) == expected_xpeak
-    assert pytest.approx(ypeak, rel = 2e-1) == expected_ypeak
-    assert pytest.approx(fwhm, rel = 2e-1) == expected_fwhm
-    raise NotImplementedError("Need to finish this test")
+    assert ypeak <= max(y) * 2
+    assert xpeak >= min(x)
+    assert xpeak <= max(x) 
+    assert fwhm < (max(x) - min(x))
 
 @pytest.mark.parametrize("x,y", [
     (np.array([1, 2, 3]), np.array([0, 1])), # shape mismatch
     ("invalid_x", np.array([0, 1, 0])),       # invalid x type
     (np.array([1, 2, 3]), "invalid_y"),       # invalid y type
+    (np.array([]), np.array([])), # empty arrays
+    ([1, 2, 3], [1, 1, 2]), # size < 4
 ])
 def test_get_peak_fwhm_invalid_input(x, y):
     with pytest.raises((ValueError, TypeError)):

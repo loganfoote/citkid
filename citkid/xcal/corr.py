@@ -47,19 +47,28 @@ def pca(x, N_comp, sig = None, highpass_params = None):
     a (array-like, (N, N_comp)): scaling factors from A -> x. 
     A (array-like, (N_comp, T)): common modes.
     """
+    # Input validation 
     x = np.asarray(x)
     N, T = x.shape
-    assert 0 <= N_comp <= N, "N_comp must be between 0 and N"
+    if not (0 <= N_comp <= N):
+        raise ValueError("N_comp must be between 0 and N")
+    
+    # Apply highpass filter if specified
     if highpass_params is not None:
         if len(highpass_params) != 3:
             raise ValueError("highpass_params must be (dt, frequency, order)")
         x_filt = highpass_filter(x, *highpass_params)
     else:
         x_filt = x.copy()
+
+    # Calculate sigma if not provided
     if sig is None:
         sig = calc_sig(x_filt)
     else:
-        assert sig.shape == (x.shape[0], 1), "sig must have shape (N, 1)"
+        if sig.shape != (x.shape[0], 1):
+            raise ValueError("sig must have shape (N, 1)")
+        
+    # Perform PCA
     x0 = x_filt / sig
     C = x0 @ x0.T / T
     eigval, eigvec = np.linalg.eig(C)
@@ -122,12 +131,17 @@ def calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params,
     sig_iter (array-like, (N_iter, N, N_comp)): sigma values for each iteration.
     a_full (array-like, (N, N)): scaling factors from all components A -> x.
     """
+    # Input validation
     x = np.asarray(x, copy = True)
-    assert len(x.shape) == 2, "x must be 2D array-like"
-    assert N_iter > 0, "N_iter must be positive"
-    assert len(lowpass_params) == 2, "lowpass_params must be (frequency, order)"
+    if len(x.shape) != 2:
+        raise ValueError("x must be 2D array-like")
+    if N_iter <= 0:
+        raise ValueError("N_iter must be positive")
+    if len(lowpass_params) != 2:
+        raise ValueError("lowpass_params must be (frequency, order)")
     highpass_check = highpass_params is None or len(highpass_params) == 2
-    assert highpass_check, "highpass_params must be (frequency, order)"
+    if not highpass_check:
+        raise ValueError("highpass_params must be (frequency, order)")
 
     # Remove the mean from each timestream
     x -= np.mean(x, axis = 1)[:, np.newaxis]
@@ -181,6 +195,7 @@ def calc_cm_complex(z, theta = None, *calc_cm_params):
     theta (array-like, (N,)): rotation angles used to rotate each timestream to 
         the real axis.
     """
+    # Input validation 
     z = np.asarray(z, dtype = np.complex128, copy = True)
 
     # Rotate each timestream median to real axis
@@ -214,27 +229,36 @@ def remove_cm(x, a, A, idx):
     Returns:
     y (array-like, (N, T)): timestreams with common modes removed.
     """
+    # Input validation
     x = np.asarray(x)
     a = np.asarray(a)
     A = np.asarray(A)
-    assert len(x.shape) in (1, 2), "x must be 1D or 2D array-like"
+    if len(x.shape) not in (1, 2):
+        raise ValueError("x must be 1D or 2D array-like")
     if not isinstance(idx, (int, np.integer)):
         idx = np.asarray(idx, dtype = np.int32)
-        assert len(idx) <= x.shape[0], "idx length exceeds x length"
-        assert np.all((0 <= idx) & (idx < a.shape[0])), "idx out of bounds"
+        if not len(idx) <= x.shape[0]:
+            raise ValueError("idx length exceeds x length")
+        if not np.all((0 <= idx) & (idx < a.shape[0])):
+            raise ValueError("idx out of bounds")
     else:
-        assert 0 <= idx < a.shape[0], "idx out of bounds" 
+        if not (0 <= idx < a.shape[0]):
+            raise ValueError("idx out of bounds")
         m = "x must be 1D or have a single row when idx is int"
-        assert len(x.shape) == 1, m
-
+        if len(x.shape) != 1:
+            raise ValueError(m)
     if len(x.shape) == 1:
         N = 1
         T = x.shape[0]
     else:
         N, T = x.shape
-    assert a.shape[0] >= N, "a must have at least N rows"
-    assert a.shape[1] == A.shape[0], "a and A shape mismatch"
-    assert A.shape[1] == T, "A and x shape mismatch"
+    if a.shape[0] < N:
+        raise ValueError("a must have at least N rows")
+    if a.shape[1] != A.shape[0]:
+        raise ValueError("a and A shape mismatch")
+    if A.shape[1] != T:
+        raise ValueError("A and x shape mismatch")
+    
     # Remove common modes 
     y = x - a[idx, :] @ A
     return y
@@ -259,7 +283,9 @@ def remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta = None):
     theta (array-like, (N,)): rotation angles used to rotate each timestream to 
         the real axis.
     """
+    # Input validation
     z = np.asarray(z, dtype = np.complex128, copy = True)
+
     # Rotate each timestream median to real axis
     if theta is None:
         if len(z.shape) == 1:
@@ -267,12 +293,15 @@ def remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta = None):
         else:
             theta = np.angle(np.median(z, axis = 1))[:, np.newaxis]
     z *= np.exp(-1j * theta)
+
     # Calculate common modes
     y_real = remove_cm(z.real, aI, AI, idx)
     y_imag = remove_cm(z.imag, aQ, AQ, idx)
     y = y_real + 1j * y_imag 
+
     # Undo rotation
     y = y * np.exp(1j * theta)
+    
     # Format theta for return
     if len(theta.shape) == 2:
         theta = theta[:, 0]

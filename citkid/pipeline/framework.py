@@ -14,8 +14,10 @@ class LazyAttr:
         name (str): The name of the attribute.
         """
         for a in ['cal_pl', 'execute_path', 'nres']:
-            assert hasattr(DS, a), f"DS must have '{a}' attribute"
-        assert isinstance(name, str), "name must be a string"
+            if not hasattr(DS, a):
+                raise AttributeError(f"DS must have '{a}' attribute")
+        if not isinstance(name, str):
+            raise ValueError("name must be a string")
         self.DS = DS
         self.name = name
         self._cache = {}        # maps row -> np.ndarray
@@ -41,7 +43,8 @@ class LazyAttr:
         for r in rows:
             if not isinstance(r, (int, np.integer)):
                 raise ValueError("all rows must be integers")
-            assert 0 <= r < self.DS.nres, "row index out of bounds"
+            if not 0 <= r < self.DS.nres:
+                raise ValueError("row index out of bounds")
 
         # Determine which rows are missing
         missing = [r for r in rows if r not in self._cache]
@@ -90,7 +93,8 @@ class LazyAttr:
         for idx, r in enumerate(rows):
             if r < 0:
                 rows[idx] = self.DS.nres + r
-            assert 0 <= rows[idx] < self.DS.nres, f"row index {r} out of bounds"
+            if not 0 <= rows[idx] < self.DS.nres:
+                raise ValueError(f"row index {r} out of bounds")
 
         self._ensure_loaded(rows)
 
@@ -134,7 +138,8 @@ class LazyAttr:
         for idx, r in enumerate(rows):
             if r < 0:
                 rows[idx] = self.DS.nres + r
-            assert 0 <= rows[idx] < self.DS.nres, f"row index {r} out of bounds"
+            if not 0 <= rows[idx] < self.DS.nres:
+                raise ValueError(f"row index {r} out of bounds")
 
         # Ensure value is iterable and matches length of rows
         try:
@@ -177,13 +182,23 @@ class plStep:
             "global": function acts on global data only.
             "global-res": function loads per-resonator data only all-at-once.
         """
-        assert type(name) == str 
-        assert callable(func)
-        assert type(param_names) == list
-        assert type(return_names) == list
-        assert all([type(p) == str for p in param_names])
-        assert all([type(r) == str for r in return_names])
-        assert func_type in ["per-row", "vectorized", "global", "global-res"]
+        if not isinstance(name, str):
+            raise ValueError("name must be a string")
+        if not callable(func):
+            raise ValueError("func must be callable")
+        if not isinstance(param_names, list):
+            raise ValueError("param_names must be a list")
+        if not isinstance(return_names, list):
+            raise ValueError("return_names must be a list")
+        if not all([isinstance(p, str) for p in param_names]):
+            raise ValueError("all param_names must be strings")
+        if not all([isinstance(r, str) for r in return_names]):
+            raise ValueError("all return_names must be strings")
+        if func_type not in ["per-row", "vectorized", "global", "global-res"]:
+            m = "func_type must be one of 'per-row', 'vectorized', "
+            m += "'global', 'global-res'"
+            raise ValueError(m)
+        
         self.name = name
         self.func = func
         self.param_names = param_names[:]
@@ -208,9 +223,14 @@ class plStep:
             data_idx = [data_idx]
 
         if self.func_type in ["per-row", "vectorized"]:
-            assert hasattr(DS, 'nres'), "DS must have 'nres' attribute"
+            if not hasattr(DS, 'nres'):
+                raise ValueError("DS must have 'nres' attribute")
             if data_idx is None:
                 data_idx = list(range(DS.nres))
+        elif self.func_type in ['global', 'global-res']:
+            if data_idx is not None:
+                m = "data_idx must be None for global or global-res functions."
+                raise ValueError(m)         
                 
         # --- 1. Collect parameters ---
         params = []
@@ -469,8 +489,9 @@ def find_pl_path(tree, return_name):
         return None
 
     # Check input datatypes
-    assert type(return_name) == str, "return_name must be a string"
-    check_pl_tree_structure(tree) # confirm that the structure is valid
+    if type(return_name) != str:
+        raise ValueError("return_name must be a string")
+    # check_pl_tree_structure(tree) # confirm that the structure is valid
     if not all([type(k) == str and k.endswith('_STEPS') for k in tree.keys()]):
         raise ValueError('root keys must end with "_STEPS"')
     
