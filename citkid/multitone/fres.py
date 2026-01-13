@@ -136,3 +136,26 @@ def cut_fine_sweep(f, z, fres, spans):
         f, z = f[ix], z[ix]
     # Needs to leave the current sweep
     return f, z
+
+
+def trim_nearby_resonances(f, z, fres, ires):
+    """
+    Trims a fine scan to remove nearby resonances.
+    
+    Parameters:
+        f: fine scan frequencies
+        z: fine scan complex S21
+        fres: list of resonant frequencies
+        ires: index of resonant frequency we want to keep
+    Returns:
+        ftrim: trimmed fine scan frequencies
+        ztrim: trimmed fine scan complex S21
+    """
+    f1, f2 = min(f), max(f)
+    if ires > 0:
+        f1 = max(f1, (fres[ires-1]+fres[ires])/2)
+    if ires < len(fres)-1:
+        f2 = min(f2, (fres[ires+1]+fres[ires])/2)
+    mask = (f>f1)&(f<f2)
+    ftrim, ztrim = f[mask], z[mask]
+    return ftrim, ztrim

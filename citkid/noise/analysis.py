@@ -7,7 +7,7 @@ from .cosmic_rays import remove_cosmic_rays
 def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
                 znoise_offres = None, dt_offres = None, flag_crs = True,
                 deglitch_nstd = 5, plot_calq = True, plot_psdq = True,
-                plot_timestreamq = True, min_cal_points = 5,
+                plot_timestreamq = True, min_cal_points = 5, poly_deg = 3,
                 circfit_npoints = None, xcal_weight_sigma = None,
                 xcal_weight_theta0 = 0.0, **cr_kwargs):
     """
@@ -93,7 +93,7 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
         #theta_fine, theta_offres, theta_offres_clean, A_offres_clean, (ix0_off, ix1_off) =\
         theta_fine, theta_offres, theta_offres_clean, A_offres_clean =\
         calibrate_timestreams(origin, ffine, zfine, fnoise_offres,
-                              znoise_offres, dt_offres, deglitch_nstd,
+                              znoise_offres, dt_offres, deglitch_nstd, poly_deg = poly_deg,
                               flag_crs = False, offres = True, min_cal_points = min_cal_points,
                               xcal_weight_theta0 = xcal_weight_theta0, xcal_weight_sigma = xcal_weight_sigma)
 
@@ -110,7 +110,7 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
         theta_fine, theta, theta_clean, A_clean, theta_range, poly, x, cr_indices, (ix0, ix1) =\
         calibrate_timestreams(origin, ffine, zfine, fnoise, znoise, dt,
                               deglitch_nstd, flag_crs = flag_crs, offres = False,
-                              min_cal_points = min_cal_points,
+                              min_cal_points = min_cal_points, poly_deg = poly_deg,
                               xcal_weight_theta0 = xcal_weight_theta0, xcal_weight_sigma = xcal_weight_sigma,
                               **cr_kwargs)
 
