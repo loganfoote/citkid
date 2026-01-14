@@ -137,7 +137,6 @@ def cut_fine_sweep(f, z, fres, spans):
     # Needs to leave the current sweep
     return f, z
 
-
 def trim_nearby_resonances(f, z, fres, ires):
     """
     Trims a fine scan to remove nearby resonances.

@@ -1,7 +1,8 @@
 import copy
 import warnings
+import numpy as np 
 
-def _get_most_recent_run(name, saved): 
+def get_most_recent_run(name, saved): 
     """
     Given a parameter name and saved runs dictionary, finds the most recent run 
     index where that parameter was exists. Returns the run index, or -1 if not 
@@ -99,7 +100,7 @@ def _get_lowest_runs(sub_dependencies):
                 conflicts = True
     return lowest_runs, conflicts
 
-def _get_dependencies(param_names, saved):
+def get_dependencies(param_names, saved):
     """
     Given a list of function parameter names and saved runs, determines the 
     appropriate run versions for each input parameter by first selecting the 
@@ -121,11 +122,19 @@ def _get_dependencies(param_names, saved):
         are their corresponding run indices, including both the input parameters 
         and their sub-dependencies.
     """
+    # Input validation
+    if not isinstance(param_names, (list, np.ndarray)):
+        raise ValueError("param_names must be a list or numpy array") 
+    if any(not isinstance(p, str) for p in param_names):
+        raise ValueError("All elements in param_names must be strings") 
+    if not isinstance(saved, dict):
+        raise ValueError("saved must be a dictionary")
+    
     # don't overwrite saved
     saved = copy.deepcopy(saved)
 
     # start with most recent run for each parameter
-    dependencies = {k: _get_most_recent_run(k, saved) for k in param_names}
+    dependencies = {k: get_most_recent_run(k, saved) for k in param_names}
     dependencies0 = dependencies.copy()
 
     # raise error if any parameters are missing from saved 

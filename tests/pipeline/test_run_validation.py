@@ -25,7 +25,7 @@ import citkid.pipeline.run_validation as rv
                 2: [("param1", {})]}, 2),
 ])
 def test_get_most_recent_run(name, saved, expected):
-    result = rv._get_most_recent_run(name, saved)
+    result = rv.get_most_recent_run(name, saved)
     assert result == expected
 
 
@@ -35,8 +35,7 @@ def test_get_most_recent_run(name, saved, expected):
 ])
 def test_get_most_recent_run_invalid_inputs(name, saved):
     with pytest.raises(ValueError):
-        rv._get_most_recent_run(name, saved)
-
+        rv.get_most_recent_run(name, saved)
 
 ################################################################################
 ############################### _get_sub_dependencies ##########################
@@ -117,9 +116,102 @@ def test_get_lowest_runs_invalid_inputs(sub_dependencies):
         rv._get_lowest_runs(sub_dependencies)
 
 ################################################################################
-############################## _get_dependencies ###############################
+############################### get_dependencies ###############################
 ################################################################################
-# Need to test linear and nonlinear paths, with many combinations of conflicts.
-# This is more complex and may require more extensive test cases. 
-def test_get_dependencies_temp():
-    raise NotImplementedError("Tests for _get_dependencies not yet implemented")
+saved0 = {0: [("param1", {})]}
+saved1 = {0: [("param1", {}), ("param2", {})], 1: [("param1", {'param2': 0})]}
+@pytest.mark.parametrize("param_names,saved,expected", [
+    (["param1"], saved0, {"param1": 0}),
+    (["param1"], saved1, {"param1": 1, "param2": 0}),
+    (["param2"], saved1, {"param2": 0})
+])
+def test_get_dependencies(param_names, saved, expected):
+    result = rv.get_dependencies(param_names, saved)
+    assert result == expected
+
+# Testing variety of function run orders for the following function dependencies
+#      B -> C 
+# A ->         -> F
+#      D -> E 
+# Here the parameter and return names are 
+# A = (['directory'], ['a1', 'a2'])
+# B = (['a1'], ['b1'])
+# C = (['a2', 'b1'], ['c1', 'c2'])
+# D = (['a2'], ['d1', 'd2'])
+# E = (['d2'], ['e1'])
+# F = (['e1', 'c2'], ['f1']) 
+# Test function names describe function run order that produces saved 
+
+def test_get_dependencies_ABC():
+    saved = {0: [('directory', {})],
+             1: [('a1', {'directory': 0}),
+             ('a2', {'directory': 0}),
+             ('b1', {'a1': 1, 'directory': 0}),
+             ('c1', {'a2': 1, 'b1': 1, 'directory': 0, 'a1': 1}),
+             ('c2', {'a2': 1, 'b1': 1, 'directory': 0, 'a1': 1})]}
+    with pytest.raises(ValueError):
+        rv.get_dependencies(['f1'], saved)
+    
+    expected = {'c1': 1, 'a2': 1, 'b1': 1, 'directory': 0, 'a1': 1} 
+    assert rv.get_dependencies(['c1'], saved) == expected
+
+def test_get_dependencies_ABCDEABC():
+    saved = {0: [('directory', {})],
+             1: [('a1', {'directory': 0}),
+              ('a2', {'directory': 0}),
+              ('b1', {'a1': 1, 'directory': 0}),
+              ('c1', {'a2': 1, 'b1': 1, 'directory': 0, 'a1': 1}),
+              ('c2', {'a2': 1, 'b1': 1, 'directory': 0, 'a1': 1}),
+              ('d1', {'a2': 1, 'directory': 0}),
+              ('d2', {'a2': 1, 'directory': 0}),
+              ('e1', {'d2': 1, 'a2': 1, 'directory': 0})],
+             2: [('a1', {'directory': 0}),
+              ('a2', {'directory': 0}),
+              ('b1', {'a1': 2, 'directory': 0}),
+              ('c1', {'a2': 2, 'b1': 2, 'directory': 0, 'a1': 2}),
+              ('c2', {'a2': 2, 'b1': 2, 'directory': 0, 'a1': 2})]}
+    
+    expected = {'c1': 2, 'a2': 2, 'b1': 2, 'directory': 0, 'a1': 2} 
+    assert rv.get_dependencies(['c1'], saved) == expected
+
+    expected = {'a1': 2, 'directory': 0} 
+    assert rv.get_dependencies(['a1'], saved) == expected 
+
+    with pytest.raises(ValueError):
+        rv.get_dependencies(['f1'], saved)
+
+    # Raises warning when backtracking 
+    with pytest.warns(UserWarning):
+        expected = {'e1': 1, 'c1': 1, 'd2': 1, 'a2': 1, 
+                    'directory': 0, 'b1': 1, 'a1': 1}
+        assert rv.get_dependencies(['e1', 'c1'], saved) == expected 
+
+def test_get_dependencies_AAAABB():
+    saved = {0: [('directory', {})],
+             1: [('a1', {'directory': 0}),
+              ('a2', {'directory': 0}),
+              ('b1', {'a1': 4, 'directory': 0})],
+             2: [('a1', {'directory': 0}),
+              ('a2', {'directory': 0}),
+              ('b1', {'a1': 4, 'directory': 0})],
+             3: [('a1', {'directory': 0}), ('a2', {'directory': 0})],
+             4: [('a1', {'directory': 0}), ('a2', {'directory': 0})]}
+    
+    expected = {'a1': 4, 'a2': 4, 'directory': 0}
+    assert rv.get_dependencies(['a1', 'a2'], saved) == expected
+
+    with pytest.raises(ValueError): 
+        rv.get_dependencies(['b2'], saved)
+
+    expected = {'b1': 2, 'a1': 4, 'directory': 0} 
+    assert rv.get_dependencies(['b1'], saved) == expected
+
+
+@pytest.mark.parametrize("param_names,saved", [
+    (123, {}),  # param_names not a list or np.ndarray
+    (["param1"], "not a dict"),  # saved not a dict
+    (["param1", 123], {})  # param_names contains non-string
+])
+def test_get_dependencies_invalid_input(param_names, saved):
+    with pytest.raises(ValueError):
+        rv.get_dependencies(param_names, saved)
