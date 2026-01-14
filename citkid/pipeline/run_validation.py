@@ -57,7 +57,7 @@ def _get_sub_dependencies(name, run_idx, saved):
 
     prev_deps = [s for s in saved[run_idx] if s[0] == name] 
     if len(prev_deps) == 0:
-        return LookupError(f"No entry for {name} in run {run_idx}")
+        raise LookupError(f"No entry for {name} in run {run_idx}")
     if len(prev_deps) != 1:
         raise ValueError(f"Multiple entries for {name} in run {run_idx}")
     # prev_deps is a list with one element: (name, dependencies dict)
