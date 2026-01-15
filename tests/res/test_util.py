@@ -194,7 +194,7 @@ def test_cardan_invalid_input(a, b, c, d, largest):
 ################################################################################
 ################################ get_peak_fwhm #################################
 ################################################################################
-# Testing general properties of the output, but not testing 
+# Testing general properties of the output, not exact values
 x = np.linspace(0, 100, 100)
 lorentz = lambda x, x0, g, A: A * g**2 / ((x - x0) ** 2 + g**2)
 @pytest.mark.parametrize("x,y", [

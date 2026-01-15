@@ -67,7 +67,8 @@ def nonlinear_iq(f, fr, Qr, amp, phi, a, i0, q0, tau, downward = True):
 @njit(float64(float64[:], float64[:], float64[:]), cache = True)
 def circle_objective(params, x, y):
     """
-    Objective for circle fitting
+    Objective for circle fitting. Legacy code: use 
+    citkid.xcal.circle.circle_objective.
 
     Parameters:
     params (A: float, B: float, R: float): circle fit parameters. (A, B) is the
