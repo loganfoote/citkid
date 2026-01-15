@@ -84,7 +84,7 @@ class Analyzer():
             steps_list = np.append(steps_list, x[0])
         return steps_list
         
-    def run_analysis_step(self, name, data_idx, save_to_zarr=True,
+    def run_analysis_step(self, name, data_idx=None, save_to_zarr=True,
                           run_idx = 0):
         """
         Runs an analysis step and saves the output to zarr.
@@ -103,14 +103,14 @@ class Analyzer():
             m = f"Step '{name}' not found in available steps."
             raise ValueError(m)
         
-        data_idx = np.atleast_1d(data_idx)
-        
         step = x[0]
         step.run(self.dataset, data_idx)
         
         if save_to_zarr:
             for return_name in step.return_names:
-                value = getattr(self.dataset, return_name)[data_idx]
-                self.dataset.write_data(return_name, value, data_idx, run_idx)
+                value = getattr(self.dataset, return_name)
+                if data_idx is not None:
+                    value = value[data_idx]
+                self.dataset.write_data(return_name, step.func_type, value, data_idx, run_idx)
             
             

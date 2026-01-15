@@ -176,6 +176,22 @@ class DataSet:
         for step in path:
             step.run(self, data_idx)
 
+
+    def generate_saved_dict(self):
+        """
+        Reads the zarr file and generates a dictionary where keys are 
+        run indices and values are lists of tuples (parameter name, dependencies dict). 
+        The dependencies dictionary maps parameter names to their run indices, 
+        and represents all the other parameters with run index that the given parameter 
+        depends on.
+
+        Returns:
+        saved: Dictionary as described above.
+        """
+        
+        return saved
+        
+
     def read_data(self, name, data_idx, run_idx = None):
         """
         Read data attribute 'name' for data indices 'data_idx' from dataset.
@@ -208,26 +224,30 @@ class DataSet:
                 
         grp = self.root[str(run_idx)]
         return grp[name].oindex[data_idx]
+        
     
-    def write_data(self, name, value, data_idx, run_idx, dtype = None):
+    def write_data(self, name, func_type, value, data_idx, run_idx, dtype = None):
         """
         Write data attribute 'name' for dataset.
 
         Parameters:
         name (str): The name of the data attribute to write.
+        func_type (str): The type of function that was called to produce the data.
+            Can be "per-row", "vectorized", or "global-res".
         value (np.ndarray or scalar): The data to write.
         data_idx (int or list): The data index or indices to write.
         run_idx (int): run index.
         dtype (np.dtype, optional): The data type to use when writing. Defaults 
             to None (use value's dtype).
         """
-        # Convert data_idx and value to numpy arrays
-        data_idx = np.atleast_1d(data_idx)
-        value = np.atleast_1d(value)
-            
-        # Check if the length of value equals the length of data_idx.
-        if data_idx.shape[0] != value.shape[0]:
-            raise ValueError('value and data_idx must have the same length.')
+        if func_type != 'global-res':
+            # Convert data_idx and value to numpy arrays
+            data_idx = np.atleast_1d(data_idx)
+            value = np.atleast_1d(value)
+                
+            # Check if the length of value equals the length of data_idx.
+            if data_idx.shape[0] != value.shape[0]:
+                raise ValueError('value and data_idx must have the same length.')
         
         # ensure run group exists (create if missing)
         key = str(run_idx)
@@ -237,36 +257,46 @@ class DataSet:
         if dtype is None:
             dtype = value.dtype
 
-        # Get the per-element shape of the new value to be added.
-        element_shape = value.shape[1:]
-
         # ensure dataset exists (create if missing)
         # dataset shape: row index at the start + all value dims
         if name not in grp:
-            shape = (0, *element_shape)
-            chunks = (1, *element_shape)  # first axis = 1 for single-row writes
+            if func_type == 'global-res':
+                shape = value.shape
+                chunks = value.shape
+            else:
+                # Get the per-element shape of the new value to be added.
+                element_shape = value.shape[1:]
+                shape = (0, *element_shape)
+                chunks = (1, *element_shape)  # first axis = 1 for single-row writes
+                data_idxs = grp.create_array(f"{name}_idx", shape=(0,), dtype=int)
+                expected_shape = element_shape
             values_arr = grp.create_array(name, shape=shape, dtype=dtype, chunks=chunks)
-            data_idxs = grp.create_array(f"{name}_idx", shape=(0,), dtype=int)
-            expected_shape = element_shape
         else:
+            if func_type == 'global-res':
+                m = "Attempt to overwrite an existing outputs of a function with "
+                m += "func_type 'global-res'."
+                raise ValueError(m)
             values_arr = grp[name]
             data_idxs = grp[f"{name}_idx"]
             expected_shape = values_arr.shape[1:]
 
         # Check that shape of the elements of value match the
         # shape of the elements of values_arr.
-        if element_shape != expected_shape:
+        if func_type in ['per-row', 'vectorized'] and element_shape != expected_shape:
             raise ValueError(f"The shape of 'value' must match the shape of the existing zarr array, {name}.")
 
         # write data at specified indices
-        n = values_arr.shape[0]
-        n_add = data_idx.shape[0]
-        n_new = n + n_add
-        new_shape = (n_new, *expected_shape)
-        values_arr.resize(new_shape)
-        data_idxs.resize((n_new))
-        values_arr[-n_add:, ...] = value
-        data_idxs[-n_add:] = data_idx
+        if func_type in ['per-row', 'vectorized']:
+            n = values_arr.shape[0]
+            n_add = data_idx.shape[0]
+            n_new = n + n_add
+            data_idxs.resize((n_new))
+            data_idxs[-n_add:] = data_idx
+            new_shape = (n_new, *expected_shape)
+            values_arr.resize(new_shape)
+            values_arr[-n_add:, ...] = value
+        elif func_type == 'global-res':
+            values_arr[...] = value        
                 
         
     def get_attr_version(self, name):
@@ -316,7 +346,7 @@ class DataSet:
             pass
         return data_exists
     
-    
+
     # ***EK - The zarr loading is causing inconsistent behavior where
     # the outputs of a plStep.run call will be stored as a LazyAttr,
     # but loading the same result from the zarr file is just 

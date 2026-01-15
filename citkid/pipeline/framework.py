@@ -219,14 +219,13 @@ class plStep:
             each data index in data_idx if data_idx is a list. If data_idx is 
             None, all data indices (0 to DS.nres - 1) are processed. 
         """
-        if isinstance(data_idx, int):
-            data_idx = [data_idx]
-
         if self.func_type in ["per-row", "vectorized"]:
             if not hasattr(DS, 'nres'):
                 raise ValueError("DS must have 'nres' attribute")
             if data_idx is None:
                 data_idx = list(range(DS.nres))
+            else:
+                data_idx = np.atleast_1d(data_idx)
         elif self.func_type in ['global', 'global-res']:
             if data_idx is not None:
                 m = "data_idx must be None for global or global-res functions."
@@ -344,7 +343,7 @@ default_cal_steps =\
 default_analysis_steps =\
 (# analysis steps
  ('make_fr_spans', gain.make_fr_spans, 
-  ['fres_all', 'qres_all', 'fg'], ['fr_spans'], 'per-row'),
+  ['fres_all', 'qres_all'], ['fr_spans'], 'global-res'),
 
  ('fit_gain', gain.fit_gain, 
   ['fg', 'zg', 'fr_spans'], ['p_amp', 'p_phase', 'gain_mask'], 'per-row'),
