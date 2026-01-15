@@ -17,7 +17,7 @@ async def take_iq_noise(inst, fres, ares, qres, fcal_indices, res_indices,
                         npoints_noisefreq_update = None, npoints_fine = 600,
                         npoints_gain = 100, npoints_rough = 300, nsamps = 10,
                         take_rough_sweep = False, update_fres_from_fine = False,
-                        fres_update_method = 'distance', fir_stage = 6,
+                        fres_update_method = 'distance', dec_stage = 6,
                         fres_all = None, qres_all = None, cable_delay = 0,
                         batch_size = 1000,
                         parser_loc = '/home/daq1/github/rfmux/firmware/r1.5.6/parser',
@@ -55,7 +55,7 @@ async def take_iq_noise(inst, fres, ares, qres, fcal_indices, res_indices,
         sweep before taking noise.
     fres_update_method (str): method for updating the tone frequencies, if
         take_rough_sweep is True. See .fres.update_fres for methods.
-    fir_stage (int): fir_stage frequency downsampling factor.
+    dec_stage (int): dec_stage frequency downsampling factor.
             6 ->   596.05 Hz
             5 -> 1,192.09 Hz
             4 -> 2,384.19 Hz, might crash
@@ -157,7 +157,7 @@ async def take_iq_noise(inst, fres, ares, qres, fcal_indices, res_indices,
                 break
         filename = f'noise{file_suffix}.npy'
         z = await inst.capture_noise(fres, ares, noise_time,
-                                     fir_stage = fir_stage,
+                                     dec_stage = dec_stage,
                                      delete_parser_data = True,
                                      return_dbc = True, batch_process = True,
                                      outpath = out_directory + filename,
@@ -197,7 +197,7 @@ async def take_rough_sweep(inst, fres, ares, qres, fcal_indices, res_indices,
         take_rough_sweep is True. See .fres.update_fres for methods
     nnoise_timestreams (int): number of noise timestreams to take sequentially.
         Set to 0 to bypass noise acquisition
-    fir_stage (int): fir_stage frequency downsampling factor.
+    dec_stage (int): dec_stage frequency downsampling factor.
             6 ->   596.05 Hz
             5 -> 1,192.09 Hz
             4 -> 2,384.19 Hz, might crash
@@ -424,7 +424,7 @@ async def take_iq_noise_sequential(inst, module_index, ncos, fres, ares, qres, f
                                    out_directory, file_suffix,
                   noise_time = 200, take_noise = False, gain_span_factor = 10, npoints_noisefreq_update = None,
                   npoints_fine = 600, npoints_gain = 100, npoints_rough = 300, nsamps = 10,
-                  take_rough_sweep = False, fres_update_method = 'distance', fir_stage = 6,
+                  take_rough_sweep = False, fres_update_method = 'distance', dec_stage = 6,
                   fres_all = None, qres_all = None, verbose = True, cable_delay = 0,
                   take_fast_noise = False, fast_noise_time = 10, n_fast_noise = 1, nco_indices_to_skip = []):
     """
@@ -458,7 +458,7 @@ async def take_iq_noise_sequential(inst, module_index, ncos, fres, ares, qres, f
         take_rough_sweep is True. See .fres.update_fres for methods
     nnoise_timestreams (int): number of noise timestreams to take sequentially.
         Set to 0 to bypass noise acquisition
-    fir_stage (int): fir_stage frequency downsampling factor.
+    dec_stage (int): dec_stage frequency downsampling factor.
             6 ->   596.05 Hz
             5 -> 1,192.09 Hz
             4 -> 2,384.19 Hz, might crash
@@ -520,7 +520,7 @@ async def take_iq_noise_sequential(inst, module_index, ncos, fres, ares, qres, f
                     npoints_noisefreq_update = npoints_noisefreq_update, cable_delay = cable_delay,
                     npoints_fine = npoints_fine, npoints_gain = npoints_gain, npoints_rough = npoints_rough,
                     nsamps = nsamps, take_rough_sweep = take_rough_sweep, fres_update_method = fres_update_method,
-                    fir_stage = fir_stage, fres_all = fres_all, qres_all = qres_all, verbose = verbose,
+                    dec_stage = dec_stage, fres_all = fres_all, qres_all = qres_all, verbose = verbose,
                     take_fast_noise = take_fast_noise, fast_noise_time = fast_noise_time, n_fast_noise = n_fast_noise)
 
         fres_initial0, fres_out[ix], ares_out[ix], qres_out[ix], fcal_indices0, fres_all0, qres_all0, \

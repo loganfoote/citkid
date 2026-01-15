@@ -182,26 +182,26 @@ def run_for_duration(cmd, duration, verbose = True):
             # Unix kill entire process group
             os.killpg(os.getpgid(process.pid), signal.SIGTERM)  
 
-def get_sample_frequency(fir_stage):
+def get_sample_frequency(dec_stage):
     """
     Returns the sample frequency in Hz given the decimation stage index.
     
     Parameters:
-    fir_stage (int): decimation stage index.
+    dec_stage (int): decimation stage index.
     
     Returns:
     (float): sample frequency in Hz.
     """
-    return 625e6 / (256 * 64 * 2 ** fir_stage)
+    return 625e6 / (256 * 64 * 2 ** dec_stage)
 
-def estimate_timestream_data_size(fir_stage, noise_time, nmodules, max_ntones, 
+def estimate_timestream_data_size(dec_stage, noise_time, nmodules, max_ntones, 
                                   ntones):
     """
     Estimates and prints the raw parser data size and processed data size of a 
     timestream. 
 
     Parameters:
-    fir_stage (int): decimation stage.
+    dec_stage (int): decimation stage.
     noise_time (float): timestream length in s. 
     nmodules (int): number of active modules. Be careful - if an NCO has been 
         set, the modules will stream max_ntones channels whether or not tones 
@@ -210,8 +210,8 @@ def estimate_timestream_data_size(fir_stage, noise_time, nmodules, max_ntones,
     ntones (int): total number of tones across the modules. 
     """
     # Type and range checks
-    if type(fir_stage) != int or fir_stage < 0 or fir_stage > 6:
-        raise ValueError('fir_stage must be an int in range [0, 6]')
+    if type(dec_stage) != int or dec_stage < 0 or dec_stage > 6:
+        raise ValueError('dec_stage must be an int in range [0, 6]')
     if noise_time < 0:
         raise ValueError('noise_time must be positive')
     if nmodules not in [1, 2, 3, 4]:
@@ -221,7 +221,7 @@ def estimate_timestream_data_size(fir_stage, noise_time, nmodules, max_ntones,
     if type(ntones) != int or ntones < 0 or ntones > 1024 * 4:
         raise ValueError('ntones must be an int in range [0, 4 * 1024]')
     # Calculate file sizes
-    sample_frequency = get_sample_frequency(fir_stage)
+    sample_frequency = get_sample_frequency(dec_stage)
     size_perchannel = 4 * 2 * (noise_time * sample_frequency)
     size_raw = size_perchannel * nmodules * max_ntones + 103
     size_processed = size_perchannel * ntones

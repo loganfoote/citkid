@@ -215,9 +215,9 @@ class CRS:
                 err += f'{round(bw_half / 1e6, 1)} MHz of an NCO frequency'
                 raise ValueError(err)
 
-        # Set fir_stage
-        fir_stage = 6
-        await self.d.set_decimation(fir_stage)
+        # Set dec_stage
+        dec_stage = 6
+        await self.d.set_decimation(dec_stage)
         # sweep
         sweep_f, sweep_z = {}, {}
         modules = get_modules(self.d, list(self.frequencies_dict.keys()))
@@ -351,7 +351,7 @@ class CRS:
         f, z = f[ix], z[ix]
         return f, z
 
-    async def capture_noise(self, fres, ares, noise_time, fir_stage = 6, 
+    async def capture_noise(self, fres, ares, noise_time, dec_stage = 6, 
                             fast_modules = [1], tmp_directory = 'tmp/',
                             parser_loc = '/home/daq1/github/rfmux/firmware/r1.5.6/parser',
                             delete_parser_data = True, return_dbc = True, 
@@ -364,7 +364,7 @@ class CRS:
         fres (array-like): tone frequencies in Hz.
         ares (array-like): tone amplitudes in dBm.
         noise_time (float): timestream length in seconds.
-        fir_stage (int): fir_stage frequency downsampling factor.
+        dec_stage (int): dec_stage frequency downsampling factor.
             6 ->   596.05 Hz
             5 -> 1,192.09 Hz
             4 -> 2,384.19 Hz
@@ -400,25 +400,25 @@ class CRS:
         
         if batch_process and not outpath.endswith('.npy'):
             raise ValueError('outpath must end with .npy')
-        if fir_stage > 2:
+        if dec_stage > 2:
             module_indices = list(self.nco_freq_dict.keys())
         else:
             module_indices = fast_modules
 
         fres, ares = np.asarray(fres), np.asarray(ares)
         
-        # set fir stage
-        if fir_stage ==0:
+        # set dec stage
+        if dec_stage ==0:
             # as of 1.5.6, can only use 2 module or else packets drop
             await self.d.set_decimation(0, short=True, module=fast_modules)
-        elif fir_stage == 1:
+        elif dec_stage == 1:
             # don't know if this restriction is necessary for stage 1
             await self.d.set_decimation(1, short=True, module=fast_modules)
         else:
-            await self.d.set_decimation(fir_stage)
-        self.sample_frequency = get_sample_frequency(fir_stage)
+            await self.d.set_decimation(dec_stage)
+        self.sample_frequency = get_sample_frequency(dec_stage)
         if verbose:
-            print(f'fir stage is {await self.d.get_decimation()}')
+            print(f'dec stage is {await self.d.get_decimation()}')
 
         # set the tones
         max_ntones = await self.write_tones(fres, ares,
@@ -430,7 +430,7 @@ class CRS:
                            '-i', self.interface, '-s',
                            f'{self.serial_number:04d}']
         run_for_duration(cmd, noise_time, verbose)
-        # Set fir stage back
+        # Set dec stage back
         await self.d.set_decimation(6)
         # read the data and convert to z
         if not batch_process: 
