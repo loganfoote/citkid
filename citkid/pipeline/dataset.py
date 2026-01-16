@@ -175,21 +175,6 @@ class DataSet:
         self.confirm_valid_path(path)
         for step in path:
             step.run(self, data_idx)
-
-
-    def generate_saved_dict(self):
-        """
-        Reads the zarr file and generates a dictionary where keys are 
-        run indices and values are lists of tuples (parameter name, dependencies dict). 
-        The dependencies dictionary maps parameter names to their run indices, 
-        and represents all the other parameters with run index that the given parameter 
-        depends on.
-
-        Returns:
-        saved: Dictionary as described above.
-        """
-        
-        return saved
         
 
     def read_data(self, name, data_idx, run_idx = None):
@@ -226,7 +211,8 @@ class DataSet:
         return grp[name].oindex[data_idx]
         
     
-    def write_data(self, name, func_type, value, data_idx, run_idx, dtype = None):
+    def write_data(self, name, func_type, param_names, param_run_idxs, 
+                   value, data_idx, run_idx, dtype = None):
         """
         Write data attribute 'name' for dataset.
 
@@ -234,6 +220,10 @@ class DataSet:
         name (str): The name of the data attribute to write.
         func_type (str): The type of function that was called to produce the data.
             Can be "per-row", "vectorized", or "global-res".
+        param_names (array-like): Array of parameter names that were used when calling
+            the function.
+        param_run_idxs (array-like): Array of run indices of the input parameter names.
+            0 represents parameter values that will never change, i.e. raw data.
         value (np.ndarray or scalar): The data to write.
         data_idx (int or list): The data index or indices to write.
         run_idx (int): run index.
@@ -297,7 +287,16 @@ class DataSet:
             values_arr[-n_add:, ...] = value
         elif func_type == 'global-res':
             values_arr[...] = value        
-                
+        
+        # Write the 'saved' dictionary attribute, to keep track of 
+        # the dependencies between run versions.
+        if not 'saved' in self.root.attrs:
+            self.root.attrs['saved'] = {0: {}, 1: {name: {}}}
+        for ii, param_name in enumerate(param_names):
+            param_run_idx = param_run_idxs[ii]
+            self.root.attrs['saved'][param_run_idx][param_name] = {}
+            self.root.attrs['saved'][run_idx][name][param_name] = param_run_idx
+
         
     def get_attr_version(self, name):
         """

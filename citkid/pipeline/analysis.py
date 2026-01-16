@@ -4,6 +4,7 @@ import importlib.util
 import numpy as np
 import zarr
 from . import framework as pf
+from .run_validation import get_most_recent_run, get_dependencies
 from .dataset import DataSet
 
 class Analyzer():
@@ -84,8 +85,7 @@ class Analyzer():
             steps_list = np.append(steps_list, x[0])
         return steps_list
         
-    def run_analysis_step(self, name, data_idx=None, save_to_zarr=True,
-                          run_idx = 0):
+    def run_analysis_step(self, name, data_idx=None, save_to_zarr=True):
         """
         Runs an analysis step and saves the output to zarr.
         
@@ -95,8 +95,6 @@ class Analyzer():
             run the step on.
         save_to_zarr (bool): If True, save the outputs to the 
             zarr store at Analyzer.dataset.root.
-        run_idx (int): Run index to save the output to.
-            REMOVE THIS WHEN LOGAN PUSHES RUN VERSIONING CODE!
         """
         x = [d for d in self.steps if d.name == name]
         if not len(x):
@@ -107,10 +105,35 @@ class Analyzer():
         step.run(self.dataset, data_idx)
         
         if save_to_zarr:
-            for return_name in step.return_names:
+            
+            if 'saved' in self.dataset.root.attrs:
+                saved = self.dataset.root.attrs['saved']
+                dependencies = get_dependencies(step.param_names, saved)
+                run_idxs = [get_most_recent_run(rname, saved)+1 for rname in step.return_names]
+                run_idxs[run_idxs == 0] = 1
+            else:
+                dependencies = {}
+                run_idxs = [1 for _ in step.return_names]
+            
+            param_run_idxs = []
+            for ii, return_name in enumerate(step.return_names):
                 value = getattr(self.dataset, return_name)
                 if data_idx is not None:
                     value = value[data_idx]
-                self.dataset.write_data(return_name, step.func_type, value, data_idx, run_idx)
+                    
+                for param_name in step.param_names:
+                    if param_name in dependencies.keys():
+                        param_run_idx = dependencies[param_name]
+                    else:
+                        # If the parameter name is not in the list of dependencies,
+                        # then it must not be an analysis output. 
+                        # I.e., it has run_idx = 0.
+                        param_run_idx = 0
+                    param_run_idxs.append(param_run_idx)
+                        
+                    
+                self.dataset.write_data(return_name, step.func_type,
+                                        step.param_names, param_run_idxs,
+                                        value, data_idx, run_idxs[ii])
             
             
