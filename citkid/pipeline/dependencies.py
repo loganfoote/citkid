@@ -4,17 +4,17 @@ import numpy as np
 
 def get_most_recent_run(name, saved): 
     """
-    Given a parameter name and saved runs dictionary, finds the most recent run 
-    index where that parameter was exists. Returns the run index, or -1 if not 
+    Given a parameter name and saved runs dictionary, finds the most recent run
+    index where that parameter exists. Returns the run index, or -1 if not
     found.
 
     Parameters:
     name (str): The parameter name to search for.
-    saved (dict): A dictionary where keys are run indices and values are lists
-        of tuples (parameter name, dependencies dict). The dependencies 
-        dictionary maps parameter names to their run indices, and represents 
-        all the other parameters with run index that the given parameter 
-        depends on.
+    saved (dict): A dictionary where keys are run indices and values are
+        dictionaries mapping parameter name (str) to its dependencies dict.
+        The dependencies dictionary maps parameter names to their run indices,
+        and represents all the other parameters with run index that the given
+        parameter depends on.
 
     Returns:
     int: The most recent run index where the parameter exists, or -1 if not 
@@ -25,8 +25,9 @@ def get_most_recent_run(name, saved):
     if not isinstance(saved, dict):
         raise ValueError("Saved runs must be a dictionary")
 
-    for k in sorted(saved, reverse = True):
-        if any(t[0] == name for t in saved[k]):
+    for k in sorted(saved, reverse=True):
+        # Expect dict per run: {param_name: deps_dict}
+        if isinstance(saved[k], dict) and name in saved[k]:
             return k
     return -1
 
@@ -39,11 +40,11 @@ def _get_sub_dependencies(name, run_idx, saved):
     Parameters:
     name (str): The parameter name whose dependencies are to be retrieved.
     run_idx (int): The run index from which to retrieve the dependencies.
-    saved (dict): A dictionary where keys are run indices and values are lists
-        of tuples (parameter name, dependencies dict). The dependencies 
-        dictionary maps parameter names to their run indices, and represents 
-        all the other parameters with run index that the given parameter 
-        depends on.
+    saved (dict): A dictionary where keys are run indices and values are
+        dictionaries mapping parameter name (str) to its dependencies dict.
+        The dependencies dictionary maps parameter names to their run indices,
+        and represents all the other parameters with run index that the given
+        parameter depends on.
 
     Returns:
     dict: A dictionary of dependencies for the given parameter, where keys are
@@ -56,13 +57,16 @@ def _get_sub_dependencies(name, run_idx, saved):
     if not isinstance(saved, dict):
         raise ValueError("Saved runs must be a dictionary")
 
-    prev_deps = [s for s in saved[run_idx] if s[0] == name] 
-    if len(prev_deps) == 0:
+    # Expect dict structure per run
+    run_dict = saved.get(run_idx)
+    if not isinstance(run_dict, dict):
+        raise LookupError(f"No entry for run {run_idx}")
+    if name not in run_dict:
         raise LookupError(f"No entry for {name} in run {run_idx}")
-    if len(prev_deps) != 1:
-        raise ValueError(f"Multiple entries for {name} in run {run_idx}")
-    # prev_deps is a list with one element: (name, dependencies dict)
-    return prev_deps[0][1] 
+    deps = run_dict[name]
+    if not isinstance(deps, dict):
+        raise ValueError("Dependencies for a parameter must be a dictionary")
+    return deps
 
 def _get_lowest_runs(sub_dependencies):
     """
@@ -111,11 +115,11 @@ def get_dependencies(param_names, saved):
     Parameters:
     param_names (list): A list of parameter names (str) for which to find 
         dependencies.
-    saved (dict): A dictionary where keys are run indices and values are lists
-        of tuples (parameter name, dependencies dict). The dependencies 
-        dictionary maps parameter names to their run indices, and represents 
-        all the other parameters with run index that the given parameter
-        depends on.
+    saved (dict): A dictionary where keys are run indices and values are
+        dictionaries mapping parameter name (str) to its dependencies dict.
+        The dependencies dictionary maps parameter names to their run indices,
+        and represents all the other parameters with run index that the given
+        parameter depends on.
 
     Returns:
     dependencies (dict): A dictionary where keys are parameter names and values 

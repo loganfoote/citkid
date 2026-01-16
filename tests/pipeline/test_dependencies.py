@@ -1,5 +1,5 @@
 import pytest 
-import citkid.pipeline.run_validation as rv 
+import citkid.pipeline.dependencies as rv 
 
 # For all of this, I am not testing the structure of the saved dict. 
 # I am assuming that it is produced by other parts of the code correctly.
@@ -9,20 +9,20 @@ import citkid.pipeline.run_validation as rv
 ################################################################################
 @pytest.mark.parametrize("name,saved,expected", [
     # Basic case: parameter exists in multiple runs
-    ("param1", {0: [("param1", {}), ("param2", {})],
-                1: [("param3", {})],
-                2: [("param1", {}), ("param4", {})]}, 2),
+    ("param1", {0: {"param1": {}, "param2": {}},
+                1: {"param3": {}},
+                2: {"param1": {}, "param4": {}}}, 2),
     # Parameter exists only in one run
-    ("param2", {0: [("param1", {})],
-                1: [("param2", {})]}, 1),
+    ("param2", {0: {"param1": {}},
+                1: {"param2": {}}}, 1),
     # Parameter does not exist in any run
-    ("paramX", {0: [("param1", {})],
-                1: [("param2", {})]}, -1),
+    ("paramX", {0: {"param1": {}},
+                1: {"param2": {}}}, -1),
     # Empty saved dictionary
     ("param1", {}, -1),
     # skipped runs
-    ("param1", {0: [("param2", {})],
-                2: [("param1", {})]}, 2),
+    ("param1", {0: {"param2": {}},
+                2: {"param1": {}}}, 2),
 ])
 def test_get_most_recent_run(name, saved, expected):
     result = rv.get_most_recent_run(name, saved)
@@ -30,35 +30,40 @@ def test_get_most_recent_run(name, saved, expected):
 
 
 @pytest.mark.parametrize("name,saved", [
-    (123, {0: [("param1", {})]}),  # name is not a string
+    (123, {0: {"param1": {}}}),  # name is not a string
     ("param1", [("param1", {})]),   # saved is not a dict   
 ])
 def test_get_most_recent_run_invalid_inputs(name, saved):
     with pytest.raises(ValueError):
         rv.get_most_recent_run(name, saved)
 
+def test_get_most_recent_run_ignores_non_dict_run_entries():
+    # Run 0 is a non-dict (legacy/invalid), run 1 is proper dict
+    saved = {0: [("param1", {})], 1: {"param1": {}}}
+    assert rv.get_most_recent_run("param1", saved) == 1
+
 ################################################################################
 ############################### _get_sub_dependencies ##########################
 ################################################################################
 @pytest.mark.parametrize("name,run_idx,saved,expected", [
     # Basic case: parameter exists with dependencies
-    ("param1", 2, {2: [("param1", {"param2": 1, "param3": 0})]}, 
+    ("param1", 2, {2: {"param1": {"param2": 1, "param3": 0}}}, 
                    {"param2": 1, "param3": 0}),
     # Parameter exists with no dependencies
-    ("param2", 1, {1: [("param2", {})]}, {}),
+    ("param2", 1, {1: {"param2": {}}}, {}),
     # Parameter does not exist in the specified run
-    ("paramX", 0, {0: [("param1", {})]}, LookupError),
-    # Multiple entries for the same parameter in the run
-    ("param1", 2, {2: [("param1", {}), ("param1", {"param2": 1})]}, 
+    ("paramX", 0, {0: {"param1": {}}}, LookupError),
+    # Invalid dependencies type for a parameter
+    ("param1", 2, {2: {"param1": []}}, 
                    ValueError),
     # Empty dependencies
-    ("param3", 3, {3: [("param3", {})]}, {}),
+    ("param3", 3, {3: {"param3": {}}}, {}),
     # skipped runs
-    ("param1", 2, {0: [("param1", {})],
-                   2: [("param2", {})]}, LookupError),
+    ("param1", 2, {0: {"param1": {}},
+                   2: {"param2": {}}}, LookupError),
     # Parameter exists in earlier run but not in specified run
-    ("param1", 1, {0: [("param1", {})], 
-                   1: [("param2", {})]}, LookupError),
+    ("param1", 1, {0: {"param1": {}}, 
+                   1: {"param2": {}}}, LookupError),
 ])
 def test_get_sub_dependencies(name, run_idx, saved, expected):
     if expected is LookupError:
@@ -73,13 +78,18 @@ def test_get_sub_dependencies(name, run_idx, saved, expected):
 
 
 @pytest.mark.parametrize("name,run_idx,saved", [
-    (123, 0, {0: [("param1", {})]}),  # name is not a string
-    ("param1", "0", {0: [("param1", {})]}),  # run_idx is not an integer
+    (123, 0, {0: {"param1": {}}}),  # name is not a string
+    ("param1", "0", {0: {"param1": {}}}),  # run_idx is not an integer
     ("param1", 0, [("param1", {})]),   # saved is not a dict   
 ])
 def test_get_sub_dependencies_invalid_inputs(name, run_idx, saved):
     with pytest.raises(ValueError):
         rv._get_sub_dependencies(name, run_idx, saved)
+
+def test_get_sub_dependencies_missing_run():
+    saved = {0: {"param1": {}}}
+    with pytest.raises(LookupError):
+        rv._get_sub_dependencies("param1", 1, saved)
 
 ################################################################################
 ############################### _get_lowest_runs ###############################
@@ -118,8 +128,8 @@ def test_get_lowest_runs_invalid_inputs(sub_dependencies):
 ################################################################################
 ############################### get_dependencies ###############################
 ################################################################################
-saved0 = {0: [("param1", {})]}
-saved1 = {0: [("param1", {}), ("param2", {})], 1: [("param1", {'param2': 0})]}
+saved0 = {0: {"param1": {}}}
+saved1 = {0: {"param1": {}, "param2": {}}, 1: {"param1": {'param2': 0}}}
 @pytest.mark.parametrize("param_names,saved,expected", [
     (["param1"], saved0, {"param1": 0}),
     (["param1"], saved1, {"param1": 1, "param2": 0}),
@@ -143,12 +153,12 @@ def test_get_dependencies(param_names, saved, expected):
 # Test function names describe function run order that produces saved 
 
 def test_get_dependencies_ABC():
-    saved = {0: [('directory', {})],
-             1: [('a1', {'directory': 0}),
-             ('a2', {'directory': 0}),
-             ('b1', {'a1': 1, 'directory': 0}),
-             ('c1', {'a2': 1, 'b1': 1, 'directory': 0, 'a1': 1}),
-             ('c2', {'a2': 1, 'b1': 1, 'directory': 0, 'a1': 1})]}
+    saved = {0: {'directory': {}},
+             1: {'a1': {'directory': 0},
+             'a2': {'directory': 0},
+             'b1': {'a1': 1, 'directory': 0},
+             'c1': {'a2': 1, 'b1': 1, 'directory': 0, 'a1': 1},
+             'c2': {'a2': 1, 'b1': 1, 'directory': 0, 'a1': 1}}}
     with pytest.raises(ValueError):
         rv.get_dependencies(['f1'], saved)
     
@@ -156,20 +166,20 @@ def test_get_dependencies_ABC():
     assert rv.get_dependencies(['c1'], saved) == expected
 
 def test_get_dependencies_ABCDEABC():
-    saved = {0: [('directory', {})],
-             1: [('a1', {'directory': 0}),
-              ('a2', {'directory': 0}),
-              ('b1', {'a1': 1, 'directory': 0}),
-              ('c1', {'a2': 1, 'b1': 1, 'directory': 0, 'a1': 1}),
-              ('c2', {'a2': 1, 'b1': 1, 'directory': 0, 'a1': 1}),
-              ('d1', {'a2': 1, 'directory': 0}),
-              ('d2', {'a2': 1, 'directory': 0}),
-              ('e1', {'d2': 1, 'a2': 1, 'directory': 0})],
-             2: [('a1', {'directory': 0}),
-              ('a2', {'directory': 0}),
-              ('b1', {'a1': 2, 'directory': 0}),
-              ('c1', {'a2': 2, 'b1': 2, 'directory': 0, 'a1': 2}),
-              ('c2', {'a2': 2, 'b1': 2, 'directory': 0, 'a1': 2})]}
+    saved = {0: {'directory': {}},
+             1: {'a1': {'directory': 0},
+              'a2': {'directory': 0},
+              'b1': {'a1': 1, 'directory': 0},
+              'c1': {'a2': 1, 'b1': 1, 'directory': 0, 'a1': 1},
+              'c2': {'a2': 1, 'b1': 1, 'directory': 0, 'a1': 1},
+              'd1': {'a2': 1, 'directory': 0},
+              'd2': {'a2': 1, 'directory': 0},
+              'e1': {'d2': 1, 'a2': 1, 'directory': 0}},
+             2: {'a1': {'directory': 0},
+              'a2': {'directory': 0},
+              'b1': {'a1': 2, 'directory': 0},
+              'c1': {'a2': 2, 'b1': 2, 'directory': 0, 'a1': 2},
+              'c2': {'a2': 2, 'b1': 2, 'directory': 0, 'a1': 2}}}
     
     expected = {'c1': 2, 'a2': 2, 'b1': 2, 'directory': 0, 'a1': 2} 
     assert rv.get_dependencies(['c1'], saved) == expected
@@ -187,15 +197,15 @@ def test_get_dependencies_ABCDEABC():
         assert rv.get_dependencies(['e1', 'c1'], saved) == expected 
 
 def test_get_dependencies_AAAABB():
-    saved = {0: [('directory', {})],
-             1: [('a1', {'directory': 0}),
-              ('a2', {'directory': 0}),
-              ('b1', {'a1': 4, 'directory': 0})],
-             2: [('a1', {'directory': 0}),
-              ('a2', {'directory': 0}),
-              ('b1', {'a1': 4, 'directory': 0})],
-             3: [('a1', {'directory': 0}), ('a2', {'directory': 0})],
-             4: [('a1', {'directory': 0}), ('a2', {'directory': 0})]}
+    saved = {0: {'directory': {}},
+             1: {'a1': {'directory': 0},
+                 'a2': {'directory': 0},
+                 'b1': {'a1': 4, 'directory': 0}},
+             2: {'a1': {'directory': 0},
+                 'a2': {'directory': 0},
+                 'b1': {'a1': 4, 'directory': 0}},
+             3: {'a1': {'directory': 0}, 'a2': {'directory': 0}},
+             4: {'a1': {'directory': 0}, 'a2': {'directory': 0}}}
     
     expected = {'a1': 4, 'a2': 4, 'directory': 0}
     assert rv.get_dependencies(['a1', 'a2'], saved) == expected
@@ -205,6 +215,24 @@ def test_get_dependencies_AAAABB():
 
     expected = {'b1': 2, 'a1': 4, 'directory': 0} 
     assert rv.get_dependencies(['b1'], saved) == expected
+
+def test_get_dependencies_overlap_inputs_with_subdeps_error():
+    saved = {0: {'directory': {}},
+             1: {'a1': {'directory': 0},
+                 'a2': {'directory': 0},
+                 'b1': {'a1': 1, 'directory': 0}}}
+    # Requesting both an input ('directory') and a param that depends on it
+    with pytest.raises(ValueError):
+        rv.get_dependencies(['directory', 'a1'], saved)
+
+def test_get_dependencies_multi_param_no_conflict():
+    saved = {0: {'directory': {}},
+             1: {'a1': {'directory': 0},
+                 'a2': {'directory': 0},
+                 'b1': {'a1': 1, 'directory': 0},
+                 'd1': {'a2': 1, 'directory': 0}}}
+    expected = {'b1': 1, 'd1': 1, 'a1': 1, 'a2': 1, 'directory': 0}
+    assert rv.get_dependencies(['b1', 'd1'], saved) == expected
 
 
 @pytest.mark.parametrize("param_names,saved", [
