@@ -15,7 +15,7 @@ def fit_nonlinear_iq_with_gain(fgain, zgain, ffine, zfine, frs, Qrs,
                                **kwargs):
     """
     Fits IQ data with gain amplitudes and phase correction from a gain sweep.
-    Cuts resonance frequencies from the gain sweep in spans of fr / Qr around fr,
+    Cuts resonant frequencies from the gain sweep in spans of fr / Qr around fr,
     where fr is an item in frs and Qr is a corresponding quality factor in Qrs.
 
     The optimal fine sweep width is 6 * fr / Qr.
@@ -26,7 +26,7 @@ def fit_nonlinear_iq_with_gain(fgain, zgain, ffine, zfine, frs, Qrs,
     zgain (np.array): gain sweep complex S21 data.
     ffine (np.array): fine sweep frequency data.
     zfine (np.array): fine sweep complex S21 data.
-    frs (list of float): resonance frequencies to cut from the gain sweep.
+    frs (list of float): resonant frequencies to cut from the gain sweep.
     Qrs (list of float): spans of frs / Qrs are cut from the gain sweep.
     downward (bool): If True, fits the equation for a downward sweep. If
         False, fits for an upward sweep.
@@ -124,9 +124,11 @@ def fit_nonlinear_iq(f, z, bounds = None, p0 = None, fr_guess = None,
         p0 = guess.guess_p0_nonlinear_iq(f, z)
     if bounds is None:
         # default bounds. Phi range is increased to avoid jumping at bounds
-        #                 fr,  Qr, amp,              phi,    a,   i0,   q0,     tau
-        bounds = ([np.min(f), 1e3, .01,        -np.pi / 2, 0, -1e2, -1e2, -1.0e-6],
-                  [np.max(f), 1e7,   1 - 1e-6,  np.pi / 2, 1,  1e2,  1e2,  1.0e-6])
+        #                 fr,  Qr, amp,       phi,    a,   i0,   q0,    tau
+        bounds = (
+            [np.min(f), 1e3, .01, -np.pi / 2, 0, -1e2, -1e2, -1.0e-6],
+            [np.max(f), 1e7, 1 - 1e-6, np.pi / 2, 1, 1e2, 1e2, 1.0e-6],
+        )
         for index in [1, 5, 6]:
             # These will be flipped in bounds_check if needed
             if p0[index] != 0:
@@ -144,8 +146,15 @@ def fit_nonlinear_iq(f, z, bounds = None, p0 = None, fr_guess = None,
     nrmse_acceptable = False
     niter = 0
     while not nrmse_acceptable:
-        popt, perr, nrmse = fit_util(np.array(p0), np.array(bounds), fit_tau, f,
-                                   z_stacked, z, downward)
+        popt, perr, nrmse = fit_util(
+            np.array(p0),
+            np.array(bounds),
+            fit_tau,
+            f,
+            z_stacked,
+            z,
+            downward,
+        )
         if nrmse < 1e-2 or niter > 1:
             nrmse_acceptable = True
         elif nrmse < 1e-1:
@@ -184,8 +193,11 @@ def fit_iq_circle(z, x0 = None, plotq = False):
     popt (list): fit parameters (A, B, R).
     fig, ax (pyplot figure and axis): fit figure and axis, or None if not plotq
     """
-    warnings.warn("fit_iq_circle is deprecated. Use citkid.xcal.circle.fit_iq_circle instead.", 
-                  DeprecationWarning)
+    warnings.warn(
+        "fit_iq_circle is deprecated. Use citkid.xcal.circle.fit_iq_circle "
+        "instead.",
+        DeprecationWarning,
+    )
     z = np.asarray(z, dtype = np.complex128)
     if not np.all(np.isfinite(z)):
         raise ValueError("Input data contains non-finite values.")
@@ -207,8 +219,10 @@ def fit_iq_circle(z, x0 = None, plotq = False):
 ################################################################################
 def fit_util(p0, bounds, fit_tau, f, z_stacked, z, downward = True):
     """
-    Utility function for fitting IQ loops. Given data and initial fit parameters,
-    fits the IQ loop and returns the fit parameters
+    Utility function for fitting IQ loops.
+
+    Given data and initial fit parameters, fits the IQ loop and returns the
+    fit parameters.
 
     Parameters:
     p0 (list): fit guess parameters
@@ -254,7 +268,13 @@ def fit_util(p0, bounds, fit_tau, f, z_stacked, z, downward = True):
                                            downward)
         p0 = np.asarray(p0, dtype = np.float64) 
         bounds = np.asarray(bounds, dtype = np.float64)
-        popt, pcov = optimize.curve_fit(fit_func, f, z_stacked, p0, bounds = bounds)
+        popt, pcov = optimize.curve_fit(
+            fit_func,
+            f,
+            z_stacked,
+            p0,
+            bounds = bounds,
+        )
 
         perr = np.sqrt(np.diag(pcov))
     popt = [pi / s for pi, s in zip(popt, scaler)]

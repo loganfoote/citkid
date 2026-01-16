@@ -10,10 +10,10 @@ def calc_sig(x):
     Given timestreams x, calculates normalized variances for each timestream.
 
     Parameters:
-    x (array-like, (N, T)): timestream data with N timestreams of length T.
+    x (array-like, (N, T)): Timestream data with N timestreams of length T.
 
     Returns:
-    sig (np.array, (N, 1)): variance normalized by the timestream length.
+    sig (np.array, (N, 1)): Variance normalized by timestream length.
     """
     x = np.asarray(x)
     return np.sqrt(np.sum(x ** 2, axis = 1)[:, np.newaxis] / x.shape[1])
@@ -28,24 +28,22 @@ def pca(x, N_comp, sig = None, highpass_params = None):
     index (max T), and c is the component index (max N_comp).
 
     Parameters:
-    x (array-like, (N, T)): timestream data with N timestreams of length T.
-    N_comp (int): number of common components to calculate.
-    sig (array-like, (N, 1)) or None: normalized variance array. If None, 
-        calculates sigma using calc_sig.
-    highpass_params: (dt, frequency, order) -> (float, float, int) or None: if
-        not None, performs a highpass filter on the timestreams before
-        calculating a and sigma, but not in the calulation of A. Parameters are
-            dt: timestream sample rate in seconds
-            frequency: highpass filter frequency in Hz
-            order: highpass filter order
-        The highpass filter improves the performance when dealing with
-        uncorrelated noise that contains a 1/f component, but filtering out the
-        low-frequency noise until it is approximately white. The 1/f correlated
-        noise is preserved in A.
+    x (array-like, (N, T)): Timestream data with N timestreams of length T.
+    N_comp (int): Number of common components to calculate.
+    sig (array-like, (N, 1) or None): Normalized variance array. If None,
+        calculates sigma using `calc_sig`.
+    highpass_params (tuple[float, float, int] or None): (dt, frequency, order).
+        If not None, performs a highpass filter on the timestreams before
+        calculating a and sigma, but not in the calculation of A.
+        dt: sample time in seconds.
+        frequency: highpass filter frequency in Hz.
+        order: highpass filter order.
+        The highpass filter improves performance for 1/f noise by whitening
+        low-frequency components while preserving correlated noise in A.
 
     Returns:
-    a (array-like, (N, N_comp)): scaling factors from A -> x. 
-    A (array-like, (N_comp, T)): common modes.
+    a (array-like, (N, N_comp)): Scaling factors from A -> x.
+    A (array-like, (N_comp, T)): Common modes.
     """
     # Input validation 
     x = np.asarray(x)
@@ -83,12 +81,12 @@ def calc_a(x, A):
     Calculate the values a that minimize |x - a @ A|^2.
 
     Parameters:
-    x (np.array, (N, T)): array of N timestreams of length T.
-    A (np.array, (C, T)): array of C common modes of length T.
+    x (np.array, (N, T)): Array of N timestreams of length T.
+    A (np.array, (C, T)): Array of C common modes of length T.
 
     Returns:
-    a (np.array, (N, C)): array of N scaling factors for each of C common modes
-        that minimize |x - a @ A|^2.
+    a (np.array, (N, C)): Scaling factors for each of C common modes that
+        minimize ||x - a @ A||^2.
     """
     cov = np.sum(x[:, :, np.newaxis] * A.T[np.newaxis, :, :], axis = 1)
     a = cov / np.sum(np.real(A) ** 2, axis = 1)
@@ -105,31 +103,26 @@ def calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params,
     common signal removed from the previous iteration.
 
     Parameters:
-    x (array-like, (N, T)): timestream data with N timestreams of length T.
-    N_comp (int): number of components.
-    N_iter (int): number of iterations.
-    dt (float): sample time in s.
-    lowpass_params: (frequency, order) -> (float, int): performs a lowpass 
-        filter on the common modes to ensure convergence of the iterative 
-        algorithm. Parameters are
-            frequency: lowpass filter frequency in Hz
-            order: lowpass filter order.
-    highpass_params: (frequency, order) -> (float, int): performs a highpass
-        filter on the timestreams before calculating a and sigma, but not in the
-        calulation of A. Parameters are
-            frequency: highpass filter frequency in Hz
-            order: highpass filter order.
-        The highpass filter improves the performance when dealing with
-        uncorrelated noise that contains a 1/f component, but filtering out the
-        low-frequency noise until it is approximately white. The 1/f correlated
-        noise is preserved in A.
-    verbose (bool): if True, shows a progress bar while iterating.
+    x (array-like, (N, T)): Timestream data with N timestreams of length T.
+    N_comp (int): Number of components.
+    N_iter (int): Number of iterations.
+    dt (float): Sample time in seconds.
+    lowpass_params (tuple[float, int]): (frequency, order) for the lowpass
+        filter applied to the common modes for convergence.
+        frequency: lowpass filter frequency in Hz.
+        order: lowpass filter order.
+    highpass_params (tuple[float, int] or None): (frequency, order) for a
+        highpass filter applied to the timestreams before calculating a and
+        sigma (but not in the calculation of A).
+        frequency: highpass filter frequency in Hz.
+        order: highpass filter order.
+    verbose (bool): If True, shows a progress bar while iterating.
 
     Returns:
-    a (array-like, (N, N_comp)): scaling factors from A -> x.
-    A (array-like, (N_comp, T)): common modes.
-    sig_iter (array-like, (N_iter, N, N_comp)): sigma values for each iteration.
-    a_full (array-like, (N, N)): scaling factors from all components A -> x.
+    a (array-like, (N, N_comp)): Scaling factors from A -> x.
+    A (array-like, (N_comp, T)): Common modes.
+    sig_iter (array-like, (N_iter, N, N_comp)): Sigma values per iteration.
+    a_full (array-like, (N, N)): Scaling factors from all components A -> x.
     """
     # Input validation
     x = np.asarray(x, copy = True)
@@ -177,22 +170,22 @@ def calc_cm_complex(z, theta = None, *calc_cm_params):
     common mode algorithm.
 
     Parameters:
-    z (array-like, (N, T)): complex gain-removed timestream data with N 
+    z (array-like, (N, T)): Complex gain-removed timestream data with N
         timestreams of length T.
-    theta (array-like, (N,)) or None: rotation angles to rotate each timestream
-        to the real axis. If None, calculates the rotation angles as the angle
-        of the median of each timestream.
-    See calc_cm for the other parameters.
+    theta (array-like, (N,) or None): Rotation angles to rotate each timestream
+        to the real axis. If None, uses the angle of the median of each
+        timestream.
+    *calc_cm_params: Parameters forwarded to `calc_cm`.
 
     Returns:
-    aI, aQ (array-like, (N, N_comp)): real and imaginary scaling factors from 
+    aI, aQ (array-like, (N, N_comp)): Real and imaginary scaling factors from
         A -> z.
-    AI, AQ (array-like, (N_comp, T)): real and imaginary common modes.
-    sigI_iter, sigQ_iter (array-like, (N_iter, N, N_comp)): real and imaginary 
+    AI, AQ (array-like, (N_comp, T)): Real and imaginary common modes.
+    sigI_iter, sigQ_iter (array-like, (N_iter, N, N_comp)): Real and imaginary
         sigma values for each iteration.
-    aI_full, aQ_full (array-like, (N, N)): real and imaginary scaling factors 
+    aI_full, aQ_full (array-like, (N, N)): Real and imaginary scaling factors
         from all components A.
-    theta (array-like, (N,)): rotation angles used to rotate each timestream to 
+    theta (array-like, (N,)): Rotation angles used to rotate each timestream to
         the real axis.
     """
     # Input validation 
@@ -220,14 +213,14 @@ def remove_cm(x, a, A, idx):
     Removes common modes from a timestream.
     
     Parameters:
-    x (array-like, (T,) or (N, T)): single timestream data of length T, or 
+    x (array-like, (T,) or (N, T)): Single timestream data of length T, or
         (N, T) for N timestreams.
-    a (array-like, (N, C)): scaling factors from A -> x.
-    A (array-like, (C, T)): common modes.
-    idx (array-like, (M,)): indices into a correponding to the timetream(s) x.
+    a (array-like, (N, C)): Scaling factors from A -> x.
+    A (array-like, (C, T)): Common modes.
+    idx (array-like, (M,) or int): Indices into a corresponding to x.
     
     Returns:
-    y (array-like, (N, T)): timestreams with common modes removed.
+    y (array-like, (N, T)): Timestreams with common modes removed.
     """
     # Input validation
     x = np.asarray(x)
@@ -269,18 +262,17 @@ def remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta = None):
     then undoes the rotation after removing the common modes.
     
     Parameters:
-    z (array-like, (T,) or (N, T)): single complex timestream data of length 
-        T, or (N, T) for N timestreams.
-    aI, aQ (array-like, (N, C)): real and imaginary scaling factors from A -> z.
-    AI, AQ (array-like, (C, T)): real and imaginary common modes.
-    idx (array-like, (M,)): indices into aI/aQ correponding to the timetream(s)
-        z.
-    theta (array-like, (N,)) or None: rotation angles to rotate each timestream
-        to the real axis. If None, calculates the rotation angles as the angle
-        of the median of each timestream.
+    z (array-like, (T,) or (N, T)): Single complex timestream data of length T,
+        or (N, T) for N timestreams.
+    aI, aQ (array-like, (N, C)): Real and imaginary scaling factors from A -> z.
+    AI, AQ (array-like, (C, T)): Real and imaginary common modes.
+    idx (array-like, (M,) or int): Indices into aI/aQ corresponding to z.
+    theta (array-like, (N,) or None): Rotation angles to rotate each timestream
+        to the real axis. If None, uses the angle of the median of each
+        timestream.
     Returns:
-    y (array-like, (N, T)): complex timestreams with common modes removed.
-    theta (array-like, (N,)): rotation angles used to rotate each timestream to 
+    y (array-like, (N, T)): Complex timestreams with common modes removed.
+    theta (array-like, (N,)): Rotation angles used to rotate each timestream to
         the real axis.
     """
     # Input validation

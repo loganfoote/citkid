@@ -64,6 +64,14 @@ def test_calc_qc_qi_broadcast_scalar_qr():
     assert np.allclose(qc_calc, qc_expected)
     assert np.allclose(qi_calc, qi_expected)
 
+def test_calc_qc_qi_array_amp_endpoints():
+    qr = np.array([1e3, 1e4, 1e5])
+    amp = np.array([0.0, 0.5, 1.0])
+    qc_calc, qi_calc = util.calc_qc_qi(qr, amp)
+    assert np.isinf(qc_calc[0]) and np.isclose(qi_calc[0], qr[0])
+    assert np.isfinite(qc_calc[1]) and np.isfinite(qi_calc[1])
+    assert np.isclose(qc_calc[2], qr[2]) and np.isinf(qi_calc[2])
+
 def test_calc_qc_qi_near_endpoints():
     qr = 1e4
     eps = 1e-9
@@ -217,6 +225,13 @@ def test_calc_nrmse_with_nan():
     nrmse = util.calc_nrmse(z, z_fit)
     assert np.isnan(nrmse)
 
+def test_calc_nrmse_list_inputs():
+    z = [1.0, 2.0, 3.0]
+    z_fit = [1.0, 2.5, 2.5]
+    nrmse = util.calc_nrmse(z, z_fit)
+    assert isinstance(nrmse, np.floating)
+    assert nrmse > 0
+
 @pytest.mark.parametrize("z,z_fit", [
     (np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0])), # shape mismatch
     (np.array([1.0, 2.0, 3.0]), "invalid_fit"),      # invalid z_fit type
@@ -322,6 +337,14 @@ def test_get_peak_fwhm_descending_x():
     xpeak, ypeak, fwhm = util.get_peak_fwhm(x, y)
     assert xpeak >= min(x)
     assert xpeak <= max(x)
+    assert fwhm > 0 and fwhm < (max(x) - min(x))
+
+def test_get_peak_fwhm_unsorted_x():
+    x = np.linspace(0, 10, 50)
+    y = np.sin(x) + 2.0
+    ix = np.random.permutation(len(x))
+    xpeak, ypeak, fwhm = util.get_peak_fwhm(x[ix], y[ix])
+    assert min(x) <= xpeak <= max(x)
     assert fwhm > 0 and fwhm < (max(x) - min(x))
 
 def test_get_peak_fwhm_multiple_peaks_highest_selected():

@@ -1,7 +1,7 @@
 import numpy as np 
 from scipy import optimize
 from numba import njit, float64
-from ..noise.psd import get_psd
+from ..signal.psd import get_psd
 
 ################################################################################
 ################################ Circle fitting ################################
@@ -12,13 +12,13 @@ def circle_objective(params, x, y):
     Objective for circle fitting.
 
     Parameters:
-    params (A: float, B: float, R: float): circle fit parameters. (A, B) is the
-        origin and R is the radius
-    x (np.array, float64): x data
-    y (np.array, float64): y data
+    params (np.array, float64, (3,)): Circle parameters (A, B, R), where
+        (A, B) is the center and R is the radius.
+    x (np.array, float64): x data.
+    y (np.array, float64): y data.
 
     Returns:
-    error (float): error for minimization
+    error (float): Least-squares error for minimization.
     """
     A, B, R = params
     error = sum(((x - A) ** 2 + (y - B) ** 2 - R ** 2) ** 2)
@@ -33,13 +33,13 @@ def fit_iq_circle(z, mask = None):
        where the origin is (A, B) and the radius is R.
 
     Parameters:
-    z (np.array, complex128): complex S21 data.
-    mask (np.array, bool or None): mask of z to use for fitting. If None,
-        all data points are used.
+    z (np.array, complex128): Complex S21 data.
+    mask (np.array, bool or None): Mask of z to use for fitting. If None, all
+        data points are used.
 
     Returns:
-    origin (complex): center of the fitted circle.
-    radius (float): radius of the fitted circle.
+    origin (complex): Center of the fitted circle.
+    radius (float): Radius of the fitted circle.
     """
     # Input validation and masking
     z = np.asarray(z, dtype = np.complex128)
@@ -72,12 +72,12 @@ def cent_rot_s21(z, center, phase):
     Apply centering and rotation to S21 data.
 
     Parameters:
-    z (array-like, complex128): complex S21 data with gain removed.
+    z (array-like, complex128): Complex S21 data with gain removed.
     center (complex): IQ circle center for centering the data.
-    phase (float): phase angle in radians for rotation.
+    phase (float): Phase angle in radians for rotation.
 
     Returns:
-    (array-like, complex128): centered and rotated S21 data points.
+    z_rot (np.array, complex128): Centered and rotated S21 data points.
     """
     z = np.asarray(z, dtype = np.complex128)
     return (z - center) * np.exp(-1j * phase)
@@ -87,12 +87,12 @@ def convert_to_theta(z, unwrap = False):
     Convert complex S21 data points to phase angles (theta).
 
     Parameters:
-    z (array-like, complex128): complex S21 data after centering and rotation. 
+    z (array-like, complex128): Complex S21 data after centering and rotation.
         Must be sorted in ascending or descending order of frequency.
-    unwrap (bool): whether to unwrap the phase angles.
+    unwrap (bool): Whether to unwrap the phase angles.
 
     Returns:
-    (array-like, float64): phase angles in radians.
+    theta (np.array, float64): Phase angles in radians.
     """
     z = np.asarray(z, dtype = np.complex128)
     theta = np.angle(z)
@@ -105,10 +105,10 @@ def convert_to_A(z):
     Convert complex S21 data points to amplitude (A).
 
     Parameters:
-    z (array-like, complex128): complex S21 data after centering and rotation.
+    z (array-like, complex128): Complex S21 data after centering and rotation.
 
     Returns:
-    (array-like, float64): amplitudes.
+    A (np.array, float64): Amplitudes.
     """
     z = np.asarray(z, dtype = np.complex128)
     return np.abs(z)
@@ -121,19 +121,17 @@ def get_spar_sper(theta, A, radius, dt, get_freqs = True):
     Calculate the PSDs of parallel and perpendicular noise components.
     
     Parameters:
-    theta (array-like, float64): phase noise timestream in radians.
-    A (array-like, float64): amplitude noise timestream in normalized units.
-    radius (float): radius of the IQ circle.
-    dt (float): sample time in s. 
-    get_freqs (bool): whether to return the frequency array.
+    theta (array-like, float64): Phase noise timestream in radians.
+    A (array-like, float64): Amplitude noise timestream in normalized units.
+    radius (float): Radius of the IQ circle.
+    dt (float): Sample time in seconds.
+    get_freqs (bool): Whether to return the frequency array.
     
     Returns:    
-    (tuple): tuple containing:
-        - frequency (array-like, float64): PSD frequencies in Hz if get_freqs,
-                                           else None.
-        - spar (array-like, float64): PSD of parallel noise component in dBc.
-        - sper (array-like, float64): PSD of perpendicular noise component in 
-                                      dBc.
+    frequency (np.array, float64 or None): PSD frequencies in Hz if get_freqs,
+        else None.
+    spar (np.array, float64): PSD of parallel noise component in dBc.
+    sper (np.array, float64): PSD of perpendicular noise component in dBc.
     """
     # Input validation
     theta = np.asarray(theta, dtype = np.float64)

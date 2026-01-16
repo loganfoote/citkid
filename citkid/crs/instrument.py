@@ -13,15 +13,23 @@ from ..util import fix_path
 class CRS:
     def __init__(self, serial_number = 27, interface = 'enp2s0'):
         """
-        Initializes the crs object d. Not that the system must be configured
-        using CRS.configure_system before measurements.
+        Initialize the CRS object.
+
+        Note that the system must be configured using
+        `CRS.configure_system` before measurements.
 
         Parameters:
         serial_number (int): CRS serial number.
         interface (str): Ethernet interface identifier.
+
+        Returns:
+        None
         """
         self.serial_number = serial_number
-        session_str = '!HardwareMap [ !CRS { ' + f'serial: "{serial_number:04d}"'
+        session_str = (
+            '!HardwareMap [ !CRS { '
+            + f'serial: "{serial_number:04d}"'
+        )
         session_str += ' } ]'
         s = rfmux.load_session(session_str)
         self.d = s.query(rfmux.CRS).one()
@@ -31,8 +39,8 @@ class CRS:
     async def configure_system(self, clock_source="SMA", full_scale_dbm = 7,
                                analog_bank_high = False, verbose = True):
         """
-        Resolves the system, sets the timestamp port, sets the clock source, and
-        sets the DAC scale.
+        Resolve the system, set the timestamp port and clock source, and set
+        the DAC scale.
 
         Parameters:
         clock_source (str): clock source specification. 'VCXO' for the internal
@@ -42,6 +50,9 @@ class CRS:
         analog_bank_high (bool): if True, uses modules 1-4 (DAC/ADC 5-8). Else
             uses modules 1-4 (DAC/ADC 1-4).
         verbose (bool): If True, gets and prints the clocking source.
+
+        Returns:
+        None
         """
         # Resolve the system
         await self.d.resolve()
@@ -72,25 +83,31 @@ class CRS:
 
     async def set_analog_bank(self, analog_bank_high):
         """
-        Sets the analog bank to either high (modules 5-8) or low (modules 1-4).
+        Set the analog bank to high (modules 5-8) or low (modules 1-4).
 
         Parameters:
         analog_bank_high (bool): if True, uses modules 1-4 (DAC/ADC 5-8). Else
             uses modules 1-4 (DAC/ADC 1-4).
+
+        Returns:
+        None
         """
         await self.d.set_analog_bank(high = analog_bank_high)
         self.analog_bank_high = analog_bank_high
 
     async def set_extended_module_bandwidth(self, extended):
         """
-        Choose between the standard module bandwidth of 500 MHz and the extended
-        module bandwidth of 600 MHz. Only extend the bandwidth if you know what
-        you are doing. See docstring for crs.d.set_extended_module_bandwidth for
-        details.
+        Choose between the standard (500 MHz) and extended (600 MHz) bandwidth.
+
+        Only extend the bandwidth if you know what you are doing. See
+        `crs.d.set_extended_module_bandwidth` for details.
 
         Parameters:
         extended (bool): If True, extends the bandwidth to 600 MHz. Else
             sets the bandwidth to 500 MHz.
+
+        Returns:
+        None
         """
         await self.d.set_extended_module_bandwidth(extended)
         self.extended_bw = extended
@@ -105,6 +122,9 @@ class CRS:
         nco_freq_dict (dict): keys (int) are module indices and values (float)
             are NCO frequencies in Hz.
         verbose (bool): If True, prints the NCO frequencies after confirming.
+
+        Returns:
+        None
         """
         modules = get_modules(self.d, list(nco_freq_dict.keys()))
         await modules.set_nco(nco_freq_dict)
@@ -117,7 +137,11 @@ class CRS:
 
     async def write_tones(self, fres, ares, return_max_ntones = False):
         """
-        Writes an array of tones given frequencies and amplitudes. Splits the
+        Write tones for the provided frequencies and amplitudes.
+
+        Splits the tones into the appropriate modules using the NCO frequencies.
+        This could lead to behavior where one tone jumps between NCOs during a
+        run. Consider setting tones per NCO or shifting NCOs with resonances.
         tones into the appropriate modules using the NCO frequencies.
         Note: this could lead to behavior where one tone jumps between NCOs
         during a measurement run. To mitigate this, we could consider setting
@@ -130,6 +154,9 @@ class CRS:
         return_max_ntones (bool): If True, returns
             max_ntones (int): maximum number of tones on any given module. This
             parameter is used to parse the noise data.
+
+        Returns:
+        int or None: Maximum tones per module if return_max_ntones is True.
         """
         # Split fres and ares into dictionaries
         if not len(self.nco_freq_dict):
@@ -144,13 +171,22 @@ class CRS:
             self.fres_dict[module_index].append(fr)
             self.ares_dict[module_index].append(ar)
             self.ch_ix_dict[module_index].append(ch_ix)
-        self.fres_dict = {key: np.array(value) for key, value in self.fres_dict.items()}
-        self.ares_dict = {key: np.array(value) for key, value in self.ares_dict.items()}
-        self.ch_ix_dict = {key: np.array(value) for key, value in self.ch_ix_dict.items()}
+        self.fres_dict = {
+            key: np.array(value) for key, value in self.fres_dict.items()
+        }
+        self.ares_dict = {
+            key: np.array(value) for key, value in self.ares_dict.items()
+        }
+        self.ch_ix_dict = {
+            key: np.array(value) for key, value in self.ch_ix_dict.items()
+        }
         # Confirm that the tones are within the NCO bandwidths
         for module_index in self.nco_freq_dict.keys():
             bw_half = 312.5e6 if self.extended_bw else 250e6
-            diffs = self.fres_dict[module_index] - self.nco_freq_dict[module_index]
+            diffs = (
+                self.fres_dict[module_index]
+                - self.nco_freq_dict[module_index]
+            )
             if any(np.abs(diffs) > bw_half):
                 err = f'All of fres must be within {round(bw_half / 1e6, 1)} '
                 err += 'MHz of an NCO frequency'
@@ -166,8 +202,7 @@ class CRS:
     async def sweep(self, frequencies, ares, nsamps = 10, return_dbc = True,
                     verbose = True, pbar_description = 'Sweeping'):
         """
-        Performs a frequency sweep and returns the complex S21 value at each
-        frequency. Performs sweeps over axis 0 of frequencies simultaneously.
+        Perform a frequency sweep and return complex S21 at each frequency.
 
         Parameters:
         frequencies (M X N array-like float): the first index M is the channel
@@ -178,6 +213,9 @@ class CRS:
         return_dbc (bool): If True, divides the output by the tone power
         verbose (bool): If True, displays a progress bar while sweeping
         pbar_description (str): description for the progress bar
+
+        Returns:
+        np.ndarray: complex S21 values for each frequency.
         """
         frequencies, ares = np.asarray(frequencies), np.asarray(ares)
         if not len(self.nco_freq_dict):
@@ -188,8 +226,10 @@ class CRS:
         self.ares_dict = {key: [] for key in self.nco_freq_dict.keys()}
         self.ch_ix_dict = {key: [] for key in self.nco_freq_dict.keys()}
         def select_nco(k):
-            ncos = [np.abs(self.nco_freq_dict[k] - fr) for fr in [max(freqs),
-                                                                  min(freqs)]]
+            ncos = [
+                np.abs(self.nco_freq_dict[k] - fr)
+                for fr in [max(freqs), min(freqs)]
+            ]
             return max(ncos)
         for ch_ix, freqs, ar in zip(channel_indices, frequencies, ares):
             module_index = min(self.nco_freq_dict, key = select_nco)
@@ -351,12 +391,22 @@ class CRS:
         f, z = f[ix], z[ix]
         return f, z
 
-    async def capture_noise(self, fres, ares, noise_time, dec_stage = 6, 
-                            fast_modules = [1], tmp_directory = 'tmp/',
-                            parser_loc = '/home/daq1/github/rfmux/firmware/r1.5.6/parser',
-                            delete_parser_data = True, return_dbc = True, 
-                            batch_process = False, outpath = '', 
-                            batch_size = 1000, verbose = True):
+    async def capture_noise(
+        self,
+        fres,
+        ares,
+        noise_time,
+        dec_stage = 6,
+        fast_modules = [1],
+        tmp_directory = 'tmp/',
+        parser_loc = '/home/daq1/github/rfmux/firmware/r1.5.6/parser',
+        delete_parser_data = True,
+        return_dbc = True,
+        batch_process = False,
+        outpath = '',
+        batch_size = 1000,
+        verbose = True,
+    ):
         """
         Captures a noise timestream using the parser.
 
@@ -374,15 +424,15 @@ class CRS:
                  active module is module 1.
         fast_modules (array-like): up to 2 modules that you want to run at 38
             or 19 kHz.
-        tmp_directory (str): directory to save the temporary parser data before 
-            converting to .npy. Data will be streamed straight to disc, so this 
-            must be a fast enough drive that contains enough room for the files.
+        tmp_directory (str): directory to save temporary parser data before
+            converting to .npy. Data is streamed to disk, so the drive must be
+            fast enough with sufficient free space.
         parser_loc (str): path to the parser file.
         delete_parser_data (bool): If True, deletes the parser data files
             after importing the data.
         return_dbc (bool): If true, divides the output by the tone power.
         batch_process (bool): If True, processes the noise data in batches.
-        outpath (str): path to save the batch data. Data will be saved in 
+        outpath (str): path to save the batch data. Data will be saved in
             multiple files with suffices appended to outpath.
         batch_size (int): batch size, in MB.
         verbose (bool): If True, displays a progress bar while taking data.
@@ -455,21 +505,27 @@ class CRS:
             return z
         
         # batch processing
-        scale_factor = rfmux.core.transferfunctions.VOLTS_PER_ROC / 256 / np.sqrt(2)
+        scale_factor = (
+            rfmux.core.transferfunctions.VOLTS_PER_ROC / 256 / np.sqrt(2)
+        )
         scale_factor = np.array(scale_factor, dtype = np.float64)
         if return_dbc:
             p_scale = 1 / 10 ** (ares[:, np.newaxis].astype(np.float64) / 20)
             scale_factor = scale_factor * p_scale
-        np.save(outpath.replace('.npy', f'_batch_scale_factor.npy'), 
-                scale_factor)
-        np.save(outpath.replace('.npy', f'_batch_tsample.npy'), 
-                1 / self.sample_frequency)
+        np.save(
+            outpath.replace('.npy', f'_batch_scale_factor.npy'),
+            scale_factor,
+        )
+        np.save(
+            outpath.replace('.npy', f'_batch_tsample.npy'),
+            1 / self.sample_frequency,
+        )
         convert_parser_to_z_batch(data_directory, outpath, self.serial_number,
-                                    module_indices, ntones = len(fres),
-                                    max_ntones = max_ntones,
-                                    return_dbc = return_dbc, ares = ares, 
-                                    ch_ix_dict = self.ch_ix_dict,
-                                    batch_size = batch_size)
+                      module_indices, ntones = len(fres),
+                      max_ntones = max_ntones,
+                      return_dbc = return_dbc, ares = ares,
+                      ch_ix_dict = self.ch_ix_dict,
+                      batch_size = batch_size)
         if delete_parser_data:
             shutil.rmtree(data_directory)
 
@@ -505,13 +561,16 @@ class CRS:
         if nsamps > 1e7:
             raise ValueError('Time must be less than 4 s')
         # Capture samples
-        samples = await self.d.get_pfb_samples(int(nsamps), channel = 1,
-                                                   module = module_index,
-                                                   binlim = 1e6, trim = True,
-                                                   nsegments = nsegments,
-                                                   reference = 'relative', # dBc / Hz
-                                                   reset_NCO = True, # shifts NCO to bin center
-                                                   )
+        samples = await self.d.get_pfb_samples(
+            int(nsamps),
+            channel = 1,
+            module = module_index,
+            binlim = 1e6,
+            trim = True,
+            nsegments = nsegments,
+            reference = 'relative',  # dBc / Hz
+            reset_NCO = True,  # shifts NCO to bin center
+        )
         f = np.asarray(samples.spectrum.freq_iq)
         z = np.asarray(samples.spectrum.psd_i + 1j * samples.spectrum.psd_q)
         z = np.array(samples.i + 1j * samples.q)
@@ -561,9 +620,12 @@ async def write_tones(module, nco_freq_dict, fres_dict, ares_dict):
         fres, ares = fres_dict[module_index], ares_dict[module_index]
         fres = np.asarray(fres)
         ares = np.asarray(ares)
-        # Randomize frequencies a little. This might be unneccesary but I kept it in to be safe
-        ix = [i for i in range(len(fres)) if i not in [np.argmin(fres), np.argmax(fres)]]
-        # don't randomize lowest and highest frequency to avoid exceeding bandwidth
+        # Randomize frequencies a little to avoid collisions.
+        ix = [
+            i for i in range(len(fres))
+            if i not in [np.argmin(fres), np.argmax(fres)]
+        ]
+        # Don't randomize lowest and highest frequency to avoid bandwidth hits.
         if len(fres) > 2:
             fres[ix] += np.random.uniform(-50, 50, len(fres) - 2)
         comb_sampling_freq =rfmux.core.transferfunctions.COMB_SAMPLING_FREQ
@@ -650,13 +712,17 @@ async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
                                       module = module_index)
                 await ctx()
             nsamples_discard = 0 # 15
-            # d.py_get_samples is t0's preferred method, but it does not work with every computer.
+            # d.py_get_samples is t0's preferred method, but not everywhere.
             samples = await d.get_samples(nsamps + nsamples_discard,
                                              module = module_index,
                                              average = True)
             # format and average data
             zi = np.asarray(samples.mean.i) + 1j * np.asarray(samples.mean.q)
-            zi = zi[:n_channels] * rfmux.core.transferfunctions.VOLTS_PER_ROC / np.sqrt(2)
+            zi = (
+                zi[:n_channels]
+                * rfmux.core.transferfunctions.VOLTS_PER_ROC
+                / np.sqrt(2)
+            )
             z[:, sweep_index] = zi
 
         # Turn off channels

@@ -1,7 +1,7 @@
 import numpy as np
 from ..xcal.circle import fit_iq_circle
 from .plot import plot_cal, plot_timestream, plot_psd
-from .psd import *
+from ..signal.psd import *
 from .cosmic_rays import remove_cosmic_rays
 
 def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
@@ -11,7 +11,7 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
                 circfit_npoints = None, xcal_weight_sigma = None,
                 xcal_weight_theta0 = 0.0, **cr_kwargs):
     """
-    Computes parallel and perpendicular noise PSDs, as well as Sxx
+    Compute parallel and perpendicular noise PSDs, as well as Sxx.
 
     Parameters:
     ffine (array-like): fine sweep frequency data in Hz
@@ -26,8 +26,8 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
     dt_offres (float): sample time of the off-resonance noise timestream in s
     flag_crs (bool): If True, flags cosmic rays and returns a list of indices
         where they were found. If False, does not flag cosmic rays
-    deglitch_nstd (float or None): threshold for removing glitched data points from
-        the timestream, or None to bypass deglitching. Points more than
+    deglitch_nstd (float or None): Threshold for removing glitched data points
+        from the timestream, or None to bypass deglitching. Points more than
         deglitch_nstd times the standard deviations of the theta timestream are
         removed from the data.
     plot_calq (bool): If True, plots the calibration figure. Else, returns None
@@ -90,14 +90,28 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
     # Extract theta and x
     if znoise_offres is not None:
         znoise_offres = np.array(znoise_offres)
-        #theta_fine, theta_offres, theta_offres_clean, A_offres_clean, (ix0_off, ix1_off) =\
-        theta_fine, theta_offres, theta_offres_clean, A_offres_clean =\
-        calibrate_timestreams(origin, ffine, zfine, fnoise_offres,
-                              znoise_offres, dt_offres, deglitch_nstd, poly_deg = poly_deg,
-                              flag_crs = False, offres = True, min_cal_points = min_cal_points,
-                              xcal_weight_theta0 = xcal_weight_theta0, xcal_weight_sigma = xcal_weight_sigma)
+        # theta_fine, theta_offres, theta_offres_clean, A_offres_clean,
+        # (ix0_off, ix1_off) = calibrate_timestreams(...)
+        theta_fine, theta_offres, theta_offres_clean, A_offres_clean = \
+            calibrate_timestreams(
+                origin,
+                ffine,
+                zfine,
+                fnoise_offres,
+                znoise_offres,
+                dt_offres,
+                deglitch_nstd,
+                poly_deg = poly_deg,
+                flag_crs = False,
+                offres = True,
+                min_cal_points = min_cal_points,
+                xcal_weight_theta0 = xcal_weight_theta0,
+                xcal_weight_sigma = xcal_weight_sigma,
+            )
 
-        spar_offres = 10 * np.log10(get_psd(radius * theta_offres_clean, dt_offres))
+        spar_offres = 10 * np.log10(
+            get_psd(radius * theta_offres_clean, dt_offres)
+        )
         sper_offres = 10 * np.log10(get_psd(A_offres_clean, dt_offres))
         f_psd_offres = np.fft.rfftfreq(len(theta_offres_clean), d = dt_offres)
     else:
@@ -107,12 +121,23 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
     if znoise is not None:
         znoise = np.array(znoise)
 
-        theta_fine, theta, theta_clean, A_clean, theta_range, poly, x, cr_indices, (ix0, ix1) =\
-        calibrate_timestreams(origin, ffine, zfine, fnoise, znoise, dt,
-                              deglitch_nstd, flag_crs = flag_crs, offres = False,
-                              min_cal_points = min_cal_points, poly_deg = poly_deg,
-                              xcal_weight_theta0 = xcal_weight_theta0, xcal_weight_sigma = xcal_weight_sigma,
-                              **cr_kwargs)
+        (theta_fine, theta, theta_clean, A_clean, theta_range, poly, x,
+         cr_indices, (ix0, ix1)) = calibrate_timestreams(
+            origin,
+            ffine,
+            zfine,
+            fnoise,
+            znoise,
+            dt,
+            deglitch_nstd,
+            flag_crs = flag_crs,
+            offres = False,
+            min_cal_points = min_cal_points,
+            poly_deg = poly_deg,
+            xcal_weight_theta0 = xcal_weight_theta0,
+            xcal_weight_sigma = xcal_weight_sigma,
+            **cr_kwargs,
+        )
 
         sxx = get_psd(x, dt)
         spar = 10 * np.log10(get_psd(radius * theta_clean, dt))
@@ -125,9 +150,19 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
         ix0, ix1 = None, None
     # Plots
     if plot_calq:
-        fig_cal = plot_cal(ffine, zfine, popt_circle, fnoise, znoise,
-                           znoise_offres, theta_range, theta_fine, theta_clean,
-                           poly, (ix0, ix1))
+        fig_cal = plot_cal(
+            ffine,
+            zfine,
+            popt_circle,
+            fnoise,
+            znoise,
+            znoise_offres,
+            theta_range,
+            theta_fine,
+            theta_clean,
+            poly,
+            (ix0, ix1),
+        )
     else:
         fig_cal = None
     if plot_timestreamq:
@@ -136,8 +171,15 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
     else:
         fig_timestream = None
     if plot_psdq:
-        fig_psd = plot_psd(f_psd, spar, sper, sxx,
-                           f_psd_offres, spar_offres, sper_offres)
+        fig_psd = plot_psd(
+            f_psd,
+            spar,
+            sper,
+            sxx,
+            f_psd_offres,
+            spar_offres,
+            sper_offres,
+        )
     else:
         fig_psd = None
     psd_onres = [f_psd, spar, sper, sxx]
@@ -149,8 +191,18 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
     else:
         xcal_data = [None]
     figs = (fig_cal, fig_timestream, fig_psd)
-    return psd_onres, psd_offres, timestream_onres, timestream_offres,\
-           cr_indices, theta_range, poly, xcal_data, popt_circle, figs
+    return (
+        psd_onres,
+        psd_offres,
+        timestream_onres,
+        timestream_offres,
+        cr_indices,
+        theta_range,
+        poly,
+        xcal_data,
+        popt_circle,
+        figs,
+    )
 
 def compute_psd_simple(ffine, zfine, fnoise, znoise, dt, deglitch_nstd = 5,
                        offres = False):
@@ -165,10 +217,10 @@ def compute_psd_simple(ffine, zfine, fnoise, znoise, dt, deglitch_nstd = 5,
     znoise (array-like or None): on-resonance complex noise data, with gain
         removed. For off-resonance noise only, set this to None
     dt (float): sample time of the on-resonance noise timestream in s
-    deglitch_nstd (float or None): threshold for removing glitched data points from
-        the timestream, or None to bypass deglitching. Points more than
+    deglitch_nstd (float or None): Threshold for removing glitched data points
+        from the timestream, or None to bypass deglitching. Points more than
         deglitch_nstd times the standard deviations of the theta timestream are
-        removed from the data
+        removed from the data.
     offres (bool): If True, sets the circle origin to 0 for off-res noise. Else,
         fits for the circle origin
 
@@ -214,10 +266,22 @@ def compute_psd_simple(ffine, zfine, fnoise, znoise, dt, deglitch_nstd = 5,
 ##################### Timestream analysis function #############################
 ################################################################################
 
-def calibrate_timestreams(origin, ffine, zfine, fnoise, znoise, dt,
-                          deglitch_nstd, flag_crs, offres = False,
-                          poly_deg = 3, min_cal_points = 5, xcal_weight_sigma = None,
-                          xcal_weight_theta0 = 0.0, **cr_kwargs):
+def calibrate_timestreams(
+    origin,
+    ffine,
+    zfine,
+    fnoise,
+    znoise,
+    dt,
+    deglitch_nstd,
+    flag_crs,
+    offres = False,
+    poly_deg = 3,
+    min_cal_points = 5,
+    xcal_weight_sigma = None,
+    xcal_weight_theta0 = 0.0,
+    **cr_kwargs,
+):
     """
     Calculates theta and x timestreams given complex IQ noise timestreams.
     1) calculate theta of the sweep data an noise timestream
@@ -257,13 +321,20 @@ def calibrate_timestreams(origin, ffine, zfine, fnoise, znoise, dt,
     theta_fine, theta, A = calculate_theta_A(zfine, znoise, origin)
     if offres:
         znoise_clean = deglitch_timestream(znoise, deglitch_nstd)
-        theta_fine, theta_clean, A_clean = calculate_theta_A(zfine,
-                                                           znoise_clean, origin)
+        theta_fine, theta_clean, A_clean = calculate_theta_A(
+            zfine,
+            znoise_clean,
+            origin,
+        )
         return theta_fine, theta, theta_clean, A_clean
     # Remove cosmic rays from theta timestream
     if flag_crs:
-        cr_indices, theta_rmvd, A_clean = remove_cosmic_rays(theta, A, dt,
-                                                             **cr_kwargs)
+        cr_indices, theta_rmvd, A_clean = remove_cosmic_rays(
+            theta,
+            A,
+            dt,
+            **cr_kwargs,
+        )
     else:
         cr_indices = np.array([], dtype = np.int64)
         theta_rmvd = theta.copy()
@@ -275,14 +346,29 @@ def calibrate_timestreams(origin, ffine, zfine, fnoise, znoise, dt,
     else:
         theta_clean = theta.copy()
     # Calibrate x
-    poly, theta_range, (ix0, ix1) = \
-        calibrate_x(ffine, theta_fine, theta_clean, poly_deg = poly_deg, 
-                    min_cal_points = min_cal_points, 
-                    weight_sigma = xcal_weight_sigma, weight_theta0 = xcal_weight_theta0)
+    poly, theta_range, (ix0, ix1) = calibrate_x(
+        ffine,
+        theta_fine,
+        theta_clean,
+        poly_deg = poly_deg,
+        min_cal_points = min_cal_points,
+        weight_sigma = xcal_weight_sigma,
+        weight_theta0 = xcal_weight_theta0,
+    )
 
     fs_clean = np.polyval(poly, theta_clean)
     x = 1 - fs_clean / fnoise
-    return theta_fine, theta, theta_clean, A_clean, theta_range, poly, x, cr_indices, (ix0, ix1)
+    return (
+        theta_fine,
+        theta,
+        theta_clean,
+        A_clean,
+        theta_range,
+        poly,
+        x,
+        cr_indices,
+        (ix0, ix1),
+    )
 
 def calibrate_x(ffine, theta_fine, theta_clean, poly_deg = 3,
                 min_cal_points = 5, weight_sigma = None,
@@ -321,12 +407,16 @@ def calibrate_x(ffine, theta_fine, theta_clean, poly_deg = 3,
         ix0 -= half
         ix1 += half
     if len(theta_fine) < min_cal_points:
-        raise Exception(f'theta_fine must be at least min_cal_points = {min_cal_points} points long')
+        raise Exception(
+            f'theta_fine must be at least min_cal_points = '
+            f'{min_cal_points} points long'
+        )
     if ix0 < 0:
         ix1 += - ix0 # Increase ix1 by the amount below 0
         ix0 = 0
     if ix1 >= len(theta_fine):
-        ix0 -= ix1 - len(theta_fine) # increase ix2 by the amount above len(theta_fine)
+        # Increase ix1 by the amount above len(theta_fine).
+        ix0 -= ix1 - len(theta_fine)
         ix1 = len(theta_fine)
 
     # Bias the fit toward an area we care more about
@@ -349,8 +439,8 @@ def deglitch_timestream(x, deglitch_nstd):
 
     Parameters:
     x (np.array): data from which glitches are removed
-    deglitch_nstd (float or None): threshold for glitch removal. points above this
-        threshold times the standard deviation of the data are removed
+    deglitch_nstd (float or None): Threshold for glitch removal. Points above
+        this threshold times the standard deviation of the data are removed.
     Returns:
     x_deglitch (np.array): data with glitches removed
     """
@@ -375,8 +465,8 @@ def calculate_theta_A(zfine, znoise, origin):
 
     Returns:
     theta_fine (np.array): values of theta corresponding to the fine sweep data
-    theta_noise (np.array): theta timestream corresponding the the noise data
-    A_noise (np.array): amplitude timestream corresponding to the noise data
+    theta_noise (np.array): Theta timestream for the noise data.
+    A_noise (np.array): Amplitude timestream for the noise data.
     """
     assert len(zfine), "No fine sweep points provided to calculate_theta_A"
     zn_mean = np.mean(znoise)

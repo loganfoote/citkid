@@ -6,16 +6,19 @@ from ..util import fix_path
 
 class peakFinder:
     def __init__(self, x_data, y_data, fr_initial, outpath, overwrite = False):
-        """Interactive peak finder for a full vna sweep.
+        """
+        Interactive peak finder for a full VNA sweep.
 
         Parameters:
-        x_data (np.array): Frequency data in Hz
-        y_data (np.array): |S21| Magnitude data
-        fr_initial (np.array): Resonance frequency guesses in Hz
-        outpath (str): path to an npy file to save the list of resonance
-            frequencies after adjustments
-        overwrite (bool): if True, overwrites the npy file. If False and outpath
-            exists, raises an error.
+        x_data (np.array): Frequency data in Hz.
+        y_data (np.array): |S21| magnitude data.
+        fr_initial (np.array): Resonant frequency guesses in Hz.
+        outpath (str): Path to an .npy file to save the resonance list.
+        overwrite (bool): If True, overwrites the .npy file. If False and
+            outpath exists, raises an error.
+
+        Returns:
+        None
         """
         outpath = fix_path(outpath)
         if os.path.exists(outpath):
@@ -46,7 +49,10 @@ class peakFinder:
 
     def setup_plot(self):
         """
-        Sets up the plot
+        Set up the plot.
+
+        Returns:
+        None
         """
         self.fig, self.ax = plt.subplots(figsize = [6, 4], dpi = 300)
         self.ax.set_xlabel('Frequency (MHz)')
@@ -67,7 +73,10 @@ class peakFinder:
 
     def initialize_plot(self):
         """
-        Initializes the plot with the resonance data and resonances
+        Initialize the plot with resonance data and markers.
+
+        Returns:
+        None
         """
         if len(self.vlines):
             for vline in self.vlines:
@@ -94,6 +103,12 @@ class peakFinder:
         """
         shift + right click: place new resonance
         ctrl + right click: remove nearest resonance in plot xlim
+
+        Parameters:
+        event (matplotlib.backend_bases.MouseEvent): Click event.
+
+        Returns:
+        None
         """
         if event.button == 3:
             clicked_x, clicked_y = event.xdata, event.ydata
@@ -116,6 +131,12 @@ class peakFinder:
         a or enter: saves data
         x: pan right
         z: pan left
+
+        Parameters:
+        event (matplotlib.backend_bases.KeyEvent): Key press event.
+
+        Returns:
+        None
         """
         if event.key == 'shift':
             self.shift_is_held = True
@@ -138,7 +159,13 @@ class peakFinder:
 
     def _on_key_release(self, event):
         """
-        Marks if shift or control are released
+        Mark if shift or control are released.
+
+        Parameters:
+        event (matplotlib.backend_bases.KeyEvent): Key release event.
+
+        Returns:
+        None
         """
         if event.key == 'shift':
             self.shift_is_held = False
@@ -147,7 +174,10 @@ class peakFinder:
 
     def _update_plot(self):
         """
-        Updates the plot after modifying fres
+        Update the plot after modifying fres.
+
+        Returns:
+        None
         """
         old_vlines = self.vlines
         self.vlines = []
@@ -163,19 +193,31 @@ class peakFinder:
 
     def _go_back(self):
         """
-        Does nothing, used for single resonance peak finder
+        No-op placeholder for single resonance peak finder.
+
+        Returns:
+        None
         """
         pass
 
     def _save(self):
         """
-        Saves fres
+        Save fres to disk.
+
+        Returns:
+        None
         """
         np.save(self.outpath, np.array(self.fres))
 
     def _on_done(self, event):
         """
-        Disconnect and close the plot, save data
+        Disconnect and close the plot, then save data.
+
+        Parameters:
+        event (matplotlib.backend_bases.Event): Button click event.
+
+        Returns:
+        None
         """
         self.fig.canvas.mpl_disconnect(self.cid)  # Disconnect event handler
         plt.close(self.fig)  # Close the plot
@@ -186,28 +228,41 @@ class peakFinder:
 ################################################################################
 
 class poptFinderSingle:
-    def __init__(self, power, anl, sfactor, res, anl_threshold = 0.65, res_threshold = 2e-3):
+    def __init__(self, power, anl, sfactor, res, anl_threshold = 0.65,
+                 res_threshold = 2e-3):
         """
-        interactive optimal power finder
+        Interactive optimal power finder.
 
         Parameters:
-        power (array-like): array of powers to optimize
-        anl (array-like): array of nonlinearity parameters
-        sfactor (array-like): array of ratios of parallel to perpendicular noise
-        res (array-like): array of IQ fit residuals
-        anl_threshold (float): highest value of anl to allow for optimization, unless all the
-            IQ fits were bad
-        res_threshold (float): IQ fits are considered 'bad' and disregarded for res > res_threshold
+        power (array-like): Array of powers to optimize.
+        anl (array-like): Array of nonlinearity parameters.
+        sfactor (array-like): Array of parallel/perpendicular noise ratios.
+        res (array-like): Array of IQ fit residuals.
+        anl_threshold (float): Maximum anl to allow for optimization, unless all
+            IQ fits were bad.
+        res_threshold (float): IQ fits are considered bad and disregarded for
+            res > res_threshold.
+
+        Returns:
+        None
         """
-        power, anl, sfactor, res = np.asarray(power), np.asarray(anl), np.asarray(sfactor), np.asarray(res)
+        power = np.asarray(power)
+        anl = np.asarray(anl)
+        sfactor = np.asarray(sfactor)
+        res = np.asarray(res)
         ix = np.argsort(power)
-        self.p0, self.a0, self.s0, self.r0 = power[ix], anl[ix], sfactor[ix], res[ix]
+        self.p0, self.a0, self.s0, self.r0 = (
+            power[ix],
+            anl[ix],
+            sfactor[ix],
+            res[ix],
+        )
         self.anl_threshold = anl_threshold
         self.res_threshold = res_threshold
 
         self.setup_plot()
-        self.ax_s.plot([],[],'sk',
-                        label = 'click: choose optimal power')
+        self.ax_s.plot([], [], 'sk',
+                   label = 'click: choose optimal power')
         self.ax_s.plot([],[],'sk', label = 'a/enter: save')
         self.ax_s.legend(fontsize = 5, ncols = 2, loc = 'lower right')
         self.initialize_popt()
@@ -216,10 +271,19 @@ class poptFinderSingle:
 
     def setup_plot(self):
         """
-        Sets up the plot
+        Set up the plot.
+
+        Returns:
+        None
         """
-        self.fig, [self.ax_s, self.ax_a] = plt.subplots(2, 1, figsize = [6, 5], dpi = 300,
-                                                        layout = 'tight', sharex = True)
+        self.fig, [self.ax_s, self.ax_a] = plt.subplots(
+            2,
+            1,
+            figsize = [6, 5],
+            dpi = 300,
+            layout = 'tight',
+            sharex = True,
+        )
         self.initialize_plot_axes()
         self.cid = self.fig.canvas.mpl_connect('button_press_event',
                                                self._on_click)
@@ -232,10 +296,16 @@ class poptFinderSingle:
 
     def initialize_plot_axes(self):
         """
-        Initializes the plot axis labels
+        Initialize the plot axis labels.
+
+        Returns:
+        None
         """
         self.ax_s.set(ylabel = r'$S_{\mathrm{par}} / S_{\mathrm{per}}$')
-        self.ax_a.set(ylabel = r'$a_{\mathrm{nl}}$', xlabel = 'ouput power (dBm)')
+        self.ax_a.set(
+            ylabel = r'$a_{\mathrm{nl}}$',
+            xlabel = 'ouput power (dBm)',
+        )
         self.ax_s.grid()
         self.ax_a.grid()
 
@@ -248,36 +318,71 @@ class poptFinderSingle:
             ix = np.where(self.a1 > self.anl_threshold)[0]
             if len(ix):
                 ix = ix[0]
-                self.p2, self.a2, self.s2 = self.p1[ix], self.a1[ix], self.s1[ix]
+                self.p2, self.a2, self.s2 = (
+                    self.p1[ix],
+                    self.a1[ix],
+                    self.s1[ix],
+                )
 
     def initialize_plot(self):
         """
-        Initializes the plot with the resonance data and resonances
+        Initialize the plot with the resonance data and markers.
+
+        Returns:
+        None
         """
-        self.ax_s.plot(self.p0, self.s0, 's', color = plt.cm.viridis(0.), label = 'raw data')
-        self.ax_a.plot(self.p0, self.a0, 's', color = plt.cm.viridis(0.), label = 'raw data')
-        self.ax_a.plot(self.p1, self.a1, 's', color = plt.cm.viridis(0.5), label = 'good fits')
-        self.popt_point_s, = self.ax_s.plot(self.p2, self.s2, 's', color = plt.cm.viridis(1.), label = 'opt power')
-        self.popt_point_a, = self.ax_a.plot(self.p2, self.a2, 's', color = plt.cm.viridis(1.), label = 'opt power')
+        self.ax_s.plot(
+            self.p0, self.s0, 's', color = plt.cm.viridis(0.),
+            label = 'raw data',
+        )
+        self.ax_a.plot(
+            self.p0, self.a0, 's', color = plt.cm.viridis(0.),
+            label = 'raw data',
+        )
+        self.ax_a.plot(
+            self.p1, self.a1, 's', color = plt.cm.viridis(0.5),
+            label = 'good fits',
+        )
+        self.popt_point_s, = self.ax_s.plot(
+            self.p2, self.s2, 's', color = plt.cm.viridis(1.),
+            label = 'opt power',
+        )
+        self.popt_point_a, = self.ax_a.plot(
+            self.p2, self.a2, 's', color = plt.cm.viridis(1.),
+            label = 'opt power',
+        )
         # self.ax_s.legend()
         self.fig.canvas.draw()
 
     def _on_click(self, event):
         """
-        If shift is held and the right mouse button is clicked, places a new
-        resonance frequency where clicked
+        Select optimal power by clicking on the plot.
+
+        Parameters:
+        event (matplotlib.backend_bases.MouseEvent): Click event.
+
+        Returns:
+        None
         """
         if event.button == 1:
             clicked_x, clicked_y = event.xdata, event.ydata
             ix = np.argmin(abs(clicked_x - self.p0))
-            self.p2, self.a2 = np.asarray([self.p0[ix]]), np.asarray([self.a0[ix]])
+            self.p2, self.a2 = (
+                np.asarray([self.p0[ix]]),
+                np.asarray([self.a0[ix]]),
+            )
             self.s2 = np.asarray([self.s0[ix]])
         self._update_plot()
 
     def _on_key_press(self, event):
         """
-        Marks if shift or control are pressed. Deletes all resonance frequencies
-        if 'x' is pressed
+        Handle key presses for save and undo.
+
+        Parameters:
+        event (matplotlib.backend_bases.KeyEvent): Key press event.
+
+        Returns:
+        None
         """
         if event.key in ['a', 'enter']:
             self._on_done(None)
@@ -286,12 +391,23 @@ class poptFinderSingle:
 
     def _on_key_release(self, event):
         """
-        Marks if shift or control are released
+        No-op for this widget.
+
+        Parameters:
+        event (matplotlib.backend_bases.KeyEvent): Key release event.
+
+        Returns:
+        None
         """
         pass
 
     def _update_plot(self):
-        """Updates the plot after changing fres"""
+        """
+        Update the plot after changing the selection.
+
+        Returns:
+        None
+        """
 
         self.popt_point_s.set_data(self.p2, self.s2)
         self.popt_point_a.set_data(self.p2, self.a2)
@@ -299,13 +415,22 @@ class poptFinderSingle:
 
     def _go_back(self):
         """
-        Does nothing for single resonance
+        No-op for single resonance selection.
+
+        Returns:
+        None
         """
         pass
 
     def _on_done(self, event):
         """
-        Disconnect and close the plot, save data
+        Disconnect and close the plot, then save data.
+
+        Parameters:
+        event (matplotlib.backend_bases.Event): Button click event.
+
+        Returns:
+        None
         """
         self.popt = float(self.p2[0])
         self.fig.canvas.mpl_disconnect(self.cid)  # Disconnect event handler
@@ -320,22 +445,38 @@ class qresFinderSingle:
         Use this to confirm and adjust ranges for fitting fine sweep data.
 
         Parameters:
-        x_data (array-like): Frequency data in Hz
-        y_data (array-like): complex iq data
-        fres (float): Resonance frequency in Hz
-        span0 (float): Starting span in Hz around fr for fitting
-        other_fres (array-like): list of other resonance frequencies,
-            omitting fr. Can include values outside the range of x_data
-        fres_outpath (str): path to the NPY file to save the list of fres after
-            adjustments
-        span_outpath (str): path to the NPY file to save the list of [fmin, fmax]
-            spans for fitting
+        x_data (array-like): Frequency data in Hz.
+        y_data (array-like): Complex IQ data.
+        fres (float): Resonant frequency in Hz.
+        span0 (float): Starting span in Hz around fr for fitting.
+        other_fres (array-like): Other resonant frequencies (excluding fr).
+            Can include values outside the range of x_data.
+        fres_outpath (str): Path to the NPY file to save fres after adjustments.
+        span_outpath (str): Path to the NPY file to save [fmin, fmax] spans.
+        x_data_previous (array-like or None): Previous sweep x-data, if any.
+        y_data_previous (array-like or None): Previous sweep y-data, if any.
+        fres_previous (float or None): Previous resonant frequency.
+
+        Returns:
+        None
         """
         self.x_data = np.asarray(x_data)
         self.y_data = np.asarray(y_data)
-        self.x_data_previous = np.asarray(x_data_previous) if x_data_previous is not None else None
-        self.y_data_previous = np.asarray(y_data_previous) if y_data_previous is not None else None
-        self.fres_previous = float(fres_previous) if fres_previous is not None else None
+        self.x_data_previous = (
+            np.asarray(x_data_previous)
+            if x_data_previous is not None
+            else None
+        )
+        self.y_data_previous = (
+            np.asarray(y_data_previous)
+            if y_data_previous is not None
+            else None
+        )
+        self.fres_previous = (
+            float(fres_previous)
+            if fres_previous is not None
+            else None
+        )
         self.dB_data = 20 * np.log10(np.abs(self.y_data))
         self.dB_data_previous = 20 * np.log10(np.abs(self.y_data_previous))
         self.fres_outpath = fres_outpath
@@ -365,23 +506,45 @@ class qresFinderSingle:
         annotation_text = (
             "shift + right click:\nplace resonance\n\n"
             "control + right click:\nchange span\n\n"
-            "a/enter:\nsave resonance")
-        props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
-        ax.text(1.05, 0.8, annotation_text, transform=ax.transAxes, fontsize=5,
-                verticalalignment='top', bbox=props)
+            "a/enter:\nsave resonance"
+        )
+        props = dict(boxstyle = 'round', facecolor = 'wheat', alpha = 0.5)
+        ax.text(
+            1.05,
+            0.8,
+            annotation_text,
+            transform = ax.transAxes,
+            fontsize = 5,
+            verticalalignment = 'top',
+            bbox = props,
+        )
         self.initialize_plot()
         plt.show()
 
     def setup_plot(self):
         """
-        Sets up the plot
+        Set up the plot.
+
+        Returns:
+        None
         """
         if self.x_data_previous is None:
-            self.fig, [self.ax, self.ax_iq] = plt.subplots(1, 2, figsize = [6, 3],
-                                                        dpi = 300, layout = 'tight')
+            self.fig, [self.ax, self.ax_iq] = plt.subplots(
+                1,
+                2,
+                figsize = [6, 3],
+                dpi = 300,
+                layout = 'tight',
+            )
         else:
-            self.fig, [[self.ax_p, self.ax_iq_p], [self.ax, self.ax_iq]] =\
-                 plt.subplots(2, 2, figsize = [6, 8], dpi = 300, layout = 'tight')
+            self.fig, [[self.ax_p, self.ax_iq_p], [self.ax, self.ax_iq]] = \
+                plt.subplots(
+                    2,
+                    2,
+                    figsize = [6, 8],
+                    dpi = 300,
+                    layout = 'tight',
+                )
             self.ax_p.sharex(self.ax)
         self.initialize_plot_axes()
         self.done_button_ax = self.fig.add_axes([0.85, 0.9, 0.1, 0.05])
@@ -398,7 +561,10 @@ class qresFinderSingle:
 
     def initialize_plot_axes(self):
         """
-        Initializes the plot axis labels
+        Initialize the plot axis labels.
+
+        Returns:
+        None
         """
         lbl = int(round(self.fres / 1e3, 0))
         if self.x_data_previous is not None:
@@ -419,7 +585,10 @@ class qresFinderSingle:
 
     def initialize_plot(self):
         """
-        Initializes the plot with the resonance data and resonances
+        Initialize the plot with the resonance data and markers.
+
+        Returns:
+        None
         """
         self.x0 = np.mean(self.x_data) / 1e3
         for p in self.iq_cut:
@@ -453,26 +622,43 @@ class qresFinderSingle:
 
 
         for xi in self.other_fres:
-            self.other_vlines.append(self.ax.axvline(xi / 1e3 - self.x0,
-                                    color = plt.cm.viridis(1.), linestyle = '--', alpha = 0.3))
-        self.fres_vline = self.ax.axvline(self.fres / 1e3 - self.x0, color='k',
-                                           linestyle = '--',
-                                           alpha = 0.8)
+            self.other_vlines.append(
+                self.ax.axvline(
+                    xi / 1e3 - self.x0,
+                    color = plt.cm.viridis(1.),
+                    linestyle = '--',
+                    alpha = 0.3,
+                )
+            )
+        self.fres_vline = self.ax.axvline(
+            self.fres / 1e3 - self.x0,
+            color = 'k',
+            linestyle = '--',
+            alpha = 0.8,
+        )
         if self.line is not None:
             self.line.remove()
-        self.line, = self.ax.plot(self.x_data / 1e3 - self.x0,
-                                  20 * np.log10(np.abs(self.y_data)),
-                                  color=plt.cm.viridis(0.), linewidth=1)
+        self.line, = self.ax.plot(
+            self.x_data / 1e3 - self.x0,
+            20 * np.log10(np.abs(self.y_data)),
+            color = plt.cm.viridis(0.),
+            linewidth = 1,
+        )
         if self.x_data_previous is not None:
-            self.line_p, = self.ax_p.plot(self.x_data_previous / 1e3 - self.x0,
-                                  20 * np.log10(np.abs(self.y_data_previous)),
-                                  color=plt.cm.viridis(0.), linewidth=1)
+            self.line_p, = self.ax_p.plot(
+                self.x_data_previous / 1e3 - self.x0,
+                20 * np.log10(np.abs(self.y_data_previous)),
+                color = plt.cm.viridis(0.),
+                linewidth = 1,
+            )
         # Set axis limits
         xd = (max(self.x_data) - min(self.x_data)) / 10 * 1e-3
 
         xx = self.x_data
-        self.ax.set_xlim(min(xx) / 1e3 - xd - self.x0,
-                         max(xx) / 1e3 + xd - self.x0)
+        self.ax.set_xlim(
+            min(xx) / 1e3 - xd - self.x0,
+            max(xx) / 1e3 + xd - self.x0,
+        )
         yd = (max(self.dB_data) - min(self.dB_data)) / 10
         self.ymin = min(self.dB_data) - yd
         self.ymax = max(self.dB_data) + yd
@@ -484,36 +670,65 @@ class qresFinderSingle:
         self.ax_iq.set_xlim(imin - idd, imax + idd)
         self.ax_iq.set_ylim(qmin - qdd, qmax + qdd)
 
-        self.span_fill = self.ax.fill_between([self.fmin / 1e3 - self.x0,
-                                               self.fmax / 1e3 - self.x0],
-                            self.ymin, self.ymax, color = plt.cm.viridis(0.67), alpha = 0.3)
+        self.span_fill = self.ax.fill_between(
+            [self.fmin / 1e3 - self.x0, self.fmax / 1e3 - self.x0],
+            self.ymin,
+            self.ymax,
+            color = plt.cm.viridis(0.67),
+            alpha = 0.3,
+        )
         self.span_vline = None
 
         self.ydata_ix = (self.x_data <= self.fmax) & (self.x_data >= self.fmin)
 
-        self.iq_scatter = self.ax_iq.plot(np.real(self.y_data),
-                                          np.imag(self.y_data), '.', color = plt.cm.viridis(0.))
+        self.iq_scatter = self.ax_iq.plot(
+            np.real(self.y_data),
+            np.imag(self.y_data),
+            '.',
+            color = plt.cm.viridis(0.),
+        )
         if self.x_data_previous is not None:
-            self.iq_scatter_p = self.ax_iq_p.plot(np.real(self.y_data_previous),
-                                            np.imag(self.y_data_previous), '.', color = plt.cm.viridis(0.))
-        self.iq_cut = self.ax_iq.plot(np.real(self.y_data[self.ydata_ix]),
-                                      np.imag(self.y_data[self.ydata_ix]), '.', color = plt.cm.viridis(0.67),
-                                       alpha = 1)
+            self.iq_scatter_p = self.ax_iq_p.plot(
+                np.real(self.y_data_previous),
+                np.imag(self.y_data_previous),
+                '.',
+                color = plt.cm.viridis(0.),
+            )
+        self.iq_cut = self.ax_iq.plot(
+            np.real(self.y_data[self.ydata_ix]),
+            np.imag(self.y_data[self.ydata_ix]),
+            '.',
+            color = plt.cm.viridis(0.67),
+            alpha = 1,
+        )
         ix = np.argmin(abs(self.fres - self.x_data))
-        self.fres_point = self.ax_iq.plot(np.real(self.y_data[ix]),
-                                        np.imag(self.y_data[ix]), color = 'black',
-                                        marker = 'x', markersize = 5)
+        self.fres_point = self.ax_iq.plot(
+            np.real(self.y_data[ix]),
+            np.imag(self.y_data[ix]),
+            color = 'black',
+            marker = 'x',
+            markersize = 5,
+        )
         if self.x_data_previous is not None:
             ix = np.argmin(abs(self.fres_previous - self.x_data_previous))
-            self.fres_point_p = self.ax_iq_p.plot(np.real(self.y_data_previous[ix]),
-                                            np.imag(self.y_data_previous[ix]), color = 'black',
-                                            marker = 'x', markersize = 5)
+            self.fres_point_p = self.ax_iq_p.plot(
+                np.real(self.y_data_previous[ix]),
+                np.imag(self.y_data_previous[ix]),
+                color = 'black',
+                marker = 'x',
+                markersize = 5,
+            )
         self.fig.canvas.draw()
 
     def _on_click(self, event):
         """
-        If shift is held and the right mouse button is clicked, places a new
-        resonance frequency where clicked
+        Handle right-click interactions to set resonance or span.
+
+        Parameters:
+        event (matplotlib.backend_bases.MouseEvent): Click event.
+
+        Returns:
+        None
         """
         if event.button == 3:
             clicked_x, clicked_y = event.xdata, event.ydata
@@ -533,8 +748,13 @@ class qresFinderSingle:
 
     def _on_key_press(self, event):
         """
-        Marks if shift or control are pressed. Deletes all resonance frequencies
-        if 'x' is pressed
+        Handle key presses for mode toggles, save, and undo.
+
+        Parameters:
+        event (matplotlib.backend_bases.KeyEvent): Key press event.
+
+        Returns:
+        None
         """
         if event.key == 'shift':
             self.shift_is_held = True
@@ -552,7 +772,13 @@ class qresFinderSingle:
 
     def _on_key_release(self, event):
         """
-        Marks if shift or control are released
+        Handle key release events for modifier keys.
+
+        Parameters:
+        event (matplotlib.backend_bases.KeyEvent): Key release event.
+
+        Returns:
+        None
         """
         if event.key == 'shift':
             self.shift_is_held = False
@@ -560,11 +786,19 @@ class qresFinderSingle:
             self.control_is_held = False
 
     def _update_plot(self):
-        """Updates the plot after changing fres"""
+        """
+        Update the plot after changing resonance or span.
+
+        Returns:
+        None
+        """
         self.fres_vline.remove()
-        self.fres_vline = self.ax.axvline(self.fres / 1e3 - self.x0, color='black',
-                                           linestyle = '--',
-                                           alpha = 1)
+        self.fres_vline = self.ax.axvline(
+            self.fres / 1e3 - self.x0,
+            color = 'black',
+            linestyle = '--',
+            alpha = 1,
+        )
 
         for p in self.iq_cut:
             if p in self.ax_iq.lines:
@@ -577,17 +811,31 @@ class qresFinderSingle:
             self.span_vline.remove()
             self.span_vline = None
         if self.fmax is None:
-            self.span_vline = self.ax.axvline(self.fmin / 1e3 - self.x0,
-                                color = plt.cm.viridis(0.67), linestyle = '--', alpha = 0.3)
+            self.span_vline = self.ax.axvline(
+                self.fmin / 1e3 - self.x0,
+                color = plt.cm.viridis(0.67),
+                linestyle = '--',
+                alpha = 0.3,
+            )
         else:
-            self.ydata_ix = (self.x_data <= self.fmax) & (self.x_data >= self.fmin)
-            self.span_fill = self.ax.fill_between([self.fmin / 1e3 - self.x0,
-                                                   self.fmax / 1e3 - self.x0],
-                                                   self.ymin, self.ymax,
-                                                   color = plt.cm.viridis(0.67), alpha = 0.3)
-            self.iq_cut = self.ax_iq.plot(np.real(self.y_data[self.ydata_ix]),
-                                          np.imag(self.y_data[self.ydata_ix]),
-                                          '.', color = plt.cm.viridis(0.67), alpha = 0.8)
+            self.ydata_ix = (
+                (self.x_data <= self.fmax)
+                & (self.x_data >= self.fmin)
+            )
+            self.span_fill = self.ax.fill_between(
+                [self.fmin / 1e3 - self.x0, self.fmax / 1e3 - self.x0],
+                self.ymin,
+                self.ymax,
+                color = plt.cm.viridis(0.67),
+                alpha = 0.3,
+            )
+            self.iq_cut = self.ax_iq.plot(
+                np.real(self.y_data[self.ydata_ix]),
+                np.imag(self.y_data[self.ydata_ix]),
+                '.',
+                color = plt.cm.viridis(0.67),
+                alpha = 0.8,
+            )
         for p in self.fres_point:
             if p in self.ax_iq.lines:
                 p.remove()
@@ -602,13 +850,22 @@ class qresFinderSingle:
 
     def _go_back(self):
         """
-        Does nothing for single resonance
+        No-op for single resonance selection.
+
+        Returns:
+        None
         """
         pass
 
     def _on_done(self, event):
         """
-        Disconnect and close the plot, save data
+        Disconnect and close the plot, then save data.
+
+        Parameters:
+        event (matplotlib.backend_bases.Event): Button click event.
+
+        Returns:
+        None
         """
         self.fig.canvas.mpl_disconnect(self.cid)  # Disconnect event handler
         plt.close(self.fig)  # Close the plot
@@ -622,19 +879,20 @@ class poptFinder(poptFinderSingle):
     def __init__(self, outpath, powers, anls, sfactors, ress, res_indices,
                  anl_threshold = 0.65, res_threshold = 2e-3):
         """
-        interactive optimal power finder
+        Interactive optimal power finder.
 
         Parameters:
-        outpath (str): path to save the output file. Must end in .npy
+        outpath (str): Path to save the output file. Must end in .npy.
+        powers (array-like): Array of powers to optimize.
+        anls (array-like): Array of nonlinearity parameters.
+        sfactors (array-like): Array of parallel/perpendicular noise ratios.
+        ress (array-like): Array of IQ fit residuals.
+        res_indices (array-like): Array of resonator indices.
+        anl_threshold (float): Maximum allowed anl, unless all fits are bad.
+        res_threshold (float): Residual threshold for discarding bad fits.
 
-        Parameters: list of the following parameters
-        powers (array-like): array of powers to optimize
-        anls (array-like): array of nonlinearity parameters
-        sfactors (array-like): array of ratios of parallel to perpendicular noise
-        ress (array-like): array of IQ fit residuals
-        anl_threshold (float): highest value of anl to allow for optimization, unless all the
-            IQ fits were bad
-        res_threshold (float): IQ fits are considered 'bad' and disregarded for res > res_threshold
+        Returns:
+        None
         """
         self.data_index = 0
 
@@ -650,8 +908,8 @@ class poptFinder(poptFinderSingle):
         self.outpath = outpath
 
         self.setup_plot()
-        self.ax_s.plot([],[],'sk',
-                        label = 'click: choose optimal power')
+        self.ax_s.plot([], [], 'sk',
+                   label = 'click: choose optimal power')
         self.ax_s.plot([],[],'sk', label = 'a/enter: save')
         self.ax_s.legend(fontsize = 5, ncols = 2, loc = 'lower right')
         self.set_data_index()
@@ -660,17 +918,33 @@ class poptFinder(poptFinderSingle):
         plt.show()
 
     def set_data_index(self):
-        """Sets all of the variables for the current data index
-           and updates the plot
+        """
+        Set variables for the current data index and update the plot.
+
+        Returns:
+        None
         """
         di = self.data_index
         while self.res_indices[di] < 0:
             di += 1
             self.data_index = di
-        power, anl, sfactor, res = self.powers[di], self.anls[di], self.sfactors[di], self.ress[di]
-        power, anl, sfactor, res = np.asarray(power), np.asarray(anl), np.asarray(sfactor), np.asarray(res)
+        power, anl, sfactor, res = (
+            self.powers[di],
+            self.anls[di],
+            self.sfactors[di],
+            self.ress[di],
+        )
+        power = np.asarray(power)
+        anl = np.asarray(anl)
+        sfactor = np.asarray(sfactor)
+        res = np.asarray(res)
         ix = np.argsort(power)
-        self.p0, self.a0, self.s0, self.r0 = power[ix], anl[ix], sfactor[ix], res[ix]
+        self.p0, self.a0, self.s0, self.r0 = (
+            power[ix],
+            anl[ix],
+            sfactor[ix],
+            res[ix],
+        )
 
         self.ax_s.set_title(f'Resonator: {int(self.res_indices[di])}')
 
@@ -682,7 +956,10 @@ class poptFinder(poptFinderSingle):
 
     def _go_back(self):
         """
-        Goes back to the previous data index
+        Go back to the previous data index.
+
+        Returns:
+        None
         """
         self.powers_new[self.data_index] = np.nan
         np.save(self.outpath, self.powers_new)
@@ -694,8 +971,15 @@ class poptFinder(poptFinderSingle):
 
     def _on_done(self, event):
         """
-        Saves the data and moves on to the next plot. Disconnects when
-           finished with all the resonators
+        Save data and move to the next plot.
+
+        Disconnects after the final resonator.
+
+        Parameters:
+        event (matplotlib.backend_bases.Event): Button click event.
+
+        Returns:
+        None
         """
         self.powers_new[self.data_index] = self.p2
         np.save(self.outpath, self.powers_new)
@@ -708,27 +992,34 @@ class poptFinder(poptFinderSingle):
 
 
 class qresFinder(qresFinderSingle):
-    def __init__(self, x_datas, y_datas, fress, span0s,
-                 fres_outpaths, span_outpaths, res_indices, ares = None, ares_title = '',
-                 titles = None, titles_previous = None,
-                 x_datas_previous = None, y_datas_previous = None, fress_previous = None):
+    def __init__(self, x_datas, y_datas, fress, span0s, fres_outpaths,
+                 span_outpaths, res_indices, ares = None, ares_title = '',
+                 titles = None, titles_previous = None, x_datas_previous = None,
+                 y_datas_previous = None, fress_previous = None):
         """
-        Interactive qres finder to loop over single resonance target sweeps.
+        Interactive qres finder to loop over single resonance sweeps.
+
         Use this to confirm and adjust ranges for fitting fine sweep data.
-        All parameters are lists of parameters passed into qresFinderSingle
+        All parameters are lists passed into `qresFinderSingle`.
 
         Parameters:
-        x_datas (array-like, array-like): list of frequency datas in Hz
-        y_datas (array-like, array-like): list of complex iq datas
-        fress (array-like, float): list of resonance frequencies in Hz
-        span0s (array-like, float): Starting spans in Hz around fr for fitting
-        other_fres (array-like, array-like): list of lists of other resonance
-            frequencies, omitting fr. Can include values outside the range of
-            x_data
-        fres_outpaths (array-like, str): paths to save the list of fres after
-            adjustments
-        span_outpaths (array-like, str): paths to save the list of [fmin, fmax]
-            spans for fitting
+        x_datas (array-like): List of frequency arrays in Hz.
+        y_datas (array-like): List of complex IQ arrays.
+        fress (array-like): Resonant frequencies in Hz.
+        span0s (array-like): Starting spans in Hz around fr for fitting.
+        fres_outpaths (array-like): Paths to save the list of fres adjustments.
+        span_outpaths (array-like): Paths to save [fmin, fmax] spans.
+        res_indices (array-like): Resonator indices.
+        ares (array-like or None): Optional parameter list for annotations.
+        ares_title (str): Title for the ares annotation.
+        titles (array-like or None): Plot titles for current data.
+        titles_previous (array-like or None): Plot titles for previous data.
+        x_datas_previous (array-like or None): Previous frequency arrays.
+        y_datas_previous (array-like or None): Previous IQ arrays.
+        fress_previous (array-like or None): Previous resonant frequencies.
+
+        Returns:
+        None
         """
         self.control_is_held = False
         self.shift_is_held = False
@@ -738,7 +1029,9 @@ class qresFinder(qresFinderSingle):
         self.fress = fress
         self.fres = fress[0]
         self.span0s = span0s
-        self.other_fress = np.array([np.delete(fress, i) for i in range(len(fress))])
+        self.other_fress = np.array(
+            [np.delete(fress, i) for i in range(len(fress))]
+        )
         self.fres_outpaths = fres_outpaths
         self.span_outpaths = span_outpaths
         self.x_datas_previous = x_datas_previous
@@ -759,14 +1052,21 @@ class qresFinder(qresFinderSingle):
         self.fres_point = []
         self.iq_scatter = None
 
-        self.x_data_previous = self.x_datas_previous[0] if self.x_datas_previous is not None else None
+        self.x_data_previous = (
+            self.x_datas_previous[0]
+            if self.x_datas_previous is not None
+            else None
+        )
         self.setup_plot()
         self.set_resonator_index()
         plt.show()
 
     def set_resonator_index(self):
-        """Sets all of the variables for the current resonator index
-           and updates the plot
+        """
+        Set variables for the current resonator index and update the plot.
+
+        Returns:
+        None
         """
         ri = self.resonator_index
         self.ax.set_title(f'Resonator: {int(ri)}')
@@ -792,7 +1092,9 @@ class qresFinder(qresFinderSingle):
         self.line = None
 
         self.other_fres = np.array(self.other_fress[ri])
-        ix = (self.other_fres >= min(self.x_data)) & (self.other_fres <= max(self.x_data))
+        ix = (self.other_fres >= min(self.x_data)) & (
+            self.other_fres <= max(self.x_data)
+        )
         self.other_fres = self.other_fres[ix]
         self.ax.cla()
         self.ax_iq.cla()
@@ -805,7 +1107,10 @@ class qresFinder(qresFinderSingle):
         self.ax.set_title(f'Fn {self.res_index}')
         if self.titles is not None:
             self.ax_iq.set_title(self.titles[ri])
-        if self.x_datas_previous is not None and self.titles_previous is not None:
+        if (
+            self.x_datas_previous is not None
+            and self.titles_previous is not None
+        ):
             self.ax_iq_p.set_title(self.titles_previous[ri])
 
         # Add annotations of commands
@@ -814,25 +1119,42 @@ class qresFinder(qresFinderSingle):
             "shift + right click:\nplace resonance\n\n"
             "control + right click:\nchange span\n\n"
             "a/enter:\nsave resonance\n\n"
-            "space:\ngo back")
-        props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
-        ax.text(1.05, 0.8, annotation_text, transform=ax.transAxes, fontsize=5,
-                verticalalignment='top', bbox=props)
+            "space:\ngo back"
+        )
+        props = dict(boxstyle = 'round', facecolor = 'wheat', alpha = 0.5)
+        ax.text(
+            1.05,
+            0.8,
+            annotation_text,
+            transform = ax.transAxes,
+            fontsize = 5,
+            verticalalignment = 'top',
+            bbox = props,
+        )
 
         # adjustment box
         if self.ares is not None:
-            axbox = self.fig.add_axes([0.5, 0.2, 0.1, 0.05])  # Position of the text box (left, bottom, width, height)
+            axbox = self.fig.add_axes([0.5, 0.2, 0.1, 0.05])
             text_box = TextBox(axbox, '', initial="25", label_pad=0.05)
-            ax_title = self.fig.add_axes([0.5, 0.25, 0.2, 0.05])  # Position for the title
+            ax_title = self.fig.add_axes([0.5, 0.25, 0.2, 0.05])
             ax_title.axis('off')  # Hide the axis
-            ax_title.text(0.5, 0.5, self.ares_title, horizontalalignment='center', verticalalignment='center')
+            ax_title.text(
+                0.5,
+                0.5,
+                self.ares_title,
+                horizontalalignment = 'center',
+                verticalalignment = 'center',
+            )
             # Connect the text box to the submit function
             # text_box.on_submit(submit)
         plt.draw()
 
     def _go_back(self):
         """
-        Goes back to the previous resonator
+        Go back to the previous resonator.
+
+        Returns:
+        None
         """
         if self.resonator_index != 0:
             self.resonator_index -= 1
@@ -840,8 +1162,15 @@ class qresFinder(qresFinderSingle):
 
     def _on_done(self, event):
         """
-        Saves the data and moves on to the next plot. Disconnects when
-           finished with all the resonators
+        Save data and move to the next plot.
+
+        Disconnects after the final resonator.
+
+        Parameters:
+        event (matplotlib.backend_bases.Event): Button click event.
+
+        Returns:
+        None
         """
         np.save(self.fres_outpath, np.array(self.fres))
         np.save(self.span_outpath, np.array([self.fmin, self.fmax]))
@@ -853,25 +1182,43 @@ class qresFinder(qresFinderSingle):
             self.set_resonator_index()
 
 
-def run_qres_opt(out_directory, f, z, fres, qres, ares, fcal_indices, res_indices, bypass_indices,
-                 f_previous, z_previous, fres_previous, ares_previous, delete_temp_data = False):
+def run_qres_opt(
+    out_directory,
+    f,
+    z,
+    fres,
+    qres,
+    ares,
+    fcal_indices,
+    res_indices,
+    bypass_indices,
+    f_previous,
+    z_previous,
+    fres_previous,
+    ares_previous,
+    delete_temp_data = False,
+):
     """
-    runs qres optimization
+    Run qres optimization.
 
     Parameters:
-    out_directory (str): directory to save the file
-    fcal_indices (array-like): calibration tone indices
-    res_indices (array-like): resonator indices
-    bypass_indices (array-like): resonator indices to bypass
-    delete_temp_data (bool): if True, deletes temporary data that was created while running
-    The following parameters are lists of lists, where the first index is the resonator index and
-        the second index is the data
-    f (M X N array-like, float): frequency data in Hz
-    z (M X N array-like, complex): complex S21 data in Hz
-    fres (M X 1 array-like, float): resonance frequencies in Hz
-    qres (M X 1 array-like, float): q-factors
-    ares (M X 1 array-like, float): parameter that was varied from the last dataset
-    parameters with _previous suffix: same as above, but from the previous value of ares
+    out_directory (str): Directory to save the file.
+    f (array-like): Frequency data in Hz (M x N).
+    z (array-like): Complex S21 data in Hz (M x N).
+    fres (array-like): Resonant frequencies in Hz (M x 1).
+    qres (array-like): Q-factors (M x 1).
+    ares (array-like): Parameter varied from the last dataset (M x 1).
+    fcal_indices (array-like): Calibration tone indices.
+    res_indices (array-like): Resonator indices.
+    bypass_indices (array-like): Resonator indices to bypass.
+    f_previous (array-like or None): Previous frequency data, if any.
+    z_previous (array-like or None): Previous S21 data, if any.
+    fres_previous (array-like or None): Previous resonant frequencies.
+    ares_previous (array-like or None): Previous ares values.
+    delete_temp_data (bool): If True, delete temporary data after running.
+
+    Returns:
+    None
     """
     path = out_directory + 'fres.npy'
     if os.path.exists(path):
@@ -883,16 +1230,27 @@ def run_qres_opt(out_directory, f, z, fres, qres, ares, fcal_indices, res_indice
     os.makedirs(out_directory, exist_ok = True)
     f, z = np.asarray(f), np.asarray(z)
     fres, qres, ares = np.asarray(fres), np.asarray(qres), np.asarray(ares)
-    fcal_indices, bypass_indices = np.asarray(fcal_indices), np.asarray(bypass_indices)
+    fcal_indices = np.asarray(fcal_indices)
+    bypass_indices = np.asarray(bypass_indices)
 
-    onres_indices = [i for i in range(len(fres)) if i not in fcal_indices and res_indices[i] not in bypass_indices]
-    fres_outpaths = [out_directory + f'fres_{ri:04d}.npy' for ri in res_indices[onres_indices]]
-    span_outpaths = [out_directory + f'span_{ri:04d}.npy' for ri in res_indices[onres_indices]]
+    onres_indices = [
+        i for i in range(len(fres))
+        if i not in fcal_indices and res_indices[i] not in bypass_indices
+    ]
+    fres_outpaths = [
+        out_directory + f'fres_{ri:04d}.npy'
+        for ri in res_indices[onres_indices]
+    ]
+    span_outpaths = [
+        out_directory + f'span_{ri:04d}.npy'
+        for ri in res_indices[onres_indices]
+    ]
     titles = np.array([f'{round(a, 2)} dB' for a in ares])
 
     if f_previous is not None:
         f_previous, z_previous = np.asarray(f_previous), np.asarray(z_previous)
-        fres_previous, ares_previous = np.asarray(fres_previous), np.asarray(ares_previous)
+        fres_previous = np.asarray(fres_previous)
+        ares_previous = np.asarray(ares_previous)
         x_datas_previous = f_previous[onres_indices]
         y_datas_previous = z_previous[onres_indices]
         titles_previous = np.array([f'{round(a, 2)} dB' for a in ares_previous])
@@ -903,18 +1261,28 @@ def run_qres_opt(out_directory, f, z, fres, qres, ares, fcal_indices, res_indice
         y_datas_previous = None
         titles_previous = None
 
-    qresFinder(f[onres_indices], z[onres_indices], fres[onres_indices],
-               fres[onres_indices] / qres[onres_indices], fres_outpaths, span_outpaths,
-               x_datas_previous = x_datas_previous,
-               y_datas_previous = y_datas_previous,
-               res_indices = res_indices[onres_indices],
-               fress_previous = fres_previous,
-               titles_previous = titles_previous, titles = titles[onres_indices],
-               ares = None, ares_title = 'power (dBm)')
+    qresFinder(
+        f[onres_indices],
+        z[onres_indices],
+        fres[onres_indices],
+        fres[onres_indices] / qres[onres_indices],
+        fres_outpaths,
+        span_outpaths,
+        x_datas_previous = x_datas_previous,
+        y_datas_previous = y_datas_previous,
+        res_indices = res_indices[onres_indices],
+        fress_previous = fres_previous,
+        titles_previous = titles_previous,
+        titles = titles[onres_indices],
+        ares = None,
+        ares_title = 'power (dBm)',
+    )
 
     fres = fres.copy()
     qres = qres.copy()
-    for fres_path, span_path, index in zip(fres_outpaths, span_outpaths, onres_indices):
+    for fres_path, span_path, index in zip(
+        fres_outpaths, span_outpaths, onres_indices
+    ):
         fres[index] = np.load(fres_path)
         span = np.load(span_path, allow_pickle = True)
         if None not in span:

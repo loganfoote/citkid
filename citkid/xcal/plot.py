@@ -3,21 +3,23 @@ import matplotlib.pyplot as plt
 import matplotlib 
 matplotlib.use('Agg')
 # use rasterized = True for noise 
-from ..noise.psd import bin_psd
+from ..signal.psd import bin_psd
 
 def plot_gain_fit(f, z, mask, p_amp, p_phase):
     """
     Plots the fit to gain amplitude and phase data.
 
     Parameters:
-    f (np.array, float64, (M,)): full frequency data.
-    dB (np.array, float64, (M,)): full amplitude data.
-    mask (np.array, bool, (M,)): resonance mask.
-    p_amp (np.array, float64): amplitude fit parameters.
-    p_phase (np.array, float64): phase fit parameters.
+    f (np.array, float64, (M,)): Full frequency data in Hz.
+    z (np.array, complex128, (M,)): Full complex S21 data.
+    mask (np.array, bool, (M,)): Resonance mask for fitted points.
+    p_amp (np.array, float64): Amplitude fit parameters.
+    p_phase (np.array, float64): Phase fit parameters.
 
     Returns:
-    fig, axs (pyplot figure and axis): data and fit plot
+    fig (matplotlib.figure.Figure): Figure containing the plots.
+    axs (np.ndarray, matplotlib.axes.Axes): Array of axes for amplitude and
+        phase plots.
     """
     # Input validation 
     f = np.asarray(f, dtype = np.float64)
@@ -70,19 +72,19 @@ def plot_s21(f, z, zt = None, fg = None, zg = None):
     |S21| vs frequency.
      
     Parameters:
-    f (np.array, float64): fine sweep frequency data in Hz.
-    z (np.array, complex128): fine sweep complex S21 data.
-    fg (np.array, float64 or None): gain sweep frequency data in Hz, or None to 
-        omit from plots.
-    zg (np.array, complex128 or None): gain sweep complex S21 data, or None to 
-        omit from plots.
-    zt (np.array, complex128 or None): timestream complex S21 data, or None to 
-        omit from plots.
+    f (np.array, float64): Fine sweep frequency data in Hz.
+    z (np.array, complex128): Fine sweep complex S21 data.
+    fg (np.array, float64 or None): Gain sweep frequency data in Hz, or None
+        to omit from plots.
+    zg (np.array, complex128 or None): Gain sweep complex S21 data, or None
+        to omit from plots.
+    zt (np.array, complex128 or None): Timestream complex S21 data, or None
+        to omit from plots.
 
     Returns:
-    fig (pyplot.figure): plot figure.
-    axs (list, pyplot.axis): pyplot axes.axs[0] is the |S21| vs frequency plot 
-        and axs[1] is the IQ plot.
+    fig (matplotlib.figure.Figure): Figure containing the plots.
+    axs (np.ndarray, matplotlib.axes.Axes): axs[0] is the |S21| vs frequency
+        plot and axs[1] is the IQ plot.
     """
     # Input validation
     f = np.asarray(f, dtype = np.float64)
@@ -128,16 +130,17 @@ def plot_circfit(z, origin, radius, zt = None, mask = None):
     Plots IQ data with a circular fit.
 
     Parameters:
-    z (np.array): complex IQ data.
-    origin (complex): circle origin.
-    radius (float): circle radius.
-    zt (np.array, complex128 or None): timestream complex S21 data, or None to 
+    z (np.array, complex128): Complex IQ data.
+    origin (complex): Circle origin.
+    radius (float): Circle radius.
+    zt (np.array, complex128 or None): Timestream complex S21 data, or None to
         omit from plot.
-    mask (np.array, bool or None): mask of z used for fitting. If None, all
-        data points were used.
+    mask (np.array, bool or None): Mask of z used for fitting. If None, all
+        data points are used.
 
     Returns:
-    fig, ax (pyplot figure and axis): data and fit plot.
+    fig (matplotlib.figure.Figure): Figure containing the plot.
+    ax (matplotlib.axes.Axes): Axis for the IQ plot.
     """
     # Input validation
     z = np.asarray(z, dtype = np.complex128) 
@@ -186,14 +189,15 @@ def plot_sparper(f, spar, sper, nbins, fmin):
     Plots binned parallel and perpendicular noise PSDs vs frequency.
 
     Parameters:
-    f (np.array, float64): frequency data in Hz.
-    spar (np.array, float64): spar data in dB.
-    sper (np.array, float64): sper data in dB.
-    nbins (int): number of bins for sparper histogram.
-    fmin (float): minimum frequency for sparper histogram in Hz.
+    f (np.array, float64): Frequency data in Hz.
+    spar (np.array, float64): Parallel PSD in dBc/Hz.
+    sper (np.array, float64): Perpendicular PSD in dBc/Hz.
+    nbins (int): Number of bins for the spar/sper histogram.
+    fmin (float): Minimum frequency for binning in Hz.
 
     Returns:
-    fig, ax (pyplot figure and axis): sparper plot.
+    fig (matplotlib.figure.Figure): Figure containing the plot.
+    ax (matplotlib.axes.Axes): Axis for the PSD plot.
     """
     # Input validation
     f = np.asarray(f, dtype = np.float64)
@@ -226,18 +230,19 @@ def plot_xcal(thetaf, xf, zf_cent, xcal_mask, poly_x, thetat = None,
     Plots x vs theta calibration data and IQ data with fit overlayed. 
 
     Parameters:
-    thetaf (np.array, float64): fine sweep theta data.
-    xf (np.array, float64): fine sweep x data.
-    zf_cent (np.array, complex128): fine sweep centered IQ data.
-    xcal_mask (np.array, bool): mask of fine sweep data used for x calibration.
-    poly_x (np.array, float64): polynomial fit parameters for x vs theta.
-    thetat (np.array, float64 or None): timestream theta data, or None to omit
+    thetaf (np.array, float64): Fine sweep theta data.
+    xf (np.array, float64): Fine sweep x data.
+    zf_cent (np.array, complex128): Fine sweep centered IQ data.
+    xcal_mask (np.array, bool): Mask of fine sweep data used for x calibration.
+    poly_x (np.array, float64): Polynomial fit parameters for x vs theta.
+    thetat (np.array, float64 or None): Timestream theta data, or None to omit
         from plot.
-    zt_cent (np.array, complex128 or None): timestream centered IQ data, or 
+    zt_cent (np.array, complex128 or None): Timestream centered IQ data, or
         None to omit from plot.
 
     Returns:
-    fig, axs (pyplot figure and axis): x vs theta and IQ data plot.
+    fig (matplotlib.figure.Figure): Figure containing the plots.
+    axs (np.ndarray, matplotlib.axes.Axes): Axes for x-vs-theta and IQ plots.
     """
     # Input validation
     thetaf = np.asarray(thetaf, dtype = np.float64)

@@ -14,7 +14,7 @@ def make_x_cal(ffine, zfine, fgain, zgain, fs, Qs, plotq = False):
     zfine (array-like): fine sweep complex S21 data
     fgain (array-like): gain sweep frequency data in Hz
     zgain (array-like): gain sweep complex S21 data
-    fs (array-like): resonance frequencies to remove from gain sweeps when
+    fs (array-like): resonant frequencies to remove from gain sweeps when
         fitting gain data
     Qs (array-like): scaled resonance quality factors to remove from gain sweeps
         when fitting gain data. frequency ranges of width fs / Qs centered on fs
@@ -60,7 +60,7 @@ def make_theta_cal(ffine, zfine, fgain, zgain, fs, Qs, plotq = False):
     zfine (array-like): fine sweep complex S21 data
     fgain (array-like): gain sweep frequency data in Hz
     zgain (array-like): gain sweep complex S21 data
-    fs (array-like): resonance frequencies to remove from gain sweeps when
+    fs (array-like): resonant frequencies to remove from gain sweeps when
         fitting gain data
     Qs (array-like): scaled resonance quality factors to remove from gain sweeps
         when fitting gain data. frequency ranges of width fs / Qs centered on fs

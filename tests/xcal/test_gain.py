@@ -25,6 +25,7 @@ z2[2] = np.nan
     (f1, z1, [0], [np.pi, 0], [1, -1, 1]),
     ([], [], [], [], []),
     (f2, z2, [0], [0], z2), # single nan in z returns single nan
+    (f1, z1.astype(np.complex64), [0], [0], z1), # complex64 input coerced
 ])
 def test_remove_gain(f, z, p_amp, p_phase, expected):
     z_rmvd = gain.remove_gain(f, z, p_amp, p_phase)
@@ -85,6 +86,19 @@ def test_fit_gain(f, z, fr_spans, p_amp_exp, p_phase_exp, mask_exp):
     np.testing.assert_allclose(p_phase, p_phase_exp, atol = 1e-12)
     np.testing.assert_equal(mask, mask_exp)
 
+def test_fit_gain_full_cut_warns_nan():
+    # Cut all points so polyfits fail and warn with NANs
+    f = np.array([0, 1, 2, 3, 4], dtype = np.float64)
+    z = np.ones_like(f, dtype = np.complex128)
+    # Span that covers entire f range
+    fr_spans = [(2, 10)]
+    with pytest.warns(UserWarning, match="Gain fit failed, returning NAN"):
+        p_amp, p_phase, mask = gain.fit_gain(f, z, fr_spans)
+    assert p_amp.dtype == np.float64 and p_phase.dtype == np.float64
+    assert np.isnan(p_amp).all()
+    assert np.isnan(p_phase).all()
+    assert mask.shape == f.shape and (~mask).all()
+
 @pytest.mark.parametrize("f,z,fr_spans", [
     ([0, 1, 2, 3, 4], [10, 10, 10, 10, 10], [1]),  # fr_spans not list of tuples
     ([0, 1, 2], [1, 1], []),                       # f and z different lengths
@@ -117,6 +131,7 @@ def test_fit_gain_invalid_input(f, z, fr_spans):
     ([0, 1, 2, 3, 4], [(1, 1), (3, 1)], [True, False, True, False, True]),
     ([0, 1, 2, 3, 4], [(1, 1), (2.5, 2)], [True, False, False, False, True]),
     ([0, 1, 2, 3, 4], [(1, 3), (2, 2)], [False, False, False, False, True]),
+    ([0, 1, 2, 3, 4], [(2, 0)], [True, True, False, True, True]),
 ])
 def test_get_res_mask(f, fr_spans, mask_exp):
     for m in [1e-12, 1, 1e6, 1e9, 1e12]:
@@ -139,7 +154,6 @@ def test_get_res_mask_invalid_input(f, fr_spans):
 ################################################################################
 ################################ make_fr_spans #################################
 ################################################################################
-# Neet to finish writing tests here
 @pytest.mark.parametrize("fres_all,qres_all", [
     ([1e9, 2e9], [1e9, 1e9]),  
     ([1e9], [1e9]), 

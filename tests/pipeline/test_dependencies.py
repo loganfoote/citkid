@@ -125,6 +125,10 @@ def test_get_lowest_runs_invalid_inputs(sub_dependencies):
     with pytest.raises(ValueError):
         rv._get_lowest_runs(sub_dependencies)
 
+def test_get_lowest_runs_invalid_subdep_value():
+    with pytest.raises(ValueError):
+        rv._get_lowest_runs({"param1": [1, 2]})
+
 ################################################################################
 ############################### get_dependencies ###############################
 ################################################################################
@@ -138,6 +142,9 @@ saved1 = {0: {"param1": {}, "param2": {}}, 1: {"param1": {'param2': 0}}}
 def test_get_dependencies(param_names, saved, expected):
     result = rv.get_dependencies(param_names, saved)
     assert result == expected
+
+def test_get_dependencies_empty_param_names():
+    assert rv.get_dependencies([], {}) == {}
 
 # Testing variety of function run orders for the following function dependencies
 #      B -> C 

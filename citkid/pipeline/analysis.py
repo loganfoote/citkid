@@ -87,14 +87,17 @@ class Analyzer():
         
     def run_analysis_step(self, name, data_idx=None, save_to_zarr=True):
         """
-        Runs an analysis step and saves the output to zarr.
+        Run an analysis step and save the output to zarr.
         
         Parameters:
         name (str): The name of the analysis step.
         data_idx (int or array-like): Data index (or indices) to
             run the step on.
-        save_to_zarr (bool): If True, save the outputs to the 
+        save_to_zarr (bool): If True, save the outputs to the
             zarr store at Analyzer.dataset.root.
+
+        Returns:
+        None
         """
         x = [d for d in self.steps if d.name == name]
         if not len(x):
@@ -109,7 +112,10 @@ class Analyzer():
             if 'saved' in self.dataset.root.attrs:
                 saved = self.dataset.root.attrs['saved']
                 dependencies = get_dependencies(step.param_names, saved)
-                run_idxs = [get_most_recent_run(rname, saved)+1 for rname in step.return_names]
+                run_idxs = [
+                    get_most_recent_run(rname, saved) + 1
+                    for rname in step.return_names
+                ]
                 run_idxs[run_idxs == 0] = 1
             else:
                 dependencies = {}
@@ -125,8 +131,8 @@ class Analyzer():
                     if param_name in dependencies.keys():
                         param_run_idx = dependencies[param_name]
                     else:
-                        # If the parameter name is not in the list of dependencies,
-                        # then it must not be an analysis output. 
+                        # If the parameter name is not in the dependencies,
+                        # then it must not be an analysis output.
                         # I.e., it has run_idx = 0.
                         param_run_idx = 0
                     param_run_idxs.append(param_run_idx)

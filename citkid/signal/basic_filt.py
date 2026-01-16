@@ -5,11 +5,11 @@ def bandpass_filter(x, dt, f0, f1, order = 8):
     Applies a bandpass filter to a timestream.
 
     Parameters:
-    x (np.ndarray, (N,)): timestream data.
-    dt (float): sample time in s.
-    f0 (float): lower cutoff frequency (Hz).
-    f1 (float): upper cutoff frequency (Hz).
-    order (int): order of the filter.
+    x (np.ndarray, (N,)): Timestream data.
+    dt (float): Sample time in s.
+    f0 (float): Lower cutoff frequency in Hz.
+    f1 (float): Upper cutoff frequency in Hz.
+    order (int): Order of the filter.
 
     Returns:
     filtered_x (np.ndarray, (N,)): Filtered timestream.
@@ -39,10 +39,10 @@ def lowpass_filter(x, dt, f_cutoff, order = 8):
     Applies a lowpass filter to a timestream.
 
     Parameters:
-    x (np.ndarray, (N,)): timestream data.
-    dt (float): sample time in s.
-    f_cutoff (float): cutoff frequency (Hz).
-    order (int): order of the filter.
+    x (np.ndarray, (N,)): Timestream data.
+    dt (float): Sample time in s.
+    f_cutoff (float): Cutoff frequency in Hz.
+    order (int): Order of the filter.
 
     Returns:
     filtered_x (np.ndarray, (N,)): Filtered timestream.
@@ -70,10 +70,10 @@ def highpass_filter(x, dt, f_cutoff, order = 8):
     Applies a highpass filter to a timestream.
 
     Parameters:
-    x (np.ndarray, (N,)): timestream data.
-    dt (float): sample time in s.
-    f_cutoff (float): cutoff frequency (Hz).
-    order (int): order of the filter.
+    x (np.ndarray, (N,)): Timestream data.
+    dt (float): Sample time in s.
+    f_cutoff (float): Cutoff frequency in Hz.
+    order (int): Order of the filter.
 
     Returns:
     filtered_x (np.ndarray, (N,)): Filtered timestream.
@@ -101,11 +101,11 @@ def get_cutoff(dt, f_cutoff):
     Calculate normalized cutoff frequency.
 
     Parameters:
-    dt (float): sample time in s.
-    f (float): cutoff frequency in Hz.
+    dt (float): Sample time in s.
+    f_cutoff (float): Cutoff frequency in Hz.
 
     Returns:
-    float: Normalized cutoff frequency.
+    cutoff (float): Normalized cutoff frequency.
     """
     nyquist = 0.5 / dt
     return f_cutoff / nyquist

@@ -65,8 +65,24 @@ def test_get_xcal_mask(ffine, tfine, tnoise, ix0_offset, ix1_offset,
 def test_get_xcal_idx_invalid_input(ffine, tfine, tnoise, ix0_offset, 
                                     ix1_offset, std_cutoff):
     with pytest.raises(Exception):
-        xcal.get_xcal_idx(ffine, tfine, tnoise, 
-                          ix0_offset, ix1_offset, std_cutoff)
+        xcal.get_xcal_mask(ffine, tfine, tnoise, 
+                           ix0_offset, ix1_offset, std_cutoff)
+
+@pytest.mark.parametrize("ffine,tfine,tnoise,ix0_offset,ix1_offset,std_cutoff", [
+    # NaN in tnoise causes failure when computing min/max
+    (ffine, tfine, [np.nan], 0, 0, None),
+    # tnoise outside tfine range yields no intersections -> error
+    (ffine, tfine, [1e9], 0, 0, None),
+    # empty tnoise leads to empty after cutoff/min-max -> error
+    (ffine, tfine, [], 0, 0, None),
+    # NaN in tfine should also fail
+    (ffine, [np.nan] * len(ffine), [20.5], 0, 0, None),
+])
+def test_get_xcal_mask_additional_invalid(ffine, tfine, tnoise, ix0_offset, 
+                                          ix1_offset, std_cutoff):
+    with pytest.raises(Exception):
+        xcal.get_xcal_mask(ffine, tfine, tnoise, ix0_offset, ix1_offset, 
+                           std_cutoff)
         
 
     

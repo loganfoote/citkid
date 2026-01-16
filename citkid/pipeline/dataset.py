@@ -120,8 +120,9 @@ class DataSet:
         
     def confirm_valid_path(self, path, raise_error = True):
         """
-        Confirm that a list of plStep objects forms a valid path, where all 
-        inputs exist or can be generated from the Zarr file or from the path.
+        Confirm that a list of plStep objects forms a valid path.
+
+        All inputs must exist or be generatable from the Zarr file or path.
 
         Parameters:
         path (list): List of plStep objects forming the path.
@@ -130,15 +131,16 @@ class DataSet:
             the step for which it was not found.
 
         Raises (if raise_error = True):
-        ValueError: If an input for any step is not found 
+        ValueError: If an input for any step is not found
             and raise_error = True.
             
         Returns (if raise_error = False):
         missing_input (str or None): Missing input name, or None
             if there were no missing input names.
-        step (plStep or None): Step at which there was a
-            missing input name, or None if there were not missing
-            input names at any step.
+        step (plStep or None): Step where input was missing, or None.
+
+        Returns:
+        None
         """
         # Need to modify this to check if values are in zarr
         valid_inputs = [d for d in dir(self) if '__' not in d]
@@ -150,7 +152,10 @@ class DataSet:
                     
                     if run is None:
                         if raise_error:
-                            m = f"Invalid path, input '{inp}' for step '{step.name}'"
+                            m = (
+                                f"Invalid path, input '{inp}' for step "
+                                f"'{step.name}'"
+                            )
                             m += f" not found."
                             raise ValueError(m)
                         else:
@@ -171,6 +176,9 @@ class DataSet:
         Parameters:
         path (list): List of plStep objects forming the path.
         data_idx (int or list): The data index or indices to process.
+
+        Returns:
+        None
         """
         self.confirm_valid_path(path)
         for step in path:
@@ -184,7 +192,7 @@ class DataSet:
         Parameters:
         name (str): The name of the data attribute to read.
         data_idx (int or list): The data index or indices to read.
-        run_idx (int): run index, or None to find most recent run index
+        run_idx (int or None): run index, or None for most recent run.
             that produced the desired data attribute.
 
         Returns:
@@ -218,17 +226,20 @@ class DataSet:
 
         Parameters:
         name (str): The name of the data attribute to write.
-        func_type (str): The type of function that was called to produce the data.
+        func_type (str): The type of function that produced the data.
             Can be "per-row", "vectorized", or "global-res".
-        param_names (array-like): Array of parameter names that were used when calling
-            the function.
-        param_run_idxs (array-like): Array of run indices of the input parameter names.
+        param_names (array-like): Parameter names used when calling the
+            function.
+        param_run_idxs (array-like): Run indices of input parameter names.
             0 represents parameter values that will never change, i.e. raw data.
         value (np.ndarray or scalar): The data to write.
         data_idx (int or list): The data index or indices to write.
         run_idx (int): run index.
         dtype (np.dtype, optional): The data type to use when writing. Defaults 
             to None (use value's dtype).
+
+        Returns:
+        None
         """
         if func_type != 'global-res':
             # Convert data_idx and value to numpy arrays
@@ -237,7 +248,9 @@ class DataSet:
                 
             # Check if the length of value equals the length of data_idx.
             if data_idx.shape[0] != value.shape[0]:
-                raise ValueError('value and data_idx must have the same length.')
+                raise ValueError(
+                    'value and data_idx must have the same length.'
+                )
         
         # ensure run group exists (create if missing)
         key = str(run_idx)
@@ -257,13 +270,26 @@ class DataSet:
                 # Get the per-element shape of the new value to be added.
                 element_shape = value.shape[1:]
                 shape = (0, *element_shape)
-                chunks = (1, *element_shape)  # first axis = 1 for single-row writes
-                data_idxs = grp.create_array(f"{name}_idx", shape=(0,), dtype=int)
+                # First axis = 1 for single-row writes.
+                chunks = (1, *element_shape)
+                data_idxs = grp.create_array(
+                    f"{name}_idx",
+                    shape = (0,),
+                    dtype = int,
+                )
                 expected_shape = element_shape
-            values_arr = grp.create_array(name, shape=shape, dtype=dtype, chunks=chunks)
+            values_arr = grp.create_array(
+                name,
+                shape = shape,
+                dtype = dtype,
+                chunks = chunks,
+            )
         else:
             if func_type == 'global-res':
-                m = "Attempt to overwrite an existing outputs of a function with "
+                m = (
+                    "Attempt to overwrite an existing outputs of a function "
+                    "with "
+                )
                 m += "func_type 'global-res'."
                 raise ValueError(m)
             values_arr = grp[name]
@@ -272,8 +298,14 @@ class DataSet:
 
         # Check that shape of the elements of value match the
         # shape of the elements of values_arr.
-        if func_type in ['per-row', 'vectorized'] and element_shape != expected_shape:
-            raise ValueError(f"The shape of 'value' must match the shape of the existing zarr array, {name}.")
+        if (
+            func_type in ['per-row', 'vectorized']
+            and element_shape != expected_shape
+        ):
+            raise ValueError(
+                f"The shape of 'value' must match the shape of the existing "
+                f"zarr array, {name}."
+            )
 
         # write data at specified indices
         if func_type in ['per-row', 'vectorized']:
@@ -288,7 +320,7 @@ class DataSet:
         elif func_type == 'global-res':
             values_arr[...] = value        
         
-        # Write the 'saved' dictionary attribute, to keep track of 
+        # Write the 'saved' dictionary attribute to track dependencies.
         # the dependencies between run versions.
         if not 'saved' in self.root.attrs:
             self.root.attrs['saved'] = {0: {}, 1: {name: {}}}

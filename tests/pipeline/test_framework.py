@@ -15,6 +15,14 @@ class DummyDSWithExecute(dataset.DataSet):
         self.cal_pl = cal_pl
         self.nres = 10
 
+class DummyDSWithCounter(DummyDS):
+    def __init__(self, cal_pl):
+        super().__init__()
+        self.cal_pl = cal_pl
+        self._execute_calls = []
+    def execute_path(self, path, rows):
+        self._execute_calls.append((path, list(rows)))
+
 ################################################################################
 #################################### Steps #####################################
 ################################################################################
@@ -214,6 +222,16 @@ def test_steps_run_vectorized():
     DS.cal_pl = {'CAL_STEPS': {1: {'task': step}}}
     del DS.result
 
+def test_steps_run_vectorized_none_idx_with_scalar_param():
+    DS = DummyDS()
+    DS.x = np.array([1, 2, 3])
+    DS.y = 5.0
+    DS.nres = 3
+    step = pf.plStep('vectorized_step', lambda x, y: np.asarray(x) + y,
+                     ['x', 'y'], ['result'], 'vectorized')
+    step.run(DS, data_idx = None)
+    assert np.array_equal(DS.result[[0, 1, 2]], np.array([6.0, 7.0, 8.0]))
+
 @pytest.mark.parametrize("step_type", ['vectorized', 'per-row'])
 def test_steps_res_bad_input(step_type):
     DS = DummyDS()
@@ -388,6 +406,13 @@ def test_lazyattr_ensure_loaded():
     assert DS.c._cache == {1: 3, 2: 4, 4: 6}
     assert DS.b._cache == {1: 2, 2: 3, 4: 5}
 
+def test_lazyattr_ensure_loaded_noop_when_cached():
+    DS = DummyDSWithCounter(cal_pl)
+    DS.c = pf.LazyAttr(DS, 'c')
+    DS.c._cache = {1: 3, 2: 4}
+    DS.c._ensure_loaded([1, 2])
+    assert DS._execute_calls == []
+
 def test_lazyattr_ensure_loaded_invalid():
     DS = DummyDSWithExecute(cal_pl) 
     LA = pf.LazyAttr(DS, 'c')
@@ -537,6 +562,10 @@ def test_find_pl_path(tree, return_name, expected_path):
     else:
         assert path is not None
         assert [step.name for step in path] == expected_path 
+
+def test_find_pl_path_not_found_returns_none():
+    tree = {'CAL_STEPS': {1: step1, 2: step2}}
+    assert pf.find_pl_path(tree, 'missing') is None
 
 # don't need to check invalid tree input, handled in check_pl_tree_structure
 def test_find_pl_path_invalid_input():

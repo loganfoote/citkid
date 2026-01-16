@@ -69,14 +69,29 @@ def plot_cal(ffine, zfine, popt_circle, fnoise, znoise, znoise_offres,
         #         ix1 = len(theta_fine)
         # else:
         #     ix1 = len(theta_fine)
-        theta_samp = np.linspace(min(theta_fine[ix0:ix1]), max(theta_fine[ix0:ix1]), 200)
-        ax2.plot(theta_samp, (1 - np.polyval(poly, theta_samp) / fnoise) * 1e6,
-                 '-k')
-        ax2.plot(theta_fine[ix0:ix1], (1 - ffine[ix0:ix1] / fnoise) * 1e6, '.',
-                  color = 'r')
-        ax2.plot(theta[::nevery],
-                 (1 - np.polyval(poly, theta[::nevery]) / fnoise) * 1e6, '.',
-                  color = color0, markersize = 5)
+        theta_samp = np.linspace(
+            min(theta_fine[ix0:ix1]),
+            max(theta_fine[ix0:ix1]),
+            200,
+        )
+        ax2.plot(
+            theta_samp,
+            (1 - np.polyval(poly, theta_samp) / fnoise) * 1e6,
+            '-k',
+        )
+        ax2.plot(
+            theta_fine[ix0:ix1],
+            (1 - ffine[ix0:ix1] / fnoise) * 1e6,
+            '.',
+            color = 'r',
+        )
+        ax2.plot(
+            theta[::nevery],
+            (1 - np.polyval(poly, theta[::nevery]) / fnoise) * 1e6,
+            '.',
+            color = color0,
+            markersize = 5,
+        )
         ax2.axvline(theta_range[0], linestyle = '--', color = color0)
         ax2.axvline(theta_range[1], linestyle = '--', color = color0)
 
@@ -135,7 +150,12 @@ def plot_timestream(dt, theta, theta_clean, dt_offres, theta_offres, x,
 
         time = np.linspace(0, len(theta) * dt, len(theta))
         axs[1].plot(time, theta, color = color0, label = 'raw data')
-        axs[1].plot(time, theta_clean, color = color1, label = 'deglitched data')
+        axs[1].plot(
+            time,
+            theta_clean,
+            color = color1,
+            label = 'deglitched data',
+        )
         axs[0].plot(time, x * 1e6, color = color0)
         axs[1].plot(time[cr_indices], theta[cr_indices], color = 'r',
                     marker = 'x', linestyle = '', label = 'removed peaks')
@@ -154,11 +174,11 @@ def plot_psd(f_psd, spar, sper, sxx, f_psd_offres, spar_offres, sper_offres):
     parallel noise, and one plot of Sxx, if provided
 
     Parameters:
-    f_psd (np.array or None): on-resonance frequency data in Hz
+    f_psd (np.array or None): on-resonant frequency data in Hz
     spar  (np.array or None): on-resonance parallel noise in dBc
     sper  (np.array or None): on-resonance perpendicular noise in dBc
     sxx   (np.array or None): on-resonance Sxx in 1 / Hz
-    f_psd_offres (np.array or None): off-resonance frequency data in Hz
+    f_psd_offres (np.array or None): off-resonant frequency data in Hz
     spar_offres  (np.array or None): off-resonance parallel noise in dBc
     sper_offres  (np.array or None): off-resonance perpendicular noise in dBc
 

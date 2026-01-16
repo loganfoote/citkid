@@ -20,7 +20,9 @@ m = "x,N_comp,N_iter,dt,lowpass_params,highpass_params,verbose"
     # verbose = True
     (x, 2, 3, 0.1, (1.0, 4), (0.5, 2), True),
     # different x format
-    (y, 2, 3, 0.1, (0.1, 4), (0.5, 4), False)
+    (y, 2, 3, 0.1, (0.1, 4), (0.5, 4), False),
+    # N_comp = N
+    (x, x.shape[0], 2, 0.1, (1.0, 4), (0.5, 2), False)
 ])
 def test_calc_cm(x, N_comp, N_iter, dt, lowpass_params,  highpass_params, 
                  verbose):
@@ -45,6 +47,8 @@ def test_calc_cm(x, N_comp, N_iter, dt, lowpass_params,  highpass_params,
     (x, 2, 3, 'a', (1.0, 4), (0.5, 2), False),
     # zero dt
     (x, 2, 3, 0.0, (1.0, 4), (0.5, 2), False),
+    # NaN dt
+    (x, 2, 3, np.nan, (1.0, 4), (0.5, 2), False),
     # invalid filter parameters
     (x, 2, 3, 0.1, (1.0,), (0.5, 2), False),
     (x, 2, 3, 0.1, (1.0, 4), (0.5,), False), 
@@ -54,6 +58,8 @@ def test_calc_cm(x, N_comp, N_iter, dt, lowpass_params,  highpass_params,
     (x, 2, 3, 0.1, (1.0, 4), (0.5,), False), 
     (x, 2, 3, 0.1, (1.0,2.0,3.0), (0.5, 2), False),
     (x, 2, 3, 0.1, (1.0, 4), (0.5,2.0,4.0), False), 
+    # None highpass_params unsupported
+    (x, 2, 3, 0.1, (1.0, 4), None, False),
     # negative N_comp   
     (x, -1, 3, 0.1, (1.0, 4), (0.5, 2), False),
     # N_comp > N
@@ -75,6 +81,7 @@ def test_find_cm_invalid(x, N_comp, N_iter, dt, lowpass_params, highpass_params,
     ([[0, 0, 0], [0, 0, 0]], [0, 0]),
     ([[1, -1, 1, -1], [2, -2, 2, -2]], [1, 2]),
     ([[]], [np.nan]), # empty timestreams
+    ([[1, np.nan], [2, 2]], [np.nan, 2]), # NaN propagates
 ])  
 def test_calc_sigma(x, sig_exp):
     x = np.array(x, dtype = np.float64)
@@ -145,11 +152,16 @@ def test_pca_invalid(x, N_comp, sig, highpass_params):
     ([[1, 1, 1]], [[3, 3, 3], [4, 4, 4]], 
      [[1 / 3, 1 / 4]]),
     ([[1, 1, 1], [2, 2, 2]], [[3, 3, 3]], 
-     [[1 / 3], [2 / 3]]),
+    [[1 / 3], [2 / 3]]),
+    # Complex A with real denominator via real(A)**2
+    ([[1, 1], [2, 2]], [[1 + 1j, 1 - 1j]], 
+    [[1], [2]]),
 ])
 def test_calc_a(x, A, a_exp):
     x = np.array(x, dtype = np.float64)
-    A = np.array(A, dtype = np.float64)
+    # Preserve complex values for complex test case
+    _A_arr = np.array(A)
+    A = np.array(A, dtype = np.complex128 if np.iscomplexobj(_A_arr) else np.float64)
     a_exp = np.array(a_exp, dtype = np.float64)
     a = corr.calc_a(x, A)
     np.testing.assert_allclose(a, a_exp, equal_nan = True)
@@ -189,7 +201,9 @@ m = "z,theta,N_comp,N_iter,dt,lowpass_params,highpass_params,verbose"
     # verbose = True
     (x, None, 2, 3, 0.1, (1.0, 4), (0.5, 2), True),
     # different x format
-    (y, None, 2, 3, 0.1, (0.1, 4), (0.5, 4), False)
+    (y, None, 2, 3, 0.1, (0.1, 4), (0.5, 4), False),
+    # complex64 input promoted to complex128
+    (np.array(x, dtype = np.complex64), None, 2, 3, 0.1, (1.0, 4), (0.5, 2), False)
 ])
 def test_calc_cm_complex(z, theta, N_comp, N_iter, dt, lowpass_params, 
                          highpass_params, verbose):
@@ -244,6 +258,8 @@ m = "z,theta,N_comp,N_iter,dt,lowpass_params,highpass_params,verbose"
     # invalid theta shape  
     (x, [0, 1], 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
     (x, np.array([[0, 1]]), 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    # None highpass_params unsupported
+    (x, None, 2, 3, 0.1, (1.0, 4), None, False),
 ])
 def test_calc_cm_complex_invalid(z, theta, N_comp, N_iter, dt, lowpass_params, 
                                  highpass_params, verbose):
@@ -349,6 +365,8 @@ def test_remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta, y_exp):
     (z, aI, aQ, AI, AQ, [0, -1], None),
     (z, aI, aQ, AI, AQ, 0, [0, 1]), # invalid theta shape
     (z, aI, aQ, AI, AQ, 0, np.array([[0, 1]])),
+    # empty idx unsupported
+    ([z, z], aI, aQ, AI, AQ, [], None),
 ])  
 def test_remove_cm_complex_invalid(z, aI, aQ, AI, AQ, idx, theta):
     with pytest.raises(Exception):

@@ -1,7 +1,11 @@
 import numpy as np
-from scipy.special import digamma # complex digamma function
-from scipy.special import iv as I_n # modified bessel function of the first kind
-from scipy.special import kv as K_n # modified bessel function of the second kind
+from scipy.special import digamma
+from scipy.special import iv as I_n
+from scipy.special import kv as K_n
+
+# digamma: complex digamma function
+# I_n: modified Bessel function of the first kind
+# K_n: modified Bessel function of the second kind
 
 k_B = 1.380649e-23
 h = 6.62607015e-34
@@ -15,20 +19,18 @@ N0_Nb = 6.135e48
 ################################################################################
 def f_vs_T(T, f0, alpha, Tc, Fdelta0, gamma = 1):
     """
-    Calcuates the resonant frequency shift due to the thermal QP density and
-    TLSs as a function of temperature.
+    Calculate resonant frequency shift from thermal QP density and TLSs.
 
     Parameters:
     T (float or array-like): temperature in K
-    f0 (float): resonant frequency at T = 0 K
+    f0 (float): resonant frequency at T = 0 K.
     alpha (float): kinetic inductance fraction
     Tc (float): critical temperature in K
     Fdelta0 (float): filling factor times dielectric loss at T = 0 K
     gamma (float): 1, 1/2, or 1/3 for thin-film, local, or anomalous limits
 
     Returns:
-    f (float or array-like): resonant frequency(ies) at the given
-        temperature(s)
+    f (float or array-like): Resonant frequency at the given temperature(s).
     """
     f_tls = f_vs_T_tls(T, f0, Fdelta0)
     f_qp = f_vs_T_qp(T, f0, alpha, Tc, gamma = 1)
@@ -36,12 +38,11 @@ def f_vs_T(T, f0, alpha, Tc, Fdelta0, gamma = 1):
 
 def Q_vs_T(T, f0, alpha, Tc, Fdelta0, delta_z, gamma = 1):
     """
-    Calcuates the quality factor shift due to the thermal QP density and TLSs as
-    a function of temperature.
+    Calculate quality factor shift from thermal QP density and TLSs.
 
     Parameters:
     T (float or array-like): temperature in K
-    f0 (float): resonant frequency at T = 0 K
+    f0 (float): resonant frequency at T = 0 K.
     alpha (float): kinetic inductance fraction
     Tc (float): critical temperature in K
     Fdelta0 (float): filling factor times dielectric loss at T = 0 K
@@ -49,7 +50,7 @@ def Q_vs_T(T, f0, alpha, Tc, Fdelta0, delta_z, gamma = 1):
     gamma (float): 1, 1/2, or 1/3 for thin-film, local, or anomalous limits
 
     Returns:
-    Q (float or array-like): quality factor(s) at the given temperature(s)
+    Q (float or array-like): Quality factor at the given temperature(s).
     """
     Q_tls = Q_vs_T_tls(T, f0, Fdelta0, delta_z = 0)
     Q_qp = Q_vs_T_qp(T, f0, alpha, Tc, delta_z = 0, gamma = gamma)
@@ -65,14 +66,13 @@ def f_vs_T_qp(T, f0, alpha, Tc, gamma = 1):
 
     Parameters:
     T (float or array-like): temperature in K
-    f0 (float): resonant frequency at T = 0 K
+    f0 (float): resonant frequency at T = 0 K.
     alpha (float): kinetic inductance fraction
     Tc (float): critical temperature in K
     gamma (float): 1, 1/2, or 1/3 for thin-film, local, or anomalous limits
 
     Returns:
-    f (float or array-like): resonant frequency(ies) at the given
-        temperature(s)
+    f (float or array-like): Resonant frequency at the given temperature(s).
     """
     T = np.asarray(T)
     kT = k_B * T

@@ -16,7 +16,7 @@ def import_iq_noise(directory, file_suffix, noise_index = 0, import_noiseq = Tru
     fres (np.array): noise frequency array in Hz
     ares (np.array): RFSoC amplitude array
     qres (np.array): resonance Q array for cutting data
-    fres_all (np.array): full list of resonance frequencies in Hz 
+    fres_all (np.array): full list of resonant frequencies in Hz 
     qres_all (np.array): full list of resonance Qs for cutting data 
     fcal_indices (np.array): calibration tone indices
     frough, zrough (np.array): rough sweep frequency and complex S21 data

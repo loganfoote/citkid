@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 # Not testing the actual plots, just that they generate without error
 
+# These tests are incomplete, need to finish building plot functions first
+
 ################################################################################
 ################################# plot_circle ##################################
 ################################################################################

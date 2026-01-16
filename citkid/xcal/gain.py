@@ -4,17 +4,17 @@ import warnings
 def remove_gain(f, z, p_amp, p_phase):
     """
     Removes the gain amplitude and phase from complex S21 data, given the raw
-    data
+    data.
 
     Parameters:
-    f (np.array, float64, (N,)): frequency data in Hz.
-    z (np.array, complex128, (N,)): complex S21 data.
-    p_amp (np.array, float64, (K,)): polynomial fit parameters to gain
+    f (np.array, float64, (N,)): Frequency data in Hz.
+    z (np.array, complex128, (N,)): Complex S21 data.
+    p_amp (np.array, float64, (K,)): Polynomial fit parameters for gain
         amplitude.
-    p_phase (np.array, float64, (L,)): polynomial fit parameters to gain phase.
+    p_phase (np.array, float64, (L,)): Polynomial fit parameters for gain phase.
 
     Returns:
-    z_rmvd (np.array, complex128, (N,)): complex S21 data with gain amplitude
+    z_rmvd (np.array, complex128, (N,)): Complex S21 data with gain amplitude
         and phase removed.
     """
     # Input validation
@@ -33,15 +33,12 @@ def get_res_mask(fg, fr_spans):
     Creates a mask for cutting resonances out of a gain sweep.
 
     Parameters:
-    fg (np.array, float64): gain sweep frequency data in Hz. Must be sorted in 
-        ascending order.
-    fr_spans (list): values are tuples (float64, float64) where the first value.
-        is the resonant frequency in Hz and the second is the span. These
-        frequency ranges are removed from the gain data.
+    fg (np.array, float64): Gain sweep frequency data in Hz, sorted ascending.
+    fr_spans (list): Tuples (float, float) of (resonant frequency, span) in Hz.
+        These frequency ranges are removed from the gain data.
 
     Returns:
-    mask (np.array, bool): mask for f where False values are resonances to cut
-        from the data.
+    mask (np.array, bool): Mask where False values are resonances to cut.
     """
     # Input validation
     fg = np.asarray(fg, dtype = np.float64)
@@ -90,18 +87,17 @@ def fit_gain(f, z, fr_spans):
     polynomial and phase is fit to a 1st order polynomial.
 
     Parameters:
-    f (np.array, float64, (N,)): gain frequency array in Hz.
-    z (np.array, complex128, (N,)): gain complex S21 array.
-    fr_spans (list): values are tuples (float64, float64) where the first value.
-        is the resonant frequency in Hz and the second is the span. These
-        frequency ranges are removed from the gain data.
+    f (np.array, float64, (N,)): Gain frequency array in Hz.
+    z (np.array, complex128, (N,)): Gain complex S21 array.
+    fr_spans (list): Tuples (float, float) of (resonant frequency, span) in Hz.
+        These frequency ranges are removed from the gain data.
 
     Returns:
     p_amp (np.array, float64): 2nd-order polynomial fit parameters to gain
         amplitude.
     p_phase (np.array, float64): 1st-order polynomial fit parameters to gain
         phase.
-    mask (np.array, bool): mask for cutting resonances from f and z.
+    mask (np.array, bool): Mask for cutting resonances from f and z.
     """
     # Input validation
     f = np.asarray(f, dtype = np.float64)
@@ -168,17 +164,16 @@ def fit_gain(f, z, fr_spans):
 
 def make_fr_spans(fres_all, qres_all):
     """
-    Makes resonance frequency spans for cutting resonances out of gain data. 
+    Makes resonant frequency spans for cutting resonances out of gain data. 
 
     Parameters:
-    fres_all (np.array, float64, (M,)): all resonant frequencies in Hz. Must be 
-        sorted in ascending order for get_res_mask.
-    qres_all (np.array, float64, (M,)): all resonator quality factors.
+    fres_all (np.array, float64, (M,)): Resonant frequencies in Hz, sorted
+        ascending.
+    qres_all (np.array, float64, (M,)): Resonator quality factors.
 
     Returns:
-    fr_spans (list): values are tuples (float64, float64) where the first value.
-        is the resonant frequency in Hz and the second is the span. These
-        frequency ranges are removed from the gain data.
+    fr_spans (np.array, float64, (M, 2)): Array of (resonant frequency, span)
+        tuples in Hz.
     """
     # Input validation
     fres_all = np.asarray(fres_all, dtype = np.float64)
@@ -190,6 +185,6 @@ def make_fr_spans(fres_all, qres_all):
     if any(fres_all[1:] < fres_all[:-1]):
         raise ValueError('fres_all must be sorted in ascending order')
     
-    # Make resonance frequency spans
+    # Make resonant frequency spans
     fr_spans = [(fr, fr / qr) for fr, qr in zip(fres_all, qres_all)]
     return np.asarray(fr_spans, dtype = np.float64)

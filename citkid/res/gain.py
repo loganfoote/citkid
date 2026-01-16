@@ -21,17 +21,13 @@ def remove_gain(f, z, p_amp, p_phase):
     z_rmvd (np.array, complex128, (N,)): complex S21 data with gain amplitude
         and phase removed.
     """
-    warnings.warn('citkid.xcal.gain.remove_gain is deprecated. '
-                  'Please use citkid.res.gain.remove_gain instead.', 
-                  DeprecationWarning)
-    f = np.asarray(f, dtype = np.float64)
-    z = np.asarray(z, dtype = np.complex128)
-    p_amp = np.asarray(p_amp, dtype = np.float64)
-    p_phase = np.asarray(p_phase, dtype = np.float64)
-
-    z_rmvd = z / 10 ** (np.polyval(p_amp, f) / 20)
-    z_rmvd = z_rmvd / np.exp(1j * np.polyval(p_phase, f))
-    return z_rmvd
+    warnings.warn(
+        'citkid.res.gain.remove_gain is deprecated. '
+        'Please use citkid.xcal.gain.remove_gain instead.',
+        DeprecationWarning,
+        stacklevel = 2,
+    )
+    return xcal_gain.remove_gain(f, z, p_amp, p_phase)
 
 def fit_gain(f, z, fr_spans, plotq = False):
     """
@@ -42,7 +38,7 @@ def fit_gain(f, z, fr_spans, plotq = False):
     f (np.array, float64, (N,)): gain frequency array.
     z (np.array, complex128, (N,)): gain complex S21 array.
     fr_spans (list): values are tuples (float64, float64) where the first value.
-        is the resonance frequency and the second is the span. These frequencies
+        is the resonant frequency and the second is the span. These frequencies
         are removed from the gain data.
     plotq (bool): If True, plots the fits and returns the figure.
 
@@ -54,9 +50,11 @@ def fit_gain(f, z, fr_spans, plotq = False):
     fig, axs (pyplot figure and axes, or None): if plotq, returns a plot of the
         gain amplitude and phase fits. Otherwise, returns (None, None).
     """
-    warnings.warn('citkid.xcal.gain.fit_gain is deprecated. '
-                  'Please use citkid.res.gain.fit_gain instead.',      
-                    DeprecationWarning)
+    warnings.warn(
+        'citkid.xcal.gain.fit_gain is deprecated. '
+        'Please use citkid.res.gain.fit_gain instead.',
+        DeprecationWarning,
+    )
     ### Check parameters
     f = np.asarray(f, dtype = np.float64)
     z = np.asarray(z, dtype = np.complex128)
@@ -152,7 +150,7 @@ def fit_and_remove_gain_phase(fgain, zgain, ffine, zfine, frs = [], Qrs = [],
     zgain (np.array): gain sweep complex S21 data.
     ffine (np.array): fine sweep frequency data.
     zfine (np.array): fine sweep complex S21 data.
-    frs (list of float): resonance frequencies to cut from the gain sweep.
+    frs (list of float): resonant frequencies to cut from the gain sweep.
     Qrs (list of float): Qrs to cut from the gain sweep.
     plotq (bool): If True, also plots fits to the gain sweep
         and corrections to the fine-sweep.
@@ -174,8 +172,11 @@ def fit_and_remove_gain_phase(fgain, zgain, ffine, zfine, frs = [], Qrs = [],
         fr_spans.append((fr, fr / Qr))
     if legacy_fit:
         f = fit_gain
-        warnings.warn('citkid.xcal.gain.fit_and_remove_gain_phase legacy_fit is depreciated.', 
-                      DeprecationWarning)
+        warnings.warn(
+            'citkid.xcal.gain.fit_and_remove_gain_phase legacy_fit is '
+            'depreciated.',
+            DeprecationWarning,
+        )
     else:   
         f = xcal_gain.fit_gain
     p_amp, p_phase, (fig_gain, axs_gain) = f(fgain, zgain, fr_spans, plotq)

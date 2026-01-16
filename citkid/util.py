@@ -6,13 +6,14 @@ import numpy as np
 
 def fix_path(path):
     r"""
-    Given a path, convert \ to / and ensure the path ends in / if it is a folder
+    Normalize a path by converting backslashes to slashes and ensuring a
+    trailing slash for folder paths.
 
     Parameters:
-    path (str): path to a folder or file
+    path (str): Path to a folder or file.
 
     Returns:
-    fixed_path (str): fixed path
+    fixed_path (str): Normalized path string.
     """
     if path == '':
         return path
@@ -24,14 +25,18 @@ def fix_path(path):
 def save_fig(fig, filename, plot_directory, ftype = 'png',
              tight_layout = False, close_fig = True):
     """
-    Saves a pyplot figure with standard settings
+    Save a matplotlib figure to disk with standard settings.
 
     Parameters:
-    fig (plt.figure): figure to save
-    filename (str): name of the file to save, without extension
-    plot_directory (str): directory to save the file
-    ftype (str): file type to save. Common types are 'png' and 'eps'
-    tight_layout (bool): if True, sets the figure layout to 'tight'
+    fig (plt.figure): Figure to save.
+    filename (str): File name without extension.
+    plot_directory (str): Directory to save the file.
+    ftype (str): File type to save (e.g., 'png', 'eps').
+    tight_layout (bool): If True, sets the figure layout to 'tight'.
+    close_fig (bool): If True, closes the figure after saving.
+
+    Returns:
+    None
     """
     if fig is not None:
         plot_directory = fix_path(plot_directory)
@@ -50,14 +55,13 @@ def save_fig(fig, filename, plot_directory, ftype = 'png',
 
 def save_figure_to_memory(fig):
     """
-    Saves a matplotlib figure to memory. Use this to easily stitch together
-    multiple figures without saving extra files
+    Save a matplotlib figure to a memory buffer.
 
     Parameters:
-    fig (pyplot.figure): figure to save
+    fig (pyplot.figure): Figure to save.
 
     Returns:
-    buf (BytesIO): memory buffer of saved figure
+    buf (BytesIO): Memory buffer containing the saved figure.
     """
     buf = BytesIO()
     fig.set_facecolor('white')
@@ -70,15 +74,18 @@ def save_figure_to_memory(fig):
 
 def combine_figures_vertically(fig1, fig2, dpi = 200):
     """
-    Combine two matplotlib figures vertically for saving as a single file
+    Combine two matplotlib figures vertically into a single figure.
 
     Parameters:
-    fig1, fig2 (pyplot.figure): figures to combine
+    fig1 (pyplot.figure): First figure to combine.
+    fig2 (pyplot.figure): Second figure to combine.
+    dpi (int): Dots per inch for the combined figure.
 
     Returns:
-    fig (pyplot.figure): combined figure
+    fig (pyplot.figure): Combined figure.
     """
-    with save_figure_to_memory(fig1) as buf1, save_figure_to_memory(fig2) as buf2:
+    with save_figure_to_memory(fig1) as buf1, \
+        save_figure_to_memory(fig2) as buf2:
         plt.close(fig1)
         plt.close(fig2)
         fig, axs = plt.subplots(2, 1, dpi = dpi, layout = 'tight')
@@ -91,15 +98,18 @@ def combine_figures_vertically(fig1, fig2, dpi = 200):
 
 def combine_figures_horizontally(fig1, fig2, dpi = 200):
     """
-    Combine two matplotlib figures horizontally for saving as a single file
+    Combine two matplotlib figures horizontally into a single figure.
 
     Parameters:
-    fig1, fig2 (pyplot.figure): figures to combine
+    fig1 (pyplot.figure): First figure to combine.
+    fig2 (pyplot.figure): Second figure to combine.
+    dpi (int): Dots per inch for the combined figure.
 
     Returns:
-    fig (pyplot.figure): combined figure
+    fig (pyplot.figure): Combined figure.
     """
-    with save_figure_to_memory(fig1) as buf1, save_figure_to_memory(fig2) as buf2:
+    with save_figure_to_memory(fig1) as buf1, \
+        save_figure_to_memory(fig2) as buf2:
         plt.close(fig1)
         plt.close(fig2)
         fig, axs = plt.subplots(1, 2, dpi = dpi, layout = 'tight')
@@ -115,10 +125,11 @@ def to_scientific_notation(number):
     Converts a number to scientific notation and returns the value and exponent.
 
     Parameters:
-    number (float): The number to convert.
+    number (float): Number to convert.
 
     Returns:
-    tuple: A tuple containing the value in scientific notation and the exponent.
+    mantissa (float): Mantissa in scientific notation.
+    exponent (int): Exponent in scientific notation.
     """
     if number == 0:
         return (0.0, 0)  # Handle the special case where the number is zero
@@ -140,13 +151,13 @@ def format_str_scientific_with_err(p, perr, for_plotting = True):
     figures. e.g. (1.54 ± 0.04) X 10^-4
 
     Parameters:
-    p (float): parameter value
-    perr (float) parameter uncertainty
-    for_plotting (bool): if True, formats the string in latex for plotting. If
-        False, formats the string for printing
+    p (float): Parameter value.
+    perr (float): Parameter uncertainty.
+    for_plotting (bool): If True, formats the string in LaTeX for plotting.
+        If False, formats the string for plain text.
 
     Returns:
-    formatted_str (str): formatted string
+    formatted_str (str): Formatted string.
     """
     p_mantissa, p_exponent = to_scientific_notation(p)
     perr_mantissa, perr_exponent = to_scientific_notation(perr)
@@ -167,15 +178,15 @@ def get_fit_bound_curves(x, popt, perr, model):
     optimal fit parameters and uncertainties
 
     Parameters:
-    x (array-like): x sample data
-    popt (array-like): fit parameters
-    perr (array-like): fit parameter uncertainties
-    model (func): model function that takes parameters (x, *popt)
+    x (array-like): Sample x data.
+    popt (array-like): Fit parameters.
+    perr (array-like): Fit parameter uncertainties.
+    model (callable): Model function that takes parameters (x, *popt).
 
     Returns:
-    y_best_fit (np.array): best fit data corresponding to x
-    y_lower (np.array): lower bound on fit data corresponding to x
-    y_upper (np.array): upper bound on fit data corresponding to x
+    y_best_fit (np.array): Best-fit data corresponding to x.
+    y_lower (np.array): Lower bound curve corresponding to x.
+    y_upper (np.array): Upper bound curve corresponding to x.
     """
     y_best_fit = model(x, *popt)
 

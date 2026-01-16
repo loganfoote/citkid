@@ -8,29 +8,27 @@ def run_mcmc(f, z_stacked, popt, nsteps = 2000, nwalkers = 256,
              ndiscard = 200, nthin = 1, downward = True, plotq = True,
              verbose = True, **kwargs):
     """
-    Runs a Monte-Carlo Markov Chain analysis of nonlinear_iq data
+    Run a Monte-Carlo Markov Chain analysis of nonlinear_iq data.
 
     Parameters:
-    f (np.array): frequency data
-    z_stacked (np.array): horizontally stacked complex IQ data
-    popt (array-like): optimal parameters, found using least-squares or other
-        fitting method
-    nsteps (int): number of MCMC steps. Minimum is 1,000
-    nwalkers (int): number of MCMC walkers. 256 is recommended
-    ndiscard (int): number of samples to discard
-    nthin (int): factor by which the samples are thinned
+    f (np.array): Frequency data.
+    z_stacked (np.array): Horizontally stacked complex IQ data.
+    popt (array-like): Optimal parameters from least-squares or other fitting.
+    nsteps (int): Number of MCMC steps. Minimum is 1,000.
+    nwalkers (int): Number of MCMC walkers. 256 is recommended.
+    ndiscard (int): Number of samples to discard.
+    nthin (int): Factor by which the samples are thinned.
     downward (bool): If True, solves the equation for a downward sweep. If
-        False, solves for an upward sweep. 
-    plotq (bool): If True, returns a corner plot
+        False, solves for an upward sweep.
+    plotq (bool): If True, returns a corner plot.
     verbose (bool): If True, tracks progress with a progress bar. If False,
         does not track progress.
-    **kwargs: arguments for corner.corner when plotting
+    **kwargs: Arguments for corner.corner when plotting.
 
     Returns:
-    params_err (np.array): uncertianty on optimal parameters
-    flat_samples (np.array): flattened MCMC samples, after discarding and
-        thinning
-    fig (pyplot.figure): corner plot figure
+    params_err (np.array): Uncertainty on optimal parameters.
+    flat_samples (np.array): Flattened MCMC samples.
+    fig (pyplot.figure): Corner plot figure.
     """
     if verbose:
         if running_in_notebook():
@@ -88,8 +86,10 @@ def get_log_probability(f, popt, downward = True):
     """
     # These bounds work pretty well for the data I tested on, but that was a
     # limited set
-    bounds0 = ([np.min(f), 1e3, .01, -np.pi * 1.5, 0, -1e2, -1e2, -1.0e-6],
-                  [np.max(f), 1e7,   1,  np.pi * 1.5, 2,  1e2,  1e2,  1.0e-6])
+    bounds0 = (
+        [np.min(f), 1e3, .01, -np.pi * 1.5, 0, -1e2, -1e2, -1.0e-6],
+        [np.max(f), 1e7,   1,  np.pi * 1.5, 2,  1e2,  1e2,  1.0e-6],
+    )
     bound_diffs = [1e5, 12000, 0.5, np.pi / 2, 0.5, 10, 10, 1e-7]
     bounds = [[popt[i] - bound_diffs[i] for i in range(len(popt))],
               [popt[i] + bound_diffs[i] for i in range(len(popt))]]
@@ -109,7 +109,10 @@ def get_log_probability(f, popt, downward = True):
         Returns:
         (float): log prior probability value
         """
-        in_bounds = [bounds[0][i] < params[i] < bounds[1][i] for i in range(len(params))]
+        in_bounds = [
+            bounds[0][i] < params[i] < bounds[1][i]
+            for i in range(len(params))
+        ]
         if all(in_bounds):
             return 0.0
         return -np.inf
@@ -167,7 +170,9 @@ def log_likelihood(params, x, y, sigma, downward = True):
     """
     # Compute the log-likelihood given the model parameters
     y_model = model(x, params, downward)
-    ll = -0.5 * np.sum(((y - y_model) / sigma) ** 2 + np.log(2 * np.pi * sigma ** 2))
+    ll = -0.5 * np.sum(
+        ((y - y_model) / sigma) ** 2 + np.log(2 * np.pi * sigma ** 2)
+    )
     return ll
 
 def running_in_notebook():

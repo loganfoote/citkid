@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 from citkid.xcal import circle
-from citkid.noise.psd import get_psd
+from citkid.signal.psd import get_psd
 import matplotlib
 matplotlib.use("Agg")
 
@@ -18,6 +18,7 @@ matplotlib.use("Agg")
     ([10, 1, 1j, -1, -1j, 10], [1, 2, 3, 4], [0, 0, 1]),
     ([10, 1, 1j, -1, -1j], [1, 2, 3, 4], [0, 0, 1]),
     ([1, 10, 1j, -1, -1j, 10], [0, 2, 3, 4], [0, 0, 1]),
+    ([np.nan, 1, 1j, -1, -1j], [1, 2, 3, 4], [0, 0, 1]),  # mask out NaN
 ])
 def test_fit_iq_circle_gain(z, idx, popt_exp):
     mask = np.ones(len(z), dtype = np.bool_)
@@ -56,6 +57,7 @@ def test_fit_iq_circle_invalid_input(z, mask):
     ([1 + 1j, 2 + 2j, 3 + 3j], 1 + 1j, np.pi / 4, 
      [0, np.sqrt(2), 2 * np.sqrt(2)]),
     ([], 0, 0, []),  # empty input
+    (np.array([1], dtype = np.complex64), 0, 0, [1]),  # complex64 input
 ])
 def test_cent_rot_s21(z, center, phase, z_exp):
     z_rot = circle.cent_rot_s21(z, center, phase)
@@ -158,6 +160,7 @@ m = "theta,A,radius,dt,get_freqs,freq_exp,spar_exp,sper_exp"
     ([10], [1], 1, 0.5, True, [0], [20], [0]),
     ([1], [1], 10, 0.5, True, [0], [20], [0]),
     (y, y, 1, 0.1, True, freq_exp, y_exp, y_exp),
+    ([10], [1], -1, 0.5, True, [0], [20], [0]),  # negative radius symmetry
 ])
 def test_get_spar_sper(theta, A, radius, dt, get_freqs, 
                        freq_exp, spar_exp, sper_exp):    
@@ -199,3 +202,25 @@ def test_get_spar_sper(theta, A, radius, dt, get_freqs,
 def test_get_spar_sper_invalid_input(theta, A, radius, dt, get_freqs):
     with pytest.raises(Exception):
         circle.get_spar_sper(theta, A, radius, dt, get_freqs)
+
+################################################################################
+############################### circle_objective ###############################
+################################################################################
+@pytest.mark.parametrize("A,B,R,x,y", [
+    (0.0, 0.0, 1.0, np.array([1, 0, -1, 0], dtype = np.float64),
+     np.array([0, 1, 0, -1], dtype = np.float64)),
+    (1.0, -2.0, 3.0, np.array([1.0 + 3.0, 1.0, 1.0 - 3.0, 1.0], dtype = np.float64),
+     np.array([-2.0, -2.0 + 3.0, -2.0, -2.0 - 3.0], dtype = np.float64)),
+])
+def test_circle_objective_zero_on_true_circle(A, B, R, x, y):
+    params = np.array([A, B, R], dtype = np.float64)
+    err = circle.circle_objective(params, x, y)
+    assert np.isclose(err, 0.0)
+
+def test_circle_objective_positive_when_mismatched_radius():
+    A, B, R = 0.0, 0.0, 1.0
+    x = np.array([1, 0, -1, 0], dtype = np.float64)
+    y = np.array([0, 1, 0, -1], dtype = np.float64)
+    params_bad = np.array([A, B, 0.9], dtype = np.float64)
+    err_bad = circle.circle_objective(params_bad, x, y)
+    assert err_bad > 0.0

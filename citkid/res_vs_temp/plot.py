@@ -27,8 +27,14 @@ def plot_f_vs_T(T, f, f_err, popt, p0, gamma):
     ax.set_title('f vs T, thermal QP + TLS shift')
 
     if f_err is None:
-        ax.plot(T * 1e3, (f - f0) * 1e-3, marker = '.', color = plt.cm.viridis(0),
-                linestyle = '', label = 'Data')
+        ax.plot(
+            T * 1e3,
+            (f - f0) * 1e-3,
+            marker = '.',
+            color = plt.cm.viridis(0),
+            linestyle = '',
+            label = 'Data',
+        )
     else:
         ax.errorbar(T * 1e3, (f - f0) * 1e-3, yerr = f_err * 1e-3, marker = '.',
                     color = plt.cm.viridis(0), linestyle = '', label = 'Data')
@@ -106,8 +112,14 @@ def plot_f_vs_T_qp(T, f, f_err, popt, p0, gamma):
     ax.set_title('f vs T, thermal QP shift')
 
     if f_err is None:
-        ax.plot(T * 1e3, (f - f0) * 1e-3, marker = '.', color = plt.cm.viridis(0),
-                linestyle = '', label = 'Data')
+        ax.plot(
+            T * 1e3,
+            (f - f0) * 1e-3,
+            marker = '.',
+            color = plt.cm.viridis(0),
+            linestyle = '',
+            label = 'Data',
+        )
     else:
         ax.errorbar(T * 1e3, (f - f0) * 1e-3, yerr = f_err * 1e-3, marker = '.',
                     color = plt.cm.viridis(0), linestyle = '', label = 'Data')
@@ -183,8 +195,14 @@ def plot_f_vs_T_tls(T, f, f_err, popt, p0):
     ax.set_title('f vs T, TLS shift')
 
     if f_err is None:
-        ax.plot(T * 1e3, (f - f0) * 1e-3, marker = '.', color = plt.cm.viridis(0),
-                linestyle = '', label = 'Data')
+        ax.plot(
+            T * 1e3,
+            (f - f0) * 1e-3,
+            marker = '.',
+            color = plt.cm.viridis(0),
+            linestyle = '',
+            label = 'Data',
+        )
     else:
         ax.errorbar(T * 1e3, (f - f0) * 1e-3, yerr = f_err * 1e-3, marker = '.',
                     color = plt.cm.viridis(0), linestyle = '', label = 'Data')

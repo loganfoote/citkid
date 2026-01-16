@@ -21,6 +21,7 @@ z = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
     (np.array([x, x]), 0.1, 0.5, 2.0, 4),
     (z, 0.1, 0.5, 2.0, 1), # data length = padlen + 1
     (np.array([z, z]), 0.1, 0.5, 2.0, 1), # data length = padlen + 1
+    (x, 1.0, 0.1, 0.4, 9), # order>8 path
 ])
 def test_bandpass_filter(x, dt, f_low, f_high, order):
     filtered_x = basic_filt.bandpass_filter(x, dt, f_low, f_high, order)
@@ -38,9 +39,12 @@ def test_bandpass_filter(x, dt, f_low, f_high, order):
     (np.array([1, 2, 3, 4, 5]), 0.2, 0.1, 0, 2),   # zero f_high
     (np.array([1, 2, 3, 4, 5]), 0.2, 0.1, 10, 2), # f_high > Nyquist
     (np.array([1, 2, 3, 4, 5]), 0.2, 10, 20, 2), # f_low > Nyquist
+    (np.array([1, 2, 3, 4, 5]), 1.0, 0.1, 0.5, 2), # f_high == Nyquist
     (z[2:], 0.1, 0.5, 2.0, 2), # data length < padlen
     (z[1:], 0.1, 0.5, 2.0, 1), # data length == padlen
     (np.array([]), 0.2, 0.1, 0.5, 2), # empty data array, too short to filter
+    (np.array([1, 2, 3, 4, 5]), 0.0, 0.1, 0.2, 2), # zero dt
+    (np.array([1, 2, 3, 4, 5]), -0.1, 0.1, 0.2, 2), # negative dt
 ])
 def test_bandpass_filter_invalid_input(x, dt, f_low, f_high, order):
     with pytest.raises(Exception):
@@ -58,6 +62,7 @@ def test_bandpass_filter_invalid_input(x, dt, f_low, f_high, order):
     (y, 0.2, 1.0, 1), # data length = padlen + 1
     (np.array([y, y]), 0.2, 1.0, 1), # data length = padlen + 1
     # Needs to work for both 1D and 2D inputs
+    (np.array([x, x]), 0.1, 0.5, 9), # order>8 path
 ])
 def test_lowpass_filter(x, dt, f_cutoff, order):
     filtered_x = basic_filt.lowpass_filter(x, dt, f_cutoff, order)
@@ -73,6 +78,9 @@ def test_lowpass_filter(x, dt, f_cutoff, order):
     (y[2:], 0.2, 0.1, 2), # data length < padlen
     (y[1:], 0.2, 0.1, 1), # data length == padlen
     (np.array([]), 0.2, 0.1, 2), # empty data array, too short to filter
+    (np.array([1, 2, 3, 4, 5]), 1.0, 0.5, 2), # cutoff == Nyquist
+    (np.array([1, 2, 3, 4, 5]), 0.0, 0.1, 2), # zero dt
+    (np.array([1, 2, 3, 4, 5]), -0.1, 0.1, 2), # negative dt
 ])
 def test_lowpass_filter_invalid_input(x, dt, f_cutoff, order):
     with pytest.raises(Exception):
@@ -88,6 +96,7 @@ def test_lowpass_filter_invalid_input(x, dt, f_cutoff, order):
     (np.array([x, x]), 0.1, 0.5, 10),
     (y, 0.2, 1.0, 1), # data length = padlen + 1
     (np.array([y, y]), 0.2, 1.0, 1), # data length = padlen + 1
+    (np.array([x, x]), 0.1, 0.5, 9), # order>8 path
 ])
 def test_highpass_filter(x, dt, f_cutoff, order):
     filtered_x = basic_filt.highpass_filter(x, dt, f_cutoff, order)
@@ -103,6 +112,9 @@ def test_highpass_filter(x, dt, f_cutoff, order):
     (y[2:], 0.2, 0.1, 2), # data length < padlen
     (y[1:], 0.2, 0.1, 1), # data length == padlen
     (np.array([]), 0.2, 0.1, 2), # empty data array, too short to filter
+    (np.array([1, 2, 3, 4, 5]), 1.0, 0.5, 2), # cutoff == Nyquist
+    (np.array([1, 2, 3, 4, 5]), 0.0, 0.1, 2), # zero dt
+    (np.array([1, 2, 3, 4, 5]), -0.1, 0.1, 2), # negative dt
 ])
 def test_highpass_filter_invalid_input(x, dt, f_cutoff, order):
     with pytest.raises(Exception):

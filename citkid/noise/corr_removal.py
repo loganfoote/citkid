@@ -3,10 +3,12 @@ from tqdm.auto import tqdm
 from .timestream_filter import lowpass_filter, highpass_filter
 import warnings
 
-warnings.warn('The citkid.noise.corr_removal module is deprecated and will be '\
-              'removed in a future release. Please use the citkid.xcal.corr '\
-              'module for timestream processing functions.', 
-              DeprecationWarning)
+warnings.warn(
+    'The citkid.noise.corr_removal module is deprecated and will be '
+    'removed in a future release. Please use the citkid.xcal.corr '
+    'module for timestream processing functions.',
+    DeprecationWarning,
+)
 
 def find_common_modes(x, N_comp, N_iter, dt, lowpass_f, lowpass_order,
                       highpass_params):
@@ -44,7 +46,12 @@ def find_common_modes(x, N_comp, N_iter, dt, lowpass_f, lowpass_order,
     sig_iter = np.empty((N_iter, x.shape[0], N_comp), dtype = float)
     pbar = tqdm(range(N_iter), total = N_iter, leave = False)
     for i in pbar:
-        a, A0 = pca(x, N_comp, sig, (dt, highpass_params[0], highpass_params[1]))
+        a, A0 = pca(
+            x,
+            N_comp,
+            sig,
+            (dt, highpass_params[0], highpass_params[1]),
+        )
         A = lowpass_filter(A0, dt, lowpass_f, lowpass_order)
         y = highpass_filter(x - a @ A, dt, *highpass_params)
         sig = calculate_sigma(y)

@@ -13,25 +13,26 @@ import numpy as np
     (np.random.rand(16), np.linspace(0.5, 1.5, 9), 16) # random noise
 ])
 def test_create_opt_filt_valid_inputs(a, SJ, nfft):
-    h = opt_filt.create_opt_filt(a, SJ, nfft)
-    assert isinstance(h, np.ndarray), "Output h should be a numpy array"
-    assert h.dtype == np.float64, "Output h should be of type float64"
-    assert len(h) == nfft, f"Output h should have length {nfft}"
+    h_out = opt_filt.create_opt_filt(a, SJ, nfft)
+    assert isinstance(h_out, np.ndarray), "Output h should be a numpy array"
+    assert h_out.dtype == np.float64, "Output h should be of type float64"
+    assert len(h_out) == nfft, f"Output h should have length {nfft}"
 
     # check against numpy fft implementation
     a = np.pad(a, (0, nfft - len(a)))
-    A = np.fft.rfft(a, n = nfft)
-    H = A.conj() / SJ / np.sum(A * np.conj(A) / SJ) * nfft / 2
+    A = np.fft.rfft(a, n = nfft) * nfft / 2
+    H = A.conj() / SJ / np.sum(A * np.conj(A) / SJ)
     h = np.fft.irfft(H, n = nfft) 
     h = np.fft.ifftshift(h)
-    assert np.allclose(h, h), "Output h does not match expected values"
+    assert np.allclose(h_out, h), "Output h does not match expected values"
 
 @pytest.mark.parametrize("a, SJ, nfft", [
     (np.sin(np.linspace(0, np.pi / 2, 10)), np.ones(8), 8), # a longer than nfft
     (np.sin(np.linspace(0, np.pi / 2, 8)), np.ones(4), 8),  # SJ wrong length
     (np.sin(np.linspace(0, np.pi / 2, 8)), np.ones(6), 8),  # SJ wrong length
     (np.sin(np.linspace(0, np.pi / 2, 8)), np.ones(8), 8.5), # nfft not integer
-    (np.sin(np.linspace(0, np.pi / 2, 8)), np.ones(8), -1) # negative nfft
+    (np.sin(np.linspace(0, np.pi / 2, 8)), np.ones(8), -1), # negative nfft
+    (np.sin(np.linspace(0, np.pi / 2, 8)), np.ones(8), 0), # zero nfft
 ])
 def test_create_opt_filt_invalid_inputs(a, SJ, nfft):
     with pytest.raises(AssertionError):
@@ -60,13 +61,23 @@ def test_apply_opt_filt():
     y_expected = [0, 0, 0, 2, 8, 12, 8, 2, 0, 0, 0, 0]
     assert np.allclose(y, y_expected), "Output y does not match expected values"
 
+@pytest.mark.parametrize("s,h", [
+    (np.random.rand(10), np.random.rand(12)), # h longer than s
+    (["a", "b"], [1, 2, 3]), # non-numeric s
+    ([1, 2, 3], ["a", "b"]), # non-numeric h
+])
+def test_apply_opt_filt_invalid_inputs(s, h):
+    with pytest.raises(Exception):
+        opt_filt.apply_opt_filt(s, h)
+
 ################################################################################
 ################################## create_nsd ##################################
 ################################################################################
 @pytest.mark.parametrize("s,nfft", [
     (np.random.rand(1000), 256),
     (np.random.rand(5000), 512),
-    (np.random.rand(2048), 1024)
+    (np.random.rand(2048), 1024),
+    (np.random.rand(256), 256),
 ])
 def test_create_nsd_valid_inputs(s, nfft):
     SJ = opt_filt.create_nsd(s, nfft)
@@ -87,6 +98,11 @@ def test_create_nsd_amplitude():
     mean_SJ = np.mean(SJ)
     assert np.isclose(mean_SJ / 2, variance_s, rtol=0.2), \
         "Mean of SJ should be close to variance of s * 2"
+
+def test_create_nsd_zero_input():
+    s = np.zeros(512)
+    SJ = opt_filt.create_nsd(s, 256)
+    assert np.allclose(SJ, 0), "Zero input should yield zero PSD"
     
 @pytest.mark.parametrize("s,nfft", [
     (np.random.rand(100), 256),  # s shorter than nfft
@@ -135,6 +151,20 @@ def test_iterate_of():
         "Output h should have length less than or equal to len(s)"
     assert len(start_idx) == 6, \
         "Output start_idx should have length equal to number of instances"
+
+def test_iterate_of_invalid_iter():
+    def build_template(s, start_idx):
+        return np.mean([s[i:i+4] for i in start_idx], axis=0)
+    def get_start_idx(y):
+        return np.array([1, 5, 9], dtype = np.int32)
+    s = np.random.rand(20)
+    j = s[:12]
+    with pytest.raises(Exception):
+        opt_filt.iterate_of(s, j, start_idx = np.array([1, 5, 9]),
+                            build_template = build_template,
+                            get_start_idx = get_start_idx,
+                            N_iter = 0,
+                            verbose = False)
 
 
 

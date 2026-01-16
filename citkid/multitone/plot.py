@@ -56,7 +56,7 @@ def plot_update_fres(fs, zs, fres, fcal_indices, res_indices, cable_delay, plot_
     Parameters:
     fs (array-like): fine sweep frequency data in Hz for each resonator in fres
     zs (array-like): fine sweep complex S21 data for each resonator in fres
-    fres (np.array or None): list of resonance frequencies in Hz
+    fres (np.array or None): list of resonant frequencies in Hz
     fcal_indices (array-like): list of calibrations tone indices (index into
         fs, zs, fres, Qres). Calibration tone frequencies will not be updated
     res_indices (array-like): resonator indices for plotting

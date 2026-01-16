@@ -164,7 +164,7 @@ class LazyAttr:
 #################################### Steps #####################################
 ################################################################################
 class plStep:
-    def __init__(self, name, func, param_names, return_names, 
+    def __init__(self, name, func, param_names, return_names,
                  func_type = "per-row"):
         """
         Class to represent a step in the analysis or calibration pipeline.
@@ -172,15 +172,18 @@ class plStep:
         Parameters:
         name (str): Name of the pipeline step.
         func (callable): Function to execute for this step.
-        param_names (list of str): Names of the parameters to pass to the 
+        param_names (list of str): Names of the parameters to pass to the
             function.
-        return_names (list of str): Names of the attributes to store the 
+        return_names (list of str): Names of the attributes to store the
             function's return values.
         func_type (str): Type of function execution.
             "per-row": function acts on one data_idx.
             "vectorized": function can act on one or multiple data_idx.
             "global": function acts on global data only.
             "global-res": function loads per-resonator data only all-at-once.
+
+        Returns:
+        None
         """
         if not isinstance(name, str):
             raise ValueError("name must be a string")
@@ -207,17 +210,20 @@ class plStep:
         
     def run(self, DS, data_idx = None):
         """
-        Run the pipeline step on the given dataset. 
+        Run the pipeline step on the given dataset.
 
         Parameters:
         DS (.dataset.DataSet): The dataset to operate on.
-        data_idx (int or list of int, optional): The data index or indices to 
-            process. For self.func_type == "global" or "global-res", data_idx is 
-            ignored. For self.func_type == "vectorized", the function is called 
-            on the data as indexed by data_idx (int or list). For 
-            self.func_type == "per-row", the function is called separately for 
-            each data index in data_idx if data_idx is a list. If data_idx is 
-            None, all data indices (0 to DS.nres - 1) are processed. 
+        data_idx (int or list of int, optional): Data index or indices to
+            process. For func_type == "global" or "global-res", data_idx is
+            ignored. For func_type == "vectorized", the function is called on
+            data indexed by data_idx. For func_type == "per-row", the function
+            is called separately for each data index in data_idx if data_idx is
+            a list. If data_idx is None, all indices (0 to DS.nres - 1) are
+            processed.
+
+        Returns:
+        None
         """
         if self.func_type in ["per-row", "vectorized"]:
             if not hasattr(DS, 'nres'):

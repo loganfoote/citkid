@@ -6,7 +6,7 @@ def update_fres(fs, zs, fres, qres, fcal_indices, method = 'distance',
                 cable_delay = 0, plotq = False, res_indices = None, 
                 plot_directory = ''):
     """
-    Update resonance frequencies given fine sweep data
+    Update resonant frequencies given fine sweep data
 
     Parameters:
     fs (array-like): fine sweep frequency data in Hz for each resonator in fres
@@ -19,7 +19,7 @@ def update_fres(fs, zs, fres, qres, fcal_indices, method = 'distance',
         point. 'none' to return fres
     cable_delay (float): cable delay in seconds to remove before updating the 
         frequency 
-    fres (np.array or None): list of resonance frequencies in Hz
+    fres (np.array or None): list of resonant frequencies in Hz
     qres (np.array or None): list of quality factors to cut if
         cut_other_resonators, or None. Cuts spans of fres / Qres from each
         sweep
@@ -120,7 +120,7 @@ def update_fr_distance(f, z):
 
 def cut_fine_sweep(f, z, fres, spans):
     """
-    Cuts resonance frequencies out of a single set of fine sweep data
+    Cuts resonant frequencies out of a single set of fine sweep data
 
     Parameters:
     f, z (np.array, np.array): fine sweep frequency in Hz and complex S21 data

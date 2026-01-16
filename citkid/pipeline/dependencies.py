@@ -1,12 +1,10 @@
 import copy
 import warnings
-import numpy as np 
+import numpy as np
 
-def get_most_recent_run(name, saved): 
+def get_most_recent_run(name, saved):
     """
-    Given a parameter name and saved runs dictionary, finds the most recent run
-    index where that parameter exists. Returns the run index, or -1 if not
-    found.
+    Find the most recent run index for a parameter name.
 
     Parameters:
     name (str): The parameter name to search for.
@@ -17,11 +15,10 @@ def get_most_recent_run(name, saved):
         parameter depends on.
 
     Returns:
-    int: The most recent run index where the parameter exists, or -1 if not 
-        found.
+    int: Most recent run index, or -1 if not found.
     """
     if not isinstance(name, str):
-        raise ValueError("Parameter name must be a string") 
+        raise ValueError("Parameter name must be a string")
     if not isinstance(saved, dict):
         raise ValueError("Saved runs must be a dictionary")
 
@@ -33,9 +30,7 @@ def get_most_recent_run(name, saved):
 
 def _get_sub_dependencies(name, run_idx, saved):
     """
-    Given a parameter name, a run index, and a saved runs dictionary, retrieves 
-    the dependencies for that parameter from the saved runs and returns as a 
-    dictionary.
+    Retrieve dependencies for a parameter at a specific run index.
 
     Parameters:
     name (str): The parameter name whose dependencies are to be retrieved.
@@ -47,8 +42,7 @@ def _get_sub_dependencies(name, run_idx, saved):
         parameter depends on.
 
     Returns:
-    dict: A dictionary of dependencies for the given parameter, where keys are
-        parameter names and values are their corresponding run indices.
+    dict: Dependencies for the parameter with run indices.
     """
     if not isinstance(name, str):
         raise ValueError("Parameter name must be a string")
@@ -70,10 +64,7 @@ def _get_sub_dependencies(name, run_idx, saved):
 
 def _get_lowest_runs(sub_dependencies):
     """
-    Given a dictionary of sub_dependencies (name: {param: run}), finds the 
-    lowest run for each parameter across all sub_dependencies. Also returns 
-    boolean conflicts, which is True if any parameter has different runs in 
-    different sub_dependencies. 
+    Find lowest runs across sub-dependencies and detect conflicts.
 
     Parameters:
     sub_dependencies (dict): A dictionary where keys are parameter names and 
@@ -81,10 +72,8 @@ def _get_lowest_runs(sub_dependencies):
         are parameter names and values are their corresponding run indices. 
 
     Returns:
-    lowest_runs (dict): A dictionary where keys are parameter names and values 
-        are the lowest run indices found across all sub_dependencies. 
-    conflicts (bool): True if any parameter has different runs in different 
-        sub_dependencies, False otherwise.
+    lowest_runs (dict): Lowest run indices found across dependencies.
+    conflicts (bool): True if any parameter has different runs.
     """
     if not isinstance(sub_dependencies, dict):
         raise ValueError("Sub-dependencies must be a dictionary")
@@ -93,7 +82,7 @@ def _get_lowest_runs(sub_dependencies):
             raise ValueError("Each sub-dependency must be a dictionary")
     
     lowest_runs, conflicts = {}, False
-    for d in sub_dependencies.values(): 
+    for d in sub_dependencies.values():
         for k, v in d.items():
             if k not in lowest_runs:
                 # append if new
@@ -106,15 +95,10 @@ def _get_lowest_runs(sub_dependencies):
 
 def get_dependencies(param_names, saved):
     """
-    Given a list of function parameter names and saved runs, determines the 
-    appropriate run versions for each input parameter by first selecting the 
-    most recent run number, then reducing run numbers if necessary to resolve 
-    conflicts in dependencies. Returns a dictionary of all dependencies 
-    (including param_names and sub-dependencies of parameters).
+    Determine appropriate run versions and resolve dependency conflicts.
 
     Parameters:
-    param_names (list): A list of parameter names (str) for which to find 
-        dependencies.
+    param_names (list): Parameter names (str) for which to find dependencies.
     saved (dict): A dictionary where keys are run indices and values are
         dictionaries mapping parameter name (str) to its dependencies dict.
         The dependencies dictionary maps parameter names to their run indices,
@@ -122,15 +106,13 @@ def get_dependencies(param_names, saved):
         parameter depends on.
 
     Returns:
-    dependencies (dict): A dictionary where keys are parameter names and values 
-        are their corresponding run indices, including both the input parameters 
-        and their sub-dependencies.
+    dependencies (dict): Run indices for input parameters and sub-dependencies.
     """
     # Input validation
     if not isinstance(param_names, (list, np.ndarray)):
-        raise ValueError("param_names must be a list or numpy array") 
+        raise ValueError("param_names must be a list or numpy array")
     if any(not isinstance(p, str) for p in param_names):
-        raise ValueError("All elements in param_names must be strings") 
+        raise ValueError("All elements in param_names must be strings")
     if not isinstance(saved, dict):
         raise ValueError("saved must be a dictionary")
     
@@ -141,7 +123,7 @@ def get_dependencies(param_names, saved):
     dependencies = {k: get_most_recent_run(k, saved) for k in param_names}
     dependencies0 = dependencies.copy()
 
-    # raise error if any parameters are missing from saved 
+    # Raise error if any parameters are missing from saved
     if any(v == -1 for v in dependencies.values()):
         missing = [k for k, v in dependencies.items() if v == -1]
         raise ValueError(f"Missing dependencies for parameters: {missing}")
@@ -162,16 +144,21 @@ def get_dependencies(param_names, saved):
                 if lowest_runs[n] < run_idx:
                     # backtrack this dependency
                     dependencies[name] -= 1 
-                    sub_dependencies[name] = _get_sub_dependencies(name, 
-                                                    dependencies[name], saved)
+                    sub_dependencies[name] = _get_sub_dependencies(
+                        name,
+                        dependencies[name],
+                        saved,
+                    )
                     mod_runs[name] = dependencies[name]
         lowest_runs, conflicts = _get_lowest_runs(sub_dependencies)
 
     # Warn if any runs were modified
     if len(mod_runs):
         msg = f"Backtracking params {list(mod_runs.keys())} from runs ["
-        for r0, r1 in zip([dependencies0[k] for k in mod_runs.keys()], 
-                           mod_runs.values()):
+        for r0, r1 in zip(
+            [dependencies0[k] for k in mod_runs.keys()],
+            mod_runs.values(),
+        ):
             msg += f"{r0} -> {r1}, "
         msg = msg[:-2] + "] to resolve dependency conflicts."
         warnings.warn(msg)

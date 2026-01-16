@@ -39,7 +39,7 @@ def nonlinear_iq(f, fr, Qr, amp, phi, a, i0, q0, tau, downward = True):
 
     Parameters:
     f (np.array): array of frequencies in Hz
-    fr (float): resonance frequency in Hz
+    fr (float): resonant frequency in Hz
     Qr (float): total quality factor
     amp (float): Qr / Qc, where Qc is the coupling quality factor
     phi (float): rotation parameter for impedance mismatch between KID and

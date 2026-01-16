@@ -11,15 +11,15 @@ from tqdm.auto import tqdm
 def create_opt_filt(a, SJ, nfft):
     """
     Create an optimal filter timestream h from template timestream a and noise 
-    timestream j.
+    spectral density SJ.
 
     Parameters:
-    a (np.ndarray, float64, (M,)): template timestream. M must be <= nfft.
-    SJ (np.ndarray, float64, (nfft//2 + 1,)): spectral noise density. 
+    a (np.ndarray, float64, (M,)): Template timestream, with M <= nfft.
+    SJ (np.ndarray, float64, (nfft//2 + 1,)): One-sided noise spectral density.
     nfft (int): FFT length for computation.
 
     Returns:
-    h (np.ndarray, float64, (nfft,)): optimal filter timestream. 
+    h (np.ndarray, float64, (nfft,)): Optimal filter timestream.
     """
     # input validation
     a = np.asarray(a, dtype = np.float64)
@@ -47,12 +47,12 @@ def apply_opt_filt(s, h):
     FFT convolution.
 
     Parameters:
-    s (np.ndarray, float64, (L,)): signal timestream.
-    h (np.ndarray, float64, (nfft,)): optimal filter timestream. nfft must be 
-        less than or equal to L.
+    s (np.ndarray, float64, (L,)): Signal timestream.
+    h (np.ndarray, float64, (nfft,)): Optimal filter timestream, with
+        nfft <= L.
 
     Returns:
-    y (np.ndarray, float64, (L,)): filtered timestream.
+    y (np.ndarray, float64, (L,)): Filtered timestream.
     """
     # input validation
     s = np.asarray(s, dtype = np.float64)
@@ -70,12 +70,11 @@ def create_nsd(s, nfft):
     segments of length nfft.
 
     Parameters:
-    s (np.array, float64, (P,)): input noise timestream which does not contain 
-        signal instances.
-    nfft (int): length of each segment for FFT.
+    s (np.array, float64, (P,)): Input noise timestream without signal events.
+    nfft (int): Segment length for FFT.
 
     Returns:
-    SJ (np.array, (nfft//2 + 1,), float): one-sided noise spectral density
+    SJ (np.array, float, (nfft//2 + 1,)): One-sided noise spectral density
         estimate.
     """
     s = np.asarray(s, np.float64)
@@ -111,27 +110,23 @@ def iterate_of(s, j, start_idx, build_template, get_start_idx,
     Minimal iterative procedure for creating an optimal filter template.
 
     Parameters:
-    s (np.ndarray, float64, (L,)): signal timestream for signal extraction. 
-    j (np.ndarray, float64, (P,)): noise timestream for noise estimation. 
-    start_idx (np.ndarray, int64, (K0,)): initial start indices of signal 
+    s (np.ndarray, float64, (L,)): Signal timestream for extraction.
+    j (np.ndarray, float64, (P,)): Noise timestream for noise estimation.
+    start_idx (np.ndarray, int64, (K0,)): Initial start indices of signal
         instances.
-    build_template (function): function that builds a template from the signal 
-        timestream and start indices. Takes in (s, start_idx) as arguments and 
-        returns a template timestream of shape (M,). 
-    get_start_idx (function): function that gets start indices from the filtered 
-        timestream. Takes in (y) as argument and returns start indices of shape 
-        (K1,). 
-    N_iter (int): number of iterations to perform. Default is 10. 
-    verbose (bool): whether to show a progress bar. Default is True.
+    build_template (callable): Builds a template from (s, start_idx) and
+        returns a template array of shape (M,).
+    get_start_idx (callable): Extracts start indices from the filtered
+        timestream y and returns an array of shape (K1,).
+    N_iter (int): Number of iterations to perform.
+    verbose (bool): Whether to show a progress bar.
 
     Returns: 
-    a (np.ndarray, float64, (N_iter + 1, M)): array of template timestreams 
-        from each iteration, where the first index corresponds to the initial 
-        template produced from start_idx.
-    y (np.ndarray, float64, (L,)): final filtered timestream.
-    h (np.ndarray, float64, (nfft,)): final optimal filter timestream. 
-    start_idx (np.ndarray, int64, (K_final,)): final start indices of signal 
-        instances.
+    a (np.ndarray, float64, (N_iter + 1, M)): Template timestreams from each
+        iteration, where index 0 corresponds to the initial template.
+    y (np.ndarray, float64, (L,)): Final filtered timestream.
+    h (np.ndarray, float64, (nfft,)): Final optimal filter timestream.
+    start_idx (np.ndarray, int64, (K_final,)): Final start indices.
     """
     s = np.asarray(s, dtype = np.float64)
     start_idx = np.asarray(start_idx, dtype = np.int64)
@@ -170,10 +165,10 @@ def get_nfft(N):
     Get optimal FFT length given the length of template a.
 
     Parameters:
-    N (int): length of the template timestream. 
+    N (int): Length of the template timestream.
 
     Returns:
-    nfft (int): optimal FFT length for fast computation.
+    nfft (int): Optimal FFT length for fast computation.
     """
     assert isinstance(N, (int, np.integer)), "N must be an integer."
     assert N > 0, "N must be positive."

@@ -7,21 +7,22 @@ from citkid.res.funcs import get_y
 def make_random_resonance_data(get_noise = False, nnoise_points = 1000,
                                 npoints_fine = 500, npoints_gain = 50):
     """
-    Makes a dataset of a random resonator and returns the data with the actual
-    resonator parameters
+    Make a dataset of a random resonator and return data and parameters.
 
     Parameters:
-        get_noise (bool): if True, also returns a noise timestream that is white
-            in the frequency and dissipation directions
-        nnoise_points (int): number of points in the noise timestream
+    get_noise (bool): If True, also return a noise timestream.
+    nnoise_points (int): Number of points in the noise timestream.
+    npoints_fine (int): Number of points in the fine sweep.
+    npoints_gain (int): Number of points in the gain sweep.
+
     Returns:
-        ffine (np.array): fine sweep frequency data in Hz
-        zfine (np.array): fine sweep complex S21 data
-        fgain (np.array): gain sweep frequecy data in Hz
-        zgain (np.array): gain sweep complex S21 data
-        p (np.array): resonator parameters [fr, Qr, amp, phi, a]
-        f0 (float): frequency at which noise was taken
-        znoise (np.array): complex S21 noise timestream
+    ffine (np.array): Fine sweep frequency data in Hz.
+    zfine (np.array): Fine sweep complex S21 data.
+    fgain (np.array): Gain sweep frequency data in Hz.
+    zgain (np.array): Gain sweep complex S21 data.
+    p (np.array): Resonator parameters [fr, Qr, amp, phi, a].
+    f0 (float): Frequency at which noise was taken.
+    znoise (np.array): Complex S21 noise timestream.
     """
     p = get_random_resonance_parameters()
 
@@ -46,22 +47,35 @@ def make_random_resonance_data(get_noise = False, nnoise_points = 1000,
     return ffine, zfine, fgain, zgain, p, f0, znoise
 
 @jit(nopython=True)
-def get_resonance_s21(f, fr_nstd, amp_nstd, fr, Qr, amp, phi, a, p_amp0, p_amp1,
-                      p_amp2, p_phase0, p_phase1):
+def get_resonance_s21(
+    f,
+    fr_nstd,
+    amp_nstd,
+    fr,
+    Qr,
+    amp,
+    phi,
+    a,
+    p_amp0,
+    p_amp1,
+    p_amp2,
+    p_phase0,
+    p_phase1,
+):
     """
-    Gets S21 of a resonance, with no added gain or phase terms.
+    Get S21 of a resonance without added gain or phase terms.
 
     Parameters:
-    f (np.array): array of frequencies in Hz
-    fr (float): resonance frequency in Hz
-    Qr (float): total quality factor
-    amp (float): Qr / Qc, where Qc is the coupling quality factor
-    phi (float): rotation parameter for impedance mismatch between KID and
+    f (np.array): Array of frequencies in Hz.
+    fr (float): Resonant frequency in Hz.
+    Qr (float): Total quality factor.
+    amp (float): Qr / Qc, where Qc is the coupling quality factor.
+    phi (float): Rotation parameter for impedance mismatch between KID and
         readout circuit
-    a (float): nonlinearity parameter.
+    a (float): Nonlinearity parameter.
 
     Returns:
-    z (np.array): complex S21 data
+    z (np.array): Complex S21 data.
     """
     fr_with_noise = np.random.normal(fr, fr_nstd * fr, size = len(f))
     amp_noise = np.random.normal(0, amp_nstd, size = len(f))
@@ -73,7 +87,10 @@ def get_resonance_s21(f, fr_nstd, amp_nstd, fr, Qr, amp, phi, a, p_amp0, p_amp1,
     z0 = 1 / (1. + 2.j * y)
     theta = np.angle(z0)
     amp_noise = amp_noise * np.exp(1j * theta + 1j * np.pi)
-    z = (1. - (amp / np.cos(phi)) * np.exp(1.j * phi) / (1. + 2.j * y) + amp_noise)
+    z = (
+        1. - (amp / np.cos(phi)) * np.exp(1.j * phi) / (1. + 2.j * y)
+        + amp_noise
+    )
 
     z_system = 10 ** (polyval([p_amp0, p_amp1, p_amp2], f - fr) / 20) + 0j
     z_system *= np.exp(1j * polyval([p_phase0, p_phase1], f - fr))
@@ -83,12 +100,12 @@ def get_resonance_s21(f, fr_nstd, amp_nstd, fr, Qr, amp, phi, a, p_amp0, p_amp1,
 @jit(nopython=True)
 def get_random_resonance_parameters():
     """
-    Creates random resonance parameters and noise parameters
+    Create random resonance and noise parameters.
 
     Returns:
-    fr_noise_nstd (float): frequency noise number of standard deviations
-    amp_noise_nstd (float): amplitude noise number of standard deviations
-    p (list): nonlinear IQ model parameters
+    fr_noise_nstd (float): Frequency noise standard deviation factor.
+    amp_noise_nstd (float): Amplitude noise standard deviation factor.
+    p (list): Nonlinear IQ model parameters.
     """
     random = lambda low, high: np.random.uniform(low, high)
     random_log = lambda low, high: np.exp(np.random.uniform(np.log(low),
@@ -115,7 +132,7 @@ def get_random_resonance_parameters():
 @jit(nopython=True)
 def polyval(p, x):
     """
-    Performs the same function as np.polyval, but with numba compatability
+    Perform the same function as np.polyval, but numba compatible.
     """
     y = np.zeros_like(x)
     for i in range(len(p)):

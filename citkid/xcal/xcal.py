@@ -12,20 +12,20 @@ def get_xcal_mask(ff, theta_f, theta_t, idx0_offset = 3, idx1_offset = 7,
     offsets.
 
     Parameters:
-    ff (array-like, float64): frequency values from the fine s21 sweep in Hz. 
+    ff (array-like, float64): Frequency values from the fine S21 sweep in Hz.
         Must be sorted in ascending order.
-    theta_f (array-like, float64): theta values from the fine s21 sweep.
-    theta_t (array-like, float64): theta values from the noise measurement.
-    idx0_offset (int): number of indices to offset below the start index.
+    theta_f (array-like, float64): Theta values from the fine S21 sweep.
+    theta_t (array-like, float64): Theta values from the noise measurement.
+    idx0_offset (int): Number of indices to offset below the start index.
         The data is sorted such that the start index corresponds to the lowest
         frequency and the end index corresponds to the highest frequency.
-    idx1_offset (int): number of indices to offset above the end index.
-    std_cutoff (float or None): number of standard deviations from the mean to 
-            use as a cutoff to apply to theta_t before determining the max and 
-            min values. If None, no cutoff is applied.
+    idx1_offset (int): Number of indices to offset above the end index.
+    std_cutoff (float or None): Number of standard deviations from the mean to
+        use as a cutoff on theta_t before determining min and max. If None, no
+        cutoff is applied.
 
     Returns:
-    mask (array-like, bool): mask of theta_f.
+    mask (np.array, bool): Mask of theta_f.
     """
     # Input validation
     ff = np.asarray(ff, dtype = np.float64)
@@ -46,7 +46,9 @@ def get_xcal_mask(ff, theta_f, theta_t, idx0_offset = 3, idx1_offset = 7,
         # determine signal cutoff
         theta_t_std = np.std(theta_t)
         theta_t_mean = np.mean(theta_t)
-        theta_t = theta_t[np.abs(theta_t - theta_t_mean) < std_cutoff * theta_t_std]
+        theta_t = theta_t[
+            np.abs(theta_t - theta_t_mean) < std_cutoff * theta_t_std
+        ]
     tmin, tmax = np.min(theta_t), np.max(theta_t)
 
     # Get idx0, idx1

@@ -100,7 +100,7 @@ def guess_a(f, z, z0, phi, amp):
 
 def guess_fr(f, z, z0, phi, amp, a, Qr):
     """
-    Guess the resonance frequency
+    Guess the resonant frequency
 
     Parameters:
     f (np.array): array of frequency data in Hz
@@ -111,7 +111,7 @@ def guess_fr(f, z, z0, phi, amp, a, Qr):
     Qr (float): guess for the total quality factor
 
     Returns:
-    fr_guess (float): guess for the resonance frequency
+    fr_guess (float): guess for the resonant frequency
     """
     z_rot = (1 - z / z0) * np.exp(-1j * phi) * np.cos(phi) / amp
     fdiff = np.mean([f[1:], f[:-1]], axis = 0)

@@ -36,6 +36,13 @@ def test_get_y(y0, a):
         y = funcs.get_y(y0, a, largest = largest)
         assert np.allclose(y, y_exp)
 
+def test_get_y_scalar_input():
+    y0 = np.array([0.25], dtype = np.float64)
+    a = 0.5
+    y = funcs.get_y(y0, a, largest = True)
+    assert isinstance(y, np.ndarray)
+    assert y.shape == y0.shape
+
 @pytest.mark.parametrize("y0,a", [
     (["0.0"], 0.0), # invalid y0
     ([0.0], "0.0"), # invalid a
@@ -76,6 +83,21 @@ def test_nonlinear_iq(f, fr, Qr, amp, phi, a, i0, q0, tau, downward, expected):
                                            downward)
     assert np.allclose(result, np.hstack((np.real(expected), 
                                           np.imag(expected))))
+
+def test_nonlinear_iq_shapes_and_dtype():
+    f = np.linspace(1e9, 1.1e9, 8)
+    z = funcs.nonlinear_iq(f, 1.05e9, 1e4, 0.5, 0.1, 0.2, 1.0, 0.0, 1e-9, True)
+    assert isinstance(z, np.ndarray)
+    assert z.dtype == np.complex128
+    assert z.shape == f.shape
+
+def test_nonlinear_iq_for_fitter_shape():
+    f = np.linspace(1e9, 1.1e9, 5)
+    z = funcs.nonlinear_iq_for_fitter(f, 1e5, 1e-4, 0.5, 0.1, 0.2, 1.0, 0.0, 
+                                      1e-3, True)
+    assert isinstance(z, np.ndarray)
+    assert z.dtype == np.float64
+    assert z.shape == (2 * len(f),)
 
 def test_nonlinear_iq_anl():
     # Not testing the output of get_y 

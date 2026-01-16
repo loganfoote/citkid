@@ -7,7 +7,7 @@ from scipy import signal
 def generate_data(npoints_fine = 600, npoints_gain = 50, noise_factor = 1,
                   generate_noise = True):
     """
-    Generates random resonance data. Assumes resonance frequencies were found
+    Generates random resonance data. Assumes resonant frequencies were found
     from the point of max spacing. I can add other options if desired.
 
     Parameters:
@@ -56,7 +56,7 @@ def generate_resonance_parameters():
 
     Returns:
     f (array-like): array of frequencies in Hz
-    fr (float): resonance frequency in Hz
+    fr (float): resonant frequency in Hz
     Qr (float): total quality factor
     amp (float): Qr / Qc, where Qc is the coupling quality factor
     phi (float): rotation parameter for impedance mismatch between KID and
@@ -133,7 +133,7 @@ def nonlinear_iq_simple(f, fr, Qr, amp, phi, a, p_amp, p_phase):
 
     Parameters:
     f (array-like): array of frequencies in Hz
-    fr (float): resonance frequency in Hz
+    fr (float): resonant frequency in Hz
     Qr (float): total quality factor
     amp (float): Qr / Qc, where Qc is the coupling quality factor
     phi (float): rotation parameter for impedance mismatch between KID and
@@ -266,7 +266,7 @@ def generate_timestream(fnoise, fr, Qr, amp, phi, a, p_amp, p_phase, tlen = 100)
 
     Parameters:
     fnoise (float): streaming frequency in Hz
-    fr (float): resonance frequency in Hz
+    fr (float): resonant frequency in Hz
     Qr (float): total quality factor
     amp (float): Qr / Qc, where Qc is the coupling quality factor
     phi (float): rotation parameter for impedance mismatch between KID and
