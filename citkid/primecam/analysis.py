@@ -5,7 +5,7 @@ from tqdm.auto import tqdm
 from ..res.fitter import fit_nonlinear_iq_with_gain
 from ..res.gain import fit_and_remove_gain_phase
 from ..res.data_io import make_fit_row, separate_fit_row
-from ..util import fix_path, save_fig
+from ..util import save_fig
 from .update_ares import get_dbm
 import matplotlib.pyplot as plt
 from ..res.gain import remove_gain
@@ -54,7 +54,7 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
     Returns:
     data (pd.DataFrame): DataFrame of fit data
     """
-    directory = fix_path(directory)
+    directory = os.path.normpath(os.path.expanduser(directory))
     # Import data
     fres_initial, fres, ares, Qres, fcal_indices, frough, zrough,\
            fgain, zgain, ffine, zfine, znoise, noise_dt =\
@@ -63,12 +63,12 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
     if file_suffix != '':
         file_suffix = '_' + file_suffix
     if out_directory is not None:
-        out_directory = fix_path(out_directory)
+        out_directory = os.path.normpath(os.path.expanduser(out_directory))
         os.makedirs(out_directory, exist_ok = True)
-        fit_plot_directory = out_directory + 'plots_iq/'
+        fit_plot_directory = os.path.join(out_directory, 'plots_iq')
         if not os.path.exists(fit_plot_directory) and plotq:
             os.makedirs(fit_plot_directory)
-        out_path = out_directory + f'fitdata{file_suffix}.csv'
+        out_path = os.path.join(out_directory, f'fitdata{file_suffix}.csv')
         if not overwrite and os.path.exists(out_path):
             raise Exception(f'{out_path} already exists!!!')
     # Split data
@@ -104,7 +104,10 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
         file_prefix = f'Tn{temperature_index}Fn{resonator_index}'
         file_prefix += f'Pn{power_number}{file_suffix}'
         if plotq_single:
-            plot_path = fit_plot_directory + file_prefix + '_fit.png'
+            plot_path = os.path.join(
+                fit_plot_directory,
+                f'{file_prefix}_fit.png',
+            )
         else:
             plot_path = ''
         try:
@@ -196,16 +199,24 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
         main_out_directory with name
         f'fitdata_noise{file_suffix}_{noise_index:02d}.csv'
     """
-    out_directory = main_out_directory + 'noise_data/'
-    plot_directory = main_out_directory + 'noise_plots/'
+    main_out_directory = os.path.normpath(
+        os.path.expanduser(main_out_directory)
+    )
+    out_directory = os.path.join(main_out_directory, 'noise_data')
+    plot_directory = os.path.join(main_out_directory, 'noise_plots')
     os.makedirs(out_directory, exist_ok = True)
     if any([plot_calq, plot_psdq, plot_timestreamq]):
         os.makedirs(plot_directory, exist_ok = True)
     file_suffix0 = file_suffix
     if file_suffix != '':
         file_suffix = '_' + file_suffix
-    data = pd.read_csv(main_out_directory + f'fitdata{file_suffix}.csv')
-    outpath = main_out_directory + f'fitdata_noise{file_suffix}_{noise_index:02d}.csv'
+    data = pd.read_csv(
+        os.path.join(main_out_directory, f'fitdata{file_suffix}.csv')
+    )
+    outpath = os.path.join(
+        main_out_directory,
+        f'fitdata_noise{file_suffix}_{noise_index:02d}.csv',
+    )
     if os.path.exists(outpath) and not overwrite:
         raise Exception(f'{outpath} already exists!!!')
     # Import data
@@ -213,8 +224,17 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
     fres_initial, fres, ares, Qres, fcal_indices, frough, zrough,\
            fgain, zgain, ffine, zfine, znoise, noise_dt =\
     import_iq_noise(directory, file_suffix0, import_noiseq = False)
-    inoise, qnoise = np.load(directory + f'noise{file_suffix}_{noise_index:02d}.npy')
-    dt = float(np.load(directory + f'noise{file_suffix}_{noise_index:02d}_tsample.npy'))
+    inoise, qnoise = np.load(
+        os.path.join(directory, f'noise{file_suffix}_{noise_index:02d}.npy')
+    )
+    dt = float(
+        np.load(
+            os.path.join(
+                directory,
+                f'noise{file_suffix}_{noise_index:02d}_tsample.npy',
+            )
+        )
+    )
     fgains, zgains = split_sweep(fgain, zgain, len(fgain) // len(fres))
     ffines, zfines = split_sweep(ffine, zfine, len(ffine) // len(fres))
 

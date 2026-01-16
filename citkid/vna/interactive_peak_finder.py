@@ -2,7 +2,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 from matplotlib.widgets import TextBox
-from ..util import fix_path
 
 class peakFinder:
     def __init__(self, x_data, y_data, fr_initial, outpath, overwrite = False):
@@ -20,7 +19,7 @@ class peakFinder:
         Returns:
         None
         """
-        outpath = fix_path(outpath)
+        outpath = os.path.normpath(os.path.expanduser(outpath))
         if os.path.exists(outpath):
             s = input('Output file already exists, proceed? (y/n)')
             if s.lower() != 'y':

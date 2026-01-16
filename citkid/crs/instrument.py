@@ -8,7 +8,6 @@ import rfmux
 from .util import find_key_and_index, get_modules, run_for_duration
 from .util import convert_parser_to_z, convert_parser_to_z_batch
 from .util import get_sample_frequency
-from ..util import fix_path
 
 class CRS:
     def __init__(self, serial_number = 27, interface = 'enp2s0'):
@@ -442,9 +441,9 @@ class CRS:
             complex S21 data point in the timestream.
         """
         # Type checks
-        tmp_directory = fix_path(tmp_directory)
+        tmp_directory = os.path.normpath(os.path.expanduser(tmp_directory))
         os.makedirs(tmp_directory, exist_ok = True)
-        data_directory = os.path.join(tmp_directory, 'parser_data_00/')
+        data_directory = os.path.join(tmp_directory, 'parser_data_00')
         if os.path.exists(data_directory):
             raise FileExistsError(f'{data_directory} already exists')
         

@@ -7,7 +7,6 @@ from ipywidgets import IntSlider, Dropdown, VBox, HBox
 from ipywidgets import Output, Label, ToggleButton, Button, FloatText, Layout
 from IPython.display import display
 from citkid.res.data_io import nonlinear_iq_names, nonlinear_iq_labels
-from citkid.util import fix_path
 
 class resSweepFitter:
     def __init__(self, get_res_data, resfit_param, nres, x_name, x_unit,
@@ -89,7 +88,7 @@ class resSweepFitter:
         self.x_df_name = x_df_name
         # initialize sweep length to 500 until data is loaded
         self.s21_data_lens = [500]
-        self.out_directory = fix_path(out_directory)
+        self.out_directory = os.path.normpath(os.path.expanduser(out_directory))
         os.makedirs(self.out_directory, exist_ok = True)
         self.fig_fit = None
 

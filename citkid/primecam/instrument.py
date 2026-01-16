@@ -3,11 +3,11 @@ Instrument control for the Xilinx ZCU111 RFSoC with primecam readout firmware
 """
 import sys
 import os
+import posixpath
 import socket
 import shutil
 import paramiko
 import numpy as np
-from ..util import fix_path
 
 class RFSOC:
     def __init__(self, out_directory, bid = 1, drid = 1,
@@ -24,17 +24,22 @@ class RFSOC:
         noiseq (bool): If False, doesn't set up noise streaming
         """
         # Create tmp and log directories
-        directory = fix_path(os.getcwd())
-        self.tmp_directory = directory + 'tmp/'
-        self.log_directory = '/'.join(directory.split('/')[:-2]) + '/'+ 'logs/'
+        directory = os.path.normpath(os.getcwd())
+        self.tmp_directory = os.path.join(directory, 'tmp')
+        self.log_directory = os.path.join(
+            os.path.dirname(os.path.dirname(directory)),
+            'logs',
+        )
         for d in (self.tmp_directory, self.log_directory):
             os.makedirs(d, exist_ok = True)
         # Import functions from primecam_readout
-        local_primecam_path = fix_path(local_primecam_path)
+        local_primecam_path = os.path.normpath(
+            os.path.expanduser(local_primecam_path)
+        )
         sys.path.insert(1,
-            os.path.abspath(os.path.expanduser(local_primecam_path + 'src/')))
+            os.path.abspath(os.path.join(local_primecam_path, 'src')))
         sys.path.insert(1,
-            os.path.abspath(os.path.expanduser(local_primecam_path)))
+            os.path.abspath(local_primecam_path))
         from queen import alcoveCommand
         from alcove_commands.tones import genPhis
         from alcove import comNumFromStr
@@ -44,7 +49,7 @@ class RFSOC:
         # Set system variables
         self.bid = bid
         self.drid = drid
-        self.out_directory = fix_path(out_directory)
+        self.out_directory = os.path.normpath(os.path.expanduser(out_directory))
         os.makedirs(self.out_directory, exist_ok = True)
         # Bind socket for noise
         if noiseq:
@@ -105,11 +110,11 @@ class RFSOC:
             if filename:
                 self.transfer_file(s, filename)
         if f_filename:
-            self.fres = np.load(self.out_directory + f_filename)
+            self.fres = np.load(os.path.join(self.out_directory, f_filename))
         if a_filename:
-            self.ares = np.load(self.out_directory + a_filename)
+            self.ares = np.load(os.path.join(self.out_directory, a_filename))
         if p_filename:
-            self.pres = np.load(self.out_directory + p_filename)
+            self.pres = np.load(os.path.join(self.out_directory, p_filename))
 
     def write_targ_comb_from_targ(self, f_filename = False, a_filename = False,
                                   p_filename = False):
@@ -137,11 +142,11 @@ class RFSOC:
             if filename:
                 self.transfer_file(s, filename)
         if f_filename:
-            self.fres = np.load(self.out_directory + f_filename)
+            self.fres = np.load(os.path.join(self.out_directory, f_filename))
         if a_filename:
-            self.ares = np.load(self.out_directory + a_filename)
+            self.ares = np.load(os.path.join(self.out_directory, a_filename))
         if p_filename:
-            self.pres = np.load(self.out_directory + p_filename)
+            self.pres = np.load(os.path.join(self.out_directory, p_filename))
 
     def write_targ_comb_from_custom(self, fres, ares = None, pres = None):
         """
@@ -157,9 +162,9 @@ class RFSOC:
             random phis. Checks to ensure that the waveform doesn't saturate
         """
         self.make_custom_tone_lists(fres, ares, pres)
-        self.fres = np.load(self.tmp_directory + 'custom_freqs.npy')
-        self.ares = np.load(self.tmp_directory + 'custom_amps.npy')
-        self.pres = np.load(self.tmp_directory + 'custom_phis.npy')
+        self.fres = np.load(os.path.join(self.tmp_directory, 'custom_freqs.npy'))
+        self.ares = np.load(os.path.join(self.tmp_directory, 'custom_amps.npy'))
+        self.pres = np.load(os.path.join(self.tmp_directory, 'custom_phis.npy'))
         com_num = self.comNumFromStr('writeTargCombFromCustomList')
         args = None
 
@@ -188,7 +193,7 @@ class RFSOC:
                                      all_boards=False, args=args)
         if filename:
             self.transfer_file('s21_vna', filename)
-            separate_iq_data(self.out_directory + filename)
+            separate_iq_data(os.path.join(self.out_directory, filename))
 
     def target_sweep(self, filename, npoints = 500, bandwidth = 0.2, N_accums = 5):
         """
@@ -212,7 +217,7 @@ class RFSOC:
                                      all_boards=False, args=args)
         if filename:
             self.transfer_file('s21_targ', filename)
-            separate_iq_data(self.out_directory + filename)
+            separate_iq_data(os.path.join(self.out_directory, filename))
 
     def capture_noise(self, seconds):
         """
@@ -245,9 +250,9 @@ class RFSOC:
         if not filename[-4:] == '.npy':
             raise ValueError(f'filename must end in .npy')
         data = self.capture_noise(seconds)
-        np.save(self.out_directory + filename, data)
-        np.save(self.out_directory + filename.replace('.npy','') + '_tsample.npy',
-                [self.sample_time])
+        np.save(os.path.join(self.out_directory, filename), data)
+        tsample_name = filename.replace('.npy', '') + '_tsample.npy'
+        np.save(os.path.join(self.out_directory, tsample_name), [self.sample_time])
 
     def find_vna_res(self, filename):
         """
@@ -298,11 +303,11 @@ class RFSOC:
             if filename:
                 self.transfer_file(s, filename)
         if f_filename:
-            self.fres = np.load(self.out_directory + f_filename)
+            self.fres = np.load(os.path.join(self.out_directory, f_filename))
         if a_filename:
-            self.ares = np.load(self.out_directory + a_filename)
+            self.ares = np.load(os.path.join(self.out_directory, a_filename))
         if p_filename:
-            self.pres = np.load(self.out_directory + p_filename)
+            self.pres = np.load(os.path.join(self.out_directory, p_filename))
 
     def close_socket(self):
         """
@@ -322,12 +327,13 @@ class RFSOC:
         path (str or None): path to the file or None if not found
         filename (str or None): name of the file or None if not found
         """
-        files = [self.tmp_directory + f for f in os.listdir(self.tmp_directory)]
+        files = [os.path.join(self.tmp_directory, f)
+             for f in os.listdir(self.tmp_directory)]
         files = [f for f in files if file_type in f]
         files.sort(key=lambda x: os.path.getmtime(x))
         if len(files):
             path = files[-1]
-            filename = path.split('/')[-1]
+            filename = os.path.basename(path)
             return path, filename
         return None, None
 
@@ -343,7 +349,7 @@ class RFSOC:
         file, filename0 = self.get_recent_file(file_type)
         if file is None:
             raise Exception(f'{file_type} data not found in tmp directory')
-        shutil.move(file, self.out_directory + filename)
+        shutil.move(file, os.path.join(self.out_directory, filename))
 
     def clear_tmp_directory(self):
         """
@@ -351,15 +357,15 @@ class RFSOC:
         """
         files = [f for f in os.listdir(self.tmp_directory) if '.npy' in f]
         for file in files:
-            os.remove(self.tmp_directory + file)
+            os.remove(os.path.join(self.tmp_directory, file))
 
     def clear_tmp_directory_full(self):
         """
         Clears all files from the temporary directory
         """
-        files =  os.listdir(self.tmp_directory)
+        files = os.listdir(self.tmp_directory)
         for file in files:
-            os.remove(self.tmp_directory + file)
+            os.remove(os.path.join(self.tmp_directory, file))
 
     def transfer_custom_tone_lists(self):
         """
@@ -378,10 +384,10 @@ class RFSOC:
         # Transfer files to the board
         scp = ssh.open_sftp()
         files = ['custom_freqs.npy', 'custom_amps.npy', 'custom_phis.npy']
-        remote_directory = '/home/xilinx/primecam_readout/src/alcove_commands/'
+        remote_directory = '/home/xilinx/primecam_readout/src/alcove_commands'
         for file in files:
-            local_path = self.tmp_directory + file
-            remote_path = remote_directory + file
+            local_path = os.path.join(self.tmp_directory, file)
+            remote_path = posixpath.join(remote_directory, file)
             scp.put(local_path, remote_path, confirm = False)
         # Close connection
         scp.close()
@@ -409,7 +415,7 @@ class RFSOC:
         for file, res in zip(['custom_freqs.npy', 'custom_amps.npy',
                               'custom_phis.npy'],
                              [fres, ares, pres]):
-            np.save(self.tmp_directory + file, res)
+            np.save(os.path.join(self.tmp_directory, file), res)
         self.transfer_custom_tone_lists()
 
 def separate_iq_data(path):

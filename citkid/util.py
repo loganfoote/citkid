@@ -1,26 +1,9 @@
 import matplotlib.pyplot as plt
+import os
 from io import BytesIO
 import warnings
 import itertools
 import numpy as np
-
-def fix_path(path):
-    r"""
-    Normalize a path by converting backslashes to slashes and ensuring a
-    trailing slash for folder paths.
-
-    Parameters:
-    path (str): Path to a folder or file.
-
-    Returns:
-    fixed_path (str): Normalized path string.
-    """
-    if path == '':
-        return path
-    fixed_path = path.replace('\\', '/')
-    if fixed_path[-1] != '/' and ('.' not in fixed_path.split('/')[-1]):
-        fixed_path += '/'
-    return fixed_path
 
 def save_fig(fig, filename, plot_directory, ftype = 'png',
              tight_layout = False, close_fig = True):
@@ -39,17 +22,21 @@ def save_fig(fig, filename, plot_directory, ftype = 'png',
     None
     """
     if fig is not None:
-        plot_directory = fix_path(plot_directory)
+        if plot_directory:
+            plot_directory = os.path.normpath(
+                os.path.expanduser(plot_directory)
+            )
+            output_path = os.path.join(plot_directory, f'{filename}.{ftype}')
+        else:
+            output_path = f'{filename}.{ftype}'
         fig.set_facecolor('white')
         if tight_layout:
             fig.tight_layout()
         plt.figure(fig.number)
         try:
-            plt.savefig(plot_directory + filename + '.' + ftype,
-                        bbox_inches='tight', pad_inches = 0.05)
+            plt.savefig(output_path, bbox_inches='tight', pad_inches = 0.05)
         except Exception as e:
-            plt.savefig(plot_directory + filename + '.' + ftype,
-                        pad_inches = 0.05)
+            plt.savefig(output_path, pad_inches = 0.05)
         if close_fig:
             plt.close(fig)
 

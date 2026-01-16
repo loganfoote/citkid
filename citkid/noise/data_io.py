@@ -1,6 +1,7 @@
+import os
 import pandas as pd
 import numpy as np
-from ..util import fix_path, save_fig
+from ..util import save_fig
 
 def save_psd(psd_onres, psd_offres, timestream_onres, timestream_offres,
              cr_indices, theta_range, poly, xcal_data, figs, dt, dt_offres,
@@ -50,37 +51,38 @@ def save_psd(psd_onres, psd_offres, timestream_onres, timestream_offres,
     iq_fit_row (pd.Series): fit row with noise data appended, or new fit row
        with noise data
     """
-    out_directory = fix_path(out_directory)
-    plot_directory = fix_path(plot_directory)
+    if out_directory:
+        out_directory = os.path.normpath(os.path.expanduser(out_directory))
+    if plot_directory:
+        plot_directory = os.path.normpath(os.path.expanduser(plot_directory))
     if iq_fit_row is None:
         iq_fit_row = pd.Series([], dtype = object)
     if len(prefix):
         prefix += '_'
-    predir = out_directory + prefix
     # Save psds
-    path = predir + 'psd.npy'
+    path = os.path.join(out_directory, f'{prefix}psd.npy')
     iq_fit_row['psdPath'] = path
     if psd_onres[0] is not None:
         np.save(path, psd_onres)
-    path = predir + 'psd_offres.npy'
+    path = os.path.join(out_directory, f'{prefix}psd_offres.npy')
     iq_fit_row['psdOffPath'] = path
     if psd_offres[0] is not None:
         np.save(path, psd_offres)
-    tpath = predir + 'timestream.npy'
+    tpath = os.path.join(out_directory, f'{prefix}timestream.npy')
     iq_fit_row['timestreamPath'] = tpath
-    dpath = predir + 'timestream_dt.npy'
+    dpath = os.path.join(out_directory, f'{prefix}timestream_dt.npy')
     iq_fit_row['timestream_dt'] = dt
     if timestream_onres[0] is not None:
         np.save(dpath, dt)
         np.save(tpath, timestream_onres)
-    tpath = predir + 'timestream_offres.npy'
+    tpath = os.path.join(out_directory, f'{prefix}timestream_offres.npy')
     iq_fit_row['timestreamOffPath'] = tpath
-    dpath = predir + 'timestream_offres_dt.npy'
+    dpath = os.path.join(out_directory, f'{prefix}timestream_offres_dt.npy')
     iq_fit_row['timestream_dtOff'] = dt_offres
     if timestream_offres[0] is not None:
         np.save(tpath, timestream_offres)
         np.save(dpath, dt_offres)
-    path = predir + 'cr_indices.npy'
+    path = os.path.join(out_directory, f'{prefix}cr_indices.npy')
     iq_fit_row['crIndexPath'] = path
     if cr_indices is not None:
         np.save(path, cr_indices)
@@ -91,17 +93,17 @@ def save_psd(psd_onres, psd_offres, timestream_onres, timestream_offres,
         iq_fit_row['thetaMin'] = np.nan 
         iq_fit_row['thetaMax'] = np.nan
     if poly is not None:
-        path = predir + 'xpoly.npy'
+        path = os.path.join(out_directory, f'{prefix}xpoly.npy')
         np.save(path, poly)
         for i, pi in enumerate(poly):
             iq_fit_row[f'xpoly_{i}'] = pi
-    path = predir + 'xcal_data.npy'
+    path = os.path.join(out_directory, f'{prefix}xcal_data.npy')
     iq_fit_row['xcalPath'] = path
     if xcal_data[0] is not None:
         np.save(path, xcal_data)
     for fig, name in zip(figs, ['cal', 'timestream', 'psd']):
         if fig is not None:
-            path = plot_directory + prefix + name + '.png'
+            path = os.path.join(plot_directory, f'{prefix}{name}.png')
             save_fig(fig, prefix + name, plot_directory, ftype = 'png')
             iq_fit_row[name + 'FitPath'] = path
     return iq_fit_row

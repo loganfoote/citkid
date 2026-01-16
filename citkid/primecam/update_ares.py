@@ -76,13 +76,18 @@ update_ares_addonly = np.vectorize(update_ares_addonly)
 ################################################################################
 ########################## power conversion functions ##########################
 ################################################################################
-cal_directory = os.path.dirname(os.path.realpath(__file__)) + '/cal_data/'
-ares                 = np.load(cal_directory + 'ares_values.npy')
-fres                 = np.load(cal_directory + 'fres_values.npy')
-dBm_powers           = np.load(cal_directory + 'dBm_powers.npy')
-dBm_powers_aliased   = np.load(cal_directory + 'dBm_powers_aliased.npy')
-output_freqs         = np.load(cal_directory + 'output_freqs.npy')
-output_freqs_aliased = np.load(cal_directory + 'output_freqs_aliased.npy')
+cal_directory = os.path.join(
+    os.path.dirname(os.path.realpath(__file__)),
+    'cal_data',
+)
+ares = np.load(os.path.join(cal_directory, 'ares_values.npy'))
+fres = np.load(os.path.join(cal_directory, 'fres_values.npy'))
+dBm_powers = np.load(os.path.join(cal_directory, 'dBm_powers.npy'))
+dBm_powers_aliased = np.load(os.path.join(cal_directory, 'dBm_powers_aliased.npy'))
+output_freqs = np.load(os.path.join(cal_directory, 'output_freqs.npy'))
+output_freqs_aliased = np.load(
+    os.path.join(cal_directory, 'output_freqs_aliased.npy')
+)
 
 def get_dbm(a, f, aliased=False):
     """

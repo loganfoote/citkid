@@ -1,6 +1,6 @@
 import numpy as np
 import os
-from ..util import save_fig, fix_path
+from ..util import save_fig
 
 def load_x_cal(path):
     """
@@ -17,7 +17,8 @@ def load_x_cal(path):
         zfine_rmvd from the origin
     p_x (array-like): polynomial fit parameters to x versus theta
     """
-    data = np.load(fix_path(path))
+    path = os.path.normpath(os.path.expanduser(path))
+    data = np.load(path)
     p_amp, p_phase = data['p_amp'], data['p_phase']
     origin, v = data['origin'], data['v']
     p_x = data['p_x']
@@ -49,8 +50,10 @@ def save_x_cal(data_directory, filename, p_amp, p_phase, origin, v, p_x, figs,
         they do not exist
     """
     # set up output directories
-    data_directory = fix_path(data_directory)
-    plot_directory = fix_path(plot_directory)
+    if data_directory:
+        data_directory = os.path.normpath(os.path.expanduser(data_directory))
+    if plot_directory:
+        plot_directory = os.path.normpath(os.path.expanduser(plot_directory))
     plotq = any([f is not None for f in figs])
     if make_directories:
         os.makedirs(data_directory, exist_ok = True)
@@ -63,7 +66,7 @@ def save_x_cal(data_directory, filename, p_amp, p_phase, origin, v, p_x, figs,
         e = f"The directory '{plot_directory}' does not exist."
         raise FileNotFoundError(e)
     # save data
-    path = data_directory + filename + '.npz'
+    path = os.path.join(data_directory, f'{filename}.npz')
     np.savez(path, p_amp = p_amp, p_phase = p_phase, origin = origin, v = v,
              p_x = p_x)
     # save plots
