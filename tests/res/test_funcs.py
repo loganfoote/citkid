@@ -1,7 +1,8 @@
 import pytest 
 import numpy as np 
 from citkid.res import funcs 
-
+# not testing circle_objective, because is is legacy code. 
+# citkid.xcal.circle.circle_objective should be used instead.
 ################################################################################
 #################################### get_y #####################################
 ################################################################################
@@ -46,6 +47,7 @@ def test_get_y_invalid_input(y0, a):
 
 ################################################################################
 ################################# nonlinear_iq #################################
+######################### and nonlinear_iq_for_fitter ##########################
 ################################################################################
 @pytest.mark.parametrize("f,fr,Qr,amp,phi,a,i0,q0,tau,downward,expected", [
     ([1e9, 1.1e9, 1.2e9], 1.1e9, 100., 0.9, -0.01, 0.4, 0., 0., 1e-9, True, 
@@ -64,16 +66,36 @@ def test_get_y_invalid_input(y0, a):
     ([1.1e9], 1e9, 10., 0.5, 0., 0., 1., 0., 0., True, [0.9 + 0.2j]),
 ])
 def test_nonlinear_iq(f, fr, Qr, amp, phi, a, i0, q0, tau, downward, expected):
+    # nonlinear_iq
     result = funcs.nonlinear_iq(np.array(f), fr, Qr, amp, phi, a, i0, q0, tau, 
                                 downward)
     assert np.allclose(result, expected)
+    # nonlinear_iq_for_fitter
+    result = funcs.nonlinear_iq_for_fitter(np.array(f), fr * 100e-6, Qr * 1e-4, 
+                                           amp, phi, a, i0, q0, tau * 1e6, 
+                                           downward)
+    assert np.allclose(result, np.hstack((np.real(expected), 
+                                          np.imag(expected))))
 
 def test_nonlinear_iq_anl():
     # Not testing the output of get_y 
     f = np.array([0.])
+    # nonlinear_iq
     result0 = funcs.nonlinear_iq(f, 1e9, 1., 1., 0., 0, 1., 0., 0., True)
     result1 = funcs.nonlinear_iq(f, 1e9, 1., 1., 0., 1., 1., 0., 0., True)
     result2 = funcs.nonlinear_iq(f, 1e9, 1., 1., 0., 1., 1., 0., 0., False)
+ 
+    assert not np.allclose(result0, result1)
+    assert not np.allclose(result1, result2) 
+    assert not np.allclose(result0, result2)
+
+    # nonlinear_iq_for_fitter
+    result0 = funcs.nonlinear_iq_for_fitter(f, 1e5, 1e-4, 1., 0., 
+                                            0., 1., 0., 0., True)
+    result1 = funcs.nonlinear_iq_for_fitter(f, 1e5, 1e-4, 1., 0., 
+                                            1., 1., 0., 0., True)
+    result2 = funcs.nonlinear_iq_for_fitter(f, 1e5, 1e-4, 1., 0., 
+                                            1., 1., 0., 0., False)
  
     assert not np.allclose(result0, result1)
     assert not np.allclose(result1, result2) 
@@ -96,9 +118,10 @@ def test_nonlinear_iq_anl():
 ])
 def test_nonlinear_iq_invalid_input(f, fr, Qr, amp, phi, a, i0, q0, tau, 
                                     downward):
+    # nonlinear_iq
     with pytest.raises((TypeError, ValueError)):
         funcs.nonlinear_iq(f, fr, Qr, amp, phi, a, i0, q0, tau, downward)
-
-################################################################################
-########################### nonlinear_iq_for_fitter ############################
-################################################################################
+    # nonlinear_iq_for_fitter
+    with pytest.raises((TypeError, ValueError)):
+        funcs.nonlinear_iq_for_fitter(f, fr, Qr, amp, phi, a, i0, q0, tau, 
+                                      downward)
