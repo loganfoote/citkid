@@ -3,6 +3,7 @@ import yaml
 import importlib.util 
 import numpy as np
 import zarr
+from .dependencies import get_most_recent_run, get_dependencies
 from . import framework as pf
 
 class LazyZarrArray:
@@ -219,115 +220,137 @@ class DataSet:
         return grp[name].oindex[data_idx]
         
     
-    def write_data(self, name, func_type, param_names, param_run_idxs, 
-                   value, data_idx, run_idx, dtype = None):
+    def write_data(self, return_name, step, value, data_idx, dtype = None):
         """
         Write data attribute 'name' for dataset.
 
         Parameters:
-        name (str): The name of the data attribute to write.
+        return_name (str): The name of the data attribute to write.
         func_type (str): The type of function that produced the data.
             Can be "per-row", "vectorized", or "global-res".
-        param_names (array-like): Parameter names used when calling the
-            function.
-        param_run_idxs (array-like): Run indices of input parameter names.
-            0 represents parameter values that will never change, i.e. raw data.
+        param_names (array-like): Parameter names used when calling the function.
+        dependencies (dictionary): Dictionary giving the dependencies for the input
+            parameters, where keys are parameter names and values are run indices.
         value (np.ndarray or scalar): The data to write.
         data_idx (int or list): The data index or indices to write.
-        run_idx (int): run index.
+        run_idx (int): run index that produced the output.
         dtype (np.dtype, optional): The data type to use when writing. Defaults 
             to None (use value's dtype).
 
         Returns:
         None
         """
-        if func_type != 'global-res':
-            # Convert data_idx and value to numpy arrays
-            data_idx = np.atleast_1d(data_idx)
-            value = np.atleast_1d(value)
-                
-            # Check if the length of value equals the length of data_idx.
-            if data_idx.shape[0] != value.shape[0]:
-                raise ValueError(
-                    'value and data_idx must have the same length.'
-                )
-        
-        # ensure run group exists (create if missing)
-        key = str(run_idx)
-        grp = self.root.require_group(key)
-
         # set dtype if not provided
         if dtype is None:
             dtype = value.dtype
+            
+        root = self.root
 
-        # ensure dataset exists (create if missing)
-        # dataset shape: row index at the start + all value dims
-        if name not in grp:
-            if func_type == 'global-res':
-                shape = value.shape
-                chunks = value.shape
+        if step.func_type in ['global', 'global-res']:
+            
+            if 'saved-global' in root.attrs:
+                saved_global = root.attrs['saved-global']
+                run_idx = get_most_recent_run(return_name, saved_global) + 1
+                run_idx = max(run_idx, 1)
             else:
-                # Get the per-element shape of the new value to be added.
-                element_shape = value.shape[1:]
-                shape = (0, *element_shape)
-                # First axis = 1 for single-row writes.
-                chunks = (1, *element_shape)
-                data_idxs = grp.create_array(
-                    f"{name}_idx",
-                    shape = (0,),
-                    dtype = int,
-                )
-                expected_shape = element_shape
+                self.root.attrs['saved-global'] = {0: {}, 1: {return_name: {}}}
+                saved_global = root.attrs['saved-global']
+                for param_name in step.param_names:
+                    saved_global[0][param_name] = {}
+                run_idx = 1
+            
+            if str(run_idx) not in root:
+                root.create_group(str(run_idx))
+            grp = root[str(run_idx)]
+                
+            shape = value.shape
+            chunks = value.shape
+            
             values_arr = grp.create_array(
-                name,
+                name = return_name,
                 shape = shape,
                 dtype = dtype,
                 chunks = chunks,
             )
-        else:
-            if func_type == 'global-res':
-                m = (
-                    "Attempt to overwrite an existing outputs of a function "
-                    "with "
-                )
-                m += "func_type 'global-res'."
-                raise ValueError(m)
-            values_arr = grp[name]
-            data_idxs = grp[f"{name}_idx"]
-            expected_shape = values_arr.shape[1:]
+            
+            values_arr[...] = value
+            
+            dependencies = get_dependencies(step.param_names, saved_global)
+            
+            for param_name, param_run_idx in dependencies.items():
+                saved_global[run_idx][return_name][param_name] = param_run_idx
+            
+        elif step.func_type in ['per-row', 'vectorized']:
+            
+            if 'saved-global' in root.attrs:
+                saved_start = root.attrs['saved-global'].copy()
+            else:
+                saved_start = {0: {}}
+                for param_name in step.param_names:
+                    saved_start[0][param_name] = {}
+            
+            if 'saved' not in root.attrs:
+                root.attrs['saved'] = {}
+                root.attrs['saved_idx'] = '[]' 
+                            
+            saved = root.attrs['saved']
+            saved_idx = np.fromstring(root.attrs['saved_idx'].strip('[]'), dtype=int, sep=' ')
+                
+            for local_idx, idx in enumerate(data_idx):
+                local_saved_idxs = np.where(saved_idx == idx)[0]
+                if local_saved_idxs:
+                    local_saved_idx = local_saved_idxs[0]
+                else:
+                    saved[idx] = saved_start
+                    local_saved_idx = len(saved) - 1
+                    saved_idx.append(idx)
+                    root.attrs['saved_idx'] = str(saved_idx)
 
-        # Check that shape of the elements of value match the
-        # shape of the elements of values_arr.
-        if (
-            func_type in ['per-row', 'vectorized']
-            and element_shape != expected_shape
-        ):
-            raise ValueError(
-                f"The shape of 'value' must match the shape of the existing "
-                f"zarr array, {name}."
-            )
-
-        # write data at specified indices
-        if func_type in ['per-row', 'vectorized']:
-            n = values_arr.shape[0]
-            n_add = data_idx.shape[0]
-            n_new = n + n_add
-            data_idxs.resize((n_new))
-            data_idxs[-n_add:] = data_idx
-            new_shape = (n_new, *expected_shape)
-            values_arr.resize(new_shape)
-            values_arr[-n_add:, ...] = value
-        elif func_type == 'global-res':
-            values_arr[...] = value        
-        
-        # Write the 'saved' dictionary attribute to track dependencies.
-        # the dependencies between run versions.
-        if not 'saved' in self.root.attrs:
-            self.root.attrs['saved'] = {0: {}, 1: {name: {}}}
-        for ii, param_name in enumerate(param_names):
-            param_run_idx = param_run_idxs[ii]
-            self.root.attrs['saved'][param_run_idx][param_name] = {}
-            self.root.attrs['saved'][run_idx][name][param_name] = param_run_idx
+                this_saved = saved[local_saved_idx]
+                dependencies = get_dependencies(step.param_names, this_saved)
+                run_idx = get_most_recent_run(return_name, this_saved) + 1
+                run_idx = max(run_idx, 1)
+                    
+                if str(run_idx) not in root:
+                    root.create_group(str(run_idx))
+                grp = root[str(run_idx)]
+                
+                this_value = value[local_idx]
+                
+                if return_name not in grp:
+                    
+                    shape = (1, *this_value.shape)
+                    chunks = (1, *this_value.shape)
+                    
+                    values_arr = grp.create_array(
+                        name = return_name,
+                        shape = shape,
+                        dtype = dtype,
+                        chunks = chunks,
+                    )
+                    values_arr[...] =  [this_value]
+                    
+                    data_idx_arr = grp.create_array(
+                        name = f'{return_name}_idx',
+                        dtype=int,
+                        data = [idx]
+                    )
+                    
+                    this_saved[run_idx] = {}
+                    
+                else:
+                    
+                    values_arr = grp[return_name]
+                    data_idx_arr = grp[f'{return_name}_idx']
+                    n = values_arr.shape[0]
+                    data_idx_arr.resize((n+1))
+                    data_idx_arr[-1] = data_idx[local_idx]
+                    new_shape = (n+1, *values_arr.shape[1:])
+                    values_arr.resize(new_shape)
+                    values_arr[-1, ...] = this_value
+                    
+                for param_name, param_run_idx in dependencies.items():
+                    saved[run_idx][return_name][param_name] = param_run_idx
 
         
     def get_attr_version(self, name):

@@ -349,7 +349,7 @@ default_cal_steps =\
 default_analysis_steps =\
 (# analysis steps
  ('make_fr_spans', gain.make_fr_spans, 
-  ['fres_all', 'qres_all'], ['fr_spans'], 'global-res'),
+  ['fres_all', 'qres_all'], ['fr_spans'], 'global'),
 
  ('fit_gain', gain.fit_gain, 
   ['fg', 'zg', 'fr_spans'], ['p_amp', 'p_phase', 'gain_mask'], 'per-row'),
