@@ -16,6 +16,16 @@ def guess_p0_nonlinear_iq(f, z):
     p0 (list): initial guess fit parameters
         [fr, Qr, amp, phi, a, i0, q0, tau]
     """
+    # Input validation 
+    f = np.asarray(f, dtype = np.float64)
+    z = np.asarray(z, dtype = np.complex128)
+    if f.ndim != 1:
+        raise ValueError("f must be a 1D array")
+    if z.ndim != 1:
+        raise ValueError("z must be a 1D array")
+    if f.shape != z.shape:
+        raise ValueError("f and z must have the same shape")
+    
     # guess i0 and q0
     z0_guess = np.mean(np.roll(z, 2)[:4])
     i0_guess = np.real(z0_guess)
@@ -23,21 +33,20 @@ def guess_p0_nonlinear_iq(f, z):
     # guess tau
     tau_guess = 0
     # guess phi and amp
-    phi_guess, amp_guess = guess_phi_amp(z, z0_guess)
-    if amp_guess > 1 - 1e-6:
-        amp_guess = 1 - 1e-6
+    phi_guess, amp_guess = _guess_phi_amp(z, z0_guess)
     # guess Qr
-    Qr_guess = guess_Qr(f, z, z0_guess, phi_guess, amp_guess)
+    Qr_guess = _guess_Qr(f, z, z0_guess, phi_guess, amp_guess)
     # guess a
-    a_guess = guess_a(f, z, z0_guess, phi_guess, amp_guess)
+    a_guess = _guess_a(f, z, z0_guess, phi_guess, amp_guess)
     # guess fr
-    fr_guess = guess_fr(f, z, z0_guess, phi_guess, amp_guess, a_guess, Qr_guess)
+    fr_guess = _guess_fr(f, z, z0_guess, phi_guess, 
+                         amp_guess, a_guess, Qr_guess)
     # Package and return p0
     p0 = [fr_guess, Qr_guess, amp_guess, phi_guess, a_guess,
           i0_guess, q0_guess, tau_guess]
     return p0
 
-def guess_Qr(f, z, z0, phi, amp):
+def _guess_Qr(f, z, z0, phi, amp):
     """
     Guesses Qr given complex S21 data.
 
@@ -46,10 +55,11 @@ def guess_Qr(f, z, z0, phi, amp):
     z (np.array): array of complex S21 data
     z0 (complex): z value off resonance
     phi (float): impedance mismatch angle
+    amp (float): Qr / Qc.
 
     Returns:
     Qr_guess (float): Qr guess
-    """
+    """    
     # rotate data, then filter
     z_rot = (1 - z / z0) * np.exp(-1j * phi) * np.cos(phi) / amp
     z_rot = abs(z_rot)
@@ -61,13 +71,13 @@ def guess_Qr(f, z, z0, phi, amp):
     if z_off > z_on:
         z_rot = - z_rot
     # Find the peak
-    xpeak, ypeak, fwhm = get_peak_fwhm(f, z_rot)
+    xpeak, _, fwhm = get_peak_fwhm(f, z_rot)
     fwhm /= xpeak
     poly = [-0.94123147,  1.80699622]
     Qr_guess = np.exp(np.polyval(poly, np.log(fwhm)))
     return Qr_guess
 
-def guess_a(f, z, z0, phi, amp):
+def _guess_a(f, z, z0, phi, amp):
     """
     Guesses the nonlinearity parameter
 
@@ -94,11 +104,11 @@ def guess_a(f, z, z0, phi, amp):
     xbin = [-1.91936449, -1.71424342, -1.49362239, -1.26713098, -1.04040067,
             -0.8144114 , -0.58510798, -0.3757271 , -0.14204129]
     a_guess = np.interp(x, xbin, abin)
-    if a_guess > 1:
-        a_guess = 1
+
+    a_guess = min(a_guess, 1.0)
     return a_guess
 
-def guess_fr(f, z, z0, phi, amp, a, Qr):
+def _guess_fr(f, z, z0, phi, amp, a, Qr):
     """
     Guess the resonant frequency
 
@@ -123,7 +133,7 @@ def guess_fr(f, z, z0, phi, amp, a, Qr):
     fr_guess *= np.polyval(poly, a / Qr) + 1
     return fr_guess
 
-def guess_phi_amp(z, z0):
+def _guess_phi_amp(z, z0):
     """
     Guess the impedance mismatch rotation and amplitude.
 
@@ -145,4 +155,7 @@ def guess_phi_amp(z, z0):
     det = x1 * y2 - y1 * x2
     phi_guess = np.arctan2(det, dot)
     amp_guess = 2 * R * np.abs(np.cos(phi_guess)) / np.abs(z0)
+
+    # amp_guess cannot exceed 1 - 1e-6
+    amp_guess = min(amp_guess, 1. - 1e-6)
     return phi_guess, amp_guess
