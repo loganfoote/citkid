@@ -125,7 +125,8 @@ def calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params,
     a_full (array-like, (N, N)): Scaling factors from all components A -> x.
     """
     # Input validation
-    x = np.asarray(x, copy = True)
+    x = np.asarray(x)
+
     if len(x.shape) != 2:
         raise ValueError("x must be 2D array-like")
     if N_iter <= 0:
@@ -137,7 +138,7 @@ def calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params,
         raise ValueError("highpass_params must be (frequency, order)")
 
     # Remove the mean from each timestream
-    x -= np.mean(x, axis = 1)[:, np.newaxis]
+    x = x - np.mean(x, axis = 1)[:, np.newaxis]
 
     # Calculate initial sigma
     sig = calc_sig(x)
@@ -189,12 +190,12 @@ def calc_cm_complex(z, theta = None, *calc_cm_params):
         the real axis.
     """
     # Input validation 
-    z = np.asarray(z, dtype = np.complex128, copy = True)
+    z = np.asarray(z, dtype = np.complex128)
 
     # Rotate each timestream median to real axis
     if theta is None:
         theta = np.angle(np.median(z, axis = 1))
-    z *= np.exp(-1j * theta[:, np.newaxis]) 
+    z = z * np.exp(-1j * theta[:, np.newaxis]) 
 
     # Calculate real and imaginary common modes
     aI, AI, sigI_iter, aI_full =\
@@ -276,7 +277,7 @@ def remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta = None):
         the real axis.
     """
     # Input validation
-    z = np.asarray(z, dtype = np.complex128, copy = True)
+    z = np.asarray(z, dtype = np.complex128)
 
     # Rotate each timestream median to real axis
     if theta is None:
@@ -284,7 +285,7 @@ def remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta = None):
             theta = np.angle(np.median(z))
         else:
             theta = np.angle(np.median(z, axis = 1))[:, np.newaxis]
-    z *= np.exp(-1j * theta)
+    z = z * np.exp(-1j * theta)
 
     # Calculate common modes
     y_real = remove_cm(z.real, aI, AI, idx)

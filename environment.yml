@@ -6,7 +6,7 @@ dependencies:
   - python=3.12
 
   # ABI-heavy scientific stack
-  - numpy=2.3.5
+  - numpy=1.26.4
   - scipy=1.16.3
   - numba=0.62.1
   - pyfftw=0.15.1

@@ -528,58 +528,6 @@ class CRS:
         if delete_parser_data:
             shutil.rmtree(data_directory)
 
-    async def capture_fast_noise(self, frequency, amplitude, time = 1,
-                                 nsegments = 10, verbose = False):
-        ### Legacy - to be removed in V 1.0
-        """
-        Captures noise with a 2.44 MHz sample rate on a single channel. Turns on
-        only a single channel to avoid noise spikes from neighboring channels.
-        Note that the output will have to be corrected for the nonlinear PFB bin
-        after taking a PSD. Temporarily changes the NCO frequency to center the
-        tone on a PFB bin.
-
-        Parameters:
-        frequency (float): tone frequency in Hz.
-        amplitude (float): tone amplitude in dBm.
-        time (float): timestream length in s. Max is 4 s.
-        nsegments (int): number of sequential timestreams to capture and average
-            linearly over.
-        verbose (bool): if True, prints NCO frequency settings.
-        """
-        warnings.warn('capture_fast_noise is experimental', UserWarning)
-        # Set up parameters for noise capture
-        select_nco = key = lambda k: np.abs(self.nco_freq_dict[k] - frequency)
-        module_index = min(self.nco_freq_dict, select_nco)
-        bw_half = 312.5e6 if self.extended_bw else 250e6
-        if np.abs(frequency - self.nco_freq_dict[module_index] > bw_half):
-            err = f'Frequency must be within {round(bw_half / 1e6, 1)} MHz of '
-            err += 'an NCO frequency'
-            raise ValueError(err)
-        fsample = 625e6 / 256
-        nsamps = int(time * fsample)
-        if nsamps > 1e7:
-            raise ValueError('Time must be less than 4 s')
-        # Capture samples
-        samples = await self.d.get_pfb_samples(
-            int(nsamps),
-            channel = 1,
-            module = module_index,
-            binlim = 1e6,
-            trim = True,
-            nsegments = nsegments,
-            reference = 'relative',  # dBc / Hz
-            reset_NCO = True,  # shifts NCO to bin center
-        )
-        f = np.asarray(samples.spectrum.freq_iq)
-        z = np.asarray(samples.spectrum.psd_i + 1j * samples.spectrum.psd_q)
-        z = np.array(samples.i + 1j * samples.q)
-
-        # This might be already applied with reference = True
-        # z *= rfmux.core.utils.transferfunctions.VOLTS_PER_ROC / np.sqrt(2)
-        # z /= 10 ** (ares[:, np.newaxis] / 20)
-        return None, None
-        return f, z
-
 ################################################################################
 ################## Methods registered to rfmux.ReadoutModule ###################
 ################################################################################
@@ -620,6 +568,8 @@ async def write_tones(module, nco_freq_dict, fres_dict, ares_dict):
         fres = np.asarray(fres)
         ares = np.asarray(ares)
         # Randomize frequencies a little to avoid collisions.
+        #######################################################################
+        # Can maybe use rfmux.algorithms.measurement._safe_concatenate_frequencies
         ix = [
             i for i in range(len(fres))
             if i not in [np.argmin(fres), np.argmax(fres)]
@@ -630,6 +580,7 @@ async def write_tones(module, nco_freq_dict, fres_dict, ares_dict):
         comb_sampling_freq =rfmux.core.transferfunctions.COMB_SAMPLING_FREQ
         threshold = 101.
         fres[fres%(comb_sampling_freq/512) < threshold] += threshold
+        #######################################################################
         # Check NCO and input parameters
         try:
             nco = nco_freq_dict[module_index]
@@ -692,8 +643,10 @@ async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
             raise ValueError('ares and frequencies are not the same length')
 
         # Write amplitudes
+        # clear channels first?
         fres_dict = {module_index: [fi[0] for fi in frequencies]}
         await module.write_tones(nco_freq_dict, fres_dict, ares_dict)
+
         # Initialize z array
         z = np.empty((n_channels, n_points), dtype = complex)
 
@@ -714,7 +667,7 @@ async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
             # d.py_get_samples is t0's preferred method, but not everywhere.
             samples = await d.get_samples(nsamps + nsamples_discard,
                                              module = module_index,
-                                             average = True)
+                                             average = True) # channel = ??? instead of cutting channels later
             # format and average data
             zi = np.asarray(samples.mean.i) + 1j * np.asarray(samples.mean.q)
             zi = (
