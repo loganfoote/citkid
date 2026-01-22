@@ -8,6 +8,7 @@ import rfmux
 from .util import find_key_and_index, get_modules, run_for_duration
 from .util import convert_parser_to_z, convert_parser_to_z_batch
 from .util import get_sample_frequency
+from rfmux.algorithms.measurement import take_netanal
 
 class CRS:
     def __init__(self, serial_number = 27, interface = 'enp2s0'):
@@ -565,27 +566,19 @@ async def write_tones(module, nco_freq_dict, fres_dict, ares_dict):
         d = module.crs
         module_index = module.module
         fres, ares = fres_dict[module_index], ares_dict[module_index]
-        fres = np.asarray(fres)
-        ares = np.asarray(ares)
-        # Randomize frequencies a little to avoid collisions.
-        #######################################################################
-        # Can maybe use rfmux.algorithms.measurement._safe_concatenate_frequencies
-        ix = [
-            i for i in range(len(fres))
-            if i not in [np.argmin(fres), np.argmax(fres)]
-        ]
-        # Don't randomize lowest and highest frequency to avoid bandwidth hits.
-        if len(fres) > 2:
-            fres[ix] += np.random.uniform(-50, 50, len(fres) - 2)
-        comb_sampling_freq =rfmux.core.transferfunctions.COMB_SAMPLING_FREQ
-        threshold = 101.
-        fres[fres%(comb_sampling_freq/512) < threshold] += threshold
-        #######################################################################
+        fres = np.asarray(fres, dtype = np.float64)
+        ares = np.asarray(ares, dtype = np.float64)
+
         # Check NCO and input parameters
         try:
             nco = nco_freq_dict[module_index]
         except:
             raise Exception('NCO frequency has not been set')
+        
+        # Dither frequencies 
+        fres = take_netanal._safe_concatenate_frequencies(fres, nco)
+
+        # ares validation 
         if any(ares > d.full_scale_dbm):
             err = f'ares must not exceed {d.full_scale_dbm} dBm: raise '
             err += 'full_scale_dbm or lower powers'
@@ -595,8 +588,9 @@ async def write_tones(module, nco_freq_dict, fres_dict, ares_dict):
             warnings.warn(err, UserWarning)
         ares_amplitude = 10 ** ((ares - d.full_scale_dbm) / 20)
 
+        # Clear channels
         await d.clear_channels(module = module_index)
-
+        # Write frequencies and amplitudes
         async with d.tuber_context() as ctx:
             for ch, (fr, ar) in enumerate(zip(fres, ares_amplitude)):
                 ctx.set_frequency(fr - nco, channel = ch + 1,
@@ -637,13 +631,18 @@ async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
 
         if not len(frequencies):
             return np.array([], dtype = float), np.array([], dtype = complex)
+        
+        # Dither frequencies per sweep index
         nco_freq = nco_freq_dict[module_index]
+        for ch, fres in enumerate(frequencies):
+            frequencies[ch] = take_netanal._safe_concatenate_frequencies(fres, 
+                                                                       nco_freq)
+        
         n_channels, n_points = frequencies.shape
         if len(ares) != n_channels:
             raise ValueError('ares and frequencies are not the same length')
 
         # Write amplitudes
-        # clear channels first?
         fres_dict = {module_index: [fi[0] for fi in frequencies]}
         await module.write_tones(nco_freq_dict, fres_dict, ares_dict)
 
@@ -663,11 +662,10 @@ async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
                     ctx.set_frequency(f - nco_freq, channel = ch + 1,
                                       module = module_index)
                 await ctx()
-            nsamples_discard = 0 # 15
             # d.py_get_samples is t0's preferred method, but not everywhere.
-            samples = await d.get_samples(nsamps + nsamples_discard,
-                                             module = module_index,
-                                             average = True) # channel = ??? instead of cutting channels later
+            samples = await d.get_samples(nsamps,
+                                          module = module_index,
+                                          average = True) # channel = ??? instead of cutting channels later
             # format and average data
             zi = np.asarray(samples.mean.i) + 1j * np.asarray(samples.mean.q)
             zi = (
