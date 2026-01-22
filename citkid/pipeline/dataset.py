@@ -5,16 +5,6 @@ import numpy as np
 import zarr
 from .dependencies import get_most_recent_run, get_dependencies
 from . import framework as pf
-
-class LazyZarrArray:
-    def __init__(self, data, exists):
-        self.data = data          # zarr.Array
-        self.exists = exists      # zarr.Array (bool)
-
-    def __getitem__(self, key):
-        if self.exists[key].all():
-            return self.data[key]
-        return None
     
 class DataSet:
     def __init__(self, custom_path, yaml_path, zarr_path):
@@ -279,6 +269,14 @@ class DataSet:
             
             for param_name, param_run_idx in dependencies.items():
                 saved_global[run_idx][return_name][param_name] = param_run_idx
+                
+            if 'output_type' not in root.attrs:
+                root.attrs['output_type'] = {}
+            output_type = root.attrs['output_type']
+            if run_idx not in root.attrs['output_type']:
+                output_type[run_idx] = {}
+            output_type[run_idx][return_name] = 'global'
+            root.attrs['output_type'] = output_type
             
         elif step.func_type in ['per-row', 'vectorized']:
             
@@ -298,7 +296,7 @@ class DataSet:
                 
             for local_idx, idx in enumerate(data_idx):
                 local_saved_idxs = np.where(saved_idx == idx)[0]
-                if local_saved_idxs:
+                if local_saved_idxs.shape != (0,):
                     local_saved_idx = local_saved_idxs[0]
                 else:
                     saved[idx] = saved_start
@@ -351,6 +349,14 @@ class DataSet:
                     
                 for param_name, param_run_idx in dependencies.items():
                     saved[run_idx][return_name][param_name] = param_run_idx
+                    
+                if 'output_type' not in root.attrs:
+                    root.attrs['output_type'] = {}
+                output_type = root.attrs['output_type']
+                if run_idx not in root.attrs['output_type']:
+                    output_type[run_idx] = {}
+                output_type[run_idx][return_name] = 'indexable'
+                root.attrs['output_type'] = output_type
 
         
     def get_attr_version(self, name):
@@ -417,14 +423,11 @@ class DataSet:
         Any: The requested attribute value or LazyAttr.
         """
         # Look up the attribute in the zarr file.
-        try:
-            # ***NEED TO IMPLEMENT DYNAMIC RUN INDEX FINDER
-            run_idx = 0
-            grp = self.root[str(run_idx)]
-            attr = grp[name]
+        run_idx = self.get_attr_version(name)
+        if run_idx is not None:
+            attr = pf.LazyAttr(self, name)
+            object.__setattr__(self, name, attr)
             return attr
-        except:
-            pass
 
         # Only run when normal lookup fails
         cal_pl = object.__getattribute__(self, "cal_pl")
@@ -470,4 +473,3 @@ class DataSet:
             m += f"'{step.name}' in custom_steps.py must be "
             m += "integer-valued and > 0."
             raise ValueError(m)
-

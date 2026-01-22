@@ -19,9 +19,9 @@ CAL_STEPS:
         task: get_thetat
         A_STEPS: 
           1:
-            task: get_At 
+            task: get_At
           2:
-            task: get_sparper        
+            task: get_sparper
       5:
         task: get_xt
     F_STEPS:

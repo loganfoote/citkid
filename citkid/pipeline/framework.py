@@ -21,6 +21,15 @@ class LazyAttr:
         self.DS = DS
         self.name = name
         self._cache = {}        # maps row -> np.ndarray
+        
+        ### Check if the attribute exists in the zarr file.
+        self.run_idx = DS.get_attr_version(name)
+        if self.run_idx is not None:
+            grp = DS.root[str(self.run_idx)]
+            self.data = grp[name]
+            self.output_type = DS.root.attrs['output_type'][str(self.run_idx)][name]
+            if self.output_type == 'indexable':
+                self.data_idx = grp[f'{name}_idx']
 
     def _ensure_loaded(self, rows):
         """
@@ -96,10 +105,21 @@ class LazyAttr:
             if not 0 <= rows[idx] < self.DS.nres:
                 raise ValueError(f"row index {r} out of bounds")
 
-        self._ensure_loaded(rows)
+        # If the data was found in the zarr, then just load it from the zarr array.
+        if self.run_idx is not None:
+            if self.output_type == 'global':
+                out = self.data[rows]
+            elif self.output_type == 'indexable':
+                # 'indexable' output_type means each row of the data has a run_idx.
+                # So, we need to map the key to the correct run_idx.
+                local_idxs = np.where(np.isin(self.data_idx, rows))[0]
+                out = self.data[local_idxs]
+                
+        else: # Otherwise, load data into the cache, and return it from the cache.
+            self._ensure_loaded(rows)
 
-        # Fetch data from cache
-        out = [self._cache[r] for r in rows]
+            # Fetch data from cache
+            out = [self._cache[r] for r in rows]
 
         if not return_array:
             return out[0]  # single row, return 1D array
