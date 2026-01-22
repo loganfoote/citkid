@@ -4,6 +4,7 @@ import matplotlib
 matplotlib.use('Agg')
 # use rasterized = True for noise 
 from ..signal.psd import bin_psd
+from ..res.funcs import nonlinear_iq
 
 def plot_gain_fit(f, z, mask, p_amp, p_phase):
     """
@@ -106,15 +107,15 @@ def plot_s21(f, z, zt = None, fg = None, zg = None):
         zg = np.asarray(zg, dtype = np.complex128)
         if fg.shape != zg.shape:
             raise ValueError('fg and zg must be the same shape')
-        axs[0].plot((fg - fmean) / 1e3, 20 * np.log10(np.abs(zg)), 'o', 
+        axs[0].plot((fg - fmean) / 1e3, 20 * np.log10(np.abs(zg)), '.', 
                     color = plt.cm.viridis(0.33), aa = False)
-        axs[1].plot(zg.real, zg.imag, 'o', color = plt.cm.viridis(0.33), 
+        axs[1].plot(zg.real, zg.imag, '.', color = plt.cm.viridis(0.33), 
                     aa = False, label = 'gain sweep')
         
     # Plot fine sweep data
-    axs[0].plot((f - fmean) / 1e3, 20 * np.log10(np.abs(z)), 'o', 
+    axs[0].plot((f - fmean) / 1e3, 20 * np.log10(np.abs(z)), '.', 
                 color = plt.cm.viridis(0.), aa = False)
-    axs[1].plot(z.real, z.imag, 'o', color = plt.cm.viridis(0.), aa = False,
+    axs[1].plot(z.real, z.imag, '.', color = plt.cm.viridis(0.), aa = False,
                 label = 'fine sweep')
 
     # Plot timestream data
@@ -162,10 +163,10 @@ def plot_circfit(z, origin, radius, zt = None, mask = None):
     ax.set(xlabel = 'I', ylabel = 'Q')
     ax.set(aspect = 'equal', adjustable = 'datalim')
     # Plot data
-    ax.plot(np.real(z), np.imag(z), 'o', color = plt.cm.viridis(0.), 
+    ax.plot(np.real(z), np.imag(z), '.', color = plt.cm.viridis(0.), 
             aa = False, label = 'data')
     if z_cut is not None:
-        ax.plot(np.real(z_cut), np.imag(z_cut), 'o', 
+        ax.plot(np.real(z_cut), np.imag(z_cut), '.', 
                 color = plt.cm.viridis(0.33), aa = False, label = 'fit data')
         
     # Plot circle fit
@@ -225,7 +226,7 @@ def plot_sparper(f, spar, sper, nbins, fmin):
     return fig, ax
 
 def plot_xcal(thetaf, xf, zf_cent, xcal_mask, poly_x, thetat = None, 
-              zt_cent = None):
+              zt_cent = None, std_cutoff = None):
     """
     Plots x vs theta calibration data and IQ data with fit overlayed. 
 
@@ -269,6 +270,15 @@ def plot_xcal(thetaf, xf, zf_cent, xcal_mask, poly_x, thetat = None,
     thetaf_cut, xf_cut = thetaf[xcal_mask], xf[xcal_mask]
     zf_cut = zf_cent[xcal_mask]
 
+    # Create std cutoff mask for timestream data
+    if thetat is not None and std_cutoff is not None:
+        # determine signal cutoff
+        theta_t_std = np.std(thetat)
+        theta_t_mean = np.mean(thetat)
+        std_mask = np.abs(thetat - theta_t_mean) < std_cutoff * theta_t_std
+    else:
+        std_mask = np.ones_like(thetat, dtype = bool)
+
     # Setup plot
     fig, axs = plt.subplots(1, 2, figsize = [6, 3], layout = 'tight', dpi = 72)
     axs[0].set(xlabel = 'theta', ylabel = 'x (kHz / GHz)')
@@ -276,25 +286,82 @@ def plot_xcal(thetaf, xf, zf_cent, xcal_mask, poly_x, thetat = None,
                aspect = 'equal', adjustable = 'datalim')
     
     # Plot x vs theta cal data
-    axs[0].plot(thetaf_cut, xf_cut * 1e6, 'o', color = plt.cm.viridis(0.33), 
+    axs[0].plot(thetaf_cut, xf_cut * 1e6, '.', color = plt.cm.viridis(0.33), 
                 aa = False)
     tsamp = np.linspace(min(thetaf_cut), max(thetaf_cut), 60)
     axs[0].plot(tsamp, np.polyval(poly_x, tsamp) * 1e6, '--k', aa = False)
     if thetat is not None:
-        axs[0].plot(thetat, np.polyval(poly_x, thetat) * 1e6, '.', 
-                color = plt.cm.viridis(0.67), aa = False, rasterized = True)
+        axs[0].plot(
+            thetat[std_mask], 
+            np.polyval(poly_x, thetat[std_mask]) * 1e6, 
+            '.', 
+            color = plt.cm.viridis(0.67), 
+            aa = False, rasterized = True
+            )
+        axs[0].plot(
+            thetat[~std_mask], 
+            np.polyval(poly_x, thetat[~std_mask]) * 1e6, 
+            '.', 
+            color = plt.cm.viridis(1.), 
+            aa = False, rasterized = True
+            )
 
     # Plot IQ data
-    axs[1].plot(zf_cent.real, zf_cent.imag, 'o', color = plt.cm.viridis(0.), 
+    axs[1].plot(zf_cent.real, zf_cent.imag, '.', color = plt.cm.viridis(0.), 
                 aa = False, label = 'full fine sweep') 
-    axs[1].plot(zf_cut.real, zf_cut.imag, 'o', color = plt.cm.viridis(0.33), 
+    axs[1].plot(zf_cut.real, zf_cut.imag, '.', color = plt.cm.viridis(0.33), 
                 aa = False, label = 'fit fine sweep') 
-    if zt_cent is not None:
-        axs[1].plot(zt_cent.real, zt_cent.imag, '.', 
+    if zt_cent is not None: 
+        
+        axs[1].plot(zt_cent[std_mask].real, zt_cent[std_mask].imag, '.', 
                     color = plt.cm.viridis(0.67), aa = False, 
-                    rasterized = True, label = 'timestream')
+                    rasterized = True, label = 'timestream <= cutoff')
+        axs[1].plot(zt_cent[~std_mask].real, zt_cent[~std_mask].imag, '.', 
+                    color = plt.cm.viridis(1.), aa = False, 
+                    rasterized = True, label = 'timestream > cutoff')
     axs[1].plot([], [], '--k', label = 'fit')
 
     # Add legend and return figure and axis
     axs[1].legend(framealpha = 1)
+    return fig, axs
+
+def plot_nonlinear_iq_fit(ff, zf_rmv, popt, mask):
+    """
+    Plots nonlinear IQ fit to fine sweep data, in IQ space and as |S21| vs
+    frequency.
+    
+    Parameters:
+    ff (np.array, float64): Fine sweep frequency data in Hz.
+    zf_rmv (np.array, complex128): Fine sweep complex S21 data with gain removed.
+    popt (list): Fit parameters.
+    mask (np.array, bool): Mask of fine sweep data used for fitting.
+    
+    Returns:
+    fig (matplotlib.figure.Figure): Figure containing the plots.
+    axs (np.ndarray, matplotlib.axes.Axes): Axes for |S21| vs frequency and IQ
+        plots.
+    """
+    # Setup plot
+    fig, axs = plt.subplots(1, 2, figsize = [7, 3], layout = 'tight', dpi = 72)
+    axs[0].set(aspect = 'equal', adjustable = 'datalim')
+    axs[0].set(ylabel = 'Q', xlabel = 'I') 
+    axs[1].set(xlabel = f'(f - {round(popt[0] / 1e9, 4)} GHz) (kHz)', 
+            ylabel = r'$S_{21}$ (dB)')
+
+    # Plot data
+    axs[0].plot(zf_rmv[mask].real, zf_rmv[mask].imag, '.', 
+                color = plt.cm.viridis(0.), aa = False, label = 'data')
+    axs[1].plot((ff - popt[0]) * 1e-3, 20 * np.log10(np.abs(zf_rmv[mask])), '.',
+                color = plt.cm.viridis(0.), aa = False)
+
+    # Plot fit
+    fsamp = np.linspace(ff[0], ff[-1], 500) 
+    zsamp = nonlinear_iq(fsamp, *popt, True) 
+    axs[0].plot(zsamp.real, zsamp.imag, '--', label = 'fit',
+                color = plt.cm.viridis(0.5), aa = False)
+    axs[1].plot((fsamp - popt[0]) * 1e-3, 20 * np.log10(np.abs(zsamp)), '--',
+                color = plt.cm.viridis(0.5), aa = False)
+
+    # Add legend and return figure and axes
+    axs[0].legend(loc = 'center', framealpha = 1)
     return fig, axs
