@@ -9,6 +9,7 @@ from .util import find_key_and_index, get_modules, run_for_duration
 from .util import convert_parser_to_z, convert_parser_to_z_batch
 from .util import get_sample_frequency
 from rfmux.algorithms.measurement import take_netanal
+from rfmux.tools import parser
 
 class CRS:
     def __init__(self, serial_number = 27, interface = 'enp2s0'):
@@ -81,6 +82,10 @@ class CRS:
             print('System configured')
             print("Clocking source is", await self.d.get_clock_source())
 
+        self.firmware_release = await self.d.get_firmware_release() 
+        if self.firmware_release.version != '1.6.0rc2':
+            raise RuntimeError("CRS firmware must be version 1.6.0rc2")
+
     async def set_analog_bank(self, analog_bank_high):
         """
         Set the analog bank to high (modules 5-8) or low (modules 1-4).
@@ -135,7 +140,7 @@ class CRS:
                 nco_str = f'{round(nco_meas * 1e-6, 6)}'
                 print(f'Module {module_index} NCO is {nco_str} MHz')
 
-    async def write_tones(self, fres, ares, return_max_ntones = False):
+    async def write_tones(self, fres, ares):
         """
         Write tones for the provided frequencies and amplitudes.
 
@@ -151,12 +156,9 @@ class CRS:
         Parameters:
         fres (array-like): tone frequencies in Hz.
         ares (array-like): tone powers in dBm.
-        return_max_ntones (bool): If True, returns
-            max_ntones (int): maximum number of tones on any given module. This
-            parameter is used to parse the noise data.
 
         Returns:
-        int or None: Maximum tones per module if return_max_ntones is True.
+        max_ntones (int): Maximum tones per module.
         """
         # Split fres and ares into dictionaries
         if not len(self.nco_freq_dict):
@@ -195,9 +197,9 @@ class CRS:
         modules = get_modules(self.d, list(self.fres_dict.keys()))
         await modules.write_tones(self.nco_freq_dict, self.fres_dict,
                                   self.ares_dict)
-        if return_max_ntones:
-            max_ntones = max([len(f) for f in self.fres_dict.values()])
-            return max_ntones
+        
+        max_ntones = max([len(f) for f in self.fres_dict.values()])
+        return max_ntones
 
     async def sweep(self, frequencies, ares, nsamps = 10, return_dbc = True,
                     verbose = True, pbar_description = 'Sweeping'):
@@ -399,7 +401,6 @@ class CRS:
         dec_stage = 6,
         fast_modules = [1],
         tmp_directory = 'tmp/',
-        parser_loc = '/home/daq1/github/rfmux/firmware/r1.5.6/parser',
         delete_parser_data = True,
         return_dbc = True,
         batch_process = False,
@@ -427,7 +428,6 @@ class CRS:
         tmp_directory (str): directory to save temporary parser data before
             converting to .npy. Data is streamed to disk, so the drive must be
             fast enough with sufficient free space.
-        parser_loc (str): path to the parser file.
         delete_parser_data (bool): If True, deletes the parser data files
             after importing the data.
         return_dbc (bool): If true, divides the output by the tone power.
@@ -471,15 +471,24 @@ class CRS:
             print(f'dec stage is {await self.d.get_decimation()}')
 
         # set the tones
-        max_ntones = await self.write_tones(fres, ares,
-                                            return_max_ntones = True)
+        max_ntones = await self.write_tones(fres, ares)
         sleep(1)
         # Collect the data
         channels = '1-' + f'{max_ntones}'
-        cmd = [parser_loc, '-c', channels, '-d', data_directory,
-                           '-i', self.interface, '-s',
-                           f'{self.serial_number:04d}']
-        run_for_duration(cmd, noise_time, verbose)
+        nframes = int(self.sample_frequency * (noise_time + 1))
+        # Need to fine-tune time offset to get exact timestream length 
+        args = [
+            '-i', self.interface,
+            '-d', data_directory,
+            '-c', channels, 
+            '-s', f'{self.serial_number:04d}',
+            '-n', f'{nframes:d}'
+            ]
+        try:
+            parser.main(*args)
+        except SystemExit as e:
+            raise e 
+            code = e.code # parser exists when done
         # Set dec stage back
         await self.d.set_decimation(6)
         # read the data and convert to z
@@ -662,7 +671,6 @@ async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
                     ctx.set_frequency(f - nco_freq, channel = ch + 1,
                                       module = module_index)
                 await ctx()
-            # d.py_get_samples is t0's preferred method, but not everywhere.
             samples = await d.get_samples(nsamps,
                                           module = module_index,
                                           average = True) # channel = ??? instead of cutting channels later
