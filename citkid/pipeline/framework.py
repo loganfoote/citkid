@@ -21,14 +21,15 @@ class LazyAttr:
         self.DS = DS
         self.name = name
         self._cache = {}        # maps row -> np.ndarray
+        self.indexable = True
         
         ### Check if the attribute exists in the zarr file.
         self.run_idx = DS.get_attr_version(name)
         if self.run_idx is not None:
             grp = DS.root[str(self.run_idx)]
             self.data = grp[name]
-            self.output_type = DS.root.attrs['output_type'][str(self.run_idx)][name]
-            if self.output_type == 'indexable':
+            self.indexable = DS.root.attrs['indexable'][str(self.run_idx)][name]
+            if self.indexable:
                 self.data_idx = grp[f'{name}_idx']
 
     def _ensure_loaded(self, rows):
@@ -107,13 +108,13 @@ class LazyAttr:
 
         # If the data was found in the zarr, then just load it from the zarr array.
         if self.run_idx is not None:
-            if self.output_type == 'global':
-                out = self.data[rows]
-            elif self.output_type == 'indexable':
+            if self.indexable:
                 # 'indexable' output_type means each row of the data has a run_idx.
                 # So, we need to map the key to the correct run_idx.
                 local_idxs = np.where(np.isin(self.data_idx, rows))[0]
                 out = self.data[local_idxs]
+            else:
+                out = self.data[rows]
                 
         else: # Otherwise, load data into the cache, and return it from the cache.
             self._ensure_loaded(rows)
@@ -259,18 +260,26 @@ class plStep:
                 
         # --- 1. Collect parameters ---
         params = []
+        indexable = []
         for p in self.param_names:
             if p == 'data_idx':
                 params.append(data_idx)
+                indexable.append(True)
                 continue
             val = getattr(DS, p)
             # Only slice input for per-row or vectorized functions
             if self.func_type in ["per-row", "vectorized"]:
                 try:
+                    if isinstance(val, LazyAttr):
+                        if not val.indexable:
+                            params.append(val.data[...])
+                            indexable.append(False)
+                            continue
                     val = val[data_idx]
                 except TypeError:
                     pass
             params.append(val)
+            indexable.append(True)
 
         # --- 2. Execute function based on func_type ---
         if self.func_type == "global" or self.func_type == "global-res":
@@ -301,8 +310,11 @@ class plStep:
 
             # params are already sliced to match data_idx
             for local_idx in range(len(data_idx)):
-                args_i = [p[local_idx] if isinstance(p, (list, np.ndarray)) \
-                          else p for p in params]
+                args_i = []
+                for p, do_indexing in zip(params, indexable):
+                    if do_indexing:
+                        p = p[local_idx]
+                    args_i.append(p)
                 out_i = self.func(*args_i)
                 if not isinstance(out_i, tuple):
                     out_i = (out_i,)

@@ -232,7 +232,7 @@ class DataSet:
         """
         # set dtype if not provided
         if dtype is None:
-            dtype = value.dtype
+            dtype = value[data_idx].dtype
             
         root = self.root
 
@@ -270,13 +270,13 @@ class DataSet:
             for param_name, param_run_idx in dependencies.items():
                 saved_global[run_idx][return_name][param_name] = param_run_idx
                 
-            if 'output_type' not in root.attrs:
-                root.attrs['output_type'] = {}
-            output_type = root.attrs['output_type']
-            if run_idx not in root.attrs['output_type']:
-                output_type[run_idx] = {}
-            output_type[run_idx][return_name] = 'global'
-            root.attrs['output_type'] = output_type
+            if 'indexable' not in root.attrs:
+                root.attrs['indexable'] = {}
+            indexable = root.attrs['indexable']
+            if run_idx not in root.attrs['indexable']:
+                indexable[run_idx] = {}
+            indexable[run_idx][return_name] = False
+            root.attrs['indexable'] = indexable
             
         elif step.func_type in ['per-row', 'vectorized']:
             
@@ -295,14 +295,14 @@ class DataSet:
             saved_idx = np.fromstring(root.attrs['saved_idx'].strip('[]'), dtype=int, sep=' ')
                 
             for local_idx, idx in enumerate(data_idx):
+                idx = idx.item()
                 local_saved_idxs = np.where(saved_idx == idx)[0]
                 if local_saved_idxs.shape != (0,):
                     local_saved_idx = local_saved_idxs[0]
                 else:
                     saved[idx] = saved_start
                     local_saved_idx = len(saved) - 1
-                    saved_idx.append(idx)
-                    root.attrs['saved_idx'] = str(saved_idx)
+                    saved_idx = np.append(saved_idx, idx)
 
                 this_saved = saved[local_saved_idx]
                 dependencies = get_dependencies(step.param_names, this_saved)
@@ -350,13 +350,16 @@ class DataSet:
                 for param_name, param_run_idx in dependencies.items():
                     saved[run_idx][return_name][param_name] = param_run_idx
                     
-                if 'output_type' not in root.attrs:
-                    root.attrs['output_type'] = {}
-                output_type = root.attrs['output_type']
-                if run_idx not in root.attrs['output_type']:
-                    output_type[run_idx] = {}
-                output_type[run_idx][return_name] = 'indexable'
-                root.attrs['output_type'] = output_type
+                root.attrs['saved'] = saved
+                root.attrs['saved_idx'] = saved_idx
+                    
+                if 'indexable' not in root.attrs:
+                    root.attrs['indexable'] = {}
+                indexable = root.attrs['indexable']
+                if run_idx not in root.attrs['indexable']:
+                    indexable[run_idx] = {}
+                indexable[run_idx][return_name] = True
+                root.attrs['indexable'] = indexable
 
         
     def get_attr_version(self, name):
