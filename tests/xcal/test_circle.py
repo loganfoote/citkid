@@ -42,6 +42,36 @@ def test_fit_iq_circle_invalid_input(z, mask):
     with pytest.raises(Exception):
         circle.fit_iq_circle(z, mask)
 
+
+################################################################################
+########################### get_theta_phase_offset #############################
+################################################################################
+@pytest.mark.parametrize("zt_rmv,origin,theta_exp", [
+    ([1], 0, 0),
+    (1, 0, 0),
+    ([1j], 0, np.pi / 2),
+    ([-1j], 0, -np.pi / 2),
+    ([1 - 1j], 0, -np.pi / 4),
+    ([1 + 1j], 1, np.pi / 2),
+    ([1 + 1j, -1 - 1j], 0, 0),
+    ([], 0, np.nan),  # empty input
+    ([np.nan, 1, -1], 0, np.nan),  # nan input
+    (np.array([1], dtype = np.complex64), 0, 0),  # complex64 input
+])
+def test_get_theta_phase_offset(zt_rmv, origin, theta_exp):
+    theta = circle.get_theta_phase_offset(zt_rmv, complex(origin))
+    assert type(theta) == np.float64
+    assert np.isclose(theta, np.float64(theta_exp), 
+                      equal_nan = True)
+
+@pytest.mark.parametrize("zt_rmv,origin", [
+    (['a', 1], 0 + 1j),  # non-numeric zt_rmv
+    ([1], 'a'),  # non-numeric origin
+])
+def test_get_theta_phase_offset_invalid_input(zt_rmv, origin):
+    with pytest.raises(ValueError):
+        circle.get_theta_phase_offset(zt_rmv, origin)
+
 ################################################################################
 ################################# cent_rot_s21 #################################
 ################################################################################
@@ -78,7 +108,6 @@ def test_cent_rot_s21(z, center, phase, z_exp):
 def test_cent_rot_s21_invalid_input(z, center, phase):
     with pytest.raises(Exception):
         circle.cent_rot_s21(z, center, phase)
-
 
 ################################################################################
 ############################### convert_to_theta ###############################

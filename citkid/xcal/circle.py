@@ -67,6 +67,28 @@ def fit_iq_circle(z, mask = None):
 ################################################################################
 ###################### Convert complex S21 to theta and A ######################
 ################################################################################
+def get_theta_phase_offset(zt_rmv, origin):
+    """
+    Calculate the phase offset to ensure that the median value of theta of the 
+    timestream is zero.
+
+    Parameters:
+    zt_rmv (array-like, complex128): Complex S21 timestream with gain removed.
+    origin (complex): circle center for centering the data.
+
+    Returns:
+    theta_phase_offset (float): Phase offset in radians.
+    """
+    # Input validation 
+    zt_rmv = np.asarray(zt_rmv, dtype = np.complex128)
+    if not isinstance(origin, complex):
+        raise ValueError("origin must be a complex number")
+    
+    # Center zt without rotating, and calculate the median angle
+    zt_cent_not_rot = cent_rot_s21(zt_rmv, origin, 0)
+    theta_phase_offset = np.angle(np.median(zt_cent_not_rot))
+    return theta_phase_offset
+
 def cent_rot_s21(z, center, phase):
     """
     Apply centering and rotation to S21 data.
@@ -82,7 +104,7 @@ def cent_rot_s21(z, center, phase):
     z = np.asarray(z, dtype = np.complex128)
     return (z - center) * np.exp(-1j * phase)
 
-def convert_to_theta(z, unwrap = False):    
+def convert_to_theta(z, unwrap = False, idx_t = None):    
     """
     Convert complex S21 data points to phase angles (theta).
 
@@ -90,6 +112,10 @@ def convert_to_theta(z, unwrap = False):
     z (array-like, complex128): Complex S21 data after centering and rotation.
         Must be sorted in ascending or descending order of frequency.
     unwrap (bool): Whether to unwrap the phase angles.
+    idx_t (int or None): If z represents an S21 sweep, idx_t is the index 
+        corresponding to the closest point to the timestream frequency. Used to 
+        ensure that unwrapping does not have a factor of 2*pi offset from the 
+        timestream data.
 
     Returns:
     theta (np.array, float64): Phase angles in radians.
@@ -98,6 +124,9 @@ def convert_to_theta(z, unwrap = False):
     theta = np.angle(z)
     if unwrap:
         theta = np.unwrap(theta)
+        if idx_t is not None:
+            k = np.round(theta[idx_t] / (2 * np.pi))
+            theta -= k * 2 * np.pi
     return theta
 
 def convert_to_A(z):

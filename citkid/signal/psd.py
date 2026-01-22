@@ -2,7 +2,6 @@ from scipy.stats import binned_statistic
 import numpy as np
 import pyfftw
 
-
 def get_psd(x, dt, get_frequencies=False):
     """
     Calculates the unilateral power spectral density magnitude of a timestream.
@@ -23,7 +22,6 @@ def get_psd(x, dt, get_frequencies=False):
         return psd
     f = np.fft.rfftfreq(len(x), d=dt)
     return f, psd
-
 
 def get_csd(x1, x2, dt):
     """

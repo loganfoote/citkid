@@ -260,7 +260,7 @@ def polyval(p, x):
 ################################################################################
 ########################### Noise timestream ###################################
 ################################################################################
-def generate_timestream(fnoise, fr, Qr, amp, phi, a, p_amp, p_phase, tlen = 100):
+def generate_timestream(fnoise, fr, Qr, amp, phi, a, p_amp, p_phase, tlen = 10):
     """
     Generates a raw IQ time stream, purely noise
 
@@ -281,7 +281,7 @@ def generate_timestream(fnoise, fr, Qr, amp, phi, a, p_amp, p_phase, tlen = 100)
     z (np.array): IQ time series complex S21 data
     """
     # Sampling parameters
-    fsample = 10000 # sampling frequency [Hz]
+    fsample = 10_000 # sampling frequency [Hz]
     # Sxx white and 1/f noise parameters
     sxx_white = 2e-17 # white noise term [1/Hz]
     fknee = 1 # knee of 1/f component [Hz]
