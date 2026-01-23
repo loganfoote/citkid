@@ -1,5 +1,7 @@
 import numpy as np
 from ..xcal import gain, circle, xcal
+from .dependencies import get_deps, get_most_recent_run
+import copy
         
 ################################################################################
 ############################### Lazy Attribute #################################
@@ -14,23 +16,22 @@ class LazyAttr:
         name (str): The name of the attribute.
         """
         for a in ['cal_pl', 'execute_path', 'nres']:
-            if not hasattr(DS, a):
+            if not DS.has_attr(a):
                 raise AttributeError(f"DS must have '{a}' attribute")
         if not isinstance(name, str):
             raise ValueError("name must be a string")
         self.DS = DS
         self.name = name
         self._cache = {}        # maps row -> np.ndarray
-        self.indexable = True
         
         ### Check if the attribute exists in the zarr file.
-        self.run_idx = DS.get_attr_version(name)
-        if self.run_idx is not None:
-            grp = DS.root[str(self.run_idx)]
-            self.data = grp[name]
-            self.indexable = DS.root.attrs['indexable'][str(self.run_idx)][name]
-            if self.indexable:
-                self.data_idx = grp[f'{name}_idx']
+        # self.run_idx = DS.get_attr_version(name)
+        # if self.run_idx is not None:
+        #     grp = DS.root[str(self.run_idx)]
+        #     self.data = grp[name]
+        #     self.data_idx = grp[f'{name}_idx']
+        # else:
+        #     self.run_idx = 1
 
     def _ensure_loaded(self, rows):
         """
@@ -108,13 +109,8 @@ class LazyAttr:
 
         # If the data was found in the zarr, then just load it from the zarr array.
         if self.run_idx is not None:
-            if self.indexable:
-                # 'indexable' output_type means each row of the data has a run_idx.
-                # So, we need to map the key to the correct run_idx.
-                local_idxs = np.where(np.isin(self.data_idx, rows))[0]
-                out = self.data[local_idxs]
-            else:
-                out = self.data[rows]
+            local_idxs = np.where(np.isin(self.data_idx, rows))[0]
+            out = self.data[local_idxs]
                 
         else: # Otherwise, load data into the cache, and return it from the cache.
             self._ensure_loaded(rows)
@@ -247,7 +243,7 @@ class plStep:
         None
         """
         if self.func_type in ["per-row", "vectorized"]:
-            if not hasattr(DS, 'nres'):
+            if not DS.has_attr('nres'):
                 raise ValueError("DS must have 'nres' attribute")
             if data_idx is None:
                 data_idx = list(range(DS.nres))
@@ -260,26 +256,19 @@ class plStep:
                 
         # --- 1. Collect parameters ---
         params = []
-        indexable = []
+        param_is_global = []
         for p in self.param_names:
             if p == 'data_idx':
                 params.append(data_idx)
-                indexable.append(True)
                 continue
+            
+            param_is_global.append(DS.global_cache[p])
             val = getattr(DS, p)
             # Only slice input for per-row or vectorized functions
             if self.func_type in ["per-row", "vectorized"]:
-                try:
-                    if isinstance(val, LazyAttr):
-                        if not val.indexable:
-                            params.append(val.data[...])
-                            indexable.append(False)
-                            continue
+                if not param_is_global[-1]:
                     val = val[data_idx]
-                except TypeError:
-                    pass
             params.append(val)
-            indexable.append(True)
 
         # --- 2. Execute function based on func_type ---
         if self.func_type == "global" or self.func_type == "global-res":
@@ -290,9 +279,11 @@ class plStep:
             if len(self.return_names) != len(results):
                 raise ValueError("Function return length does not match "
                                  "number of return names.")
+                
             for name, val in zip(self.return_names, results):
                 setattr(DS, name, val)  # store as normal attribute, no LazyAttr
-
+                DS.global_cache[name] = True
+                
         elif self.func_type == "vectorized":
             results = self.func(*params)
             if not isinstance(results, tuple):
@@ -301,8 +292,9 @@ class plStep:
                 raise ValueError("Function return length does not match "
                                  "number of return names.")
             for name, val in zip(self.return_names, results):
-                if not hasattr(DS, name):
-                    setattr(DS, name, LazyAttr(DS, name)) 
+                if not DS.has_attr(name):
+                    setattr(DS, name, LazyAttr(DS, name))
+                    DS.global_cache[name] = False
                 getattr(DS, name)[data_idx] = val
 
         elif self.func_type == "per-row":
@@ -311,8 +303,8 @@ class plStep:
             # params are already sliced to match data_idx
             for local_idx in range(len(data_idx)):
                 args_i = []
-                for p, do_indexing in zip(params, indexable):
-                    if do_indexing:
+                for p, is_global in zip(params, param_is_global):
+                    if not is_global:
                         p = p[local_idx]
                     args_i.append(p)
                 out_i = self.func(*args_i)
@@ -326,9 +318,62 @@ class plStep:
                 raise ValueError("Function return length does not match "
                                  "number of return names.")
             for name, val in zip(self.return_names, results_per_row):
-                if not hasattr(DS, name):
-                    setattr(DS, name, LazyAttr(DS, name)) 
+                if not DS.has_attr(name):
+                    setattr(DS, name, LazyAttr(DS, name))
+                    DS.global_cache[name] = False
                 getattr(DS, name)[data_idx] = val
+                
+        self._update_deps_map(DS, data_idx)
+
+    def _update_deps_map(self, DS, data_idx):
+        """
+        Updates the dependencies map in a DataSet.
+        """
+        def update_deps(return_names, deps_map):
+            """
+            Updates individual leaves of the deps_map corresponding
+            to each return name in return_names.
+            """
+            param_names = [param_name for param_name in self.param_names
+                           if param_name != 'data_idx']
+            deps_to_add = get_deps(param_names, deps_map)
+            for name in return_names:
+                # This conditional is needed to distinguish between
+                # steps where an input parameter can change, so that 
+                # the run_idx can increase, and those where it can't,
+                # so that it should always be run_idx = 1.
+                if param_names:
+                    run_idx = get_most_recent_run(name, deps_map)
+                    run_idx = max(run_idx+1, 1)
+                else:
+                    run_idx = 1
+                if run_idx not in deps_map:
+                    deps_map[run_idx] = {}
+                deps_map[run_idx][name] = {}
+                for dep_name, dep_run_idx in deps_to_add.items():
+                    if dep_name != name:
+                        deps_map[run_idx][name][dep_name] = dep_run_idx
+        
+        if data_idx is None: # "global" case
+            deps_map = DS.deps_map['global']
+            update_deps(self.return_names, deps_map)
+
+        else: # "non-global" case
+            # Load the global deps_map so we can copy it over to 
+            # the deps_maps for each data index.
+            deps_map_global = {}
+            if 'global' in DS.deps_map:
+                deps_map_global = DS.deps_map['global']
+            for di in data_idx:
+                di_str = f'idx{di}'
+                if di_str not in DS.deps_map:
+                    DS.deps_map[di_str] = {}
+                deps_map = DS.deps_map[di_str]
+                # Unite global deps_map with the per-data_index deps_map
+                DS.deps_map[di_str] = deps_map | copy.deepcopy(deps_map_global)
+                deps_map = DS.deps_map[di_str]
+                
+                update_deps(self.return_names, deps_map)
 
     def __repr__(self):
         s = f"Pipeline Step: {self.name}"

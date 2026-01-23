@@ -2,16 +2,14 @@ import os
 import yaml
 import importlib.util 
 import numpy as np
-import zarr
 from . import framework as pf
-from .dependencies import get_most_recent_run, get_dependencies
-from .dataset import DataSet
+from .dataset import DataSet   
 
 class Analyzer():
     def __init__(self, directory, cal_yaml_path, analysis_yaml_path,
                  zarr_path):
         """
-        Initialize the Analyzer class, which 
+        Initialize the Analyzer class, which calls analysis steps.
         """
         # Normalize paths
         self.directory = os.path.normpath(directory)

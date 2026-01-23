@@ -3,9 +3,9 @@ import yaml
 import importlib.util 
 import numpy as np
 import zarr
-from .dependencies import get_most_recent_run, get_dependencies
+from .dependencies import get_most_recent_run, get_deps
 from . import framework as pf
-    
+
 class DataSet:
     def __init__(self, custom_path, yaml_path, zarr_path):
         """
@@ -27,6 +27,8 @@ class DataSet:
         self.zarr_path = os.path.normpath(zarr_path)
         self.root = zarr.open_group(self.zarr_path, mode = 'a')
         self.yaml_path = os.path.normpath(yaml_path)
+        self.global_cache = {}
+        self.deps_map = {'global':{}}
 
         # Input validation 
         if self.custom_path is not None and \
@@ -173,7 +175,10 @@ class DataSet:
         """
         self.confirm_valid_path(path)
         for step in path:
-            step.run(self, data_idx)
+            this_data_idx = data_idx
+            if step.func_type in ['global', 'global-res']:
+                this_data_idx = None
+            step.run(self, this_data_idx)
         
 
     def read_data(self, name, data_idx, run_idx = None):
@@ -265,7 +270,7 @@ class DataSet:
             
             values_arr[...] = value
             
-            dependencies = get_dependencies(step.param_names, saved_global)
+            dependencies = get_deps(step.param_names, saved_global)
             
             for param_name, param_run_idx in dependencies.items():
                 saved_global[run_idx][return_name][param_name] = param_run_idx
@@ -305,7 +310,7 @@ class DataSet:
                     saved_idx = np.append(saved_idx, idx)
 
                 this_saved = saved[local_saved_idx]
-                dependencies = get_dependencies(step.param_names, this_saved)
+                dependencies = get_deps(step.param_names, this_saved)
                 run_idx = get_most_recent_run(return_name, this_saved) + 1
                 run_idx = max(run_idx, 1)
                     
@@ -453,6 +458,23 @@ class DataSet:
         attr = object.__getattribute__(self, name)
         
         return attr
+            
+    def has_attr(obj, name):
+        """
+        Function to check if an attribute or method is present, without
+        calling __getattr__.
+        """
+        # 1. Instance attributes
+        if name in obj.__dict__:
+            return True
+
+        # 2. Class + base classes (methods live here)
+        for cls in type(obj).__mro__:
+            if name in cls.__dict__:
+                return True
+
+        return False
+
     
     def _validate_nres(self):
         path = pf.find_pl_path(self.cal_pl, 'nres')
