@@ -2,6 +2,13 @@ import copy
 import warnings
 import numpy as np
 
+def print_deps_map(deps_map):
+    """
+    Prints a user-readable diagram of a dependency map.
+    """
+    return
+    
+
 def get_most_recent_run(name, deps_map):
     """
     Find the most recent run index for a parameter name.

@@ -454,6 +454,7 @@ class DataSet:
         # Otherwise create LazyAttr for per-row/vectorized output
         attr = pf.LazyAttr(self, name)
         object.__setattr__(self, name, attr)
+        self.global_cache[name] = False
         
         attr = object.__getattribute__(self, name)
         

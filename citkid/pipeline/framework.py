@@ -107,16 +107,16 @@ class LazyAttr:
             if not 0 <= rows[idx] < self.DS.nres:
                 raise ValueError(f"row index {r} out of bounds")
 
-        # If the data was found in the zarr, then just load it from the zarr array.
-        if self.run_idx is not None:
-            local_idxs = np.where(np.isin(self.data_idx, rows))[0]
-            out = self.data[local_idxs]
+        # # If the data was found in the zarr, then just load it from the zarr array.
+        # if self.run_idx is not None:
+        #     local_idxs = np.where(np.isin(self.data_idx, rows))[0]
+        #     out = self.data[local_idxs]
                 
-        else: # Otherwise, load data into the cache, and return it from the cache.
-            self._ensure_loaded(rows)
+        # else: # Otherwise, load data into the cache, and return it from the cache.
+        self._ensure_loaded(rows)
 
-            # Fetch data from cache
-            out = [self._cache[r] for r in rows]
+        # Fetch data from cache
+        out = [self._cache[r] for r in rows]
 
         if not return_array:
             return out[0]  # single row, return 1D array
@@ -262,8 +262,8 @@ class plStep:
                 params.append(data_idx)
                 continue
             
-            param_is_global.append(DS.global_cache[p])
             val = getattr(DS, p)
+            param_is_global.append(DS.global_cache[p])
             # Only slice input for per-row or vectorized functions
             if self.func_type in ["per-row", "vectorized"]:
                 if not param_is_global[-1]:
@@ -329,6 +329,18 @@ class plStep:
         """
         Updates the dependencies map in a DataSet.
         """
+        def deep_union(a, b):
+            """
+            Returns the union of two nested dictionaries a and b.
+            """
+            out = copy.deepcopy(a)
+            for k, v in b.items():
+                if k in out and isinstance(out[k], dict) and isinstance(v, dict):
+                    out[k] = deep_union(out[k], v)
+                else:
+                    out[k] = v
+            return out
+        
         def update_deps(return_names, deps_map):
             """
             Updates individual leaves of the deps_map corresponding
@@ -363,14 +375,14 @@ class plStep:
             # the deps_maps for each data index.
             deps_map_global = {}
             if 'global' in DS.deps_map:
-                deps_map_global = DS.deps_map['global']
+                deps_map_global = copy.deepcopy(DS.deps_map['global'])
             for di in data_idx:
                 di_str = f'idx{di}'
                 if di_str not in DS.deps_map:
                     DS.deps_map[di_str] = {}
                 deps_map = DS.deps_map[di_str]
                 # Unite global deps_map with the per-data_index deps_map
-                DS.deps_map[di_str] = deps_map | copy.deepcopy(deps_map_global)
+                DS.deps_map[di_str] = deep_union(deps_map, deps_map_global)
                 deps_map = DS.deps_map[di_str]
                 
                 update_deps(self.return_names, deps_map)
