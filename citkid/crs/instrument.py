@@ -1,15 +1,15 @@
 import os
+import asyncio
 import shutil
 import warnings
 import numpy as np
 from time import sleep
 from tqdm.auto import tqdm
+from . import util
 import rfmux
-from .util import find_key_and_index, get_modules, run_for_duration
-from .util import convert_parser_to_z, convert_parser_to_z_batch
-from .util import get_sample_frequency
 from rfmux.algorithms.measurement import take_netanal
 from rfmux.tools import parser
+import warnings
 
 class CRS:
     def __init__(self, serial_number = 27, interface = 'enp2s0'):
@@ -26,7 +26,20 @@ class CRS:
         Returns:
         None
         """
+        # Input validation 
+        if rfmux.__version__ != '1.3.2':
+            raise RuntimeError('rfmux version 1.3.2 is required') 
+        if not isinstance(serial_number, int):
+            raise TypeError('serial_number must be an integer') 
+        if not util.interface_exists(interface):
+            raise ValueError(f'interface {interface} does not exist') 
+        
+        # Store inputs
         self.serial_number = serial_number
+        self.interface = interface
+        self.nco_freqs = {}
+
+        # Initialize CRS object
         session_str = (
             '!HardwareMap [ !CRS { '
             + f'serial: "{serial_number:04d}"'
@@ -34,73 +47,131 @@ class CRS:
         session_str += ' } ]'
         s = rfmux.load_session(session_str)
         self.d = s.query(rfmux.CRS).one()
-        self.nco_freq_dict = {}
-        self.interface = interface
 
-    async def configure_system(self, clock_source="SMA", full_scale_dbm = 7,
+    async def configure_system(self, clock_source = "VCXO", full_scale_dbm = 7,
                                analog_bank_high = False, verbose = True):
         """
-        Resolve the system, set the timestamp port and clock source, and set
-        the DAC scale.
+        Resolve the system, validate the CRS firmware version, set the timestamp 
+        port, clock source, extended bandwidth, analog bank, and DAC full scale.
 
         Parameters:
         clock_source (str): clock source specification. 'VCXO' for the internal
             voltage controlled crystal oscillator or 'SMA' for the external 10
-            MHz reference (reference should be 5 Vpp).
+            MHz reference (reference should be 5 Vpp). Note that the clock 
+            source will default to 'VCXO' if the specified source is 
+            unavailable, and a warning will be raised.
         full_scale_dbm (int): full scale power in dBm. Range is [-18, 7].
         analog_bank_high (bool): if True, uses modules 1-4 (DAC/ADC 5-8). Else
-            uses modules 1-4 (DAC/ADC 1-4).
+            uses modules 1-4 (DAC/ADC 1-4). Can be changed later using 
+            self.set_analog_bank.
         verbose (bool): If True, gets and prints the clocking source.
 
         Returns:
         None
         """
+        # Input validation
+        validate_configure_system_params(clock_source, full_scale_dbm, 
+                                         analog_bank_high, verbose)
+        
         # Resolve the system
         await self.d.resolve()
-        # Set the timestamp port. bypass if already set
-        just_booted = await self.d.get_timestamp_port() != 'TEST'
-        if just_booted:
-            await self.d.set_timestamp_port(self.d.TIMESTAMP_PORT.TEST)
-        # Set the clock source
-        await self.d.set_clock_source(clock_source)
-        # Default extended bandwidth to False
-        await self.set_extended_module_bandwidth(False)
-        # Set the analog bank
-        await self.set_analog_bank(analog_bank_high)
-        # Set the DAC scale and routing. Routing may be obsolete but I'm not
-        # absolutely sure. Might be worth testing and removing
-        module_indices = range(5, 9) if analog_bank_high else range(1, 5)
-        for module_index in module_indices:
-            await self.d.set_dmfd_routing(self.d.ROUTING.ADC, module_index)
-            await self.d.set_dac_scale(full_scale_dbm, self.d.UNITS.DBM,
-                                       module_index)
-        self.full_scale_dbm = full_scale_dbm
-        self.d.full_scale_dbm = full_scale_dbm
-        # Print configuration if verbose. Sleep to be safe, mostly for routing
-        sleep(1)
-        if verbose:
-            print('System configured')
-            print("Clocking source is", await self.d.get_clock_source())
 
+        # Validate firmware version
         self.firmware_release = await self.d.get_firmware_release() 
         if self.firmware_release.version != '1.6.0rc2':
             raise RuntimeError("CRS firmware must be version 1.6.0rc2")
 
-    async def set_analog_bank(self, analog_bank_high):
+        # Set the timestamp port. Bypass if already set
+        just_booted = await self.d.get_timestamp_port() != 'TEST'
+        if just_booted:
+            await self.d.set_timestamp_port(self.d.TIMESTAMP_PORT.TEST)
+
+        # Set the clock source
+        await self.set_clock_source(clock_source)
+
+        # Default extended bandwidth to False
+        await self.set_extended_module_bw(False)
+
+        # Set the analog bank and DAC full scales
+        await self.set_analog_bank(analog_bank_high, full_scale_dbm)
+
+        # Print configuration if verbose.
+        if verbose:
+            print('System configured')
+            print("Clocking source is", self.clock_source)
+
+    async def set_clock_source(self, clock_source):
+        """
+        Set the clock source to 'VCXO' or 'SMA'.
+        
+        Parameters:
+        clock_source (str): clock source specification. 'VCXO' for the internal
+            voltage controlled crystal oscillator or 'SMA' for the external 10
+            MHz reference (reference should be 5 Vpp).
+            
+        Returns:
+        None
+        """
+        # Input validation
+        validate_configure_system_params(clock_source, 1, True, True)
+        
+        # Set and check clock source
+        await self.d.set_clock_source(clock_source)
+        self.clock_source = await self.d.get_clock_source() 
+        if self.clock_source != clock_source:
+            warnings.warn(
+                f"Requested clock source {clock_source} unavailable. "
+                + f"Using {self.clock_source} instead.",
+                UserWarning
+            )
+
+    async def set_analog_bank(self, analog_bank_high, full_scale_dbm):
         """
         Set the analog bank to high (modules 5-8) or low (modules 1-4).
 
         Parameters:
         analog_bank_high (bool): if True, uses modules 1-4 (DAC/ADC 5-8). Else
             uses modules 1-4 (DAC/ADC 1-4).
+        full_scale_dbm (int): full scale power in dBm. Range is [-18, 7].
 
         Returns:
         None
         """
+        # Input validation
+        validate_configure_system_params("SMA", full_scale_dbm, 
+                                         analog_bank_high, True)
+        
+        # Set analog bank
         await self.d.set_analog_bank(high = analog_bank_high)
+        abh = await self.d.get_analog_bank()
+        if abh != analog_bank_high:
+            raise RuntimeError("Failed to set analog bank")
+        
+        # Store analog bank
         self.analog_bank_high = analog_bank_high
 
-    async def set_extended_module_bandwidth(self, extended):
+        # Set DAC scale to full_scale_dbm
+        module_idxs = range(5, 9) if analog_bank_high else range(1, 5)
+        coros = [
+            self.d.set_dac_scale(full_scale_dbm, self.d.UNITS.DBM,
+                                       module_idx)
+            for module_idx in module_idxs
+        ]
+        await asyncio.gather(*coros) 
+
+        # Confirm DAC scale was set correctly
+        coros = [
+            self.d.get_dac_scale(self.d.UNITS.DBM, module_idx)
+            for module_idx in module_idxs
+                ]
+        results = await asyncio.gather(*coros) 
+        if not np.allclose(results, full_scale_dbm, atol = 0.1):
+            raise RuntimeError("Failed to set DAC full scale")
+        
+        # Store full scale in self.d
+        self.d.full_scale_dbm = full_scale_dbm
+
+    async def set_extended_module_bw(self, extended):
         """
         Choose between the standard (500 MHz) and extended (600 MHz) bandwidth.
 
@@ -114,31 +185,43 @@ class CRS:
         Returns:
         None
         """
+        # Input validation
+        if not isinstance(extended, bool):
+            raise TypeError('extended must be a boolean value') 
+        
+        # Set and check extended bandwidth
         await self.d.set_extended_module_bandwidth(extended)
+        ex = await self.d.get_extended_module_bandwidth()
+        if ex != extended:
+            raise RuntimeError("Failed to set extended module bandwidth")
+        
+        # Store extended bandwidth
         self.extended_bw = extended
+
+        # Raise warning if extended bandwidth is set
         if extended:
             warnings.warn(f"Extended module bandwidth set", UserWarning)
 
-    async def set_nco(self, nco_freq_dict, verbose = True):
+    async def set_nco(self, nco_freqs, verbose = True):
         """
         Set the NCO frequency.
 
         Parameters:
-        nco_freq_dict (dict): keys (int) are module indices and values (float)
+        nco_freqs (dict): keys (int) are module indices and values (float)
             are NCO frequencies in Hz.
         verbose (bool): If True, prints the NCO frequencies after confirming.
 
         Returns:
         None
         """
-        modules = get_modules(self.d, list(nco_freq_dict.keys()))
-        await modules.set_nco(nco_freq_dict)
-        for module_index, nco_set in nco_freq_dict.items():
-            nco_meas = await self.d.get_nco_frequency(module = module_index)
-            self.nco_freq_dict[module_index] = nco_meas
+        nco_freqs = nco_freqs.copy()
+        modules = util.get_modules(self.d, list(nco_freqs.keys()))
+        await modules.set_nco(nco_freqs)
+        self.nco_freqs.update(nco_freqs)
+        for module_idx, nco in nco_freqs.items():
             if verbose:
-                nco_str = f'{round(nco_meas * 1e-6, 6)}'
-                print(f'Module {module_index} NCO is {nco_str} MHz')
+                nco_str = f'{round(nco * 1e-6, 6)}'
+                print(f'Module {module_idx} NCO is {nco_str} MHz')
 
     async def write_tones(self, fres, ares):
         """
@@ -161,18 +244,18 @@ class CRS:
         max_ntones (int): Maximum tones per module.
         """
         # Split fres and ares into dictionaries
-        if not len(self.nco_freq_dict):
+        if not len(self.nco_freqs):
             raise Exception("NCO frequencies are not set")
-        channel_indices = list(range(len(fres)))
-        self.fres_dict = {key: [] for key in self.nco_freq_dict.keys()}
-        self.ares_dict = {key: [] for key in self.nco_freq_dict.keys()}
-        self.ch_ix_dict = {key: [] for key in self.nco_freq_dict.keys()}
-        for ch_ix, fr, ar in zip(channel_indices, fres, ares):
-            module_index = min(self.nco_freq_dict,
-                             key = lambda k: np.abs(self.nco_freq_dict[k] - fr))
-            self.fres_dict[module_index].append(fr)
-            self.ares_dict[module_index].append(ar)
-            self.ch_ix_dict[module_index].append(ch_ix)
+        channel_idxs = list(range(len(fres)))
+        self.fres_dict = {key: [] for key in self.nco_freqs.keys()}
+        self.ares_dict = {key: [] for key in self.nco_freqs.keys()}
+        self.ch_ix_dict = {key: [] for key in self.nco_freqs.keys()}
+        for ch_ix, fr, ar in zip(channel_idxs, fres, ares):
+            module_idx = min(self.nco_freqs,
+                             key = lambda k: np.abs(self.nco_freqs[k] - fr))
+            self.fres_dict[module_idx].append(fr)
+            self.ares_dict[module_idx].append(ar)
+            self.ch_ix_dict[module_idx].append(ch_ix)
         self.fres_dict = {
             key: np.array(value) for key, value in self.fres_dict.items()
         }
@@ -183,19 +266,19 @@ class CRS:
             key: np.array(value) for key, value in self.ch_ix_dict.items()
         }
         # Confirm that the tones are within the NCO bandwidths
-        for module_index in self.nco_freq_dict.keys():
+        for module_idx in self.nco_freqs.keys():
             bw_half = 312.5e6 if self.extended_bw else 250e6
             diffs = (
-                self.fres_dict[module_index]
-                - self.nco_freq_dict[module_index]
+                self.fres_dict[module_idx]
+                - self.nco_freqs[module_idx]
             )
             if any(np.abs(diffs) > bw_half):
                 err = f'All of fres must be within {round(bw_half / 1e6, 1)} '
                 err += 'MHz of an NCO frequency'
                 raise ValueError(err)
         # Write tones
-        modules = get_modules(self.d, list(self.fres_dict.keys()))
-        await modules.write_tones(self.nco_freq_dict, self.fres_dict,
+        modules = util.get_modules(self.d, list(self.fres_dict.keys()))
+        await modules.write_tones(self.nco_freqs, self.fres_dict,
                                   self.ares_dict)
         
         max_ntones = max([len(f) for f in self.fres_dict.values()])
@@ -220,24 +303,24 @@ class CRS:
         np.ndarray: complex S21 values for each frequency.
         """
         frequencies, ares = np.asarray(frequencies), np.asarray(ares)
-        if not len(self.nco_freq_dict):
+        if not len(self.nco_freqs):
             raise Exception("NCO frequencies are not set")
         # Split frequencies and ares into dictionaries
-        channel_indices = list(range(len(frequencies)))
-        self.frequencies_dict = {key: [] for key in self.nco_freq_dict.keys()}
-        self.ares_dict = {key: [] for key in self.nco_freq_dict.keys()}
-        self.ch_ix_dict = {key: [] for key in self.nco_freq_dict.keys()}
+        channel_idxs = list(range(len(frequencies)))
+        self.frequencies_dict = {key: [] for key in self.nco_freqs.keys()}
+        self.ares_dict = {key: [] for key in self.nco_freqs.keys()}
+        self.ch_ix_dict = {key: [] for key in self.nco_freqs.keys()}
         def select_nco(k):
             ncos = [
-                np.abs(self.nco_freq_dict[k] - fr)
+                np.abs(self.nco_freqs[k] - fr)
                 for fr in [max(freqs), min(freqs)]
             ]
             return max(ncos)
-        for ch_ix, freqs, ar in zip(channel_indices, frequencies, ares):
-            module_index = min(self.nco_freq_dict, key = select_nco)
-            self.frequencies_dict[module_index].append(freqs)
-            self.ares_dict[module_index].append(ar)
-            self.ch_ix_dict[module_index].append(ch_ix)
+        for ch_ix, freqs, ar in zip(channel_idxs, frequencies, ares):
+            module_idx = min(self.nco_freqs, key = select_nco)
+            self.frequencies_dict[module_idx].append(freqs)
+            self.ares_dict[module_idx].append(ar)
+            self.ch_ix_dict[module_idx].append(ch_ix)
         self.frequencies_dict = {key: np.array(value)
                                  for key, value in self.frequencies_dict.items()
                                  }
@@ -248,10 +331,10 @@ class CRS:
                            for key, value in self.ch_ix_dict.items()
                            }
         # Confirm that frequencies are in each NCO bandwidth
-        for module_index in self.nco_freq_dict.keys():
+        for module_idx in self.nco_freqs.keys():
             bw_half = 312.5e6 if self.extended_bw else 250e6
-            diffs = self.frequencies_dict[module_index].copy()
-            diffs -= self.nco_freq_dict[module_index]
+            diffs = self.frequencies_dict[module_idx].copy()
+            diffs -= self.nco_freqs[module_idx]
             if any(np.abs(diffs).flatten() > bw_half):
                 err = 'All of frequencies must be within '
                 err += f'{round(bw_half / 1e6, 1)} MHz of an NCO frequency'
@@ -262,8 +345,8 @@ class CRS:
         await self.d.set_decimation(dec_stage)
         # sweep
         sweep_f, sweep_z = {}, {}
-        modules = get_modules(self.d, list(self.frequencies_dict.keys()))
-        await modules.sweep(self.nco_freq_dict, self.frequencies_dict,
+        modules = util.get_modules(self.d, list(self.frequencies_dict.keys()))
+        await modules.sweep(self.nco_freqs, self.frequencies_dict,
                             self.ares_dict, sweep_f, sweep_z, nsamps = nsamps,
                             verbose = verbose,
                             pbar_description = pbar_description)
@@ -271,11 +354,11 @@ class CRS:
         nres = frequencies.shape[0]
         f = np.empty(frequencies.shape, dtype = float)
         z = np.empty(frequencies.shape, dtype = complex)
-        for res_index in range(nres):
-            module_index, ch_index = find_key_and_index(self.ch_ix_dict,
-                                                        res_index)
-            f[res_index] = sweep_f[module_index][ch_index]
-            z[res_index] = sweep_z[module_index][ch_index]
+        for res_idx in range(nres):
+            module_idx, ch_idx = util.find_key_and_idx(self.ch_ix_dict,
+                                                        res_idx)
+            f[res_idx] = sweep_f[module_idx][ch_idx]
+            z[res_idx] = sweep_z[module_idx][ch_idx]
         if return_dbc:
             z /= 10 ** (ares[:, np.newaxis] / 20)
         return f, z
@@ -374,7 +457,7 @@ class CRS:
         f (np.array): array of frequencies in Hz.
         z (np.array): array of complex S21 data corresponding to f.
         """
-        ncos = list(self.nco_freq_dict.values())
+        ncos = list(self.nco_freqs.values())
         bw_total = 600e6 if self.extended_bw else 500e6
         bw = bw_total / 1024 + 200
         spacing = bw / npoints
@@ -451,9 +534,9 @@ class CRS:
         if batch_process and not outpath.endswith('.npy'):
             raise ValueError('outpath must end with .npy')
         if dec_stage > 2:
-            module_indices = list(self.nco_freq_dict.keys())
+            module_idxs = list(self.nco_freqs.keys())
         else:
-            module_indices = fast_modules
+            module_idxs = fast_modules
 
         fres, ares = np.asarray(fres), np.asarray(ares)
         
@@ -466,7 +549,7 @@ class CRS:
             await self.d.set_decimation(1, short=True, module=fast_modules)
         else:
             await self.d.set_decimation(dec_stage)
-        self.sample_frequency = get_sample_frequency(dec_stage)
+        self.sample_frequency = util.get_sample_frequency(dec_stage)
         if verbose:
             print(f'dec stage is {await self.d.get_decimation()}')
 
@@ -496,14 +579,14 @@ class CRS:
             # Legacy method 
             # -> larger data files, without batch processing, and slower
             z = [[]] * len(fres)
-            for module_index in module_indices:
-                ntones = len(self.ch_ix_dict[module_index])
-                zi = convert_parser_to_z(data_directory, self.serial_number,
-                                         module_index, ntones = ntones,
+            for module_idx in module_idxs:
+                ntones = len(self.ch_ix_dict[module_idx])
+                zi = util.convert_parser_to_z(data_directory, self.serial_number,
+                                         module_idx, ntones = ntones,
                                          max_ntones = max_ntones)
-                # fres0 = self.fres_dict[module_index].copy()
-                for index, ch_index in enumerate(self.ch_ix_dict[module_index]):
-                    z[ch_index] = zi[index]
+                # fres0 = self.fres_dict[module_idx].copy()
+                for idx, ch_idx in enumerate(self.ch_ix_dict[module_idx]):
+                    z[ch_idx] = zi[idx]
             # Sometimes the number of points is not exact
             data_len = min([len(zi) for zi in z])
             z = np.array([zi[:data_len] for zi in z])
@@ -529,8 +612,8 @@ class CRS:
             outpath.replace('.npy', f'_batch_tsample.npy'),
             1 / self.sample_frequency,
         )
-        convert_parser_to_z_batch(data_directory, outpath, self.serial_number,
-                      module_indices, ntones = len(fres),
+        util.convert_parser_to_z_batch(data_directory, outpath, self.serial_number,
+                      module_idxs, ntones = len(fres),
                       max_ntones = max_ntones,
                       return_dbc = return_dbc, ares = ares,
                       ch_ix_dict = self.ch_ix_dict,
@@ -543,28 +626,39 @@ class CRS:
 ################################################################################
 
 @rfmux.macro(rfmux.ReadoutModule, register=True)
-async def set_nco(module, nco_freq_dict):
+async def set_nco(module, nco_freqs):
         """
         Set the NCO frequency
 
         Parameters:
         module (rfmux.ReadoutModule): readout module object.
-        nco_freq_dict (dict): keys (int) are module indices and values (float)
+        nco_freqs (dict): keys (int) are module indices and values (float)
             are NCO frequencies in Hz. This should not be a round number.
+
+        Returns:
+        nco_meas (float): Measured NCO frequency in Hz.
         """
         d = module.crs
-        module_index = module.module
-        nco_freq = nco_freq_dict[module_index]
-        await d.set_nco_frequency(nco_freq, module = module_index)
+        module_idx = module.module
+        nco_freq = nco_freqs[module_idx]
+        await d.set_nco_frequency(nco_freq, module = module_idx)
+
+        nco_meas = await d.get_nco_frequency(module = module_idx)
+        if not np.isclose(nco_meas, nco_freq, atol = 1):
+            err = f'Failed to set NCO frequency to {nco_freq} Hz. '
+            err += f'Set to {nco_meas} Hz instead.'
+            raise RuntimeError(err)
+        
+        nco_freqs[module_idx] = nco_meas
 
 @rfmux.macro(rfmux.ReadoutModule, register=True)
-async def write_tones(module, nco_freq_dict, fres_dict, ares_dict):
+async def write_tones(module, nco_freqs, fres_dict, ares_dict):
         """
         Writes an array of tones given frequencies and amplitudes.
 
         Parameters:
         module (rfmux.ReadoutModule): readout module object.
-        nco_freq_dict (dict): keys (int) are module indices and values (float)
+        nco_freqs (dict): keys (int) are module indices and values (float)
             are NCO frequencies in Hz.
         fres_dict (dict): keys (int) are module indices and values (array-like)
             are frequencies in Hz.
@@ -573,14 +667,14 @@ async def write_tones(module, nco_freq_dict, fres_dict, ares_dict):
         """
         # Prepare fres and ares
         d = module.crs
-        module_index = module.module
-        fres, ares = fres_dict[module_index], ares_dict[module_index]
+        module_idx = module.module
+        fres, ares = fres_dict[module_idx], ares_dict[module_idx]
         fres = np.asarray(fres, dtype = np.float64)
         ares = np.asarray(ares, dtype = np.float64)
 
         # Check NCO and input parameters
         try:
-            nco = nco_freq_dict[module_index]
+            nco = nco_freqs[module_idx]
         except:
             raise Exception('NCO frequency has not been set')
         
@@ -598,17 +692,17 @@ async def write_tones(module, nco_freq_dict, fres_dict, ares_dict):
         ares_amplitude = 10 ** ((ares - d.full_scale_dbm) / 20)
 
         # Clear channels
-        await d.clear_channels(module = module_index)
+        await d.clear_channels(module = module_idx)
         # Write frequencies and amplitudes
         async with d.tuber_context() as ctx:
             for ch, (fr, ar) in enumerate(zip(fres, ares_amplitude)):
                 ctx.set_frequency(fr - nco, channel = ch + 1,
-                                  module = module_index)
-                ctx.set_amplitude(ar, channel = ch+1, module = module_index)
+                                  module = module_idx)
+                ctx.set_amplitude(ar, channel = ch+1, module = module_idx)
             await ctx()
 
 @rfmux.macro(rfmux.ReadoutModule, register=True)
-async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
+async def sweep(module, nco_freqs, frequencies_dict, ares_dict, sweep_f,
                 sweep_z, nsamps = 10, verbose = True,
                 pbar_description = 'Sweeping'):
         """
@@ -617,7 +711,7 @@ async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
 
         Parameters:
         module (rfmux.ReadoutModule): readout module object.
-        nco_freq_dict (dict): keys (int) are module indices and values (float)
+        nco_freqs (dict): keys (int) are module indices and values (float)
             are NCO frequencies in Hz.
         frequencies_dict (dict): keys (int) are module indices and values
             (M X N array-like float) are arrays where the first index M is the
@@ -634,15 +728,15 @@ async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
             in f.
         """
         d = module.crs
-        module_index = module.module
-        frequencies = np.asarray(frequencies_dict[module_index])
-        ares = np.asarray(ares_dict[module_index])
+        module_idx = module.module
+        frequencies = np.asarray(frequencies_dict[module_idx])
+        ares = np.asarray(ares_dict[module_idx])
 
         if not len(frequencies):
             return np.array([], dtype = float), np.array([], dtype = complex)
         
-        # Dither frequencies per sweep index
-        nco_freq = nco_freq_dict[module_index]
+        # Dither frequencies per sweep idx
+        nco_freq = nco_freqs[module_idx]
         for ch, fres in enumerate(frequencies):
             frequencies[ch] = take_netanal._safe_concatenate_frequencies(fres, 
                                                                        nco_freq)
@@ -652,8 +746,8 @@ async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
             raise ValueError('ares and frequencies are not the same length')
 
         # Write amplitudes
-        fres_dict = {module_index: [fi[0] for fi in frequencies]}
-        await module.write_tones(nco_freq_dict, fres_dict, ares_dict)
+        fres_dict = {module_idx: [fi[0] for fi in frequencies]}
+        await module.write_tones(nco_freqs, fres_dict, ares_dict)
 
         # Initialize z array
         z = np.empty((n_channels, n_points), dtype = complex)
@@ -663,16 +757,16 @@ async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
             pbar = tqdm(pbar, total = n_points, leave = False)
             pbar.set_description(pbar_description)
 
-        for sweep_index in pbar:
+        for sweep_idx in pbar:
             # Write frequencies
             async with d.tuber_context() as ctx:
                 for ch in range(n_channels):
-                    f = frequencies[ch, sweep_index]
+                    f = frequencies[ch, sweep_idx]
                     ctx.set_frequency(f - nco_freq, channel = ch + 1,
-                                      module = module_index)
+                                      module = module_idx)
                 await ctx()
             samples = await d.get_samples(nsamps,
-                                          module = module_index,
+                                          module = module_idx,
                                           average = True) # channel = ??? instead of cutting channels later
             # format and average data
             zi = np.asarray(samples.mean.i) + 1j * np.asarray(samples.mean.q)
@@ -681,9 +775,32 @@ async def sweep(module, nco_freq_dict, frequencies_dict, ares_dict, sweep_f,
                 * rfmux.core.transferfunctions.VOLTS_PER_ROC
                 / np.sqrt(2)
             )
-            z[:, sweep_index] = zi
+            z[:, sweep_idx] = zi
 
         # Turn off channels
-        await d.clear_channels(module = module_index)
-        sweep_f[module_index] = frequencies
-        sweep_z[module_index] = z
+        await d.clear_channels(module = module_idx)
+        sweep_f[module_idx] = frequencies
+        sweep_z[module_idx] = z
+
+def validate_configure_system_params(clock_source, full_scale_dbm, 
+                                     analog_bank_high, verbose):
+    """
+    Validate the input parameters for configure_system.
+    
+    Parameters:
+    see full_scale_dbm docstring.
+    
+    Returns:
+    None
+    """
+    if clock_source not in ['VCXO', 'SMA']:
+        raise ValueError("clock_source must be 'VCXO' or 'SMA'")
+    if not isinstance(full_scale_dbm, (int, float)):
+        raise TypeError('full_scale_dbm must be a number')
+    if full_scale_dbm < 0. or full_scale_dbm > 7:
+        raise ValueError('full_scale_dbm must be in [0, 7]')
+    assert full_scale_dbm
+    if not isinstance(analog_bank_high, bool):
+        raise TypeError('analog_bank_high must be a boolean value')
+    if not isinstance(verbose, bool):
+        raise TypeError('verbose must be a boolean value')

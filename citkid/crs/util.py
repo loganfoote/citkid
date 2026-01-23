@@ -6,6 +6,7 @@ import signal
 from time import sleep
 from tqdm.auto import tqdm
 import warnings
+import socket 
 
 def convert_parser_to_z(path, crs_sn, module, ntones, max_ntones):
     """
@@ -254,3 +255,20 @@ def estimate_timestream_data_size(dec_stage, noise_time, nmodules, max_ntones,
         unit = 'GB'
         s = f'{size_processed:.1f}'
     print(f'Processed data size:  {s} {unit}') 
+
+
+def interface_exists(iface):
+    """
+    Check if a network interface exists on the system.
+    
+    Parameters:
+    iface (str): Name of the network interface to check.
+    
+    Returns:
+    bool: True if the interface exists, False otherwise.
+    """
+    try:
+        socket.if_nametoindex(iface)
+        return True
+    except OSError:
+        return False
