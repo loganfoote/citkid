@@ -21,7 +21,9 @@ CAL_STEPS:
           1:
             task: get_At
           2:
-            task: get_sparper
+            task: get_sparper 
+            # Small issue: need to define this such that get_freqs is 
+            # always True, rather than a user-defined parameter.
       5:
         task: get_xt
     F_STEPS:
@@ -30,6 +32,7 @@ CAL_STEPS:
       2:
         task: rmv_gain_f 
         delete_input: [zf]
+        # Add nonlinear IQ fitting here when it is ready 
       3:
         task: center_f 
       4:

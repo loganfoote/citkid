@@ -423,6 +423,9 @@ default_cal_steps =\
  ('get_thetat', circle.convert_to_theta, 
   ['zt_cent', 'unwrap_thetat'], ['thetat'], 'per-row'),
 
+  ('cut_xf', lambda x, t, mask: (x[mask], t[mask]), 
+  ['xf', 'thetaf', 'xcal_mask'], ['xf_cut', 'thetaf_cut'], 'per-row'),
+
  ('get_xf', lambda ff, ft: 1 - ff / ft, 
   ['ff', 'ft'], ['xf'], 'per-row'),
 
@@ -433,7 +436,8 @@ default_cal_steps =\
   ['zt_cent'], ['At'], 'per-row'),
  ('get_sparper', circle.get_spar_sper, 
   ['thetat', 'At', 'circ_radius', 'dt', 'sparper_get_freqs'], 
-  ['spar', 'sper'], 'per-row')
+  ['spar', 'sper'], 'per-row'),
+  
 )
 default_analysis_steps =\
 (# analysis steps
@@ -452,10 +456,10 @@ default_analysis_steps =\
  ('get_xcal_mask', xcal.get_xcal_mask,
   ['ff', 'thetaf', 'thetat', 'xcal_idx0_offset', 'xcal_idx1_offset', 
    'xcal_std_cutoff'], ['xcal_mask'], 'per-row'),
- ('cut_xf', lambda x, t, mask: (x[mask], t[mask]), 
-  ['xf', 'thetaf', 'xcal_mask'], ['xf_cut', 'thetaf_cut'], 'per-row'),
+
  ('fit_x_theta', np.polyfit, 
   ['xf_cut', 'thetaf_cut', 'poly_x_deg'], ['poly_x'], 'per-row'),
+  # This will probably be concatenated with 'cut_xf' and take the mask as input
 )
 
 
