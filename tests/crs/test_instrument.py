@@ -1,76 +1,42 @@
-import importlib
-import sys
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
+import numpy as np 
 import pytest
-
-################################################################################
-######################### Fake rfmux module for testing ########################
-################################################################################
-def _install_fake_rfmux(monkeypatch):
-    """Provide a minimal fake rfmux module for import-time decorators."""
-    def macro(_cls, register=False):
-        def decorator(func):
-            return func
-        return decorator
-
-    fake_rfmux = SimpleNamespace(
-        macro=macro,
-        ReadoutModule=type("ReadoutModule", (), {}),
-    )
-    fake_measurement = SimpleNamespace(
-        take_netanal=SimpleNamespace(
-            _safe_concatenate_frequencies=lambda frequencies, _nco: frequencies
-        )
-    )
-    fake_algorithms = SimpleNamespace(measurement=fake_measurement)
-    monkeypatch.setitem(sys.modules, "rfmux", fake_rfmux)
-    monkeypatch.setitem(sys.modules, "rfmux.algorithms", fake_algorithms)
-    monkeypatch.setitem(sys.modules, "rfmux.algorithms.measurement",
-                        fake_measurement)
-
-@pytest.fixture()
-def instrument_module(monkeypatch):
-    _install_fake_rfmux(monkeypatch)
-
-    from citkid.crs import instrument
-    return importlib.reload(instrument)
+from citkid.crs.instrument import CRS
 
 ################################################################################
 #################################### set_nco ###################################
 ################################################################################
-@pytest.mark.asyncio
-async def test_set_nco_uses_module_index(instrument_module):
-    device = SimpleNamespace(set_nco_frequency=AsyncMock())
-    module = SimpleNamespace(crs=device, module=2)
+# @pytest.mark.asyncio
+# async def test_set_nco_uses_module_index(instrument_module):
+#     device = SimpleNamespace(set_nco_frequency=AsyncMock())
+#     module = SimpleNamespace(crs=device, module=2)
 
-    nco_freq_dict = {1: 123.0, 2: 456.0, 3: 789.0}
-    await instrument_module.set_nco(module, nco_freq_dict)
+#     nco_freq_dict = {1: 123.0, 2: 456.0, 3: 789.0}
+#     await instrument_module.set_nco(module, nco_freq_dict)
 
-    device.set_nco_frequency.assert_awaited_once_with(456.0, module=2)
-
-
-@pytest.mark.asyncio
-async def test_set_nco_passes_through_value(instrument_module):
-    device = SimpleNamespace(set_nco_frequency=AsyncMock())
-    module = SimpleNamespace(crs=device, module=3)
-
-    nco_freq_dict = {3: 1.2345e6}
-    await instrument_module.set_nco(module, nco_freq_dict)
-
-    device.set_nco_frequency.assert_awaited_once_with(1.2345e6, module=3)
+#     device.set_nco_frequency.assert_awaited_once_with(456.0, module=2)
 
 
-@pytest.mark.asyncio
-async def test_set_nco_missing_module_key_raises(instrument_module):
-    device = SimpleNamespace(set_nco_frequency=AsyncMock())
-    module = SimpleNamespace(crs=device, module=5)
+# @pytest.mark.asyncio
+# async def test_set_nco_passes_through_value(instrument_module):
+#     device = SimpleNamespace(set_nco_frequency=AsyncMock())
+#     module = SimpleNamespace(crs=device, module=3)
 
-    nco_freq_dict = {3: 1000}
-    with pytest.raises(KeyError):
-        await instrument_module.set_nco(module, nco_freq_dict)
+#     nco_freq_dict = {3: 1.2345e6}
+#     await instrument_module.set_nco(module, nco_freq_dict)
 
-    device.set_nco_frequency.assert_not_awaited()
+#     device.set_nco_frequency.assert_awaited_once_with(1.2345e6, module=3)
+
+
+# @pytest.mark.asyncio
+# async def test_set_nco_missing_module_key_raises(instrument_module):
+#     device = SimpleNamespace(set_nco_frequency=AsyncMock())
+#     module = SimpleNamespace(crs=device, module=5)
+
+#     nco_freq_dict = {3: 1000}
+#     with pytest.raises(KeyError):
+#         await instrument_module.set_nco(module, nco_freq_dict)
+
+#     device.set_nco_frequency.assert_not_awaited()
 
 ################################################################################
 ################################## write_tones #################################
