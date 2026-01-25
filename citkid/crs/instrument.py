@@ -48,6 +48,9 @@ class CRS:
         s = rfmux.load_session(session_str)
         self.d = s.query(rfmux.CRS).one()
 
+        # Set module bw, in case self.extended_bw is not called 
+        self.bw = 500e6
+
     async def configure_system(self, clock_source = "VCXO", full_scale_dbm = 7,
                                analog_bank_high = False, verbose = True):
         """
@@ -90,7 +93,7 @@ class CRS:
         await self.set_clock_source(clock_source)
 
         # Default extended bandwidth to False
-        await self.set_extended_module_bw(False)
+        await self.set_extended_bw(False)
 
         # Set the analog bank and DAC full scales
         await self.set_analog_bank(analog_bank_high, full_scale_dbm)
@@ -171,7 +174,7 @@ class CRS:
         # Store full scale in self.d
         self.d.full_scale_dbm = full_scale_dbm
 
-    async def set_extended_module_bw(self, extended):
+    async def set_extended_bw(self, extended):
         """
         Choose between the standard (500 MHz) and extended (600 MHz) bandwidth.
 
@@ -195,8 +198,11 @@ class CRS:
         if ex != extended:
             raise RuntimeError("Failed to set extended module bandwidth")
         
-        # Store extended bandwidth
+        # Store extended_bw and bw
         self.extended_bw = extended
+        self.bw = 625e6 if extended else 500e6
+        warnings.warn("Check if 625 MHz is the correct extended bandwidth", 
+                      UserWarning)
 
         # Raise warning if extended bandwidth is set
         if extended:
@@ -223,69 +229,74 @@ class CRS:
                 nco_str = f'{round(nco * 1e-6, 6)}'
                 print(f'Module {module_idx} NCO is {nco_str} MHz')
 
-    async def write_tones(self, fres, ares):
+    async def write_tones(self, fres, ares, ch_map = None, 
+                          allow_missing = False):
         """
         Write tones for the provided frequencies and amplitudes.
-
-        Splits the tones into the appropriate modules using the NCO frequencies.
-        This could lead to behavior where one tone jumps between NCOs during a
-        run. Consider setting tones per NCO or shifting NCOs with resonances.
-        tones into the appropriate modules using the NCO frequencies.
-        Note: this could lead to behavior where one tone jumps between NCOs
-        during a measurement run. To mitigate this, we could consider setting
-        the tones for each NCO manually, or shifting the NCOs with the
-        resonances.
 
         Parameters:
         fres (array-like): tone frequencies in Hz.
         ares (array-like): tone powers in dBm.
+        ch_map (dict): keys (int) are module indices and values (array-like int)
+            are channel indices to write tones to. If None, automatically maps
+            tones to NCOs based on frequency.
+        allow_missing (bool): If True, ignores tones that are outside the 
+            bandwidth of all NCOs. If False, raises an error if any tones are 
+            outside the bandwidth of all NCOs.
 
         Returns:
-        max_ntones (int): Maximum tones per module.
+        None
         """
-        # Split fres and ares into dictionaries
+        # Input validation 
         if not len(self.nco_freqs):
             raise Exception("NCO frequencies are not set")
-        channel_idxs = list(range(len(fres)))
-        self.fres_dict = {key: [] for key in self.nco_freqs.keys()}
-        self.ares_dict = {key: [] for key in self.nco_freqs.keys()}
-        self.ch_ix_dict = {key: [] for key in self.nco_freqs.keys()}
-        for ch_ix, fr, ar in zip(channel_idxs, fres, ares):
-            module_idx = min(self.nco_freqs,
-                             key = lambda k: np.abs(self.nco_freqs[k] - fr))
-            self.fres_dict[module_idx].append(fr)
-            self.ares_dict[module_idx].append(ar)
-            self.ch_ix_dict[module_idx].append(ch_ix)
-        self.fres_dict = {
-            key: np.array(value) for key, value in self.fres_dict.items()
-        }
-        self.ares_dict = {
-            key: np.array(value) for key, value in self.ares_dict.items()
-        }
-        self.ch_ix_dict = {
-            key: np.array(value) for key, value in self.ch_ix_dict.items()
-        }
-        # Confirm that the tones are within the NCO bandwidths
-        for module_idx in self.nco_freqs.keys():
-            bw_half = 312.5e6 if self.extended_bw else 250e6
-            diffs = (
-                self.fres_dict[module_idx]
-                - self.nco_freqs[module_idx]
-            )
-            if any(np.abs(diffs) > bw_half):
-                err = f'All of fres must be within {round(bw_half / 1e6, 1)} '
-                err += 'MHz of an NCO frequency'
-                raise ValueError(err)
-        # Write tones
-        modules = util.get_modules(self.d, list(self.fres_dict.keys()))
-        await modules.write_tones(self.nco_freqs, self.fres_dict,
-                                  self.ares_dict)
+        fres = np.asarray(fres, dtype = np.float64)
+        ares = np.asarray(ares, dtype = np.float64)
+        if fres.shape != ares.shape:
+            raise ValueError('fres and ares must be the same shape')
+        if len(fres) == 0:
+            return 0 
         
-        max_ntones = max([len(f) for f in self.fres_dict.values()])
-        return max_ntones
+        # Get ch_map
+        if ch_map is None:
+            ch_map, missing_chs = util.map_channels_to_ncos(
+                fres, self.nco_freqs, self.extended_bw
+                )
+        else:
+            missing_chs = []
 
-    async def sweep(self, frequencies, ares, nsamps = 10, return_dbc = True,
-                    verbose = True, pbar_description = 'Sweeping'):
+        # Handle missing channels
+        if missing_chs:
+            msg = (f"Tones must be within {round(self.bw / 2e6, 1)} "
+                   "MHz of an NCO frequency. Ignoring "
+                   f"{len(missing_chs)} tones.")
+            if allow_missing:
+                warnings.warn(msg, UserWarning)
+            else:
+                raise ValueError(msg)
+            
+        # Split fres and ares into dictionaries
+        self.fres_map = {key: fres[val] for key, val in ch_map.items()}
+        self.ares_map = {key: ares[val] for key, val in ch_map.items()}
+        self.ch_map = ch_map
+
+        # Dither frequencies 
+        for key, fres in self.fres_map.items():
+            self.fres_map[key] = take_netanal._safe_concatenate_frequencies(
+                fres, self.nco_freqs[key]
+                )
+
+        # Write tones
+        modules = util.get_modules(self.d, list(self.fres_map.keys()))
+        await modules.write_tones(self.nco_freqs, self.fres_map,
+                                  self.ares_map)
+        
+        # Save max_tones 
+        self.max_ntones = max([len(f) for f in self.fres_map.values()])
+
+    async def sweep(self, frequencies, ares, nsamps = 10, 
+                    allow_missing = False, verbose = True, 
+                    pbar_description = 'Sweeping'):
         """
         Perform a frequency sweep and return complex S21 at each frequency.
 
@@ -295,7 +306,6 @@ class CRS:
             for a single point in the sweep
         ares (M array-like float): amplitudes in dBm for each channel
         nsamps (int): number of samples to average per point
-        return_dbc (bool): If True, divides the output by the tone power
         verbose (bool): If True, displays a progress bar while sweeping
         pbar_description (str): description for the progress bar
 
@@ -305,66 +315,81 @@ class CRS:
         frequencies, ares = np.asarray(frequencies), np.asarray(ares)
         if not len(self.nco_freqs):
             raise Exception("NCO frequencies are not set")
-        # Split frequencies and ares into dictionaries
-        channel_idxs = list(range(len(frequencies)))
-        self.frequencies_dict = {key: [] for key in self.nco_freqs.keys()}
-        self.ares_dict = {key: [] for key in self.nco_freqs.keys()}
-        self.ch_ix_dict = {key: [] for key in self.nco_freqs.keys()}
-        def select_nco(k):
-            ncos = [
-                np.abs(self.nco_freqs[k] - fr)
-                for fr in [max(freqs), min(freqs)]
-            ]
-            return max(ncos)
-        for ch_ix, freqs, ar in zip(channel_idxs, frequencies, ares):
-            module_idx = min(self.nco_freqs, key = select_nco)
-            self.frequencies_dict[module_idx].append(freqs)
-            self.ares_dict[module_idx].append(ar)
-            self.ch_ix_dict[module_idx].append(ch_ix)
-        self.frequencies_dict = {key: np.array(value)
-                                 for key, value in self.frequencies_dict.items()
-                                 }
-        self.ares_dict = {key: np.array(value)
-                          for key, value in self.ares_dict.items()
-                          }
-        self.ch_ix_dict = {key: np.array(value)
-                           for key, value in self.ch_ix_dict.items()
-                           }
-        # Confirm that frequencies are in each NCO bandwidth
-        for module_idx in self.nco_freqs.keys():
-            bw_half = 312.5e6 if self.extended_bw else 250e6
-            diffs = self.frequencies_dict[module_idx].copy()
-            diffs -= self.nco_freqs[module_idx]
-            if any(np.abs(diffs).flatten() > bw_half):
-                err = 'All of frequencies must be within '
-                err += f'{round(bw_half / 1e6, 1)} MHz of an NCO frequency'
-                raise ValueError(err)
+        
+        # Get channel map 
+        # Get ch_map
+        if ch_map is None:
+            ch_map, missing_chs = util.map_channels_to_ncos(
+                frequencies, self.nco_freqs, self.extended_bw
+                )
+        else:
+            missing_chs = []
+
+        # Handle missing channels
+        if missing_chs:
+            msg = (f"Tones must be within {round(self.bw / 2e6, 1)} "
+                   "MHz of an NCO frequency. Ignoring "
+                   f"{len(missing_chs)} tones.")
+            if allow_missing:
+                warnings.warn(msg, UserWarning)
+            else:
+                raise ValueError(msg)
+            
+        # Split fres and ares into dictionaries
+        self.freqs_map = {key: frequencies[val] for key, val in ch_map.items()}
+        self.ares_map = {key: ares[val] for key, val in ch_map.items()}
+        self.ch_map = ch_map
+
+        # Dither frequencies 
+        for key, freqs in self.freqs_map.items():
+            # Each point is the sweep is dithered across the NCO
+            for idx, freq in enumerate(freqs.T):
+                freq_dithered = take_netanal._safe_concatenate_frequencies(
+                    freq, self.nco_freqs[key]
+                    )
+                self.freqs_map[key][:, idx] = freq_dithered
+            raise NotImplementedError("Need to check logic on dithering for sweeps")
 
         # Set dec_stage
         dec_stage = 6
         await self.d.set_decimation(dec_stage)
-        # sweep
+
+        # Sweep
         sweep_f, sweep_z = {}, {}
-        modules = util.get_modules(self.d, list(self.frequencies_dict.keys()))
-        await modules.sweep(self.nco_freqs, self.frequencies_dict,
-                            self.ares_dict, sweep_f, sweep_z, nsamps = nsamps,
+        modules = util.get_modules(self.d, list(self.freqs_map.keys()))
+        await modules.sweep(self.nco_freqs, self.freqs_map,
+                            self.ares_map, sweep_f, sweep_z, nsamps = nsamps,
                             verbose = verbose,
                             pbar_description = pbar_description)
-        # Create f, z from sweep results
+        
+        ### Create f, z from sweep results
         nres = frequencies.shape[0]
-        f = np.empty(frequencies.shape, dtype = float)
-        z = np.empty(frequencies.shape, dtype = complex)
-        for res_idx in range(nres):
-            module_idx, ch_idx = util.find_key_and_idx(self.ch_ix_dict,
-                                                        res_idx)
-            f[res_idx] = sweep_f[module_idx][ch_idx]
-            z[res_idx] = sweep_z[module_idx][ch_idx]
-        if return_dbc:
-            z /= 10 ** (ares[:, np.newaxis] / 20)
+        f = np.full(frequencies.shape, np.nan, dtype = float)
+        z = np.full(frequencies.shape, np.nan + 1j * np.nan, dtype = complex)
+
+        # Build lookup arrays once for O(n) assignment
+        module_of_res = np.full(nres, -1, dtype = np.int32)
+        ch_of_res = np.full(nres, -1, dtype = np.int32)
+        for module_idx, ch_list in self.ch_ix_dict.items():
+            ch_list = np.asarray(ch_list, dtype = np.int32)
+            if ch_list.size == 0:
+                continue
+            module_of_res[ch_list] = module_idx
+            ch_of_res[ch_list] = np.arange(ch_list.size, dtype = np.int32)
+
+        # Fill outputs where mapping exists
+        for module_idx in np.unique(module_of_res):
+            res_idxs = np.where(module_of_res == module_idx)[0]
+            ch_idxs = ch_of_res[res_idxs]
+            f[res_idxs] = sweep_f[module_idx][ch_idxs]
+            z[res_idxs] = sweep_z[module_idx][ch_idxs]
+        
+        # Convert to dbc
+        z /= 10 ** (ares[:, np.newaxis] / 20)
         return f, z
 
-    async def sweep_linear(self, fres, ares, bw = 20e3, npoints = 10,
-                           nsamps = 10, return_dbc = True, center_fres = True,
+    async def sweep_linear(self, fres, ares, span = 20e3, npoints = 10,
+                           nsamps = 10, center_fres = True,
                            downward = True, verbose = True,
                            pbar_description = 'Sweeping'):
         """
@@ -374,10 +399,9 @@ class CRS:
         Parameters:
         fres (array-like): center frequencies in Hz.
         ares (array-like): amplitudes in dBm.
-        bw (float): span around each frequency to sweep in Hz.
+        span (float): span around each frequency to sweep in Hz.
         npoints (int): number of sweep points per channel.
         nsamps (int): number of samples to average per point.
-        return_dbc (bool): If True, divides the output by the tone power.
         center_fres (bool): If True, fres is the center of each band. Else,
             fres is the starting frequency.
         downward (bool): if True, sweeps from high to low frequency. Else,
@@ -394,21 +418,21 @@ class CRS:
         fres, ares = np.asarray(fres), np.asarray(ares)
         if center_fres:
             if downward:
-                f = np.linspace(fres + bw / 2, fres - bw / 2, npoints).T
+                f = np.linspace(fres + span / 2, fres - span / 2, npoints).T
             else:
-                f = np.linspace(fres - bw / 2, fres + bw / 2, npoints).T
+                f = np.linspace(fres - span / 2, fres + span / 2, npoints).T
         else:
             if downward:
-                f = np.linspace(fres + bw, fres, npoints).T
+                f = np.linspace(fres + span, fres, npoints).T
             else:
-                f = np.linspace(fres, fres + bw, npoints).T
+                f = np.linspace(fres, fres + span, npoints).T
         f, z = await self.sweep(f, ares, nsamps = nsamps,
-                                return_dbc = return_dbc, verbose = verbose,
+                                verbose = verbose,
                                 pbar_description = pbar_description)
         return f, z
 
     async def sweep_qres(self, fres, ares, qres, npoints = 10, nsamps = 10,
-                         return_dbc = True, verbose = True,
+                         verbose = True,
                          pbar_description = 'Sweeping'):
         """
         Performs a frequency sweep where the span around each frequency is set
@@ -421,7 +445,6 @@ class CRS:
             fres / qres.
         npoints (int): number of sweep points per channel.
         nsamps (int): number of samples to average per point.
-        return_dbc (bool): If True, divides the output by the tone power.
         verbose (bool): If True, displays a progress bar while sweeping.
         pbar_description (str): description for the progress bar.
 
@@ -434,12 +457,12 @@ class CRS:
         spans = fres / qres
         f = np.linspace(fres + spans / 2, fres - spans / 2, npoints).T
         f, z = await self.sweep(f, ares, nsamps = nsamps,
-                                return_dbc = return_dbc, verbose = verbose,
+                                verbose = verbose,
                                 pbar_description = pbar_description)
         return f, z
 
     async def sweep_full(self, amplitude, npoints = 10, nsamps = 10,
-                         return_dbc = True, verbose = True,
+                         verbose = True,
                          pbar_description = 'Sweeping'):
         """
         Performs a frequency sweep over the full bandwidth around the NCO
@@ -449,7 +472,6 @@ class CRS:
         amplitude (float): amplitude in dBm.
         npoints (int): number of sweep points per channel.
         nsamps (int): number of samples to average per point.
-        return_dbc (bool): If True, divides the output by the tone power.
         verbose (bool): If True, displays a progress bar while sweeping.
         pbar_description (str): description for the progress bar.
 
@@ -458,17 +480,15 @@ class CRS:
         z (np.array): array of complex S21 data corresponding to f.
         """
         ncos = list(self.nco_freqs.values())
-        bw_total = 600e6 if self.extended_bw else 500e6
-        bw = bw_total / 1024 + 200
-        spacing = bw / npoints
-        fres = np.concatenate([np.linspace(nco - bw_total / 2 + 10 + bw,
-                                           nco + bw_total / 2 - 10 - bw,
+        tone_bw = self.bw / 1024 + 200
+        spacing = tone_bw / npoints
+        fres = np.concatenate([np.linspace(nco - self.bw / 2 + 10 + tone_bw,
+                                           nco + self.bw / 2 - 10 - tone_bw,
                                            1024) for nco in ncos])
         ares = amplitude * np.ones(len(fres))
-        # Left off here
-        f, z = await self.sweep_linear(fres, ares, bw = bw - spacing,
+        
+        f, z = await self.sweep_linear(fres, ares, span = self.bw - spacing,
                                        npoints = npoints, nsamps = nsamps,
-                                       return_dbc = return_dbc,
                                        verbose = verbose,
                                        pbar_description = pbar_description)
         f, z = f.flatten(), z.flatten()
@@ -476,28 +496,26 @@ class CRS:
         f, z = f[ix], z[ix]
         return f, z
 
-    async def capture_noise(
+    async def capture_ts(
         self,
         fres,
         ares,
-        noise_time,
+        total_time,
         dec_stage = 6,
         fast_modules = [1],
         tmp_directory = 'tmp/',
         delete_parser_data = True,
-        return_dbc = True,
-        batch_process = False,
         outpath = '',
         batch_size = 1000,
         verbose = True,
     ):
         """
-        Captures a noise timestream using the parser.
+        Captures a timestream using the parser.
 
         Parameters:
         fres (array-like): tone frequencies in Hz.
         ares (array-like): tone amplitudes in dBm.
-        noise_time (float): timestream length in seconds.
+        total_time (float): timestream length in seconds.
         dec_stage (int): dec_stage frequency downsampling factor.
             6 ->   596.05 Hz
             5 -> 1,192.09 Hz
@@ -513,8 +531,6 @@ class CRS:
             fast enough with sufficient free space.
         delete_parser_data (bool): If True, deletes the parser data files
             after importing the data.
-        return_dbc (bool): If true, divides the output by the tone power.
-        batch_process (bool): If True, processes the noise data in batches.
         outpath (str): path to save the batch data. Data will be saved in
             multiple files with suffices appended to outpath.
         batch_size (int): batch size, in MB.
@@ -531,7 +547,7 @@ class CRS:
         if os.path.exists(data_directory):
             raise FileExistsError(f'{data_directory} already exists')
         
-        if batch_process and not outpath.endswith('.npy'):
+        if not outpath.endswith('.npy'):
             raise ValueError('outpath must end with .npy')
         if dec_stage > 2:
             module_idxs = list(self.nco_freqs.keys())
@@ -557,13 +573,13 @@ class CRS:
         max_ntones = await self.write_tones(fres, ares)
         sleep(1)
         # Collect the data
-        channels = '1-' + f'{max_ntones}'
-        nframes = int(self.sample_frequency * (noise_time + 1))
+        chs = '1-' + f'{max_ntones}'
+        nframes = int(self.sample_frequency * (total_time + 1))
         # Need to fine-tune time offset to get exact timestream length 
         args = [
             '-i', self.interface,
             '-d', data_directory,
-            '-c', channels, 
+            '-c', chs, 
             '-s', f'{self.serial_number:04d}',
             '-n', f'{nframes:d}'
             ]
@@ -574,36 +590,18 @@ class CRS:
             code = e.code # parser exists when done
         # Set dec stage back
         await self.d.set_decimation(6)
-        # read the data and convert to z
-        if not batch_process: 
-            # Legacy method 
-            # -> larger data files, without batch processing, and slower
-            z = [[]] * len(fres)
-            for module_idx in module_idxs:
-                ntones = len(self.ch_ix_dict[module_idx])
-                zi = util.convert_parser_to_z(data_directory, self.serial_number,
-                                         module_idx, ntones = ntones,
-                                         max_ntones = max_ntones)
-                # fres0 = self.fres_dict[module_idx].copy()
-                for idx, ch_idx in enumerate(self.ch_ix_dict[module_idx]):
-                    z[ch_idx] = zi[idx]
-            # Sometimes the number of points is not exact
-            data_len = min([len(zi) for zi in z])
-            z = np.array([zi[:data_len] for zi in z])
-            if delete_parser_data:
-                shutil.rmtree(data_directory)
-            if return_dbc:
-                z /= 10 ** (ares[:, np.newaxis] / 20)
-            return z
         
-        # batch processing
+        # Batch processing
         scale_factor = (
             rfmux.core.transferfunctions.VOLTS_PER_ROC / 256 / np.sqrt(2)
         )
         scale_factor = np.array(scale_factor, dtype = np.float64)
-        if return_dbc:
-            p_scale = 1 / 10 ** (ares[:, np.newaxis].astype(np.float64) / 20)
-            scale_factor = scale_factor * p_scale
+
+        # Convert to dBc
+        p_scale = 1 / 10 ** (ares[:, np.newaxis].astype(np.float64) / 20)
+        scale_factor = scale_factor * p_scale
+
+        # Save scale factor and tsample
         np.save(
             outpath.replace('.npy', f'_batch_scale_factor.npy'),
             scale_factor,
@@ -612,6 +610,7 @@ class CRS:
             outpath.replace('.npy', f'_batch_tsample.npy'),
             1 / self.sample_frequency,
         )
+        # Batch process noise
         util.convert_parser_to_z_batch(data_directory, outpath, self.serial_number,
                       module_idxs, ntones = len(fres),
                       max_ntones = max_ntones,
@@ -624,7 +623,6 @@ class CRS:
 ################################################################################
 ################## Methods registered to rfmux.ReadoutModule ###################
 ################################################################################
-
 @rfmux.macro(rfmux.ReadoutModule, register=True)
 async def set_nco(module, nco_freqs):
         """
@@ -677,9 +675,6 @@ async def write_tones(module, nco_freqs, fres_dict, ares_dict):
             nco = nco_freqs[module_idx]
         except:
             raise Exception('NCO frequency has not been set')
-        
-        # Dither frequencies 
-        fres = take_netanal._safe_concatenate_frequencies(fres, nco)
 
         # ares validation 
         if any(ares > d.full_scale_dbm):
@@ -729,20 +724,15 @@ async def sweep(module, nco_freqs, frequencies_dict, ares_dict, sweep_f,
         """
         d = module.crs
         module_idx = module.module
-        frequencies = np.asarray(frequencies_dict[module_idx])
-        ares = np.asarray(ares_dict[module_idx])
+        frequencies = np.asarray(frequencies_dict[module_idx], 
+                                 dtype = np.float64)
+        ares = np.asarray(ares_dict[module_idx], dtype = np.float64)
 
         if not len(frequencies):
             return np.array([], dtype = float), np.array([], dtype = complex)
         
-        # Dither frequencies per sweep idx
-        nco_freq = nco_freqs[module_idx]
-        for ch, fres in enumerate(frequencies):
-            frequencies[ch] = take_netanal._safe_concatenate_frequencies(fres, 
-                                                                       nco_freq)
-        
-        n_channels, n_points = frequencies.shape
-        if len(ares) != n_channels:
+        n_chs, n_points = frequencies.shape
+        if len(ares) != n_chs:
             raise ValueError('ares and frequencies are not the same length')
 
         # Write amplitudes
@@ -750,7 +740,7 @@ async def sweep(module, nco_freqs, frequencies_dict, ares_dict, sweep_f,
         await module.write_tones(nco_freqs, fres_dict, ares_dict)
 
         # Initialize z array
-        z = np.empty((n_channels, n_points), dtype = complex)
+        z = np.empty((n_chs, n_points), dtype = complex)
 
         pbar = range(n_points)
         if verbose:
@@ -760,7 +750,7 @@ async def sweep(module, nco_freqs, frequencies_dict, ares_dict, sweep_f,
         for sweep_idx in pbar:
             # Write frequencies
             async with d.tuber_context() as ctx:
-                for ch in range(n_channels):
+                for ch in range(n_chs):
                     f = frequencies[ch, sweep_idx]
                     ctx.set_frequency(f - nco_freq, channel = ch + 1,
                                       module = module_idx)
@@ -771,7 +761,7 @@ async def sweep(module, nco_freqs, frequencies_dict, ares_dict, sweep_f,
             # format and average data
             zi = np.asarray(samples.mean.i) + 1j * np.asarray(samples.mean.q)
             zi = (
-                zi[:n_channels]
+                zi[:n_chs]
                 * rfmux.core.transferfunctions.VOLTS_PER_ROC
                 / np.sqrt(2)
             )

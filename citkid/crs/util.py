@@ -42,7 +42,7 @@ def convert_parser_to_z_batch(path, outpath, crs_sn, module_indices, ntones,
     Import a parser file in batches and reformat for channels of interest.
 
     Saves each batch as int32 data, to later be scaled by the factors saved by
-    `CRS.take_noise`.
+    `CRS.take_ts`.
 
     Parameters:
     path (str): path to the parser folder.
@@ -103,9 +103,9 @@ def convert_parser_to_z_batch(path, outpath, crs_sn, module_indices, ntones,
         for f in files:
             f.close()
 
-def import_noise_data(data_path, scale_factor_path):
+def import_ts_data(data_path, scale_factor_path):
     """
-    Import noise data as saved by the batch processor.
+    Import timestream data as saved by the batch processor.
 
     Parameters:
     data_path (str): path to the complex IQ data.
@@ -203,14 +203,14 @@ def get_sample_frequency(dec_stage):
     """
     return 625e6 / (256 * 64 * 2 ** dec_stage)
 
-def estimate_timestream_data_size(dec_stage, noise_time, nmodules, max_ntones,
+def estimate_ts_data_size(dec_stage, total_time, nmodules, max_ntones,
                                   ntones):
     """
     Estimate and print raw and processed timestream data sizes.
 
     Parameters:
     dec_stage (int): decimation stage.
-    noise_time (float): timestream length in s.
+    total_time (float): timestream length in s.
     nmodules (int): number of active modules. If an NCO has been set, the
         modules will stream max_ntones channels whether or not tones are
         written.
@@ -223,8 +223,8 @@ def estimate_timestream_data_size(dec_stage, noise_time, nmodules, max_ntones,
     # Type and range checks
     if type(dec_stage) != int or dec_stage < 0 or dec_stage > 6:
         raise ValueError('dec_stage must be an int in range [0, 6]')
-    if noise_time < 0:
-        raise ValueError('noise_time must be positive')
+    if total_time < 0:
+        raise ValueError('total_time must be positive')
     if nmodules not in [1, 2, 3, 4]:
         raise ValueError('nmodules must be in [1, 2, 3, 4]')
     if type(max_ntones) != int or max_ntones < 0 or max_ntones > 1024:
@@ -233,9 +233,9 @@ def estimate_timestream_data_size(dec_stage, noise_time, nmodules, max_ntones,
         raise ValueError('ntones must be an int in range [0, 4 * 1024]')
     # Calculate file sizes
     sample_frequency = get_sample_frequency(dec_stage)
-    size_perchannel = 4 * 2 * (noise_time * sample_frequency)
-    size_raw = size_perchannel * nmodules * max_ntones + 103
-    size_processed = size_perchannel * ntones
+    size_per_ch = 4 * 2 * (total_time * sample_frequency)
+    size_raw = size_per_ch * nmodules * max_ntones + 103
+    size_processed = size_per_ch * ntones
     size_processed += 8 * ntones  # scale factors
 
     # print files sizes
@@ -272,3 +272,66 @@ def interface_exists(iface):
         return True
     except OSError:
         return False
+
+def create_ch_map(nco_freqs, freqs, bw):
+    """
+    Create a mapping between  NCO frequencies and tone frequencies. 
+
+    Parameters: 
+    nco_freqs (dict): Keys are module indices (int), values are NCO frequencies
+        (float).
+    freqs (array-like(float) or array-like(array-like(float))): Each index 
+        corresponds to a channel index and each value is either a single tone 
+        frequency or a list of tone frequencies for that channel. 
+    bw (float): bandwidth in Hz.
+
+    Returns:
+    ch_map (dict): Keys are module indices (int), values are arrays of channel 
+        indices (int) that fall within the NCO bandwidth for that module.
+    missing_chs (np.ndarray, int32): List of channel indices that fall outside 
+        all NCO bandwidths. 
+    """
+    # Input validation
+    if not isinstance(nco_freqs, dict):
+        raise ValueError("nco_freqs must be a dictionary")
+    if not all(isinstance(v, (float, np.floating)) for v in nco_freqs.values()):
+        raise ValueError("All values in nco_freqs must be float")
+    if not all(isinstance(k, int, np.integer) for k in nco_freqs.keys()):
+        raise ValueError("All keys in nco_freqs must be int") 
+    freqs = np.asarray(freqs, dtype = np.float64) 
+    bw = float(bw)
+
+    # Reshape freqs to 2D array if necessary
+    if freqs.ndim == 1:
+        freqs = freqs[:, np.newaxis]
+
+    # Create channel mapping
+    ch_map = {module: [] for module in nco_freqs.keys()} 
+    missing_chs = [] 
+    for ch_idx, freq in enumerate(freqs):
+        fmin, fmax = freq.min(), freq.max() 
+        # Find candidate modules whose NCO bandwidth contains the tone(s)
+        candidates = []
+        for module, nco_freq in nco_freqs.items():
+            if (fmin >= nco_freq - bw / 2) and (fmax <= nco_freq + bw / 2):
+                candidates.append((module, nco_freq))
+        # Select the best module based on median frequency
+        if len(candidates) == 1:
+            # 1 candidate found
+            best_module = candidates[0][0]
+            ch_map[best_module].append(ch_idx)
+        elif candidates:
+            # Multiple candidates found, choose closest to median frequency
+            median_freq = np.median(freq)
+            best_module, _ = min(candidates, 
+                                 key=lambda item: abs(median_freq - item[1]))
+            ch_map[best_module].append(ch_idx)
+        else:
+            # No candidates found, append to missing_chs
+            missing_chs.append(ch_idx)
+
+    # Convert channel lists to numpy arrays
+    for module in ch_map.keys():
+        ch_map[module] = np.array(ch_map[module], dtype = np.int32) 
+    missing_chs = np.array(missing_chs, dtype = np.int32)
+    return ch_map, missing_chs
