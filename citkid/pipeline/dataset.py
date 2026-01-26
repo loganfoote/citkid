@@ -3,6 +3,8 @@ import yaml
 import importlib.util 
 import numpy as np
 import zarr
+import copy
+
 from .dependencies import get_most_recent_run, get_deps
 from . import framework as pf
 
@@ -240,132 +242,82 @@ class DataSet:
             dtype = value[data_idx].dtype
             
         root = self.root
-
+        
         if step.func_type in ['global', 'global-res']:
             
-            if 'saved-global' in root.attrs:
-                saved_global = root.attrs['saved-global']
-                run_idx = get_most_recent_run(return_name, saved_global) + 1
-                run_idx = max(run_idx, 1)
-            else:
-                self.root.attrs['saved-global'] = {0: {}, 1: {return_name: {}}}
-                saved_global = root.attrs['saved-global']
-                for param_name in step.param_names:
-                    saved_global[0][param_name] = {}
-                run_idx = 1
+            deps_map = self.deps_map['global']
+            run_idx = get_most_recent_run(return_name, deps_map)
+            deps = get_deps(step.return_names, deps_map)
             
             if str(run_idx) not in root:
                 root.create_group(str(run_idx))
-            grp = root[str(run_idx)]
-                
+            run_grp = root[str(run_idx)]
+            return_grp = run_grp.create_group(return_name)
+            
+            # If the func_type is global, we can't index it by row with data_idx.
+            # So we always just write the full thing to zarr.
             shape = value.shape
             chunks = value.shape
             
-            values_arr = grp.create_array(
-                name = return_name,
+            values_arr = return_grp.create_array(
+                name = 'data',
                 shape = shape,
                 dtype = dtype,
                 chunks = chunks,
             )
             
             values_arr[...] = value
-            
-            dependencies = get_deps(step.param_names, saved_global)
-            
-            for param_name, param_run_idx in dependencies.items():
-                saved_global[run_idx][return_name][param_name] = param_run_idx
-                
-            if 'indexable' not in root.attrs:
-                root.attrs['indexable'] = {}
-            indexable = root.attrs['indexable']
-            if run_idx not in root.attrs['indexable']:
-                indexable[run_idx] = {}
-            indexable[run_idx][return_name] = False
-            root.attrs['indexable'] = indexable
+            # Store parameter dependencies and 'global(-res)' status.
+            return_grp.attrs['deps'] = deps
+            return_grp.attrs['global'] = self.global_cache[return_name]
             
         elif step.func_type in ['per-row', 'vectorized']:
             
-            if 'saved-global' in root.attrs:
-                saved_start = root.attrs['saved-global'].copy()
-            else:
-                saved_start = {0: {}}
-                for param_name in step.param_names:
-                    saved_start[0][param_name] = {}
-            
-            if 'saved' not in root.attrs:
-                root.attrs['saved'] = {}
-                root.attrs['saved_idx'] = '[]' 
-                            
-            saved = root.attrs['saved']
-            saved_idx = np.fromstring(root.attrs['saved_idx'].strip('[]'), dtype=int, sep=' ')
+            for local_idx, di in enumerate(data_idx):
+                di = di.item()
+                di_str = f'idx{di}'
+                deps_map = self.deps_map[di_str]
+                run_idx = get_most_recent_run(return_name, deps_map)
+                deps = get_deps(step.return_names, deps_map)
                 
-            for local_idx, idx in enumerate(data_idx):
-                idx = idx.item()
-                local_saved_idxs = np.where(saved_idx == idx)[0]
-                if local_saved_idxs.shape != (0,):
-                    local_saved_idx = local_saved_idxs[0]
-                else:
-                    saved[idx] = saved_start
-                    local_saved_idx = len(saved) - 1
-                    saved_idx = np.append(saved_idx, idx)
-
-                this_saved = saved[local_saved_idx]
-                dependencies = get_deps(step.param_names, this_saved)
-                run_idx = get_most_recent_run(return_name, this_saved) + 1
-                run_idx = max(run_idx, 1)
-                    
                 if str(run_idx) not in root:
                     root.create_group(str(run_idx))
-                grp = root[str(run_idx)]
+                run_grp = root[str(run_idx)]
+                if return_name not in run_grp:
+                    run_grp.create_group(return_name)
+                return_grp = run_grp[return_name]
                 
-                this_value = value[local_idx]
-                
-                if return_name not in grp:
+                if 'data' not in return_grp:                    
+                    # Initialize the full empty array with all rows.
+                    # The array is chunked per-row.
+                    shape = (self.nres, *value.shape[1:])
+                    chunks = (1, *value.shape[1:])
                     
-                    shape = (1, *this_value.shape)
-                    chunks = (1, *this_value.shape)
-                    
-                    values_arr = grp.create_array(
-                        name = return_name,
+                    values_arr = return_grp.create_array(
+                        name = 'data',
                         shape = shape,
                         dtype = dtype,
-                        chunks = chunks,
-                    )
-                    values_arr[...] =  [this_value]
-                    
-                    data_idx_arr = grp.create_array(
-                        name = f'{return_name}_idx',
-                        dtype=int,
-                        data = [idx]
+                        chunks = chunks
                     )
                     
-                    this_saved[run_idx] = {}
+                    # Initialize an array to tell us which data indices
+                    # have been saved to values_arr.
+                    exists_arr = return_grp.create_array(
+                        name = f'row_exists',
+                        data = np.full(self.nres, False)
+                    )
                     
-                else:
-                    
-                    values_arr = grp[return_name]
-                    data_idx_arr = grp[f'{return_name}_idx']
-                    n = values_arr.shape[0]
-                    data_idx_arr.resize((n+1))
-                    data_idx_arr[-1] = data_idx[local_idx]
-                    new_shape = (n+1, *values_arr.shape[1:])
-                    values_arr.resize(new_shape)
-                    values_arr[-1, ...] = this_value
-                    
-                for param_name, param_run_idx in dependencies.items():
-                    saved[run_idx][return_name][param_name] = param_run_idx
-                    
-                root.attrs['saved'] = saved
-                root.attrs['saved_idx'] = saved_idx
-                    
-                if 'indexable' not in root.attrs:
-                    root.attrs['indexable'] = {}
-                indexable = root.attrs['indexable']
-                if run_idx not in root.attrs['indexable']:
-                    indexable[run_idx] = {}
-                indexable[run_idx][return_name] = True
-                root.attrs['indexable'] = indexable
-
+                values_arr[di] = value[di]
+                exists_arr[di] = True
+                
+                # Store parameter dependencies and 'global(-res)' status.
+                if 'deps' not in return_grp.attrs:
+                    return_grp.attrs['deps'] = {}
+                zarr_deps = return_grp.attrs['deps']
+                zarr_deps[di_str] = deps
+                return_grp.attrs['deps'] = zarr_deps
+                return_grp.attrs['global'] = self.global_cache[return_name]
+                
         
     def get_attr_version(self, name):
         """
@@ -433,8 +385,19 @@ class DataSet:
         # Look up the attribute in the zarr file.
         run_idx = self.get_attr_version(name)
         if run_idx is not None:
-            attr = pf.LazyAttr(self, name)
+            grp = self.root[f'{run_idx}/{name}']
+            attr = grp['data']
             object.__setattr__(self, name, attr)
+            self.global_cache[name] = grp.attrs['global']
+            if self.global_cache[name]:
+                deps_map = grp.attrs['deps']
+                
+            else:
+                row_exists = grp['row_exists'][...]
+                dis = np.where(row_exists)[0]
+                for di in dis:
+                    deps_map = grp.attrs['deps_map'][f'idx{di}']
+                
             return attr
 
         # Only run when normal lookup fails
@@ -499,3 +462,65 @@ class DataSet:
             m += f"'{step.name}' in custom_steps.py must be "
             m += "integer-valued and > 0."
             raise ValueError(m)
+
+    def update_deps_map(self, param_names, return_names, data_idx):
+        """
+        Updates the dependencies map in a DataSet.
+        """
+        def deep_union(a, b):
+            """
+            Returns the union of two nested dictionaries a and b.
+            """
+            out = copy.deepcopy(a)
+            for k, v in b.items():
+                if k in out and isinstance(out[k], dict) and isinstance(v, dict):
+                    out[k] = deep_union(out[k], v)
+                else:
+                    out[k] = v
+            return out
+        
+        def update_deps(param_names, return_names, deps_map):
+            """
+            Updates individual leaves of the deps_map corresponding
+            to each return name in return_names.
+            """
+            param_names = [param_name for param_name in param_names
+                           if param_name != 'data_idx']
+            deps_to_add = get_deps(param_names, deps_map)
+            for name in return_names:
+                # This conditional is needed to distinguish between
+                # steps where an input parameter can change, so that 
+                # the run_idx can increase, and those where it can't,
+                # so that it should always be run_idx = 1.
+                if param_names:
+                    run_idx = get_most_recent_run(name, deps_map)
+                    run_idx = max(run_idx+1, 1)
+                else:
+                    run_idx = 1
+                if run_idx not in deps_map:
+                    deps_map[run_idx] = {}
+                deps_map[run_idx][name] = {}
+                for dep_name, dep_run_idx in deps_to_add.items():
+                    if dep_name != name:
+                        deps_map[run_idx][name][dep_name] = dep_run_idx
+        
+        if data_idx is None: # "global" case
+            deps_map = self.deps_map['global']
+            update_deps(param_names, return_names, deps_map)
+
+        else: # "non-global" case
+            # Load the global deps_map so we can copy it over to 
+            # the deps_maps for each data index.
+            deps_map_global = {}
+            if 'global' in self.deps_map:
+                deps_map_global = copy.deepcopy(self.deps_map['global'])
+            for di in data_idx:
+                di_str = f'idx{di}'
+                if di_str not in self.deps_map:
+                    self.deps_map[di_str] = {}
+                deps_map = self.deps_map[di_str]
+                # Unite global deps_map with the per-data_index deps_map
+                self.deps_map[di_str] = deep_union(deps_map, deps_map_global)
+                deps_map = self.deps_map[di_str]
+                
+                update_deps(param_names, return_names, deps_map)

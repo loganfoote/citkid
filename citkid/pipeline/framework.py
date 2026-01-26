@@ -23,6 +23,7 @@ class LazyAttr:
         self.DS = DS
         self.name = name
         self._cache = {}        # maps row -> np.ndarray
+        self.shape = ()
         
         ### Check if the attribute exists in the zarr file.
         # self.run_idx = DS.get_attr_version(name)
@@ -168,6 +169,10 @@ class LazyAttr:
 
         for r, v in zip(rows, value):
             self._cache[r] = v
+            
+        # Update the shape of the LazyAttr if needed.
+        if self.shape == ():
+            self.shape = (self.DS.nres, *value[0].shape)
 
     def __repr__(self):
         return f"LazyAttr({self.name}, {len(self._cache.keys()):d} cached rows)"
@@ -323,69 +328,7 @@ class plStep:
                     DS.global_cache[name] = False
                 getattr(DS, name)[data_idx] = val
                 
-        self._update_deps_map(DS, data_idx)
-
-    def _update_deps_map(self, DS, data_idx):
-        """
-        Updates the dependencies map in a DataSet.
-        """
-        def deep_union(a, b):
-            """
-            Returns the union of two nested dictionaries a and b.
-            """
-            out = copy.deepcopy(a)
-            for k, v in b.items():
-                if k in out and isinstance(out[k], dict) and isinstance(v, dict):
-                    out[k] = deep_union(out[k], v)
-                else:
-                    out[k] = v
-            return out
-        
-        def update_deps(return_names, deps_map):
-            """
-            Updates individual leaves of the deps_map corresponding
-            to each return name in return_names.
-            """
-            param_names = [param_name for param_name in self.param_names
-                           if param_name != 'data_idx']
-            deps_to_add = get_deps(param_names, deps_map)
-            for name in return_names:
-                # This conditional is needed to distinguish between
-                # steps where an input parameter can change, so that 
-                # the run_idx can increase, and those where it can't,
-                # so that it should always be run_idx = 1.
-                if param_names:
-                    run_idx = get_most_recent_run(name, deps_map)
-                    run_idx = max(run_idx+1, 1)
-                else:
-                    run_idx = 1
-                if run_idx not in deps_map:
-                    deps_map[run_idx] = {}
-                deps_map[run_idx][name] = {}
-                for dep_name, dep_run_idx in deps_to_add.items():
-                    if dep_name != name:
-                        deps_map[run_idx][name][dep_name] = dep_run_idx
-        
-        if data_idx is None: # "global" case
-            deps_map = DS.deps_map['global']
-            update_deps(self.return_names, deps_map)
-
-        else: # "non-global" case
-            # Load the global deps_map so we can copy it over to 
-            # the deps_maps for each data index.
-            deps_map_global = {}
-            if 'global' in DS.deps_map:
-                deps_map_global = copy.deepcopy(DS.deps_map['global'])
-            for di in data_idx:
-                di_str = f'idx{di}'
-                if di_str not in DS.deps_map:
-                    DS.deps_map[di_str] = {}
-                deps_map = DS.deps_map[di_str]
-                # Unite global deps_map with the per-data_index deps_map
-                DS.deps_map[di_str] = deep_union(deps_map, deps_map_global)
-                deps_map = DS.deps_map[di_str]
-                
-                update_deps(self.return_names, deps_map)
+        DS.update_deps_map(self.param_names, self.return_names, data_idx)
 
     def __repr__(self):
         s = f"Pipeline Step: {self.name}"
