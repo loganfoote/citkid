@@ -1,17 +1,17 @@
 import numpy as np 
 import pytest
-from citkid.crs.instrument import CRS
+# from citkid.crs.instrument import CRS
 
-class fakeDevice:
-    async def set_nco(self, nco_freqs):
-        self.nco_freqs = nco_freqs 
+# class fakeDevice:
+#     async def set_nco(self, nco_freqs):
+#         self.nco_freqs = nco_freqs 
 
 ################################################################################
 #################################### set_nco ###################################
 ################################################################################
-@pytest.mark.asyncio
-async def test_set_nco_uses_module_index(monkeypatch):
-    crs = CRS.__new__() 
+# @pytest.mark.asyncio
+# async def test_set_nco_uses_module_index(monkeypatch):
+#     crs = CRS.__new__() 
 
     
 

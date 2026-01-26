@@ -370,7 +370,7 @@ class CRS:
         # Build lookup arrays once for O(n) assignment
         module_of_res = np.full(nres, -1, dtype = np.int32)
         ch_of_res = np.full(nres, -1, dtype = np.int32)
-        for module_idx, ch_list in self.ch_ix_dict.items():
+        for module_idx, ch_list in self.ch_map.items():
             ch_list = np.asarray(ch_list, dtype = np.int32)
             if ch_list.size == 0:
                 continue
@@ -496,7 +496,7 @@ class CRS:
         f, z = f[ix], z[ix]
         return f, z
 
-    async def capture_ts(
+    async def stream(
         self,
         fres,
         ares,
@@ -588,6 +588,7 @@ class CRS:
         except SystemExit as e:
             raise e 
             code = e.code # parser exists when done
+            
         # Set dec stage back
         await self.d.set_decimation(6)
         
@@ -597,7 +598,7 @@ class CRS:
         )
         scale_factor = np.array(scale_factor, dtype = np.float64)
 
-        # Convert to dBc
+        # Add dBc conversion to scale_factor
         p_scale = 1 / 10 ** (ares[:, np.newaxis].astype(np.float64) / 20)
         scale_factor = scale_factor * p_scale
 
@@ -610,13 +611,20 @@ class CRS:
             outpath.replace('.npy', f'_batch_tsample.npy'),
             1 / self.sample_frequency,
         )
+
         # Batch process noise
-        util.convert_parser_to_z_batch(data_directory, outpath, self.serial_number,
-                      module_idxs, ntones = len(fres),
-                      max_ntones = max_ntones,
-                      return_dbc = return_dbc, ares = ares,
-                      ch_ix_dict = self.ch_ix_dict,
-                      batch_size = batch_size)
+        util.convert_parser_to_z(
+            data_directory, 
+            outpath, 
+            self.serial_number,
+            module_idxs, 
+            ntones = len(fres),
+            max_ntones = max_ntones,
+            ch_map = self.ch_map,
+            batch_size = batch_size
+            )
+        
+        # Delete parser data
         if delete_parser_data:
             shutil.rmtree(data_directory)
 
@@ -727,6 +735,7 @@ async def sweep(module, nco_freqs, frequencies_dict, ares_dict, sweep_f,
         frequencies = np.asarray(frequencies_dict[module_idx], 
                                  dtype = np.float64)
         ares = np.asarray(ares_dict[module_idx], dtype = np.float64)
+        nco_freq = nco_freqs[module_idx]
 
         if not len(frequencies):
             return np.array([], dtype = float), np.array([], dtype = complex)
