@@ -51,6 +51,12 @@ class CRS:
         # Set module bw, in case self.extended_bw is not called 
         self.bw = 500e6
 
+        # Attributes to keep track of tone frequencies, amplitudes, 
+        # and channel mappings
+        self.fres_map = {}
+        self.ares_map = {}
+        self.ch_map = {}
+
     async def configure_system(self, clock_source = "VCXO", full_scale_dbm = 7,
                                analog_bank_high = False, verbose = True):
         """
@@ -200,9 +206,7 @@ class CRS:
         
         # Store extended_bw and bw
         self.extended_bw = extended
-        self.bw = 625e6 if extended else 500e6
-        warnings.warn("Check if 625 MHz is the correct extended bandwidth", 
-                      UserWarning)
+        self.bw = 600e6 if extended else 500e6
 
         # Raise warning if extended bandwidth is set
         if extended:
@@ -220,14 +224,63 @@ class CRS:
         Returns:
         None
         """
+        # Input validation 
+        validate_nco_freqs(nco_freqs, self.analog_bank_high)
+            
+        # Set NCO frequencies
         nco_freqs = nco_freqs.copy()
         modules = util.get_modules(self.d, list(nco_freqs.keys()))
-        await modules.set_nco(nco_freqs)
+        await modules._set_nco(nco_freqs)
         self.nco_freqs.update(nco_freqs)
+
+        # Clear channels on modules with newly set NCO frequencies 
+        await self._clear_channels(list(nco_freqs.keys()))
         for module_idx, nco in nco_freqs.items():
             if verbose:
                 nco_str = f'{round(nco * 1e-6, 6)}'
                 print(f'Module {module_idx} NCO is {nco_str} MHz')
+
+    async def disable_modules(self, module_idxs):
+        """
+        Disable modules by clearing channels and removing NCO frequencies. 
+
+        Parameters:
+        module_idxs (int): module indices to disable.
+
+        Returns:
+        None
+        """
+        # Input validation
+        if not all(isinstance(mi, (int, np.integer)) for mi in module_idxs):
+            raise TypeError('module_idxs must be a list of integers')
+
+        # Clear channels
+        await self._clear_channels(module_idxs)
+        
+        # Update self.nco_freqs
+        for module_idx in module_idxs:
+            if module_idx in self.nco_freqs:
+                del self.nco_freqs[module_idx]
+
+    async def _clear_channels(self, module_idxs):
+        """
+        Clear all channels on the specified modules. 
+        
+        Parameters:
+        module_idxs (array-like int): module indices to clear channels on.
+
+        Returns:
+        None
+        """
+        # Input validation
+        if not all(isinstance(mi, (int, np.integer)) for mi in module_idxs):
+            raise TypeError('module_idxs must be a list of integers')
+        
+        # Clear channels and update fres_map and ares_map
+        for module_idx in module_idxs:
+            await self.d.clear_channels(module = module_idx)
+            self.fres_map[module_idx] = np.array([], dtype = np.float64)
+            self.ares_map[module_idx] = np.array([], dtype = np.float64)
 
     async def write_tones(self, fres, ares, ch_map = None, 
                           allow_missing = False):
@@ -249,28 +302,33 @@ class CRS:
         """
         # Input validation 
         if not len(self.nco_freqs):
-            raise Exception("NCO frequencies are not set")
+            raise RuntimeError("NCO frequencies are not set")
         fres = np.asarray(fres, dtype = np.float64)
         ares = np.asarray(ares, dtype = np.float64)
         if fres.shape != ares.shape:
             raise ValueError('fres and ares must be the same shape')
         if len(fres) == 0:
             return 0 
+        validate_ch_map(ch_map)
         
         # Get ch_map
         if ch_map is None:
-            ch_map, missing_chs = util.map_channels_to_ncos(
-                fres, self.nco_freqs, self.extended_bw
+            ch_map, missing_chs = util.create_ch_map(
+                self.nco_freqs, fres, self.bw
                 )
         else:
+            ch_map = ch_map.copy()
             missing_chs = []
+            for ch in range(len(fres)):
+                if not any(ch in ch_list for ch_list in ch_map.values()):
+                    missing_chs.append(ch)
 
         # Handle missing channels
-        if missing_chs:
-            msg = (f"Tones must be within {round(self.bw / 2e6, 1)} "
-                   "MHz of an NCO frequency. Ignoring "
-                   f"{len(missing_chs)} tones.")
+        if len(missing_chs):
+            msg = (f"Tones must be within {self.bw / 2e6:.0f} "
+                   "MHz of an NCO frequency.")
             if allow_missing:
+                msg += f" Ignoring {len(missing_chs)} tone(s)."
                 warnings.warn(msg, UserWarning)
             else:
                 raise ValueError(msg)
@@ -282,19 +340,20 @@ class CRS:
 
         # Dither frequencies 
         for key, fres in self.fres_map.items():
+            # Dither separately for each NCO
             self.fres_map[key] = take_netanal._safe_concatenate_frequencies(
                 fres, self.nco_freqs[key]
                 )
 
         # Write tones
         modules = util.get_modules(self.d, list(self.fres_map.keys()))
-        await modules.write_tones(self.nco_freqs, self.fres_map,
+        await modules._write_tones(self.nco_freqs, self.fres_map,
                                   self.ares_map)
         
         # Save max_tones 
         self.max_ntones = max([len(f) for f in self.fres_map.values()])
 
-    async def sweep(self, frequencies, ares, nsamps = 10, 
+    async def sweep(self, frequencies, ares, nsamps = 10, ch_map = None, 
                     allow_missing = False, verbose = True, 
                     pbar_description = 'Sweeping'):
         """
@@ -303,42 +362,73 @@ class CRS:
         Parameters:
         frequencies (M X N array-like float): the first index M is the channel
             index (max len 1024) and the second index N is the frequency in Hz
-            for a single point in the sweep
-        ares (M array-like float): amplitudes in dBm for each channel
-        nsamps (int): number of samples to average per point
-        verbose (bool): If True, displays a progress bar while sweeping
-        pbar_description (str): description for the progress bar
+            for a single point in the sweep.
+        ares (M array-like float): amplitudes in dBm for each channel.
+        nsamps (int): number of samples to average per point.
+        ch_map (dict): keys (int) are module indices and values (array-like int)
+            are channel indices to write tones to. If None, automatically maps
+            tones to NCOs based on frequency.
+        allow_missing (bool): If True, ignores tones that are outside the
+            allowed frequency range and inserts NaNs in the output. If False,
+            raises an error if any tones are outside the allowed frequency 
+            range.
+        verbose (bool): If True, displays a progress bar while sweeping.
+        pbar_description (str): description for the progress bar.
 
         Returns:
         np.ndarray: complex S21 values for each frequency.
         """
-        frequencies, ares = np.asarray(frequencies), np.asarray(ares)
+        # Input validation
+        frequencies = np.asarray(frequencies, dtype = np.float64)
+        ares = np.asarray(ares, dtype = np.float64)
+        if frequencies.shape[0] != ares.shape[0]:
+            raise ValueError('frequencies and ares must have the same length '
+                             'along axis 0') 
+        if frequencies.ndim != 2:
+            raise ValueError('frequencies must be a 2D array-like object') 
+        if not isinstance(nsamps, int) and nsamps > 0:
+            raise ValueError('nsamps must be a positive integer')
         if not len(self.nco_freqs):
-            raise Exception("NCO frequencies are not set")
+            raise RuntimeError("NCO frequencies are not set")
+        validate_ch_map(ch_map) 
+        if not isinstance(pbar_description, str):
+            raise TypeError('pbar_description must be a string')
         
-        # Get channel map 
+        ### Map frequencies to modules/channels
         # Get ch_map
         if ch_map is None:
-            ch_map, missing_chs = util.map_channels_to_ncos(
-                frequencies, self.nco_freqs, self.extended_bw
+            ch_map, missing_chs = util.create_ch_map(
+                self.nco_freqs, frequencies, self.bw
                 )
         else:
+            ch_map = ch_map.copy()
             missing_chs = []
-
+            for ch in range(len(frequencies)):
+                if not any(ch in ch_list for ch_list in ch_map.values()):
+                    missing_chs.append(ch)
+            
         # Handle missing channels
-        if missing_chs:
-            msg = (f"Tones must be within {round(self.bw / 2e6, 1)} "
-                   "MHz of an NCO frequency. Ignoring "
-                   f"{len(missing_chs)} tones.")
+        if len(missing_chs):
+            if ch_map is not None:
+                msg = (f"Tones must be within {self.bw / 2e6:.0f} "
+                    "MHz of an NCO frequency.")
+            else: 
+                msg = "Missing channels detected in ch_map."
             if allow_missing:
+                msg += f" Proceeding with {len(missing_chs)} "
+                msg += "missing channel(s)."
                 warnings.warn(msg, UserWarning)
             else:
                 raise ValueError(msg)
             
+        # Clear fres_map, since d.sweep will clear channels 
+        for module_idx in ch_map.keys():
+            self.fres_map[module_idx] = np.array([], dtype = np.float64)
+
         # Split fres and ares into dictionaries
         self.freqs_map = {key: frequencies[val] for key, val in ch_map.items()}
-        self.ares_map = {key: ares[val] for key, val in ch_map.items()}
-        self.ch_map = ch_map
+        self.ares_map.update({key: ares[val] for key, val in ch_map.items()})
+        self.ch_map.update(ch_map)
 
         # Dither frequencies 
         for key, freqs in self.freqs_map.items():
@@ -348,43 +438,38 @@ class CRS:
                     freq, self.nco_freqs[key]
                     )
                 self.freqs_map[key][:, idx] = freq_dithered
-            raise NotImplementedError("Need to check logic on dithering for sweeps")
 
-        # Set dec_stage
+        ### Set dec_stage to 6 for sweeping
         dec_stage = 6
         await self.d.set_decimation(dec_stage)
 
-        # Sweep
+        ### Sweep
         sweep_f, sweep_z = {}, {}
         modules = util.get_modules(self.d, list(self.freqs_map.keys()))
-        await modules.sweep(self.nco_freqs, self.freqs_map,
+        await modules._sweep(self.nco_freqs, self.freqs_map,
                             self.ares_map, sweep_f, sweep_z, nsamps = nsamps,
                             verbose = verbose,
                             pbar_description = pbar_description)
         
-        ### Create f, z from sweep results
-        nres = frequencies.shape[0]
+        # Clear ares_map after sweeping, since d.sweep clears channels
+        # fres_map was already cleared
+        for module_idx in ch_map.keys():
+            self.ares_map[module_idx] = np.array([], dtype = np.float64)
+
+        ### Create f, z to fill with sweep results
         f = np.full(frequencies.shape, np.nan, dtype = float)
         z = np.full(frequencies.shape, np.nan + 1j * np.nan, dtype = complex)
 
-        # Build lookup arrays once for O(n) assignment
-        module_of_res = np.full(nres, -1, dtype = np.int32)
-        ch_of_res = np.full(nres, -1, dtype = np.int32)
-        for module_idx, ch_list in self.ch_map.items():
-            ch_list = np.asarray(ch_list, dtype = np.int32)
-            if ch_list.size == 0:
+        for module_idx, chs in ch_map.items():
+            # Note: self.ch_map may modules that are not used here
+            # ch_map only has modules used in this sweep
+            chs = np.asarray(chs, dtype = np.int32)
+            if chs.size == 0:
                 continue
-            module_of_res[ch_list] = module_idx
-            ch_of_res[ch_list] = np.arange(ch_list.size, dtype = np.int32)
-
-        # Fill outputs where mapping exists
-        for module_idx in np.unique(module_of_res):
-            res_idxs = np.where(module_of_res == module_idx)[0]
-            ch_idxs = ch_of_res[res_idxs]
-            f[res_idxs] = sweep_f[module_idx][ch_idxs]
-            z[res_idxs] = sweep_z[module_idx][ch_idxs]
+            f[chs, :] = sweep_f[module_idx]
+            z[chs, :] = sweep_z[module_idx]
         
-        # Convert to dbc
+        # Convert to dBc and return
         z /= 10 ** (ares[:, np.newaxis] / 20)
         return f, z
 
@@ -415,20 +500,32 @@ class CRS:
             and N is the index of each point in the sweep
         z (M X N np.array): array of complex S21 data corresponding to f
         """
-        fres, ares = np.asarray(fres), np.asarray(ares)
+        # Input validation
+        fres = np.asarray(fres, dtype = np.float64)
+        ares = np.asarray(ares, dtype = np.float64) 
+        if not isinstance(span, (float, np.floating)) and span > 0:
+            raise ValueError('span must be a positive float') 
+        if not isinstance(npoints, int) and npoints > 0:
+            raise ValueError('npoints must be a positive integer')
+        # other validation is performed in self.sweep
+
+        # Create freqs array
         if center_fres:
             if downward:
-                f = np.linspace(fres + span / 2, fres - span / 2, npoints).T
+                freqs = np.linspace(fres + span / 2, fres - span / 2, npoints).T
             else:
-                f = np.linspace(fres - span / 2, fres + span / 2, npoints).T
+                freqs = np.linspace(fres - span / 2, fres + span / 2, npoints).T
         else:
             if downward:
-                f = np.linspace(fres + span, fres, npoints).T
+                freqs = np.linspace(fres + span, fres, npoints).T
             else:
-                f = np.linspace(fres, fres + span, npoints).T
-        f, z = await self.sweep(f, ares, nsamps = nsamps,
-                                verbose = verbose,
-                                pbar_description = pbar_description)
+                freqs = np.linspace(fres, fres + span, npoints).T
+
+        # Sweep and return 
+        f, z = await self.sweep(
+            freqs, ares, nsamps = nsamps, verbose = verbose,
+            pbar_description = pbar_description
+            )
         return f, z
 
     async def sweep_qres(self, fres, ares, qres, npoints = 10, nsamps = 10,
@@ -453,12 +550,23 @@ class CRS:
             and N is the index of each point in the sweep.
         z (M X N np.array): array of complex S21 data corresponding to f.
         """
-        fres, ares, qres = np.asarray(fres), np.asarray(ares), np.asarray(qres)
+        # Input validation
+        fres = np.asarray(fres, dtype = np.float64)
+        ares = np.asarray(ares, dtype = np.float64) 
+        qres = np.asarray(qres, dtype = np.float64)
+        if not isinstance(npoints, int) and npoints > 0:
+            raise ValueError('npoints must be a positive integer')
+        # other validation is performed in self.sweep
+        
+        # Create freqs array
         spans = fres / qres
-        f = np.linspace(fres + spans / 2, fres - spans / 2, npoints).T
-        f, z = await self.sweep(f, ares, nsamps = nsamps,
-                                verbose = verbose,
-                                pbar_description = pbar_description)
+        freqs = np.linspace(fres + spans / 2, fres - spans / 2, npoints).T
+
+        # Sweep and return
+        f, z = await self.sweep(
+            freqs, ares, nsamps = nsamps, verbose = verbose, 
+            pbar_description = pbar_description
+            )
         return f, z
 
     async def sweep_full(self, amplitude, npoints = 10, nsamps = 10,
@@ -479,7 +587,15 @@ class CRS:
         f (np.array): array of frequencies in Hz.
         z (np.array): array of complex S21 data corresponding to f.
         """
-        ncos = list(self.nco_freqs.values())
+        # Input validation 
+        if not isinstance(amplitude, (float, np.floating)):
+            raise TypeError('amplitude must be a float') 
+        if not isinstance(npoints, int) and npoints > 0:
+            raise ValueError('npoints must be a positive integer') 
+        # other validation is performed in self.sweep_linear
+
+        # Create fres and ares arrays
+        ncos = self.nco_freqs.values()
         tone_bw = self.bw / 1024 + 200
         spacing = tone_bw / npoints
         fres = np.concatenate([np.linspace(nco - self.bw / 2 + 10 + tone_bw,
@@ -487,10 +603,14 @@ class CRS:
                                            1024) for nco in ncos])
         ares = amplitude * np.ones(len(fres))
         
-        f, z = await self.sweep_linear(fres, ares, span = self.bw - spacing,
-                                       npoints = npoints, nsamps = nsamps,
-                                       verbose = verbose,
-                                       pbar_description = pbar_description)
+        # Sweep
+        f, z = await self.sweep_linear(
+            fres, ares, span = self.bw - spacing, npoints = npoints, 
+            nsamps = nsamps, center_fres = True, downward = True, 
+            verbose = verbose, pbar_description = pbar_description
+            )
+        
+        # Flatten and sort
         f, z = f.flatten(), z.flatten()
         ix = np.argsort(f)
         f, z = f[ix], z[ix]
@@ -540,6 +660,8 @@ class CRS:
         z (M X N np.array): first index is channel index and second index is
             complex S21 data point in the timestream.
         """
+        raise NotImplementedError("This method is depreciated. Update in progress")
+        # Separate streaming from tone reading/writing?
         # Type checks
         tmp_directory = os.path.normpath(os.path.expanduser(tmp_directory))
         os.makedirs(tmp_directory, exist_ok = True)
@@ -589,6 +711,9 @@ class CRS:
             raise e 
             code = e.code # parser exists when done
             
+        # Clear channels 
+        self._clear_channels(module_idxs)
+
         # Set dec stage back
         await self.d.set_decimation(6)
         
@@ -632,7 +757,7 @@ class CRS:
 ################## Methods registered to rfmux.ReadoutModule ###################
 ################################################################################
 @rfmux.macro(rfmux.ReadoutModule, register=True)
-async def set_nco(module, nco_freqs):
+async def _set_nco(module, nco_freqs):
         """
         Set the NCO frequency
 
@@ -658,7 +783,7 @@ async def set_nco(module, nco_freqs):
         nco_freqs[module_idx] = nco_meas
 
 @rfmux.macro(rfmux.ReadoutModule, register=True)
-async def write_tones(module, nco_freqs, fres_dict, ares_dict):
+async def _write_tones(module, nco_freqs, fres_map, ares_map):
         """
         Writes an array of tones given frequencies and amplitudes.
 
@@ -666,15 +791,15 @@ async def write_tones(module, nco_freqs, fres_dict, ares_dict):
         module (rfmux.ReadoutModule): readout module object.
         nco_freqs (dict): keys (int) are module indices and values (float)
             are NCO frequencies in Hz.
-        fres_dict (dict): keys (int) are module indices and values (array-like)
+        fres_map (dict): keys (int) are module indices and values (array-like)
             are frequencies in Hz.
-        ares_dict (dict): keys (int) are module indices and values (array-like)
+        ares_map (dict): keys (int) are module indices and values (array-like)
             are powers in dBm.
         """
         # Prepare fres and ares
         d = module.crs
         module_idx = module.module
-        fres, ares = fres_dict[module_idx], ares_dict[module_idx]
+        fres, ares = fres_map[module_idx], ares_map[module_idx]
         fres = np.asarray(fres, dtype = np.float64)
         ares = np.asarray(ares, dtype = np.float64)
 
@@ -696,6 +821,7 @@ async def write_tones(module, nco_freqs, fres_dict, ares_dict):
 
         # Clear channels
         await d.clear_channels(module = module_idx)
+
         # Write frequencies and amplitudes
         async with d.tuber_context() as ctx:
             for ch, (fr, ar) in enumerate(zip(fres, ares_amplitude)):
@@ -705,7 +831,7 @@ async def write_tones(module, nco_freqs, fres_dict, ares_dict):
             await ctx()
 
 @rfmux.macro(rfmux.ReadoutModule, register=True)
-async def sweep(module, nco_freqs, frequencies_dict, ares_dict, sweep_f,
+async def _sweep(module, nco_freqs, frequencies_map, ares_map, sweep_f,
                 sweep_z, nsamps = 10, verbose = True,
                 pbar_description = 'Sweeping'):
         """
@@ -716,11 +842,11 @@ async def sweep(module, nco_freqs, frequencies_dict, ares_dict, sweep_f,
         module (rfmux.ReadoutModule): readout module object.
         nco_freqs (dict): keys (int) are module indices and values (float)
             are NCO frequencies in Hz.
-        frequencies_dict (dict): keys (int) are module indices and values
+        frequencies_map (dict): keys (int) are module indices and values
             (M X N array-like float) are arrays where the first index M is the
             channel index (max len 1024) and the second index N is the frequency
             in Hz for a single point in the sweep.
-        ares_dict (dict): keys (int) are module indices and values
+        ares_map (dict): keys (int) are module indices and values
             (M array-like float) are amplitudes in dBm for each channel.
         nsamps (int): number of samples to average per point.
         verbose (bool): If True, displays a progress bar while sweeping.
@@ -732,9 +858,9 @@ async def sweep(module, nco_freqs, frequencies_dict, ares_dict, sweep_f,
         """
         d = module.crs
         module_idx = module.module
-        frequencies = np.asarray(frequencies_dict[module_idx], 
+        frequencies = np.asarray(frequencies_map[module_idx], 
                                  dtype = np.float64)
-        ares = np.asarray(ares_dict[module_idx], dtype = np.float64)
+        ares = np.asarray(ares_map[module_idx], dtype = np.float64)
         nco_freq = nco_freqs[module_idx]
 
         if not len(frequencies):
@@ -744,9 +870,10 @@ async def sweep(module, nco_freqs, frequencies_dict, ares_dict, sweep_f,
         if len(ares) != n_chs:
             raise ValueError('ares and frequencies are not the same length')
 
-        # Write amplitudes
-        fres_dict = {module_idx: [fi[0] for fi in frequencies]}
-        await module.write_tones(nco_freqs, fres_dict, ares_dict)
+        # Call write_tones to clear channels and initialize amplitudes with 
+        # first frequency of sweep
+        fres_map = {module_idx: [fi[0] for fi in frequencies]}
+        await module._write_tones(nco_freqs, fres_map, ares_map)
 
         # Initialize z array
         z = np.empty((n_chs, n_points), dtype = complex)
@@ -803,3 +930,57 @@ def validate_configure_system_params(clock_source, full_scale_dbm,
         raise TypeError('analog_bank_high must be a boolean value')
     if not isinstance(verbose, bool):
         raise TypeError('verbose must be a boolean value')
+    
+def validate_nco_freqs(nco_freqs, analog_bank_high):
+    """
+    Validate the nco_freqs dictionary format.
+    
+    Parameters:
+    nco_freqs (dict): keys (int) are module indices and values (float)
+        are NCO frequencies in Hz.
+    analog_bank_high (bool): if True, uses modules 5-8. Else uses modules 1-4.
+
+    Returns:
+    None
+    """
+    if not isinstance(nco_freqs, dict):
+        raise TypeError('nco_freqs must be a dictionary') 
+    for mi, nco in nco_freqs.items():
+        if not isinstance(nco, (float, np.floating)):
+            msg = 'nco_freqs values must be float NCO frequencies in Hz.'
+            raise TypeError(msg)
+        if nco <= 0 or nco >= 5e9:
+            msg = f'NCO frequency {nco} Hz is out of range [0, 5] GHz.'
+            raise ValueError(msg)
+        if not isinstance(mi, (int, np.integer)):
+            raise TypeError('nco_freqs keys must be integer module indices')
+        if analog_bank_high and not (5 <= mi <= 8):
+            raise ValueError(
+                f'Module index {mi} is out of range [5, 8] for high '
+                'analog bank.'
+                )
+        if not analog_bank_high and not (1 <= mi <= 4):
+            raise ValueError(
+                f'Module index {mi} is out of range [1, 4] for low '
+                'analog bank.'
+                )
+        
+def validate_ch_map(ch_map):
+    """
+    Validate the ch_map dictionary format.
+
+    Parameters:
+    ch_map (dict): keys (int) are module indices and values (array-like int)
+        are channel indices to write tones to.
+
+    Returns:
+    None
+    """
+    if ch_map is not None:
+        if not isinstance(ch_map, dict):
+            raise TypeError('ch_map must be a dictionary') 
+        for key, val in ch_map.items():
+            if not isinstance(key, (int, np.integer)):
+                raise TypeError('ch_map keys must be integers')
+            if not all(isinstance(ch, (int, np.integer)) for ch in val):
+                raise TypeError('ch_map values must be lists of integers') 

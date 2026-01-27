@@ -1,7 +1,14 @@
 {
     "python.testing.pytestArgs": [
-        "tests"
+        "-s",
+        "-vv",
+        "-rA",
+        "--crs",
+        "--crs_sn=45",
+        "--crs_iface=enp5s0",
+        "."
     ],
     "python.testing.unittestEnabled": false,
-    "python.testing.pytestEnabled": true
+    "python.testing.pytestEnabled": true,
+    "python.testing.cwd": "${workspaceFolder}"
 }
