@@ -7,9 +7,10 @@ import copy
 
 from .dependencies import get_most_recent_run, get_deps
 from . import framework as pf
+from ..zarr_util import deep_union
 
 class DataSet:
-    def __init__(self, custom_path, yaml_path, zarr_path):
+    def __init__(self, custom_path, zarr_path, cal_yaml_path, analysis_yaml_path=None):
         """
         Initialize the dataset with a calibration pipeline defined by a YAML 
         file.  
@@ -19,7 +20,8 @@ class DataSet:
             calibration functions.
         zarr_path (str): The path to the zarr file containing the analysis 
             outputs.
-        yaml_path (str): The path to the YAML configuration file.
+        cal_yaml_path (str): The path to the YAML configuration file.
+        analysis_yaml_path (str): The path to the YAML analysis file.
         """
         # Normalize paths 
         if custom_path is not None:
@@ -28,9 +30,10 @@ class DataSet:
             self.custom_path = None
         self.zarr_path = os.path.normpath(zarr_path)
         self.root = zarr.open_group(self.zarr_path, mode = 'a')
-        self.yaml_path = os.path.normpath(yaml_path)
+        self.cal_yaml_path = os.path.normpath(cal_yaml_path)
+        self.analysis_yaml_path = analysis_yaml_path
         self.global_cache = {}
-        self.deps_map = {'global':{}}
+        self.deps_map = {'global': {}}
 
         # Input validation 
         if self.custom_path is not None and \
@@ -38,27 +41,61 @@ class DataSet:
             raise ValueError("custom_path must point to a .py file.")
         if not self.zarr_path.endswith('.zarr'):
             raise ValueError("zarr_path must point to a .zarr file.")
-        is_yaml = self.yaml_path.endswith('.yaml') 
-        is_yaml = is_yaml or self.yaml_path.endswith('.yml')
+        is_yaml = self.cal_yaml_path.endswith('.yaml') 
+        is_yaml = is_yaml or self.cal_yaml_path.endswith('.yml')
         if not is_yaml:
-            raise ValueError("yaml_path must point to a .yaml or .yml file.")
+            raise ValueError("cal_yaml_path must point to a .yaml or .yml file.")
 
         # Load steps from custom_steps.py if it exists
-        self.steps = self._load_custom_steps()
+        self.cal_steps, self.analysis_steps = self._load_custom_steps()
         # Add default calibration steps if not already present
         for step in pf.default_cal_steps:
-            if step.name not in [s.name for s in self.steps]:
-                self.steps.append(step)
+            if step.name not in [s.name for s in self.cal_steps]:
+                self.cal_steps.append(step)
+        # Add default analysis steps if not already present
+        for step in pf.default_analysis_steps:
+            if step.name not in [s.name for s in self.analysis_steps]:
+                self.analysis_steps.append(step)
 
         # hard-coded nres for now
         self.nres = 1600
                 
         # Load YAML and convert to calibration pipeline
-        yaml_dict = self._load_yaml()
+        yaml_dict = self._load_yaml(self.cal_yaml_path)
         self.cal_pl = self._convert_yaml_to_steps(yaml_dict)
 
-        # confirm that the cal_plstructure is valid
+        # confirm that the cal_pl structure is valid
         pf.check_pl_tree_structure(self.cal_pl) 
+        
+        if self.analysis_yaml_path is not None:
+            self.analysis_yaml_path = os.path.normpath(analysis_yaml_path)
+            
+            is_yaml = self.analysis_yaml_path.endswith('.yaml')
+            is_yaml = is_yaml or self.analysis_yaml_path.endswith('.yml')
+            if not is_yaml:
+                raise ValueError("analysis_yaml_path must point to a .yaml or .yml file.")
+            
+            # Load analysis YAML and user-specified analysis parameters
+            yaml_dict = self._load_yaml(self.analysis_yaml_path)
+            yaml_dict = yaml_dict['ANALYSIS_STEPS']
+            self.analysis_params = {}
+            step_names = np.array([s.name for s in self.analysis_steps])
+            for step_dict in yaml_dict.values():
+                name = step_dict['task']
+                ixs = np.where(step_names == name)[0]
+                if len(ixs):
+                    step = self.analysis_steps[ixs[0]]
+                    if 'params' in step_dict.keys():
+                        params_dict = step_dict['params']
+                        for param_name, param_val in params_dict.items():
+                            if param_name in step.param_names:
+                                if param_val == 'None':
+                                    param_val = None
+                                self.analysis_params[param_name] = param_val
+                                self.global_cache[param_name] = True
+                                if 1 not in self.deps_map['global']:
+                                    self.deps_map['global'][1] = {}
+                                self.deps_map['global'][1][param_name] = {}
         
     def _load_custom_steps(self):
         """
@@ -78,17 +115,28 @@ class DataSet:
                                                       self.custom_path)
         cs = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cs)
-        return cs.custom_cal_steps
+        custom_cal_steps = cs.custom_cal_steps
+        
+        spec = importlib.util.spec_from_file_location("custom_analysis_steps", 
+                                                      self.custom_path)
+        cs = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cs)
+        custom_analysis_steps = cs.custom_analysis_steps
+        
+        return custom_cal_steps, custom_analysis_steps
     
-    def _load_yaml(self):
+    def _load_yaml(self, path):
         """
         Load the YAML configuration file. 
+
+        Parameters:
+        path: the path to the yaml file.
 
         Returns:
         dict: The loaded YAML configuration as a dictionary.
         """
-        with open(self.yaml_path, 'r') as f:
-            return yaml.safe_load(f)
+        with open(path, 'r') as f:
+            return yaml.safe_load(f)        
             
     def _convert_yaml_to_steps(self, pl_dict, key = None):
         """
@@ -106,7 +154,7 @@ class DataSet:
             for key, val in pl_dict.items():
                 pl_dict[key] = self._convert_yaml_to_steps(val, key)
         if isinstance(pl_dict, str) and key == 'task':
-            x = [d for d in self.steps if d.name == pl_dict]
+            x = [d for d in self.cal_steps if d.name == pl_dict]
             if not len(x):
                 m = f"Step '{pl_dict}' not found in available steps."
                 raise ValueError(m)
@@ -248,6 +296,10 @@ class DataSet:
             deps_map = self.deps_map['global']
             run_idx = get_most_recent_run(return_name, deps_map)
             deps = get_deps(step.return_names, deps_map)
+            names_to_remove = [name for name in step.return_names
+                               if name != return_name]
+            for name in names_to_remove:
+                deps.pop(name)
             
             if str(run_idx) not in root:
                 root.create_group(str(run_idx))
@@ -279,6 +331,10 @@ class DataSet:
                 deps_map = self.deps_map[di_str]
                 run_idx = get_most_recent_run(return_name, deps_map)
                 deps = get_deps(step.return_names, deps_map)
+                names_to_remove = [name for name in step.return_names
+                                if name != return_name]
+                for name in names_to_remove:
+                    deps.pop(name)
                 
                 if str(run_idx) not in root:
                     root.create_group(str(run_idx))
@@ -303,9 +359,12 @@ class DataSet:
                     # Initialize an array to tell us which data indices
                     # have been saved to values_arr.
                     exists_arr = return_grp.create_array(
-                        name = f'row_exists',
+                        name = 'row_exists',
                         data = np.full(self.nres, False)
                     )
+                else:
+                    values_arr = return_grp['data']
+                    exists_arr = return_grp['row_exists']
                     
                 values_arr[di] = value[di]
                 exists_arr[di] = True
@@ -390,15 +449,20 @@ class DataSet:
             object.__setattr__(self, name, attr)
             self.global_cache[name] = grp.attrs['global']
             if self.global_cache[name]:
-                deps_map = grp.attrs['deps']
+                deps_to_add = grp.attrs['deps']
+                self.update_deps_map_after_load(name, deps_to_add, di=None)
                 
             else:
                 row_exists = grp['row_exists'][...]
                 dis = np.where(row_exists)[0]
                 for di in dis:
-                    deps_map = grp.attrs['deps_map'][f'idx{di}']
+                    deps_to_add = grp.attrs['deps'][f'idx{di}']
+                    self.update_deps_map_after_load(name, deps_to_add, di=di)
                 
             return attr
+
+        if name in self.analysis_params.keys():
+            return self.analysis_params[name]
 
         # Only run when normal lookup fails
         cal_pl = object.__getattribute__(self, "cal_pl")
@@ -463,22 +527,21 @@ class DataSet:
             m += "integer-valued and > 0."
             raise ValueError(m)
 
-    def update_deps_map(self, param_names, return_names, data_idx):
+    def update_deps_map_after_run(self, param_names, return_names, data_idx):
         """
-        Updates the dependencies map in a DataSet.
-        """
-        def deep_union(a, b):
-            """
-            Returns the union of two nested dictionaries a and b.
-            """
-            out = copy.deepcopy(a)
-            for k, v in b.items():
-                if k in out and isinstance(out[k], dict) and isinstance(v, dict):
-                    out[k] = deep_union(out[k], v)
-                else:
-                    out[k] = v
-            return out
+        Updates the dependencies map after running a plStep.
         
+        Parameters:
+        param_names (array-like (str)): The list of input parameter names
+            of the plStep: plStep.param_names
+        return_names (array-like (str)): The list of return parameter names
+            of the plStep: plStep.return_names
+        data_idx: The data indices that the plStep was run on, or None if
+            the function was 'global'-type.
+            
+        Returns:
+        None
+        """
         def update_deps(param_names, return_names, deps_map):
             """
             Updates individual leaves of the deps_map corresponding
@@ -505,6 +568,8 @@ class DataSet:
                         deps_map[run_idx][name][dep_name] = dep_run_idx
         
         if data_idx is None: # "global" case
+            if 'global' not in self.deps_map:
+                self.deps_map['global'] = {}
             deps_map = self.deps_map['global']
             update_deps(param_names, return_names, deps_map)
 
@@ -524,3 +589,71 @@ class DataSet:
                 deps_map = self.deps_map[di_str]
                 
                 update_deps(param_names, return_names, deps_map)
+                       
+    def update_deps_map_after_load(self, name, deps_to_add, di=None):
+        """
+        Updates the dependencies map after loading data from the zarr file.
+        
+        Parameters:
+        name (str): The name of the analysis output.
+        deps_to_add (dictionary): Keys are return names, and values are run indices.
+            'name' should be included in the list of keys.
+        di (int or None): The data index of the output. If None, the 
+            output is of 'global' type and has no data index.
+        
+        Returns:
+        None
+        """
+        # Get the branch of self.deps_map that corresponds to 'global' attributes,
+        # or to the specified data index.
+        if di is None:
+            if 'global' not in self.deps_map:
+                self.deps_map['global'] = {}
+            deps_map = self.deps_map['global']
+        else:
+            di_str = f'idx{di}'
+            if di_str not in self.deps_map:
+                self.deps_map[di_str] = {}
+            deps_map = self.deps_map[di_str]
+        
+        # Initialize the dependencies leaf for this output name.
+        run_idx = deps_to_add[name]
+        if run_idx not in deps_map:
+            deps_map[run_idx] = {}
+        deps_map[run_idx][name] = {}
+        
+        # Add the dependencies to this leaf.
+        for key, value in deps_to_add.items():
+            if key != name:
+                deps_map[run_idx][name][key] = value
+                
+                
+    def run_analysis_step(self, name, data_idx=None, save_to_zarr=True):
+        """
+        Run an analysis step and save the output to zarr.
+        
+        Parameters:
+        name (str): The name of the analysis step.
+        data_idx (int or array-like): Data index (or indices) to
+            run the step on.
+        save_to_zarr (bool): If True, save the outputs to the
+            zarr store at Analyzer.dataset.root.
+
+        Returns:
+        None
+        """
+        x = [d for d in self.analysis_steps if d.name == name]
+        if not len(x):
+            m = f"Step '{name}' not found in available analysis steps."
+            raise ValueError(m)
+        
+        step = x[0]
+        step.run(self, data_idx)
+        
+        if save_to_zarr:
+                        
+            for return_name in step.return_names:
+                value = getattr(self, return_name)             
+                    
+                self.write_data(return_name, step,
+                                 value, data_idx)

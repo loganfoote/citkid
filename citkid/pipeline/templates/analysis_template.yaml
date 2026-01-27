@@ -13,6 +13,8 @@ ANALYSIS_STEPS:
       span_mult: 2 # I will implement this soon, multiplies all spans by this factor
   3 :
     task: fit_iq_circle 
+    params:
+      idx_circfit: None
     # unique case: res_mask is user defined, but would only be specified if 
     # calling from interactive mode. Defaults to None in the function, so you 
     # don't have to specify a parameter here.

@@ -1,7 +1,6 @@
 import numpy as np
 from ..xcal import gain, circle, xcal
 from .dependencies import get_deps, get_most_recent_run
-import copy
         
 ################################################################################
 ############################### Lazy Attribute #################################
@@ -328,7 +327,7 @@ class plStep:
                     DS.global_cache[name] = False
                 getattr(DS, name)[data_idx] = val
                 
-        DS.update_deps_map(self.param_names, self.return_names, data_idx)
+        DS.update_deps_map_after_run(self.param_names, self.return_names, data_idx)
 
     def __repr__(self):
         s = f"Pipeline Step: {self.name}"
@@ -390,7 +389,7 @@ default_analysis_steps =\
  ('fit_gain', gain.fit_gain, 
   ['fg', 'zg', 'fr_spans'], ['p_amp', 'p_phase', 'gain_mask'], 'per-row'),
 
- ('fit_circ', circle.fit_iq_circle, 
+ ('fit_iq_circle', circle.fit_iq_circle, 
   ['zf_rmv', 'idx_circfit'], ['circ_origin', 'circ_radius'], 'per-row'),
 
  ('get_theta_phase_offset', np.median, 
