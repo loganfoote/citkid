@@ -4,6 +4,9 @@ from io import BytesIO
 import warnings
 import itertools
 import numpy as np
+import time
+import threading
+from tqdm.auto import tqdm
 
 def save_fig(fig, filename, plot_directory, ftype = 'png',
              tight_layout = False, close_fig = True):
@@ -184,3 +187,48 @@ def get_fit_bound_curves(x, popt, perr, model):
     y_upper = np.nanmax(y_combinations, axis=0)
     y_lower = np.nanmin(y_combinations, axis=0)
     return y_best_fit, y_lower, y_upper
+
+def run_with_time_bar(fn, duration_s, desc, *args, **kwargs):
+    """
+    Runs a function while displaying a time progress bar for the specified 
+    duration.
+
+    Parameters:
+    fn (callable): Function to run.
+    duration_s (float): Duration in seconds for the progress bar.
+    desc (str): Description for the progress bar.
+
+    *args: Positional arguments to pass to fn.
+    **kwargs: Keyword arguments to pass to fn.
+    
+    Returns:
+    The return value of fn.
+        """
+    stop = threading.Event()
+
+    def progress():
+        start = time.monotonic()
+        with tqdm(
+            total = duration_s, 
+            unit = "s", 
+            desc = desc, 
+            bar_format = "{l_bar}{bar}| {remaining}",
+            leave = False
+            ) as pbar:
+            while not stop.is_set():
+                elapsed = time.monotonic() - start
+                pbar.n = min(elapsed, duration_s)
+                pbar.refresh()
+                time.sleep(0.1)
+
+            pbar.n = duration_s 
+            pbar.refresh()
+
+    t = threading.Thread(target=progress, daemon=True)
+    t.start()
+
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        stop.set()
+        t.join()

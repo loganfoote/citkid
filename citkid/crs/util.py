@@ -3,6 +3,7 @@ import os
 import rfmux
 import warnings
 import socket 
+from .. import zarr_util
 
 ################################################################################
 ##################### tone frequency -> NCO frequency map ######################
@@ -127,8 +128,8 @@ def get_sample_freq(dec_stage):
 ################################################################################
 ############################## parser processing ###############################
 ################################################################################
-def parser_to_zarr(path, grp, crs_sn, module_idxs, ntones, max_ntones, 
-                   ch_map, batch_size = 1_000):
+def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones, 
+                   ch_map, ares_map, dt, batch_size_mb = 1_000):
     """
     Import a parser file in batches and reformat for channels of interest. Save 
     to a Zarr file.
@@ -140,55 +141,102 @@ def parser_to_zarr(path, grp, crs_sn, module_idxs, ntones, max_ntones,
     path (str): path to the parser folder.
     grp (zarr.hierarchy.Group): Zarr group to save data.
     crs_sn (int): CRS serial number.
-    module_idxs (array-like): module idxs.
     ntones (int): number of tones.
     max_ntones (int): maximum number of tones per module.
     ch_map (dict): channel index dictionary. Keys (int) are module indices.
         Values are lists where values (int) are channel indices.
-    batch_size (int): batch size, in MB.
+    ares_map (dict): power dictionary. Keys (int) are module indices. Values are
+        arrays where values (float) are power in dBc. Used to create scaling 
+        from CRS amplitude to dBc.
+    dt (float): sample time in seconds.
+    batch_size_mb (int): batch size, in MB.
 
     Returns:
     None
     """
-    raise NotImplementedError("parser_to_zarr is not implemented.")
-    warnings.warn("convert_parser will overwrite data",
-                  UserWarning)
+    ### Write scale_factor and dt
+    rfmux_scale = rfmux.core.transferfunctions.VOLTS_PER_ROC 
+    rfmux_scale = rfmux_scale / 256 / np.sqrt(2)
+    scale_factor = np.full(ntones, fill_value = np.nan) 
 
-    dtype = np.dtype([('i', np.int32), ('q', np.int32)])
-    record_size = dtype.itemsize
+    for module_idx in ch_map.keys():
+        ares = ares_map[module_idx]
+        ch_idxs = ch_map[module_idx] 
+        pscale = 1 / 10 ** (ares / 20)
+        scale_factor[ch_idxs] = rfmux_scale * pscale
 
-    target_bytes = batch_size * (1024 ** 2)
-    batch_size = target_bytes // (record_size * len(module_idxs))
-    batch_size = (batch_size // max_ntones) * max_ntones
-    # Channel data is stored sequentially, so batch_size must be
-    # a multiple of max_ntones
+    # Save scale_factor and dt  
+    zarr_util.write_single_array(
+        grp, 'counts_to_dbc', scale_factor, dtype = np.float64
+    )
+    zarr_util.write_single_array(
+        grp, 'dt', dt, dtype = np.float64
+    )
+
+    ### Batch process parser file
+    # Open files 
+    module_idxs = list(ch_map.keys())
     file_paths = [
         os.path.join(path, f'serial_{crs_sn:04d}', 'm0%d_raw32'%(module))
         for module in module_idxs
-    ]
-
+    ] 
     files = [open(fp, 'rb') for fp in file_paths]
+
+    # Setup batches and initialize Zarr array 
+    dtype = np.dtype([('i', np.int32), ('q', np.int32)])
+    record_size = dtype.itemsize
+    target_bytes = batch_size_mb * (1024 ** 2)
+    batch_size = int(target_bytes // (record_size * len(files)))
+    batch_size = (batch_size // max_ntones) * max_ntones
+    z_out = grp.create_array(
+        name = 'z', 
+        shape = (2, ntones, 0), 
+        chunks = (2, ntones, batch_size), 
+        dtype = np.int32
+    )
+
+    # Process batches
     try:
         batch_idx = 0
+        max_batch_N = batch_size // max_ntones
+        z_real_buf = np.empty((ntones, max_batch_N), dtype = np.int32)
+        z_imag_buf = np.empty((ntones, max_batch_N), dtype = np.int32)
+
         while True:
             batch_parts = [
-                np.fromfile(f, dtype = dtype, count = batch_size)
+                np.fromfile(
+                    f, 
+                    dtype = dtype, 
+                    count = batch_size
+                )
                 for f in files
             ]
-            N = min([b.shape[0] // (max_ntones) for b in batch_parts])
-            z_real = np.empty((ntones, N), dtype = np.int32)
-            z_imag = np.empty((ntones, N), dtype = np.int32)
-            for module_idx, parser_dat  in zip(module_idxs, batch_parts):
-                zi_real = parser_dat['i'].astype(np.int32)
-                zi_imag = parser_dat['q'].astype(np.int32)
-                for idx, ch_idx in enumerate(ch_map[module_idx]):
-                    z_real[ch_idx] = zi_real[idx:N * max_ntones:max_ntones]
-                    z_imag[ch_idx] = zi_imag[idx:N * max_ntones:max_ntones]
-            if z_real.shape[1] == 0:
+            N = min([b.shape[0] // (max_ntones) 
+                    for b in batch_parts]) 
+            if N == 0:
+                # End when one or more files ends
                 break
-            np.save(outpath.replace('.npy', f'_batch{batch_idx:02d}.npy'),
-                    [z_real, z_imag])
+            
+            z_real = z_real_buf[:, :N]
+            z_imag = z_imag_buf[:, :N]
+            for module_idx,  parser_dat  in zip(
+                module_idxs, batch_parts
+            ):
+                zi_real = parser_dat['i'][:N * max_ntones]
+                zi_imag = parser_dat['q'][:N * max_ntones]
+                ch_idxs = ch_map[module_idx]
+                z_real[ch_idxs] = zi_real.reshape(N, max_ntones).T
+                z_imag[ch_idxs] = zi_imag.reshape(N, max_ntones).T            
+            
+            t0 = z_out.shape[2] 
+            t1 = t0 + N 
+            z_out.resize((z_out.shape[0], z_out.shape[1], 
+                        z_out.shape[2] + N))
+            z_out[0, :, t0:t1] = z_real 
+            z_out[1, :, t0:t1] = z_imag 
+            
             batch_idx += 1
+            batch_parts = None # free memory
     finally:
         for f in files:
             f.close()

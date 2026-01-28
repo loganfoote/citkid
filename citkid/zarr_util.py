@@ -48,7 +48,7 @@ def write_zarr_row(root, name, idx, value):
     arr = root[name]
     value = np.asarray(value)
  
-    # Optional but strongly recommended safety check
+    # Safety check on shape
     expected_shape = arr.shape[1:]
     if value.shape != expected_shape:
         raise ValueError(
@@ -102,8 +102,7 @@ def write_single_array(root, name, value, dtype = None):
         return
  
     root.create_array(name, data = value) # no chunking
-    
-    
+        
 def deep_union(a, b):
     """
     Returns the union of two dictionaries a and b, both of which

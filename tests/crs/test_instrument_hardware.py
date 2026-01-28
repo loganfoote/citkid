@@ -1,9 +1,11 @@
 import pytest
 import rfmux
 import numpy as np 
-import tqdm
+import zarr 
+import os 
 import re
 from citkid.crs.instrument import CRS
+from citkid.crs import util
 
 ################################################################################
 # Fixtures
@@ -78,7 +80,7 @@ async def test_crs_config(pytestconfig, capsys):
         analog_bank_high = False, verbose = False
     )
     captured = capsys.readouterr() 
-    assert captured.out == "" 
+    assert captured.out == ""
     assert captured.err == ""
 
     await crs.configure_system(
@@ -86,7 +88,9 @@ async def test_crs_config(pytestconfig, capsys):
         analog_bank_high = False, verbose = True
     )
     captured = capsys.readouterr() 
-    assert captured.out == "System configured\nClocking source is VCXO\n" 
+    msg = "Set decimation: dec_stage = 0, short = False, modules = []\n"
+    msg += "System configured\nClocking source is VCXO\n" 
+    assert captured.out == msg
     assert captured.err == ""
 
 @pytest.mark.asyncio
@@ -177,20 +181,20 @@ async def test_nco_tones(pytestconfig, capsys):
     # clear module 1 
     await crs._clear_channels([1])
     await validate_ch_maps(crs) 
-    assert len(crs.fres_map[1]) == 0
+    assert 1 not in crs.fres_map.keys()
     # re-write tones 
     await crs.write_tones(fres, ares) 
     assert len(crs.fres_map[1]) > 0 
     # reset module 1 NCO: should clear tones 
     await crs.set_nco({1: 1e9}, verbose = False)
     await validate_ch_maps(crs) 
-    assert len(crs.fres_map[1]) == 0 
-    assert len(crs.fres_map[2]) > 0 
+    assert 1 not in crs.fres_map.keys()
+    assert len(crs.fres_map[2]) > 0
     # disable module 2 
     await crs.disable_modules([2]) 
     await validate_ch_maps(crs) 
     assert list(crs.nco_freqs.keys()) == [1]
-    assert len(crs.fres_map[2]) == 0
+    assert 2 not in crs.fres_map.keys()
 
     # Check custom ch map 
     await crs.set_nco({1: 1e9, 2: 1e9}, verbose = False)
@@ -199,7 +203,7 @@ async def test_nco_tones(pytestconfig, capsys):
     await crs.write_tones(fres, ares)
     await validate_ch_maps(crs) 
     assert len(crs.fres_map[1]) == 2 
-    assert len(crs.fres_map[2]) == 0 
+    assert len(crs.fres_map[2]) == 0
 
     ch_map = {1: [1], 2: [0]}
     await crs.write_tones(fres, ares, ch_map = ch_map)
@@ -228,6 +232,11 @@ async def test_nco_tones(pytestconfig, capsys):
                             allow_missing = True)
     await validate_ch_maps(crs) 
     assert len(crs.fres_map[1]) == 1 
+
+@pytest.mark.asyncio 
+async def test_decimation_placeholder():
+    """ Placeholder for future decimation tests. """
+    pass
 
 @pytest.mark.asyncio
 async def test_sweep(pytestconfig, monkeypatch):
@@ -307,10 +316,10 @@ async def test_sweep(pytestconfig, monkeypatch):
         verbose = False
         )
     await validate_ch_maps(crs)
-    assert np.allclose(crs.freqs_map[3], frequencies[0:1, :], atol = 1e-3)
-    assert np.allclose(crs.freqs_map[4], frequencies[1:2, :], atol = 1e-3)
-    assert crs.freqs_map.get(1) is None
-    assert crs.freqs_map.get(2) is None
+    assert len(crs.fres_map[3]) == 0 
+    assert len(crs.fres_map[4]) == 0
+    assert crs.fres_map.get(1) is None
+    assert crs.fres_map.get(2) is None
     assert f.dtype == np.float64
     assert np.allclose(f, frequencies, atol = 1)
     assert z.dtype == np.complex128
@@ -337,7 +346,6 @@ async def test_sweep(pytestconfig, monkeypatch):
     msg_w = msg + " Proceeding with 1 missing channel(s)."
     await validate_ch_maps(crs)
     with pytest.raises(ValueError, match = re.escape(msg)):
-        
         f, z = await crs.sweep(
             frequencies, 
             ares, 
@@ -391,10 +399,10 @@ async def test_sweep(pytestconfig, monkeypatch):
             verbose = False
             )
     await validate_ch_maps(crs)
-    assert np.allclose(crs.freqs_map[3], frequencies[1:2, :], atol = 1e-3)
-    assert crs.freqs_map.get(1) is None
-    assert crs.freqs_map.get(2) is None
-    assert crs.freqs_map.get(4) is None
+    assert len(crs.fres_map[3]) == 0
+    assert crs.fres_map.get(1) is None
+    assert crs.fres_map.get(2) is None
+    assert crs.fres_map.get(4) is None
     assert f.dtype == np.float64
     assert np.allclose(f[1], frequencies[1], atol = 1)
     assert np.all(np.isnan(f[0]))
@@ -403,19 +411,95 @@ async def test_sweep(pytestconfig, monkeypatch):
     assert np.all(np.isfinite(z[1]))
     assert np.all(np.isnan(z[0]))
 
+@pytest.mark.asyncio
+async def test_stream(pytestconfig, monkeypatch, tmp_path):
+    """ 
+    Tests whether streaming executes properly, and if the amplitue and phase 
+    matches sweep (just for a couple modules).
+    """
+    ### Initialize board 
+    crs = initialize_crs(pytestconfig)
+    await crs.configure_system(
+        clock_source = "VCXO", full_scale_dbm = 7,
+        analog_bank_high = False, verbose = False
+    )
 
-def test_stream_placeholder():
-    """ Placeholder for future stream tests. """
-    # crs = initialize_crs(pytestconfig)
-    pass
+    ### set_nco
+    await crs.set_nco({1: 1e9, 2: 2e9})
 
+    fres = np.array([0.9e9, 1e9, 1.1e9, 1.9e9, 2.0e9, 2.1e9])
+    ares = np.array([-55, -55, -50, -50, -55, -50], dtype = np.float64)
 
+    root = zarr.open(os.path.join(tmp_path, 'data.zarr'), mode = 'a')
+    grp = root.require_group('sample_0')
+
+    spy = TqdmSpy()
+    monkeypatch.setattr("citkid.util.tqdm", spy)
+    await crs.capture_ts(
+        fres = fres,
+        ares = ares,
+        ts_duration_s = 4,
+        dec_stage = 4,
+        grp = grp,
+        tmp_directory = os.path.join(tmp_path, 'tmp/'),
+        batch_size_mb = 1,
+        delete_parser_data = True,
+        verbose = True
+    )
+    _, zsweep = await crs.sweep_linear(
+        fres, ares, 1e3, 1, 100, 
+        allow_missing = False, center_fres = True, downward = True,
+        verbose = False
+    )
+    assert len(spy.calls) == 1 # one for each module
+    _, kwargs1, stub1 = spy.calls[0]
+    assert kwargs1["leave"] is False
+    assert stub1.desc == "Streaming"
+
+    # Check output 
+    counts_to_dbc = grp['counts_to_dbc']
+    dt = float(grp['dt'][...])
+    z = grp['z']
+
+    assert counts_to_dbc.shape == (len(fres),)
+    assert np.isclose(dt, 1 / util.get_sample_freq(4))
+    assert z.shape[0] == 2
+    assert z.shape[1] == len(fres)
+    assert np.isclose(z.shape[2] * dt, 4.0, atol = 0.2)
+
+    # Check that sweep matches parser 
+    z = z[0, :, :] + 1j * z[1, :, :]
+    z *= np.array(counts_to_dbc)[:, np.newaxis]
+    z_avg = np.mean(z, axis = 1) 
+    zsweep = zsweep[:, 0]
+
+    raise NotImplementedError("Need to make sure tolerance check is correct")
+    abs_tol = 1e-2
+    abs_diff = np.abs(zsweep - z_avg)
+    flat_idx = np.nanargmax(abs_diff)
+    max_idx = np.unravel_index(flat_idx, abs_diff.shape)
+    max_abs = abs_diff.ravel()[flat_idx]
+    if max_abs > abs_tol:
+        zs_val = zsweep.ravel()[flat_idx]
+        za_val = z_avg.ravel()[flat_idx]
+        raise AssertionError(
+            "Max absolute diff exceeds tolerance: "
+            f"idx={max_idx}, zsweep={zs_val}, z_avg={za_val}, "
+            f"abs_diff={max_abs} (tol={abs_tol})"
+        )
+
+def test_parser_to_zarr():
+    raise Exception("Known bug: parser_to_zarr cannot handle missing tones.")
 
 ################################################################################
 # Loopback tests 
-################################################################################ 
+################################################################################
 def test_loopback_placeholder():
-    """ Placeholder for future loopback tests. """
+    """ Placeholder for future loopback tests. 
+    Tests all CRS modules in loopback mode across the first and second Nyquist 
+    zones. Ensures that loopback profile is within 5 dB of specifications. 
+    Ensures that streaming matches loopback values.
+    """
     pass
 
 ################################################################################
@@ -476,18 +560,28 @@ class TqdmSpy:
         self.calls = []
 
     def __call__(self, *args, **kwargs):
-        stub = _TqdmStub(args[0] if args else None)
+        stub = _TqdmStub(args[0] if args else None, kwargs)
         self.calls.append((args, kwargs, stub))
         return stub
 
 
 class _TqdmStub:
-    def __init__(self, iterable):
+    def __init__(self, iterable, kwargs=None):
         self.iterable = iterable
-        self.desc = None
+        self.desc = None if kwargs is None else kwargs.get("desc")
+        self.n = 0
 
     def __iter__(self):
         return iter(self.iterable if self.iterable is not None else [])
 
     def set_description(self, desc):
         self.desc = desc
+
+    def refresh(self):
+        return None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
