@@ -1,7 +1,6 @@
 import numpy as np
 import os
 import rfmux
-import warnings
 import socket 
 from .. import zarr_util
 
@@ -49,6 +48,10 @@ def create_ch_map(nco_freqs, freqs, bw):
     # Reshape freqs to 2D array if necessary
     if freqs.ndim == 1:
         freqs = freqs[:, np.newaxis]
+
+    # Short-circuit if no NCOs provided
+    if len(nco_freqs) == 0:
+        return {}, np.arange(freqs.shape[0], dtype = np.int32)
 
     # Create channel mapping
     ch_map = {module: [] for module in nco_freqs.keys()} 
@@ -100,7 +103,7 @@ def get_modules(d, module_idxs):
         raise TypeError("d must be an instance of rfmux.core.schema.CRS")
     if not hasattr(module_idxs, '__iter__'):
         raise TypeError("module_idxs must be an iterable of ints")
-    if not all(isinstance(i, int) for i in module_idxs):
+    if not all(isinstance(i, (int, np.integer)) for i in module_idxs):
         raise ValueError("All module_idxs must be ints")
     
     # Get modules
@@ -119,7 +122,7 @@ def get_sample_freq(dec_stage):
     float: sample frequency in Hz.
     """
     # Input validation
-    if not isinstance(dec_stage, int) or dec_stage < 0 or dec_stage > 6:
+    if not isinstance(dec_stage, (int, np.integer)) or dec_stage < 0 or dec_stage > 6:
         raise ValueError("dec_stage must be an int in range [0, 6]")
     
     # Calculate sample frequency
@@ -132,11 +135,11 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
                    ch_map, ares_map, dt, batch_size_mb = 1_000,
                    chunk_size_mb = None):
     """
-    Import a parser file in batches and reformat for channels of interest. Save 
-    to a Zarr file.
+    Import parser file data in batches and reformat for channels of interest. 
+    Save to a Zarr file.
 
     Saves each batch as int32 data, to later be scaled by the factors saved by
-    `CRS.take_ts`.
+    `CRS.capture_ts`/`CRS.stream`.
 
     Parameters:
     path (str): path to the parser folder.
@@ -147,7 +150,7 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
     ch_map (dict): channel index dictionary. Keys (int) are module indices.
         Values are lists where values (int) are channel indices.
     ares_map (dict): power dictionary. Keys (int) are module indices. Values are
-        arrays where values (float) are power in dBc. Used to create scaling 
+        arrays where values (float) are power in dBm. Used to create scaling 
         from CRS amplitude to dBc.
     dt (float): sample time in seconds.
     batch_size_mb (int): total input read size per batch, in MB.
@@ -268,25 +271,6 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
         for f in files:
             f.close()
 
-def import_ts(data_path, scale_factor_path):
-    """
-    Import timestream data as saved by the batch processor.
-
-    Parameters:
-    data_path (str): path to the complex IQ data.
-    scale_factor_path (str): path to the scale factor data.
-
-    Returns:
-    z (np.ndarray): data scaled by scale_factor in complex128.
-    """
-    raise NotImplementedError("import_ts is deprecated. Need to update convert_parser")
-    i, q = np.load(data_path).astype(np.int32)
-    scale_factor = np.load(scale_factor_path).astype(np.float64)
-    z = np.empty(i.shape, dtype = np.complex128)
-    np.multiply(i, scale_factor, out = z.real)
-    np.multiply(q, scale_factor, out = z.imag)
-    return z
-
 def estimate_ts_data_size(dec_stage, total_time, nmodules, max_ntones, ntones):
     """
     Estimate and print raw and processed timestream data sizes.
@@ -304,16 +288,17 @@ def estimate_ts_data_size(dec_stage, total_time, nmodules, max_ntones, ntones):
     None
     """
     # Type and range checks
-    if type(dec_stage) != int or dec_stage < 0 or dec_stage > 6:
+    if not isinstance(dec_stage, int) or dec_stage < 0 or dec_stage > 6:
         raise ValueError('dec_stage must be an int in range [0, 6]')
     if total_time < 0:
         raise ValueError('total_time must be positive')
     if nmodules not in [1, 2, 3, 4]:
         raise ValueError('nmodules must be in [1, 2, 3, 4]')
-    if type(max_ntones) != int or max_ntones < 0 or max_ntones > 1024:
+    if not isinstance(max_ntones, int) or max_ntones < 0 or max_ntones > 1024:
         raise ValueError('max_ntones must be an int in range [0, 1024]')
-    if type(ntones) != int or ntones < 0 or ntones > 1024 * 4:
+    if not isinstance(ntones, int) or ntones < 0 or ntones > 1024 * 4:
         raise ValueError('ntones must be an int in range [0, 4 * 1024]')
+        
     # Calculate file sizes
     sample_frequency = get_sample_freq(dec_stage)
     size_per_ch = 4 * 2 * (total_time * sample_frequency)

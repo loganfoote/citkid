@@ -170,3 +170,4 @@ citkid/primecam/dump.rdb
 .vscode/
 tmp/
 crs_test_data/
+.vscode/settings.json

@@ -13,7 +13,6 @@ from . import util
 # rfmux imports
 import rfmux
 from rfmux.algorithms.measurement import take_netanal
-from rfmux.tools import parser
 
 
 class CRS:
@@ -79,8 +78,8 @@ class CRS:
             MHz reference (reference should be 5 Vpp). Note that the clock 
             source will default to 'VCXO' if the specified source is 
             unavailable, and a warning will be raised.
-        full_scale_dbm (int): full scale power in dBm. Range is [-18, 7].
-        analog_bank_high (bool): if True, uses modules 1-4 (DAC/ADC 5-8). Else
+        full_scale_dbm (int): full scale power in dBm. Range is [0, 7].
+        analog_bank_high (bool): if True, uses modules 5-8 (DAC/ADC 5-8). Else
             uses modules 1-4 (DAC/ADC 1-4). Can be changed later using 
             self.set_analog_bank.
         verbose (bool): If True, gets and prints the clocking source.
@@ -156,9 +155,9 @@ class CRS:
         Set the analog bank to high (modules 5-8) or low (modules 1-4).
 
         Parameters:
-        analog_bank_high (bool): if True, uses modules 1-4 (DAC/ADC 5-8). Else
+        analog_bank_high (bool): if True, uses modules 5-8 (DAC/ADC 5-8). Else
             uses modules 1-4 (DAC/ADC 1-4).
-        full_scale_dbm (int): full scale power in dBm. Range is [-18, 7].
+        full_scale_dbm (int): full scale power in dBm. Range is [0, 7].
 
         Returns:
         None
@@ -287,7 +286,7 @@ class CRS:
                 short = max_ntones <= 128
             else:
                 short = False
-        if not module_idxs:
+        if module_idxs is None or len(module_idxs) == 0:
             module_idxs = [k for k, v in self.fres_map.items() if len(v)]
 
         # Set decimation 
@@ -496,7 +495,7 @@ class CRS:
                              'along axis 0') 
         if frequencies.ndim != 2:
             raise ValueError('frequencies must be a 2D array-like object') 
-        if not isinstance(nsamps, int) and nsamps > 0:
+        if not isinstance(nsamps, int) or nsamps <= 0:
             raise ValueError('nsamps must be a positive integer')
         if not len(self.nco_freqs):
             raise RuntimeError("NCO frequencies are not set")
@@ -622,9 +621,9 @@ class CRS:
         # Input validation
         fres = np.asarray(fres, dtype = np.float64)
         ares = np.asarray(ares, dtype = np.float64) 
-        if not isinstance(span, (float, np.floating)) and span > 0:
+        if not isinstance(span, (float, np.floating)) or span <= 0:
             raise ValueError('span must be a positive float') 
-        if not isinstance(npoints, int) and npoints > 0:
+        if not isinstance(npoints, int) or npoints <= 0:
             raise ValueError('npoints must be a positive integer')
         # other validation is performed in self.sweep
 
@@ -680,7 +679,7 @@ class CRS:
         fres = np.asarray(fres, dtype = np.float64)
         ares = np.asarray(ares, dtype = np.float64) 
         qres = np.asarray(qres, dtype = np.float64)
-        if not isinstance(npoints, int) and npoints > 0:
+        if not isinstance(npoints, int) or npoints <= 0:
             raise ValueError('npoints must be a positive integer')
         # other validation is performed in self.sweep
         
@@ -716,7 +715,7 @@ class CRS:
         """
         # Input validation 
         amplitude = float(amplitude)
-        if not isinstance(npoints, int) and npoints > 0:
+        if not isinstance(npoints, int) or npoints <= 0:
             raise ValueError('npoints must be a positive integer') 
         # other validation is performed in self.sweep_linear
 
@@ -786,8 +785,7 @@ class CRS:
         verbose (bool): If True, displays a progress bar while taking data.
 
         Returns:
-        z (M X N np.array): first index is channel index and second index is
-            complex S21 data point in the timestream.
+        None
         """
         # fres and ares validation perfomed in self.write_tones 
         # Remaining input validation performed in self.stream
@@ -862,8 +860,7 @@ class CRS:
         verbose (bool): If True, displays a progress bar while taking data.
 
         Returns:
-        z (M X N np.array): first index is channel index and second index is
-            complex S21 data point in the timestream.
+        None
         """
         ### Input validation -> move to util to use in take_ts?
         tmp_directory = os.path.normpath(os.path.expanduser(tmp_directory))
@@ -894,6 +891,7 @@ class CRS:
             '-n', f'{nframes:d}'
             ]
         # Run parser
+        from rfmux.tools import parser
         try:
             if verbose:
                 await run_with_time_bar(
@@ -1082,6 +1080,9 @@ async def _sweep(module, nco_freqs, frequencies_map, ares_map, sweep_f,
         sweep_f[module_idx] = frequencies
         sweep_z[module_idx] = z
 
+################################################################################
+########################### Input validation helpers ###########################
+################################################################################
 def _validate_configure_system_params(clock_source, full_scale_dbm, 
                                      analog_bank_high, verbose):
     """
@@ -1099,7 +1100,6 @@ def _validate_configure_system_params(clock_source, full_scale_dbm,
         raise TypeError('full_scale_dbm must be a number')
     if full_scale_dbm < 0. or full_scale_dbm > 7:
         raise ValueError('full_scale_dbm must be in [0, 7]')
-    assert full_scale_dbm
     if not isinstance(analog_bank_high, bool):
         raise TypeError('analog_bank_high must be a boolean value')
     if not isinstance(verbose, bool):

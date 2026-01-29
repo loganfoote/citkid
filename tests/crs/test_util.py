@@ -1,6 +1,5 @@
 import pytest
 import numpy as np
-import rfmux
 from citkid.crs import util 
 
 ################################################################################
@@ -61,6 +60,16 @@ def test_create_ch_map(nco_freqs, freqs, bw, map_exp, missing_exp):
     assert np.allclose(missing_chs, missing_exp)
 
 
+def test_create_ch_map_empty_freqs_returns_empty_arrays():
+    ch_map, missing_chs = util.create_ch_map(
+        {0: 100e6, 1: 200e6}, [], 200e6
+    )
+    assert set(ch_map.keys()) == {0, 1}
+    assert ch_map[0].size == 0
+    assert ch_map[1].size == 0
+    assert missing_chs.size == 0
+
+
 @pytest.mark.parametrize(
     "nco_freqs, freqs, bw",
     [
@@ -77,6 +86,12 @@ def test_create_ch_map(nco_freqs, freqs, bw, map_exp, missing_exp):
 def test_create_ch_map_exceptions(nco_freqs, freqs, bw):
     with pytest.raises((TypeError, ValueError)):
         util.create_ch_map(nco_freqs, freqs, bw)
+
+
+def test_create_ch_map_empty_nco_freqs_returns_missing_only():
+    ch_map, missing_chs = util.create_ch_map({}, [100e6, 200e6], 100e6)
+    assert ch_map == {}
+    assert np.allclose(missing_chs, [0, 1])
 
 ################################################################################
 ################################## get_modules #################################
@@ -170,7 +185,7 @@ def test_get_modules_invalid_d_type_raises(monkeypatch):
     monkeypatch.setattr(util, "rfmux", FakeRfmux)
 
     with pytest.raises(TypeError):
-        util.get_modules(d="not_a_crs", module_indices=[1, 2])
+        util.get_modules(d = "not_a_crs", module_indices = [1, 2])
 
 def test_get_modules_invalid_module_indices_type_raises(monkeypatch):
     class FakeRfmux:
@@ -186,7 +201,7 @@ def test_get_modules_invalid_module_indices_type_raises(monkeypatch):
     monkeypatch.setattr(util, "rfmux", FakeRfmux)
 
     with pytest.raises(TypeError):
-        util.get_modules(d=FakeCRS(), module_indices=123)
+        util.get_modules(d = FakeCRS(), module_indices = 123)
 
 def test_get_modules_invalid_module_indices_element_type_raises(monkeypatch):
     class FakeRfmux:
@@ -202,7 +217,43 @@ def test_get_modules_invalid_module_indices_element_type_raises(monkeypatch):
     monkeypatch.setattr(util, "rfmux", FakeRfmux)
 
     with pytest.raises((ValueError, TypeError)):
-        util.get_modules(d=FakeCRS(), module_indices=[1, "2"])
+        util.get_modules(d = FakeCRS(), module_indices = [1, "2"])
+
+
+def test_get_modules_empty_indices(monkeypatch):
+    class FakeModuleQuery:
+        def __init__(self, indices):
+            self.indices = indices
+
+    class FakeReadoutModule:
+        class module:
+            @staticmethod
+            def in_(module_indices):
+                return FakeModuleQuery(module_indices)
+
+    class FakeModules:
+        def __init__(self):
+            self.last_query = None
+        def filter(self, query):
+            self.last_query = query
+            return []
+
+    class FakeRfmux:
+        ReadoutModule = FakeReadoutModule
+        class core:
+            class schema:
+                class CRS:
+                    pass
+
+    class FakeCRS(FakeRfmux.core.schema.CRS):
+        def __init__(self):
+            self.modules = FakeModules()
+
+    monkeypatch.setattr(util, "rfmux", FakeRfmux)
+
+    result = util.get_modules(d = FakeCRS(), module_idxs = [])
+
+    assert result == []
 
 ################################################################################
 ################################ get_sample_freq ###############################
@@ -221,17 +272,151 @@ def test_get_sample_freq_invalid_decimation():
     with pytest.raises(ValueError, match = msg):
         util.get_sample_freq(7)
 
+
+def test_get_sample_freq_accepts_numpy_int():
+    assert np.isclose(
+        util.get_sample_freq(np.int64(3)), 
+        625e6 / (256 * 64 * 2 ** 3)
+        )
+
 ################################################################################
 ################################ parser_to_zarr ################################
 ################################################################################
-
-################################################################################
-################################## import_ts ###################################
-################################################################################
+def test_parser_to_zarr_placeholder():
+    raise NotImplementedError("parser_to_zarr test is not yet implemented")
 
 ################################################################################
 ############################ estimate_ts_data_size #############################
 ################################################################################
+def _parse_size_line(line):
+    label, value = line.split(':', 1)
+    value = value.strip()
+    num_str, unit = value.split()
+    return label.strip(), float(num_str), unit
+
+
+def _expected_sizes_mb(dec_stage, total_time, nmodules, max_ntones, ntones):
+    sample_frequency = 625e6 / (256 * 64 * 2 ** dec_stage)
+    size_per_ch = 4 * 2 * (total_time * sample_frequency)
+    size_raw_mb = (size_per_ch * nmodules * max_ntones + 103) / 1e6
+    size_proc_mb = (size_per_ch * ntones + 8 * ntones) / 1e6
+    return size_raw_mb, size_proc_mb
+
+
+def _to_mb(value, unit):
+    if unit == 'GB':
+        return value * 1e3
+    return value
+
+
+def test_estimate_ts_data_size_outputs_mb(capsys):
+    args = dict(
+        dec_stage = 6, 
+        total_time = 10, 
+        nmodules = 1, 
+        max_ntones = 128, 
+        ntones = 64
+    )
+    util.estimate_ts_data_size(**args)
+
+    out = capsys.readouterr().out.strip().splitlines()
+    assert len(out) == 2
+
+    raw_label, raw_val, raw_unit = _parse_size_line(out[0])
+    proc_label, proc_val, proc_unit = _parse_size_line(out[1])
+
+    assert raw_label.startswith('Raw parser data size')
+    assert proc_label.startswith('Processed data size')
+    assert raw_unit == 'MB'
+    assert proc_unit == 'MB'
+
+    exp_raw_mb, exp_proc_mb = _expected_sizes_mb(**args)
+    assert np.isclose(
+        _to_mb(raw_val, raw_unit), exp_raw_mb, rtol = 0.02, atol = 0.1
+    )
+    assert np.isclose(
+        _to_mb(proc_val, proc_unit), exp_proc_mb, rtol = 0.02, atol = 0.1
+    )
+
+
+def test_estimate_ts_data_size_outputs_gb(capsys):
+    args = dict(
+        dec_stage = 0, 
+        total_time = 100, 
+        nmodules = 4, 
+        max_ntones = 1024, 
+        ntones = 2048
+    )
+    util.estimate_ts_data_size(**args)
+
+    out = capsys.readouterr().out.strip().splitlines()
+    assert len(out) == 2
+
+    raw_label, raw_val, raw_unit = _parse_size_line(out[0])
+    proc_label, proc_val, proc_unit = _parse_size_line(out[1])
+
+    assert raw_label.startswith('Raw parser data size')
+    assert proc_label.startswith('Processed data size')
+    assert raw_unit == 'GB'
+    assert proc_unit == 'GB'
+
+    exp_raw_mb, exp_proc_mb = _expected_sizes_mb(**args)
+    assert np.isclose(
+        _to_mb(raw_val, raw_unit), exp_raw_mb, rtol = 0.02, atol = 0.1
+    )
+    assert np.isclose(
+        _to_mb(proc_val, proc_unit), exp_proc_mb, rtol = 0.02, atol = 0.1
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(
+            dec_stage = 7, total_time = 1, nmodules = 1, 
+            max_ntones = 1, ntones = 1
+        ),
+        dict(
+            dec_stage = -1, total_time = 1, nmodules = 1, 
+            max_ntones = 1, ntones = 1
+        ),
+        dict(
+            dec_stage = 1.5, total_time = 1, nmodules = 1, 
+            max_ntones = 1, ntones = 1
+        ),
+        dict(
+            dec_stage = 1, total_time = -0.1, nmodules = 1, 
+            max_ntones = 1, ntones = 1
+        ),
+        dict(
+            dec_stage = 1, total_time = 1, nmodules = 0, 
+            max_ntones = 1, ntones = 1
+        ),
+        dict(
+            dec_stage = 1, total_time = 1, nmodules = 5, 
+            max_ntones = 1, ntones = 1
+        ),
+        dict(
+            dec_stage = 1, total_time = 1, nmodules = 1, 
+            max_ntones = -1, ntones = 1
+        ),
+        dict(
+            dec_stage = 1, total_time = 1, nmodules = 1, 
+            max_ntones = 1025, ntones = 1
+        ),
+        dict(
+            dec_stage = 1, total_time = 1, nmodules = 1, 
+            max_ntones = 1, ntones = -1
+        ),
+        dict(
+            dec_stage = 1, total_time = 1, nmodules = 1, 
+            max_ntones = 1, ntones = 4097
+        ),
+    ],
+)
+def test_estimate_ts_data_size_invalid_inputs(kwargs):
+    with pytest.raises((TypeError, ValueError)):
+        util.estimate_ts_data_size(**kwargs)
 
 ################################################################################
 ############################### interface_exists ###############################
@@ -250,3 +435,15 @@ def test_interface_exists(monkeypatch):
 def test_interface_exists_invalid_input():
     with pytest.raises(TypeError):
         util.interface_exists(123)
+
+
+def test_interface_exists_passes_through_str(monkeypatch):
+    captured = {}
+    def fake_if_nametoindex(name):
+        captured["name"] = name
+        return 1
+
+    monkeypatch.setattr(util.socket, "if_nametoindex", fake_if_nametoindex)
+
+    assert util.interface_exists("eth0") is True
+    assert captured["name"] == "eth0"

@@ -24,24 +24,38 @@ def save_fig(fig, filename, plot_directory, ftype = 'png',
     Returns:
     None
     """
-    if fig is not None:
-        if plot_directory:
-            plot_directory = os.path.normpath(
-                os.path.expanduser(plot_directory)
-            )
-            output_path = os.path.join(plot_directory, f'{filename}.{ftype}')
-        else:
-            output_path = f'{filename}.{ftype}'
-        fig.set_facecolor('white')
-        if tight_layout:
-            fig.tight_layout()
-        plt.figure(fig.number)
-        try:
-            plt.savefig(output_path, bbox_inches='tight', pad_inches = 0.05)
-        except Exception as e:
-            plt.savefig(output_path, pad_inches = 0.05)
-        if close_fig:
-            plt.close(fig)
+    # Input validation
+    if not isinstance(filename, str):
+        raise TypeError('filename must be a string')
+    if not isinstance(plot_directory, str):
+        raise TypeError('plot_directory must be a string')
+    if not isinstance(ftype, str):
+        raise TypeError('ftype must be a string')
+    if not isinstance(tight_layout, bool):
+        raise TypeError('tight_layout must be a boolean')
+    if not isinstance(close_fig, bool):
+        raise TypeError('close_fig must be a boolean')
+    
+    # Save figure 
+    if fig is None:
+        return 
+    if plot_directory:
+        plot_directory = os.path.normpath(
+            os.path.expanduser(plot_directory)
+        )
+        output_path = os.path.join(plot_directory, f'{filename}.{ftype}')
+    else:
+        output_path = f'{filename}.{ftype}'
+    fig.set_facecolor('white')
+    if tight_layout:
+        fig.tight_layout()
+    plt.figure(fig.number)
+    try:
+        plt.savefig(output_path, bbox_inches='tight', pad_inches = 0.05)
+    except Exception as e:
+        plt.savefig(output_path, pad_inches = 0.05)
+    if close_fig:
+        plt.close(fig)
 
 def save_figure_to_memory(fig):
     """
@@ -53,6 +67,12 @@ def save_figure_to_memory(fig):
     Returns:
     buf (BytesIO): Memory buffer containing the saved figure.
     """
+    # Input validation
+    if fig is None:
+        raise ValueError('fig cannot be None')
+    if not hasattr(fig, 'savefig'):
+        raise TypeError('fig must be a matplotlib figure object')
+    
     buf = BytesIO()
     fig.set_facecolor('white')
     with warnings.catch_warnings():
@@ -74,6 +94,12 @@ def combine_figures_vertically(fig1, fig2, dpi = 200):
     Returns:
     fig (pyplot.figure): Combined figure.
     """
+    # Input validation
+    if not isinstance(dpi, (int, np.integer)):
+        raise TypeError('dpi must be an integer')
+    if dpi <= 0:
+        raise ValueError('dpi must be positive')
+    
     with save_figure_to_memory(fig1) as buf1, \
         save_figure_to_memory(fig2) as buf2:
         plt.close(fig1)
@@ -98,6 +124,12 @@ def combine_figures_horizontally(fig1, fig2, dpi = 200):
     Returns:
     fig (pyplot.figure): Combined figure.
     """
+    # Input validation
+    if not isinstance(dpi, (int, np.integer)):
+        raise TypeError('dpi must be an integer')
+    if dpi <= 0:
+        raise ValueError('dpi must be positive')
+    
     with save_figure_to_memory(fig1) as buf1, \
         save_figure_to_memory(fig2) as buf2:
         plt.close(fig1)
@@ -121,6 +153,10 @@ def to_scientific_notation(number):
     mantissa (float): Mantissa in scientific notation.
     exponent (int): Exponent in scientific notation.
     """
+    # Input validation
+    if not isinstance(number, (int, float, np.integer, np.floating)):
+        raise TypeError('number must be a numeric type')
+    
     if number == 0:
         return (0.0, 0)  # Handle the special case where the number is zero
 
@@ -149,6 +185,14 @@ def format_str_scientific_with_err(p, perr, for_plotting = True):
     Returns:
     formatted_str (str): Formatted string.
     """
+    # Input validation
+    if not isinstance(p, (int, float, np.integer, np.floating)):
+        raise TypeError('p must be a numeric type')
+    if not isinstance(perr, (int, float, np.integer, np.floating)):
+        raise TypeError('perr must be a numeric type')
+    if not isinstance(for_plotting, bool):
+        raise TypeError('for_plotting must be a boolean')
+    
     p_mantissa, p_exponent = to_scientific_notation(p)
     perr_mantissa, perr_exponent = to_scientific_notation(perr)
     exp_diff = p_exponent - perr_exponent
@@ -178,6 +222,15 @@ def get_fit_bound_curves(x, popt, perr, model):
     y_lower (np.array): Lower bound curve corresponding to x.
     y_upper (np.array): Upper bound curve corresponding to x.
     """
+    # Input validation
+    if not callable(model):
+        raise TypeError('model must be callable')
+    popt = np.asarray(popt)
+    perr = np.asarray(perr)
+    x = np.asarray(x)
+    if popt.shape != perr.shape:
+        raise ValueError('popt and perr must have the same shape')
+    
     y_best_fit = model(x, *popt)
 
     param_combinations = list(itertools.product(*zip(popt - np.array(perr),
@@ -204,6 +257,16 @@ def run_with_time_bar(fn, duration_s, desc, *args, **kwargs):
     Returns:
     The return value of fn.
         """
+    # Input validation
+    if not callable(fn):
+        raise TypeError('fn must be callable')
+    if not isinstance(duration_s, (int, float, np.integer, np.floating)):
+        raise TypeError('duration_s must be a numeric type')
+    if duration_s < 0:
+        raise ValueError('duration_s must be non-negative')
+    if not isinstance(desc, str):
+        raise TypeError('desc must be a string')
+    
     stop = threading.Event()
 
     def progress():
