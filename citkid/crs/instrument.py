@@ -89,16 +89,16 @@ class CRS:
         None
         """
         # Input validation
-        validate_configure_system_params(clock_source, full_scale_dbm, 
-                                         analog_bank_high, verbose)
+        _validate_configure_system_params(clock_source, full_scale_dbm, 
+                                          analog_bank_high, verbose)
         
         # Resolve the system
         await self.d.resolve()
 
         # Validate firmware version
         self.firmware_release = await self.d.get_firmware_release() 
-        if self.firmware_release.version != '1.6.0rc2':
-            raise RuntimeError("CRS firmware must be version 1.6.0rc2")
+        if self.firmware_release.version != '1.6.0rc3':
+            raise RuntimeError("CRS firmware must be version 1.6.0rc3")
 
         # Set the timestamp port. Bypass if already set
         just_booted = await self.d.get_timestamp_port() != 'TEST'
@@ -115,7 +115,7 @@ class CRS:
         await self.set_analog_bank(analog_bank_high, full_scale_dbm)
 
         # Set the decimation 
-        await self.set_decimation(0, short = False, module_idxs = None,
+        await self.set_decimation(6, short = False, module_idxs = None,
                                  verbose = verbose) 
         
         # Store number of tones
@@ -139,7 +139,7 @@ class CRS:
         None
         """
         # Input validation
-        validate_configure_system_params(clock_source, 1, True, True)
+        _validate_configure_system_params(clock_source, 1, True, True)
         
         # Set and check clock source
         await self.d.set_clock_source(clock_source)
@@ -164,7 +164,7 @@ class CRS:
         None
         """
         # Input validation
-        validate_configure_system_params("SMA", full_scale_dbm, 
+        _validate_configure_system_params("SMA", full_scale_dbm, 
                                          analog_bank_high, True)
         
         # Set analog bank
@@ -172,6 +172,18 @@ class CRS:
         abh = await self.d.get_analog_bank()
         if abh != analog_bank_high:
             raise RuntimeError("Failed to set analog bank")
+    
+        # Remove other modules from nco_freqs and maps
+        remove_module_idxs = range(1, 5) if analog_bank_high else range(5, 9)
+        for module_idx in remove_module_idxs:
+            if module_idx in self.nco_freqs:
+                del self.nco_freqs[module_idx]
+            if module_idx in self.fres_map:
+                del self.fres_map[module_idx]
+            if module_idx in self.ares_map:
+                del self.ares_map[module_idx]
+            if module_idx in self.ch_map:
+                del self.ch_map[module_idx]
         
         # Store analog bank
         self.analog_bank_high = analog_bank_high
@@ -180,7 +192,7 @@ class CRS:
         module_idxs = range(5, 9) if analog_bank_high else range(1, 5)
         coros = [
             self.d.set_dac_scale(full_scale_dbm, self.d.UNITS.DBM,
-                                       module_idx)
+                                 module_idx)
             for module_idx in module_idxs
         ]
         await asyncio.gather(*coros) 
@@ -311,7 +323,7 @@ class CRS:
         None
         """
         # Input validation 
-        validate_nco_freqs(nco_freqs, self.analog_bank_high)
+        _validate_nco_freqs(nco_freqs, self.analog_bank_high)
             
         # Set NCO frequencies
         nco_freqs = nco_freqs.copy()
@@ -400,7 +412,7 @@ class CRS:
             raise ValueError('fres and ares must be the same shape')
         if len(fres) == 0:
             return 0 
-        validate_ch_map(ch_map)
+        _validate_ch_map(ch_map)
 
         # Store ntones for later
         ntones = len(fres)
@@ -488,7 +500,7 @@ class CRS:
             raise ValueError('nsamps must be a positive integer')
         if not len(self.nco_freqs):
             raise RuntimeError("NCO frequencies are not set")
-        validate_ch_map(ch_map) 
+        _validate_ch_map(ch_map) 
         if not isinstance(pbar_description, str):
             raise TypeError('pbar_description must be a string')
         
@@ -703,8 +715,7 @@ class CRS:
         z (np.array): array of complex S21 data corresponding to f.
         """
         # Input validation 
-        if not isinstance(amplitude, (float, np.floating)):
-            raise TypeError('amplitude must be a float') 
+        amplitude = float(amplitude)
         if not isinstance(npoints, int) and npoints > 0:
             raise ValueError('npoints must be a positive integer') 
         # other validation is performed in self.sweep_linear
@@ -742,6 +753,7 @@ class CRS:
             allow_missing = False,
             tmp_directory = 'tmp/',
             batch_size_mb = 1000,
+            chunk_size_mb = 128,
             delete_parser_data = True,
             verbose = True
     ): 
@@ -767,8 +779,8 @@ class CRS:
             converting. Data is streamed to disk, so the drive must have
             fast enough I/O performance with sufficient free space.
         batch_size_mb (int): batch size, in MB. Approximate size of each chunk 
-            that is loaded into memory when converting parser data to zarr, and 
-            the size of each zarr chunk along the time axis.
+            that is loaded into memory when converting parser data to zarr.
+        chunk_size_mb (int): size of each zarr chunk along the time axis, in MB.
         delete_parser_data (bool): If True, deletes the parser data files
             after importing the data.
         verbose (bool): If True, displays a progress bar while taking data.
@@ -785,7 +797,9 @@ class CRS:
         await self._clear_channels(idx_to_clear)
 
         # Write tones
-        await self.write_tones(fres, ares, ch_map = ch_map)
+        await self.write_tones(
+            fres, ares, ch_map = ch_map, allow_missing = allow_missing
+            )
         time.sleep(0.5) # frequency change has transient
         
         # Stream  
@@ -796,6 +810,7 @@ class CRS:
                 grp = grp,
                 tmp_directory = tmp_directory,
                 batch_size_mb = batch_size_mb,
+                chunk_size_mb = chunk_size_mb,
                 delete_parser_data = delete_parser_data,
                 verbose = verbose
             )
@@ -815,6 +830,7 @@ class CRS:
         grp,
         tmp_directory = 'tmp/',
         batch_size_mb = 1000,
+        chunk_size_mb = 128,
         delete_parser_data = True,
         verbose = True
     ):
@@ -839,8 +855,8 @@ class CRS:
             converting. Data is streamed to disk, so the drive must have
             fast enough I/O performance with sufficient free space.
         batch_size_mb (int): batch size, in MB. Approximate size of each chunk 
-            that is loaded into memory when converting parser data to zarr, and 
-            the size of each zarr chunk along the time axis.
+            that is loaded into memory when converting parser data to zarr.
+        chunk_size_mb (int): size of each zarr chunk along the time axis, in MB.
         delete_parser_data (bool): If True, deletes the parser data files
             after importing the data.
         verbose (bool): If True, displays a progress bar while taking data.
@@ -902,7 +918,8 @@ class CRS:
             self.ch_map,
             self.ares_map,
             1 / self.sample_freq,
-            batch_size_mb = batch_size_mb
+            batch_size_mb = batch_size_mb,
+            chunk_size_mb = chunk_size_mb
         )
 
         
@@ -1065,7 +1082,7 @@ async def _sweep(module, nco_freqs, frequencies_map, ares_map, sweep_f,
         sweep_f[module_idx] = frequencies
         sweep_z[module_idx] = z
 
-def validate_configure_system_params(clock_source, full_scale_dbm, 
+def _validate_configure_system_params(clock_source, full_scale_dbm, 
                                      analog_bank_high, verbose):
     """
     Validate the input parameters for configure_system.
@@ -1088,7 +1105,7 @@ def validate_configure_system_params(clock_source, full_scale_dbm,
     if not isinstance(verbose, bool):
         raise TypeError('verbose must be a boolean value')
     
-def validate_nco_freqs(nco_freqs, analog_bank_high):
+def _validate_nco_freqs(nco_freqs, analog_bank_high):
     """
     Validate the nco_freqs dictionary format.
     
@@ -1122,7 +1139,7 @@ def validate_nco_freqs(nco_freqs, analog_bank_high):
                 'analog bank.'
                 )
         
-def validate_ch_map(ch_map):
+def _validate_ch_map(ch_map):
     """
     Validate the ch_map dictionary format.
 

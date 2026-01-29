@@ -129,7 +129,8 @@ def get_sample_freq(dec_stage):
 ############################## parser processing ###############################
 ################################################################################
 def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones, 
-                   ch_map, ares_map, dt, batch_size_mb = 1_000):
+                   ch_map, ares_map, dt, batch_size_mb = 1_000,
+                   chunk_size_mb = None):
     """
     Import a parser file in batches and reformat for channels of interest. Save 
     to a Zarr file.
@@ -149,7 +150,10 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
         arrays where values (float) are power in dBc. Used to create scaling 
         from CRS amplitude to dBc.
     dt (float): sample time in seconds.
-    batch_size_mb (int): batch size, in MB.
+    batch_size_mb (int): total input read size per batch, in MB.
+    chunk_size_mb (int or None): target Zarr chunk size, in MB. If None,
+        defaults to batch_size_mb. The chunk length is capped to the total
+        available samples to avoid oversized final chunks.
 
     Returns:
     None
@@ -177,42 +181,64 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
     # Open files 
     module_idxs = list(ch_map.keys())
     file_paths = [
-        os.path.join(path, f'serial_{crs_sn:04d}', 'm0%d_raw32'%(module))
+        # module idxs are 1 - 4 in parser data, regardless of analog_bank_high
+        # might be changed in future release
+        os.path.join(path, f'serial_{crs_sn:04d}', 
+                     'm0%d_raw32'%(module - (module // 5) * 4))
         for module in module_idxs
     ] 
     files = [open(fp, 'rb') for fp in file_paths]
 
     # Setup batches and initialize Zarr array 
     dtype = np.dtype([('i', np.int32), ('q', np.int32)])
-    record_size = dtype.itemsize
-    target_bytes = batch_size_mb * (1024 ** 2)
-    batch_size = int(target_bytes // (record_size * len(files)))
-    batch_size = (batch_size // max_ntones) * max_ntones
+    batch_size_bytes = int(batch_size_mb * (1024 ** 2))
+    chunk_size_bytes = int(
+        (batch_size_mb if chunk_size_mb is None else chunk_size_mb) * (1024 ** 2)
+    )
+    # Total bytes read per batch across all files is ~batch_size_mb
+    # Each file stores max_ntones records per time sample
+    read_count = max(max_ntones, batch_size_bytes // (len(files) * dtype.itemsize))
+    # read_count must be multiple of max_ntones
+    read_count = (read_count // max_ntones) * max_ntones
+    # Chunk length in time samples for output array (decoupled from read size)
+    chunk_N = max(
+        1,
+        chunk_size_bytes // (2 * ntones * np.dtype(np.int32).itemsize)
+    )
+    # Cap chunk length to total available samples to avoid oversized tail chunk
+    samples_per_file = [
+        (os.path.getsize(fp) // dtype.itemsize) // max_ntones
+        for fp in file_paths
+    ]
+    total_samples = int(min(samples_per_file)) if samples_per_file else 0
+    if total_samples > 0:
+        chunk_N = min(chunk_N, total_samples)
+
+    # Initialize output Zarr array
     z_out = grp.create_array(
         name = 'z', 
         shape = (2, ntones, 0), 
-        chunks = (2, ntones, batch_size), 
+        chunks = (2, ntones, chunk_N), 
         dtype = np.int32
     )
 
     # Process batches
     try:
         batch_idx = 0
-        max_batch_N = batch_size // max_ntones
-        z_real_buf = np.empty((ntones, max_batch_N), dtype = np.int32)
-        z_imag_buf = np.empty((ntones, max_batch_N), dtype = np.int32)
+        z_real_buf = np.empty((ntones, chunk_N), dtype = np.int32)
+        z_imag_buf = np.empty((ntones, chunk_N), dtype = np.int32)
 
         while True:
             batch_parts = [
                 np.fromfile(
                     f, 
                     dtype = dtype, 
-                    count = batch_size
+                    count = read_count
                 )
                 for f in files
             ]
             N = min([b.shape[0] // (max_ntones) 
-                    for b in batch_parts]) 
+                     for b in batch_parts]) 
             if N == 0:
                 # End when one or more files ends
                 break
@@ -230,8 +256,9 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
             
             t0 = z_out.shape[2] 
             t1 = t0 + N 
-            z_out.resize((z_out.shape[0], z_out.shape[1], 
-                        z_out.shape[2] + N))
+            z_out.resize(
+                (z_out.shape[0], z_out.shape[1], z_out.shape[2] + N)
+                )
             z_out[0, :, t0:t1] = z_real 
             z_out[1, :, t0:t1] = z_imag 
             

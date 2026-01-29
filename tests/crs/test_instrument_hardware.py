@@ -3,9 +3,13 @@ import rfmux
 import numpy as np 
 import zarr 
 import os 
+import shutil
 import re
 from citkid.crs.instrument import CRS
 from citkid.crs import util
+import matplotlib.pyplot as plt 
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend for tests
 
 ################################################################################
 # Fixtures
@@ -88,7 +92,7 @@ async def test_crs_config(pytestconfig, capsys):
         analog_bank_high = False, verbose = True
     )
     captured = capsys.readouterr() 
-    msg = "Set decimation: dec_stage = 0, short = False, modules = []\n"
+    msg = "Set decimation: dec_stage = 6, short = False, modules = []\n"
     msg += "System configured\nClocking source is VCXO\n" 
     assert captured.out == msg
     assert captured.err == ""
@@ -473,7 +477,6 @@ async def test_stream(pytestconfig, monkeypatch, tmp_path):
     z_avg = np.mean(z, axis = 1) 
     zsweep = zsweep[:, 0]
 
-    raise NotImplementedError("Need to make sure tolerance check is correct")
     abs_tol = 1e-2
     abs_diff = np.abs(zsweep - z_avg)
     flat_idx = np.nanargmax(abs_diff)
@@ -494,13 +497,195 @@ def test_parser_to_zarr():
 ################################################################################
 # Loopback tests 
 ################################################################################
-def test_loopback_placeholder():
+@pytest.mark.asyncio 
+async def test_loopback(pytestconfig, tmp_path):
     """ Placeholder for future loopback tests. 
     Tests all CRS modules in loopback mode across the first and second Nyquist 
     zones. Ensures that loopback profile is within 5 dB of specifications. 
     Ensures that streaming matches loopback values.
     """
-    pass
+    raise NotImplementedError("Need to add phase to loopback test plots.")
+    ### Initialize board 
+    crs = initialize_crs(pytestconfig)
+    full_scale_dbm = 7
+    await crs.configure_system(
+        clock_source = "VCXO", full_scale_dbm = full_scale_dbm,
+        analog_bank_high = False, verbose = False
+    )
+
+    # Setup sweep parameters
+    ncos = [0.25, 0.75, 1.25, 1.75, 2.25, 
+        2.75, 3.25, 3.75, 4.25, 4.75] 
+    ncos = np.array(ncos, dtype = np.float64) * 1e9 
+    amplitude = -50 
+    npoints = 1 
+    nsamps = 10
+
+    data = {} 
+    data_ts = {}
+    tmp_directory = 'tmp/'
+    zarr_path = os.path.join(tmp_directory, 'tmp_zarr.zarr')
+    root = zarr.open(zarr_path, mode = 'a')
+    run_idx = 0
+    try:
+        for analog_bank_high in [False, True]:
+            await crs.set_analog_bank(analog_bank_high,
+                                        full_scale_dbm)
+            for nco in ncos:
+                if analog_bank_high:
+                    all_modules = range(5, 9)  
+                else:
+                    all_modules = range(1, 5)
+                await crs.set_nco(
+                    {idx: nco for idx in all_modules},
+                    verbose = False
+                )
+                
+                # Create fres and ares arrays -> same as sweep_full, 
+                # but with custom channel map since all NCOs are the 
+                # same
+                tone_bw = crs.bw / 1024 + 200
+                # spacing = tone_bw / npoints
+                fres = np.concatenate(
+                    [np.linspace(nco - crs.bw / 2 + 10 + tone_bw,
+                                nco + crs.bw / 2 - 10 - tone_bw,
+                                1024) 
+                    for nco in crs.nco_freqs.values()]
+                )
+                ares = amplitude * np.ones(len(fres))
+                
+                ch_map = {}
+                offset = min(all_modules)
+                for idx in all_modules:
+                    ch_map[idx] = list(
+                        range((idx - offset) * 1024, 
+                            (idx - offset) * 1024 + 1024)
+                    )
+                # Sweep
+                f, z = await crs.sweep_linear(
+                    fres, ares, tone_bw, npoints, nsamps, 
+                    ch_map = ch_map, allow_missing = False, 
+                    center_fres = True, downward = True, 
+                    verbose = False
+                    )
+                subdata = {k: [f[v].flatten(), z[v].flatten()] 
+                        for k, v in ch_map.items()
+                        }
+                # Append to data
+                for idx in subdata:
+                    if idx in data:
+                        for i in range(2):
+                            data[idx][i] = np.concatenate(
+                                [data[idx][i], subdata[idx][i]]
+                            )
+                    else:
+                        data[idx] = subdata[idx]
+                # Take short ts 
+                ts_duration_s = 0.2 
+                dec_stage = 5 
+                grp = root.require_group(f'run_{run_idx:d}')
+                run_idx += 1
+                ts_path = os.path.join(tmp_directory, 'parser/') 
+                os.makedirs(ts_path, exist_ok = True)
+                await crs.capture_ts(
+                    fres,
+                    ares, 
+                    ts_duration_s,
+                    dec_stage,
+                    grp,
+                    ch_map = ch_map,
+                    allow_missing = False,
+                    tmp_directory = ts_path,
+                    batch_size_mb = 1000,
+                    chunk_size_mb = 128,
+                    delete_parser_data = True,
+                    verbose = False
+                )
+
+                # Import ts and append to ts_data
+                z = np.array(grp['z'], dtype = np.float64)
+                s = np.array(grp['counts_to_dbc'])
+                z *= s[np.newaxis, :, np.newaxis]
+                z = z[0] + 1j * z[1]
+                for k, chs in ch_map.items():
+                    if k in data_ts:
+                        data_ts[k][0] = np.concatenate(
+                            [data_ts[k][0], fres[chs]]
+                        )
+                        data_ts[k][1].extend(z[chs])
+                    else:
+                        data_ts[k] = [fres[chs], 
+                                    [zi for zi in z[chs]]]
+
+        # Plot loopback profiles
+        fig, axs = plt.subplots(
+            2, 4, figsize = [16, 8], 
+            sharey = True, sharex = True, layout = 'tight'
+        ) 
+        for ax in axs[-1, :]:
+            ax.set(xlabel = 'Frequency (GHz)')
+        for ax in axs[:, 0]:
+            ax.set(ylabel = r'$|S_{21}|$ (dBc)')
+            
+        for (module_idx, (fi, zi)), ax in zip(
+                data.items(), axs.flatten()
+            ):
+            
+            mask = (fi > 50e6)
+            c = plt.cm.cividis(0.)
+            fi, zi = fi[mask], zi[mask] 
+            mask = fi < 2.3e9
+            ax.plot(fi[mask] / 1e9, 20 * np.log10(np.abs(zi[mask])), 
+                    color = c, aa = False)
+            mask = fi > 2.6e9
+            ax.plot(fi[mask] / 1e9, 20 * np.log10(np.abs(zi[mask])), 
+                    color = c, aa = False)
+            ax.set(title = f'Module: {module_idx:d}')
+
+        # Save figure for reference regardless of test outcome
+        artifact_dir = pytestconfig.rootpath / 'crs_test_data'
+        artifact_dir.mkdir(parents = True, exist_ok = True)
+        fig_paths = [
+            tmp_path / 'loopback_profile.png',
+            artifact_dir / 'loopback_profile.png'
+        ]
+        for fig_path in fig_paths:
+            fig.savefig(fig_path, dpi = 150)
+
+        status_paths = [
+            tmp_path / 'loopback_profile_status.txt',
+            artifact_dir / 'loopback_profile_status.txt'
+        ]
+        try:
+            # Confirms that streamed noise matches IQ to within 0.01
+            for module_idx, (_, zsweep) in data.items():
+                zt = data_ts[module_idx][1] 
+                z_avg = np.array([np.mean(zi) for zi in zt])
+                abs_tol = 1e-2
+                abs_diff = np.abs(zsweep - z_avg)
+                flat_idx = np.nanargmax(abs_diff)
+                max_idx = np.unravel_index(flat_idx, abs_diff.shape)
+                max_abs = abs_diff.ravel()[flat_idx]
+                if max_abs > abs_tol:
+                    zs_val = zsweep.ravel()[flat_idx]
+                    za_val = z_avg.ravel()[flat_idx]
+                    raise AssertionError(
+                        "Max absolute diff exceeds tolerance: "
+                        f"idx={max_idx}, zsweep={zs_val}, z_avg={za_val}, "
+                        f"abs_diff={max_abs} (tol={abs_tol})"
+                    )
+            for status_path in status_paths:
+                status_path.write_text("PASS\n")
+        except AssertionError as exc:
+            for status_path in status_paths:
+                status_path.write_text(f"FAIL: {exc}\n")
+            raise
+    finally:
+        if os.path.exists(zarr_path):
+            shutil.rmtree(zarr_path, ignore_errors = True)
+        if os.path.exists(ts_path):
+            shutil.rmtree(ts_path, ignore_errors = True)
+        
 
 ################################################################################
 # Helper functions

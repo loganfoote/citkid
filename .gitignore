@@ -166,4 +166,7 @@ cython_debug/
 citkid/primecam/dump.rdb
 citkid/primecam/dump.rdb
 
+# Misc folders
 .vscode/
+tmp/
+crs_test_data/
