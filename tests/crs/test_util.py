@@ -282,8 +282,8 @@ def test_get_sample_freq_accepts_numpy_int():
 ################################################################################
 ################################ parser_to_zarr ################################
 ################################################################################
-def test_parser_to_zarr_placeholder():
-    raise NotImplementedError("parser_to_zarr test is not yet implemented")
+# NOTE: Tests for parser_to_zarr have been moved to test_parser_to_zarr.py
+# to keep validation and functional tests together in a dedicated file.
 
 ################################################################################
 ############################ estimate_ts_data_size #############################

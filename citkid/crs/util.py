@@ -2,6 +2,7 @@ import numpy as np
 import os
 import rfmux
 import socket 
+import zarr 
 from .. import zarr_util
 
 ################################################################################
@@ -133,7 +134,7 @@ def get_sample_freq(dec_stage):
 ################################################################################
 def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones, 
                    ch_map, ares_map, dt, batch_size_mb = 1_000,
-                   chunk_size_mb = None):
+                   chunk_size_mb = 128):
     """
     Import parser file data in batches and reformat for channels of interest. 
     Save to a Zarr file.
@@ -154,19 +155,26 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
         from CRS amplitude to dBc.
     dt (float): sample time in seconds.
     batch_size_mb (int): total input read size per batch, in MB.
-    chunk_size_mb (int or None): target Zarr chunk size, in MB. If None,
+    chunk_size_mb (int): target Zarr chunk size, in MB. If None,
         defaults to batch_size_mb. The chunk length is capped to the total
         available samples to avoid oversized final chunks.
 
     Returns:
     None
     """
+    ### Input validation 
+    _validate_parser_to_zarr_inputs(
+        path, grp, crs_sn, ntones, max_ntones, ch_map, ares_map, dt, 
+        batch_size_mb, chunk_size_mb
+    )
+        
     ### Write scale_factor and dt
     rfmux_scale = rfmux.core.transferfunctions.VOLTS_PER_ROC 
     rfmux_scale = rfmux_scale / 256 / np.sqrt(2)
     scale_factor = np.full(ntones, fill_value = np.nan) 
 
     for module_idx in ch_map.keys():
+        # Use ares to modify scale_factor from dBm to dBc 
         ares = ares_map[module_idx]
         ch_idxs = ch_map[module_idx] 
         pscale = 1 / 10 ** (ares / 20)
@@ -196,7 +204,7 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
     dtype = np.dtype([('i', np.int32), ('q', np.int32)])
     batch_size_bytes = int(batch_size_mb * (1024 ** 2))
     chunk_size_bytes = int(
-        (batch_size_mb if chunk_size_mb is None else chunk_size_mb) * (1024 ** 2)
+        chunk_size_mb * (1024 ** 2)
     )
     # Total bytes read per batch across all files is ~batch_size_mb
     # Each file stores max_ntones records per time sample
@@ -228,8 +236,9 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
     # Process batches
     try:
         batch_idx = 0
-        z_real_buf = np.empty((ntones, chunk_N), dtype = np.int32)
-        z_imag_buf = np.empty((ntones, chunk_N), dtype = np.int32)
+        # Pre-allocate buffers (will be resized if N exceeds chunk_N)
+        z_real_buf = np.zeros((ntones, chunk_N), dtype = np.int32)
+        z_imag_buf = np.zeros((ntones, chunk_N), dtype = np.int32)
 
         while True:
             batch_parts = [
@@ -246,6 +255,15 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
                 # End when one or more files ends
                 break
             
+            # Resize buffers if needed
+            if N > z_real_buf.shape[1]:
+                z_real_buf = np.zeros((ntones, N), dtype = np.int32)
+                z_imag_buf = np.zeros((ntones, N), dtype = np.int32)
+            else:
+                # Zero out the portion we'll use
+                z_real_buf[:, :N] = 0
+                z_imag_buf[:, :N] = 0
+            
             z_real = z_real_buf[:, :N]
             z_imag = z_imag_buf[:, :N]
             for module_idx,  parser_dat  in zip(
@@ -254,8 +272,10 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
                 zi_real = parser_dat['i'][:N * max_ntones]
                 zi_imag = parser_dat['q'][:N * max_ntones]
                 ch_idxs = ch_map[module_idx]
-                z_real[ch_idxs] = zi_real.reshape(N, max_ntones).T
-                z_imag[ch_idxs] = zi_imag.reshape(N, max_ntones).T            
+                # Extract only the channels we need from the parser data
+                n_ch = len(ch_idxs)
+                z_real[ch_idxs] = zi_real.reshape(N, max_ntones)[:, :n_ch].T
+                z_imag[ch_idxs] = zi_imag.reshape(N, max_ntones)[:, :n_ch].T            
             
             t0 = z_out.shape[2] 
             t1 = t0 + N 
@@ -342,4 +362,53 @@ def interface_exists(iface):
         return True
     except OSError:
         return False
+
+################################################################################
+########################### input validation ###################################
+################################################################################  
+def _validate_parser_to_zarr_inputs(
+    path, grp, crs_sn, ntones, max_ntones, ch_map, ares_map, dt, 
+    batch_size_mb, chunk_size_mb
+):
+    """Validate inputs for parser_to_zarr function."""
+    if not os.path.isdir(path):
+        raise ValueError(f'path {path} is not a valid directory') 
+    if not isinstance(grp, zarr.core.group.Group):
+        raise TypeError('grp must be a zarr.core.group.Group object')
+    # Check that required names don't already exist in the group
+    existing_names = set(grp.keys())
+    required_names = {'counts_to_dbc', 'dt', 'z'}
+    conflicts = existing_names & required_names
+    if conflicts:
+        msg = f'grp already contains required names: {sorted(conflicts)}'
+        raise ValueError(msg) 
+    if not isinstance(crs_sn, (int, np.integer)):
+        raise TypeError('crs_sn must be an int') 
+    if not isinstance(ntones, (int, np.integer)) or ntones < 0:
+        raise ValueError('ntones must be a positive int')
+    if not isinstance(max_ntones, (int, np.integer)) or max_ntones <= 0:
+        raise ValueError('max_ntones must be a positive int')
+    if not isinstance(ch_map, dict):
+        raise TypeError('ch_map must be a dict')
+    if not all(isinstance(k, (int, np.integer)) for k in ch_map.keys()):
+        raise ValueError('All keys in ch_map must be int')
+    if not all(isinstance(v, np.ndarray) and 
+               np.issubdtype(v.dtype, np.integer) 
+               for v in ch_map.values()):
+        raise ValueError('All values in ch_map must be numpy arrays of int')
+    if not isinstance(ares_map, dict):
+        raise TypeError('ares_map must be a dict')
+    if not all(isinstance(k, (int, np.integer)) for k in ares_map.keys()):
+        raise ValueError('All keys in ares_map must be int')
+    if not all(isinstance(v, np.ndarray) and 
+               np.issubdtype(v.dtype, np.floating) 
+               for v in ares_map.values()):
+        raise ValueError('All values in ares_map must be numpy arrays of float')
+    if not isinstance(dt, (float, np.floating)) or dt <= 0:
+        raise ValueError('dt must be a positive float')
+    if not isinstance(batch_size_mb, (int, np.integer)) or batch_size_mb <= 0:
+        raise ValueError('batch_size_mb must be a positive int')
+    if not isinstance(chunk_size_mb, (int, np.integer)) or \
+        chunk_size_mb <= 0:
+        raise ValueError('chunk_size_mb must be a positive int or None')
 

@@ -14,7 +14,6 @@ from . import util
 import rfmux
 from rfmux.algorithms.measurement import take_netanal
 
-
 class CRS:
     def __init__(self, serial_number = 27, interface = 'enp2s0'):
         """
@@ -105,7 +104,7 @@ class CRS:
             await self.d.set_timestamp_port(self.d.TIMESTAMP_PORT.TEST)
 
         # Set the clock source
-        await self.set_clock_source(clock_source)
+        await self.set_clock_source(clock_source, verbose = verbose)
 
         # Default extended bandwidth to False
         await self.set_extended_bw(False)
@@ -122,10 +121,9 @@ class CRS:
 
         # Print configuration if verbose.
         if verbose:
-            print('System configured')
-            print("Clocking source is", self.clock_source)
+            print('System configured')      
         
-    async def set_clock_source(self, clock_source):
+    async def set_clock_source(self, clock_source, verbose = True):
         """
         Set the clock source to 'VCXO' or 'SMA'.
         
@@ -133,6 +131,7 @@ class CRS:
         clock_source (str): clock source specification. 'VCXO' for the internal
             voltage controlled crystal oscillator or 'SMA' for the external 10
             MHz reference (reference should be 5 Vpp).
+        verbose (bool): If True, prints the clock source after confirming.
             
         Returns:
         None
@@ -143,12 +142,18 @@ class CRS:
         # Set and check clock source
         await self.d.set_clock_source(clock_source)
         self.clock_source = await self.d.get_clock_source() 
+
+        # Raise warning if requested clock source is unavailable
         if self.clock_source != clock_source:
             warnings.warn(
                 f"Requested clock source {clock_source} unavailable. "
                 + f"Using {self.clock_source} instead.",
                 UserWarning
             )
+
+        # Print clock source if verbose
+        if verbose:
+            print(f'Clock source set to {self.clock_source}')
 
     async def set_analog_bank(self, analog_bank_high, full_scale_dbm):
         """
@@ -332,6 +337,8 @@ class CRS:
 
         # Clear channels on modules with newly set NCO frequencies 
         await self._clear_channels(list(nco_freqs.keys()))
+
+        # Print NCO frequencies if verbose
         for module_idx, nco in nco_freqs.items():
             if verbose:
                 nco_str = f'{round(nco * 1e-6, 6)}'
@@ -342,7 +349,7 @@ class CRS:
         Disable modules by clearing channels and removing NCO frequencies. 
 
         Parameters:
-        module_idxs (int): module indices to disable.
+        module_idxs (list of int): module indices to disable.
 
         Returns:
         None
@@ -458,7 +465,7 @@ class CRS:
         # Write tones
         modules = util.get_modules(self.d, list(self.fres_map.keys()))
         await modules._write_tones(self.nco_freqs, self.fres_map,
-                                  self.ares_map)
+                                   self.ares_map)
         self.ntones = ntones
 
     async def sweep(
@@ -941,17 +948,29 @@ async def _set_nco(module, nco_freqs):
         Returns:
         nco_meas (float): Measured NCO frequency in Hz.
         """
+        # Input validation 
+        if not isinstance(nco_freqs, dict):
+            raise TypeError('nco_freqs must be a dictionary')
         d = module.crs
         module_idx = module.module
+        if module_idx not in nco_freqs:
+            raise ValueError(f'NCO frequency for module {module_idx} not '
+                             'provided in nco_freqs') 
         nco_freq = nco_freqs[module_idx]
+        if not isinstance(nco_freq, (float, np.floating)):
+            raise TypeError('NCO frequency must be a float')
+        
+        # Set NCO frequency on the module
         await d.set_nco_frequency(nco_freq, module = module_idx)
 
+        # Confirm set NCO frequency is close to measured frequency
         nco_meas = await d.get_nco_frequency(module = module_idx)
-        if not np.isclose(nco_meas, nco_freq, atol = 1):
+        if not np.isclose(nco_meas, nco_freq, atol = 1, rtol = 0):
             err = f'Failed to set NCO frequency to {nco_freq} Hz. '
             err += f'Set to {nco_meas} Hz instead.'
             raise RuntimeError(err)
         
+        # Update nco_freqs with measured value
         nco_freqs[module_idx] = nco_meas
 
 @rfmux.macro(rfmux.ReadoutModule, register=True)
@@ -1004,8 +1023,8 @@ async def _write_tones(module, nco_freqs, fres_map, ares_map):
 
 @rfmux.macro(rfmux.ReadoutModule, register=True)
 async def _sweep(module, nco_freqs, frequencies_map, ares_map, sweep_f,
-                sweep_z, nsamps = 10, verbose = True,
-                pbar_description = 'Sweeping'):
+                 sweep_z, nsamps = 10, verbose = True,
+                 pbar_description = 'Sweeping'):
         """
         Performs a frequency sweep and returns the complex S21 value at each
         frequency. Performs sweeps over axis 0 of frequencies simultaneously.
@@ -1020,6 +1039,14 @@ async def _sweep(module, nco_freqs, frequencies_map, ares_map, sweep_f,
             in Hz for a single point in the sweep.
         ares_map (dict): keys (int) are module indices and values
             (M array-like float) are amplitudes in dBm for each channel.
+        sweep_f (dict): output parameter. keys (int) are module indices and
+            values (M X N array-like float) are arrays where the first index M
+            is the channel index and the second index N is the frequency in Hz
+            for a single point in the sweep.
+        sweep_z (dict): output parameter. keys (int) are module indices and
+            values (M X N array-like complex) are arrays where the first index M
+            is the channel index and the second index N is the complex S21 data
+            in V for each frequency in f.
         nsamps (int): number of samples to average per point.
         verbose (bool): If True, displays a progress bar while sweeping.
         pbar_description (str): description for the progress bar.
@@ -1030,17 +1057,22 @@ async def _sweep(module, nco_freqs, frequencies_map, ares_map, sweep_f,
         """
         d = module.crs
         module_idx = module.module
+        
+        # Validate inputs
+        _validate_sweep_input(module_idx, nco_freqs, frequencies_map, ares_map,
+                             sweep_f, sweep_z, nsamps, verbose, pbar_description)
+        
         frequencies = np.asarray(frequencies_map[module_idx], 
                                  dtype = np.float64)
         ares = np.asarray(ares_map[module_idx], dtype = np.float64)
         nco_freq = nco_freqs[module_idx]
 
         if not len(frequencies):
-            return np.array([], dtype = float), np.array([], dtype = complex)
+            sweep_f = np.array([], dtype = float)
+            sweep_z = np.array([], dtype = complex)
+            return
         
         n_chs, n_points = frequencies.shape
-        if len(ares) != n_chs:
-            raise ValueError('ares and frequencies are not the same length')
 
         # Call write_tones to clear channels and initialize amplitudes with 
         # first frequency of sweep
@@ -1089,7 +1121,7 @@ def _validate_configure_system_params(clock_source, full_scale_dbm,
     Validate the input parameters for configure_system.
     
     Parameters:
-    see full_scale_dbm docstring.
+    see docstring of configure_system for parameter description.
     
     Returns:
     None
@@ -1110,9 +1142,7 @@ def _validate_nco_freqs(nco_freqs, analog_bank_high):
     Validate the nco_freqs dictionary format.
     
     Parameters:
-    nco_freqs (dict): keys (int) are module indices and values (float)
-        are NCO frequencies in Hz.
-    analog_bank_high (bool): if True, uses modules 5-8. Else uses modules 1-4.
+    See docstring of write_tones for parameter description.
 
     Returns:
     None
@@ -1144,8 +1174,7 @@ def _validate_ch_map(ch_map):
     Validate the ch_map dictionary format.
 
     Parameters:
-    ch_map (dict): keys (int) are module indices and values (array-like int)
-        are channel indices to write tones to.
+    See docstring of write_tones for parameter description.
 
     Returns:
     None
@@ -1157,4 +1186,95 @@ def _validate_ch_map(ch_map):
             if not isinstance(key, (int, np.integer)):
                 raise TypeError('ch_map keys must be integers')
             if not all(isinstance(ch, (int, np.integer)) for ch in val):
-                raise TypeError('ch_map values must be lists of integers') 
+                raise TypeError('ch_map values must be lists of integers')
+
+
+def _validate_sweep_input(module_idx, nco_freqs, frequencies_map, ares_map,
+                          sweep_f, sweep_z, nsamps, verbose, pbar_description):
+    """
+    Validate inputs for the _sweep macro function.
+
+    Parameters:
+    See docstring of _sweep for parameter descriptions.
+
+    Returns:
+    None
+
+    Raises:
+    TypeError: if inputs are not the correct type.
+    ValueError: if inputs have invalid values.
+    """
+    # Validate nco_freqs
+    if not isinstance(nco_freqs, dict):
+        raise TypeError('nco_freqs must be a dictionary')
+    if module_idx not in nco_freqs:
+        raise ValueError(f'nco_freqs does not contain module index {module_idx}')
+    if not isinstance(nco_freqs[module_idx], (float, np.floating)):
+        raise TypeError(
+            f'nco_freqs[{module_idx}] must be a float NCO frequency in Hz'
+        )
+    
+    # Validate frequencies_map
+    if not isinstance(frequencies_map, dict):
+        raise TypeError('frequencies_map must be a dictionary')
+    if module_idx not in frequencies_map:
+        raise ValueError(f'frequencies_map does not contain module index {module_idx}')
+    # Check that value is 2D array-like (list of lists or 2D array)
+    try:
+        arr = np.asarray(frequencies_map[module_idx], dtype=np.float64)
+        if arr.ndim != 2:
+            raise ValueError(
+                f'frequencies_map[{module_idx}] must be a 2D array '
+                f'(M channels X N frequencies), got shape {arr.shape}'
+            )
+    except (ValueError, TypeError) as e:
+        raise TypeError(
+            f'frequencies_map[{module_idx}] must be 2D array-like of floats'
+        ) from e
+    
+    # Validate ares_map
+    if not isinstance(ares_map, dict):
+        raise TypeError('ares_map must be a dictionary')
+    if module_idx not in ares_map:
+        raise ValueError(f'ares_map does not contain module index {module_idx}')
+    try:
+        arr = np.asarray(ares_map[module_idx], dtype=np.float64)
+        if arr.ndim != 1:
+            raise ValueError(
+                f'ares_map[{module_idx}] must be a 1D array, got shape {arr.shape}'
+            )
+    except (ValueError, TypeError) as e:
+        raise TypeError(
+            f'ares_map[{module_idx}] must be 1D array-like of floats'
+        ) from e
+    
+    # Validate sweep_f and sweep_z (output dicts should not contain module_idx)
+    if not isinstance(sweep_f, dict):
+        raise TypeError('sweep_f must be a dictionary')
+    if module_idx in sweep_f:
+        raise ValueError(
+            f'sweep_f already contains module index {module_idx}. '
+            'Output dictionaries should not contain the current module index.'
+        )
+    
+    if not isinstance(sweep_z, dict):
+        raise TypeError('sweep_z must be a dictionary')
+    if module_idx in sweep_z:
+        raise ValueError(
+            f'sweep_z already contains module index {module_idx}. '
+            'Output dictionaries should not contain the current module index.'
+        )
+    
+    # Validate nsamps
+    if not isinstance(nsamps, (int, np.integer)):
+        raise TypeError('nsamps must be an integer')
+    if nsamps <= 0:
+        raise ValueError('nsamps must be greater than 0')
+    
+    # Validate verbose
+    if not isinstance(verbose, bool):
+        raise TypeError('verbose must be a boolean')
+    
+    # Validate pbar_description
+    if not isinstance(pbar_description, str):
+        raise TypeError('pbar_description must be a string') 
