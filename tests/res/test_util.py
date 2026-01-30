@@ -1,4 +1,5 @@
-import pytest 
+import pytest
+import warnings
 import numpy as np 
 from citkid.res import util 
 
@@ -87,19 +88,23 @@ def test_calc_qc_qi_near_endpoints():
     (1e4, np.nan, np.nan, np.nan),
 ])
 def test_calc_qc_qi_nonfinite(qr, amp, qc_expected, qi_expected):
-    qc_calc, qi_calc = util.calc_qc_qi(qr, amp)
-    if np.isnan(qc_expected):
-        assert np.isnan(qc_calc)
-    else:
-        assert np.isinf(qc_calc)
-    if np.isnan(qi_expected):
-        assert np.isnan(qi_calc)
-    else:
-        assert np.isinf(qi_calc)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        qc_calc, qi_calc = util.calc_qc_qi(qr, amp)
+        if np.isnan(qc_expected):
+            assert np.isnan(qc_calc)
+        else:
+            assert np.isinf(qc_calc)
+        if np.isnan(qi_expected):
+            assert np.isnan(qi_calc)
+        else:
+            assert np.isinf(qi_calc)
 
 def test_calc_qc_qi_inf_raises():
-    with pytest.raises(ZeroDivisionError):
-        util.calc_qc_qi(np.inf, 0.5)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        with pytest.raises(ZeroDivisionError):
+            util.calc_qc_qi(np.inf, 0.5)
 
 @pytest.mark.parametrize("qr,amp", [
     (1, -0.1),
@@ -210,8 +215,10 @@ def test_bounds_check_invalid_input(p0, bounds):
     (np.array([1.0, -1.0, 1.0, -1.0]), np.array([-1.0, 1.0, -1.0, 1.0]), 4.0),
 ])
 def test_calc_nrmse(z, z_fit, expected):
-    nrmse = util.calc_nrmse(z, z_fit)
-    assert pytest.approx(nrmse, nan_ok = True) == expected
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        nrmse = util.calc_nrmse(z, z_fit)
+        assert pytest.approx(nrmse, nan_ok = True) == expected
 
 def test_calc_nrmse_singleton():
     z = np.array([1.0 + 1.0j])
@@ -268,8 +275,10 @@ def test_calc_nrmse_invalid_input(z, z_fit):
      (4., 4., 1., 0., False, -0.5)
 ])
 def test_cardan(a, b, c, d, largest, expected):
-    root = util.cardan(a, b, c, d, largest)
-    assert pytest.approx(root, nan_ok = True) == expected
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        root = util.cardan(a, b, c, d, largest)
+        assert pytest.approx(root, nan_ok = True) == expected
 
 def test_cardan_no_real_roots():
     # Polynomial with no real roots: x^3 + x + 1 = 0
@@ -281,7 +290,9 @@ def test_cardan_no_real_roots():
 def test_cardan_degenerate_case():
     # Degenerate case: all coefficients zero
     a, b, c, d = 0.0, 0.0, 0.0, 0.0
-    assert np.isnan(util.cardan(a, b, c, d, True)) 
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        assert np.isnan(util.cardan(a, b, c, d, True))
 
 @pytest.mark.parametrize("a,b,c,d,largest,expected", [
     (1.0, -2.0, 1.0, 0.0, True, 1.0),  # roots: 0, 1 (double)
@@ -296,7 +307,9 @@ def test_cardan_double_root(a, b, c, d, largest, expected):
     (0.0, 0.0, 1.0, -1.0),
 ])
 def test_cardan_non_cubic_returns_nan(a, b, c, d):
-    assert np.isnan(util.cardan(a, b, c, d, True))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        assert np.isnan(util.cardan(a, b, c, d, True))
 
 @pytest.mark.parametrize("a,b,c,d,largest", [
     ("1.0", -6.0, 11.0, -6.0, True), # invalid a

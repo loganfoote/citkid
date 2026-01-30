@@ -1,4 +1,5 @@
-import pytest 
+import pytest
+import warnings
 from citkid.res import guess, funcs
 import numpy as np 
 from scipy.ndimage import gaussian_filter
@@ -9,7 +10,9 @@ from scipy.ndimage import gaussian_filter
 def test_guess_p0_nonlinear_iq_shape():
     f = np.linspace(1e9, 1.1e9, 5)
     z = np.ones_like(f, dtype = np.complex128)
-    p0 = guess.guess_p0_nonlinear_iq(f, z)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        p0 = guess.guess_p0_nonlinear_iq(f, z)
     assert isinstance(p0, list)
     assert len(p0) == 8
 
@@ -65,34 +68,36 @@ def test_guess_p0_nonlinear_iq_invalid_inputs(f, z):
         0.3, 1.0, 0.0, 2e-9, True)),
 ])
 def test_guess_helper_shapes(f, z):
-    z0 = np.mean(np.roll(z, 2)[:4])
-    # _guess_phi_amp
-    phi_guess, amp_guess = guess._guess_phi_amp(z, z0)
-    assert isinstance(phi_guess, float)
-    assert isinstance(amp_guess, float)
-    assert amp_guess >= 0.0
-    assert amp_guess <= 1.0
-    assert phi_guess >= -np.pi
-    assert phi_guess <= np.pi
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        z0 = np.mean(np.roll(z, 2)[:4])
+        # _guess_phi_amp
+        phi_guess, amp_guess = guess._guess_phi_amp(z, z0)
+        assert isinstance(phi_guess, float)
+        assert isinstance(amp_guess, float)
+        assert amp_guess >= 0.0
+        assert amp_guess <= 1.0
+        assert phi_guess >= -np.pi
+        assert phi_guess <= np.pi
 
-    # _guess_Qr
-    Qr_guess = guess._guess_Qr(f, z, z0, phi_guess, amp_guess)
-    assert isinstance(Qr_guess, float)
-    assert Qr_guess >= 0.0
-    assert Qr_guess <= 1e9
+        # _guess_Qr
+        Qr_guess = guess._guess_Qr(f, z, z0, phi_guess, amp_guess)
+        assert isinstance(Qr_guess, float)
+        assert Qr_guess >= 0.0
+        assert Qr_guess <= 1e9
 
-    # _guess_a
-    a_guess = guess._guess_a(f, z, z0, phi_guess, amp_guess)
-    assert isinstance(a_guess, float)
-    assert a_guess >= 0.0
-    assert a_guess <= 1.0
+        # _guess_a
+        a_guess = guess._guess_a(f, z, z0, phi_guess, amp_guess)
+        assert isinstance(a_guess, float)
+        assert a_guess >= 0.0
+        assert a_guess <= 1.0
 
-    # _guess_fr
-    fr_guess = guess._guess_fr(f, z, z0, phi_guess, amp_guess, 
-                               a_guess, Qr_guess)
-    assert isinstance(fr_guess, float)
-    assert fr_guess >= min(f)
-    assert fr_guess <= max(f)
+        # _guess_fr
+        fr_guess = guess._guess_fr(f, z, z0, phi_guess, amp_guess, 
+                                   a_guess, Qr_guess)
+        assert isinstance(fr_guess, float)
+        assert fr_guess >= min(f)
+        assert fr_guess <= max(f)
 
 def test_guess_phi_amp_clamps_amp(monkeypatch):
     z = np.ones(5, dtype = np.complex128)
@@ -107,7 +112,9 @@ def test_guess_a_clamps_to_one(monkeypatch):
     z = np.ones(5, dtype = np.complex128)
     monkeypatch.setattr(guess.np, "interp", 
                         lambda x, xbin, abin: 1.5)
-    a_guess = guess._guess_a(f, z, 1. + 0.j, 0.0, 1.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        a_guess = guess._guess_a(f, z, 1. + 0.j, 0.0, 1.0)
     assert a_guess == 1.0
 
 def test_guess_Qr_flips_when_off_res_greater(monkeypatch):

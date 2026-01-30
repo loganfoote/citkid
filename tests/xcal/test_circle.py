@@ -1,4 +1,5 @@
 import pytest
+import warnings
 import numpy as np
 from citkid.xcal import circle
 from citkid.signal.psd import get_psd
@@ -59,10 +60,12 @@ def test_fit_iq_circle_invalid_input(z, mask):
     (np.array([1], dtype = np.complex64), 0, 0),  # complex64 input
 ])
 def test_get_theta_phase_offset(zt_rmv, origin, theta_exp):
-    theta = circle.get_theta_phase_offset(zt_rmv, complex(origin))
-    assert type(theta) == np.float64
-    assert np.isclose(theta, np.float64(theta_exp), 
-                      equal_nan = True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        theta = circle.get_theta_phase_offset(zt_rmv, complex(origin))
+        assert type(theta) == np.float64
+        assert np.isclose(theta, np.float64(theta_exp), 
+                          equal_nan = True)
 
 @pytest.mark.parametrize("zt_rmv,origin", [
     (['a', 1], 0 + 1j),  # non-numeric zt_rmv

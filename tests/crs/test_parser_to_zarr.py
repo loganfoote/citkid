@@ -114,7 +114,7 @@ from citkid.crs import util
                 batch_size_mb = 1000,
                 chunk_size_mb = 128,
             ),
-            TypeError
+            ValueError
         ),
         # Invalid ntones - negative
         (
@@ -228,7 +228,7 @@ from citkid.crs import util
             ),
             ValueError
         ),
-        # Invalid ch_map - non-array values
+        # Invalid ch_map - non-convertible values
         (
             dict(
                 path = ".",
@@ -236,7 +236,7 @@ from citkid.crs import util
                 crs_sn = 1,
                 ntones = 10,
                 max_ntones = 128,
-                ch_map = {0: [0, 1]},
+                ch_map = {0: ["bad"]},
                 ares_map = {0: np.array([0.0, 1.0])},
                 dt = 0.01,
                 batch_size_mb = 1000,
@@ -244,7 +244,7 @@ from citkid.crs import util
             ),
             ValueError
         ),
-        # Invalid ch_map - float array values
+        # Invalid ch_map - non-convertible array values
         (
             dict(
                 path = ".",
@@ -252,7 +252,7 @@ from citkid.crs import util
                 crs_sn = 1,
                 ntones = 10,
                 max_ntones = 128,
-                ch_map = {0: np.array([0.0, 1.0])},
+                ch_map = {0: np.array(["bad"], dtype = object)},
                 ares_map = {0: np.array([0.0, 1.0])},
                 dt = 0.01,
                 batch_size_mb = 1000,
@@ -292,7 +292,7 @@ from citkid.crs import util
             ),
             ValueError
         ),
-        # Invalid ares_map - non-array values
+        # Invalid ares_map - non-convertible values
         (
             dict(
                 path = ".",
@@ -301,14 +301,14 @@ from citkid.crs import util
                 ntones = 10,
                 max_ntones = 128,
                 ch_map = {0: np.array([0, 1], dtype = np.int32)},
-                ares_map = {0: [0.0, 1.0]},
+                ares_map = {0: ["bad"]},
                 dt = 0.01,
                 batch_size_mb = 1000,
                 chunk_size_mb = 128,
             ),
             ValueError
         ),
-        # Invalid ares_map - int array values
+        # Invalid ares_map - non-convertible array values
         (
             dict(
                 path = ".",
@@ -317,7 +317,7 @@ from citkid.crs import util
                 ntones = 10,
                 max_ntones = 128,
                 ch_map = {0: np.array([0, 1], dtype = np.int32)},
-                ares_map = {0: np.array([0, 1], dtype = np.int32)},
+                ares_map = {0: np.array(["bad"], dtype = object)},
                 dt = 0.01,
                 batch_size_mb = 1000,
                 chunk_size_mb = 128,
@@ -334,7 +334,7 @@ from citkid.crs import util
                 max_ntones = 128,
                 ch_map = {0: np.array([0, 1], dtype = np.int32)},
                 ares_map = {0: np.array([0.0, 1.0])},
-                dt = "0.01",
+                dt = "bad",
                 batch_size_mb = 1000,
                 chunk_size_mb = 128,
             ),
@@ -372,22 +372,6 @@ from citkid.crs import util
             ),
             ValueError
         ),
-        # Invalid batch_size_mb - not an int
-        (
-            dict(
-                path = ".",
-                grp = None,
-                crs_sn = 1,
-                ntones = 10,
-                max_ntones = 128,
-                ch_map = {0: np.array([0, 1], dtype = np.int32)},
-                ares_map = {0: np.array([0.0, 1.0])},
-                dt = 0.01,
-                batch_size_mb = 1000.5,
-                chunk_size_mb = 128,
-            ),
-            ValueError
-        ),
         # Invalid batch_size_mb - zero
         (
             dict(
@@ -417,22 +401,6 @@ from citkid.crs import util
                 dt = 0.01,
                 batch_size_mb = -1000,
                 chunk_size_mb = 128,
-            ),
-            ValueError
-        ),
-        # Invalid chunk_size_mb - not an int (when not None)
-        (
-            dict(
-                path = ".",
-                grp = None,
-                crs_sn = 1,
-                ntones = 10,
-                max_ntones = 128,
-                ch_map = {0: np.array([0, 1], dtype = np.int32)},
-                ares_map = {0: np.array([0.0, 1.0])},
-                dt = 0.01,
-                batch_size_mb = 1000,
-                chunk_size_mb = 500.5,
             ),
             ValueError
         ),
@@ -468,12 +436,37 @@ from citkid.crs import util
             ),
             ValueError
         ),
+        # Invalid chunk_size_mb - larger than batch_size_mb
+        (
+            dict(
+                path = ".",
+                grp = None,
+                crs_sn = 1,
+                ntones = 10,
+                max_ntones = 128,
+                ch_map = {0: np.array([0, 1], dtype = np.int32)},
+                ares_map = {0: np.array([0.0, 1.0])},
+                dt = 0.01,
+                batch_size_mb = 10,
+                chunk_size_mb = 20,
+            ),
+            ValueError
+        ),
     ],
 )
 def test_parser_to_zarr_invalid_input(kwargs, expected_error, tmp_path):
     """Test that parser_to_zarr raises appropriate errors for invalid inputs."""
     import zarr
     import os
+
+    # Normalize module index 0 to 1 so invalid tests target their intended
+    # validation (module indices are now restricted to 1-8).
+    ch_map = kwargs.get("ch_map")
+    if isinstance(ch_map, dict) and set(ch_map.keys()) == {0}:
+        kwargs["ch_map"] = {1: ch_map[0]}
+    ares_map = kwargs.get("ares_map")
+    if isinstance(ares_map, dict) and set(ares_map.keys()) == {0}:
+        kwargs["ares_map"] = {1: ares_map[0]}
     
     # Create a temporary directory for path if needed
     if kwargs["path"] == ".":
@@ -491,7 +484,7 @@ def test_parser_to_zarr_invalid_input(kwargs, expected_error, tmp_path):
         grp = root.require_group("test_group")
         # Add the conflicting name
         conflict_name = kwargs["grp"][4:]  # Remove "HAS_" prefix
-        grp.create_dataset(conflict_name, shape=(1,), dtype = 'f8')
+        grp.create_array(conflict_name, shape=(1,), dtype = 'f8')
         kwargs["grp"] = grp
     
     with pytest.raises(expected_error):
@@ -827,10 +820,11 @@ def test_parser_to_zarr_batch_and_chunk_sizes(tmp_path):
     
     # Test different combinations
     test_cases = [
-        (1, 1),     # Small batches and chunks
-        (10, 5),    # Larger batch, smaller chunk
-        (5, 10),    # Smaller batch, larger chunk
-        (100, 100), # Large batches and chunks
+        (1.0, 1.0),    # Small batches and chunks
+        (10, 5),       # Larger batch, smaller chunk
+        (5, 5),        # Equal batch and chunk
+        (2.5, 1.25),   # Float sizes
+        (100, 100),    # Large batches and chunks
     ]
     
     for batch_mb, chunk_mb in test_cases:

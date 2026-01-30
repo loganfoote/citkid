@@ -438,8 +438,8 @@ async def test_write_tones_with_provided_ch_map(mock_crs_for_write_tones):
     mock_create.assert_not_called()
     
     # Check ch_map was used
-    assert crs.ch_map[1] == [0, 1, 2]
-    assert crs.ch_map[2] == [3]
+    assert np.array_equal(crs.ch_map[1], [0, 1, 2])
+    assert np.array_equal(crs.ch_map[2], [3])
 
 
 @pytest.mark.asyncio
@@ -672,7 +672,9 @@ async def test_write_tones_validates_ch_map_keys(mock_crs_for_write_tones):
     ares = np.array([-50, -51])
     
     # Test ch_map with non-integer key
-    with pytest.raises(TypeError, match = 'keys must be integers'):
+    with pytest.raises(
+        ValueError, match = 'ch_map keys must be integer module indices'
+        ):
         await crs.write_tones(fres, ares, ch_map = {'1': [0, 1]})
 
 
@@ -686,8 +688,10 @@ async def test_write_tones_validates_ch_map_values(
     ares = np.array([-50, -51])
     
     # Test ch_map with non-integer in value list
-    with pytest.raises(TypeError, match = 'values must be lists of integers'):
-        await crs.write_tones(fres, ares, ch_map = {1: [0, '1']})
+    with pytest.raises(
+        ValueError, match = 'ch_map could not be converted to int32'
+        ):
+        await crs.write_tones(fres, ares, ch_map = {1: [0, '1a']})
 
 
 @pytest.mark.asyncio

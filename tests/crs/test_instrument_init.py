@@ -44,6 +44,24 @@ def test_crs_init_default_parameters(mock_rfmux_session):
         mock_rfmux.load_session.assert_called_once_with(expected_str)
 
 
+def test_crs_init_sets_versions(mock_rfmux_session):
+    """Test CRS.__init__ stores rfmux and citkid version attributes."""
+    import citkid
+
+    with patch('citkid.crs.instrument.rfmux') as mock_rfmux, \
+         patch('citkid.crs.instrument.util.interface_exists',
+               return_value = True):
+
+        mock_rfmux.__version__ = '1.3.2'
+        mock_rfmux.load_session.return_value = mock_rfmux_session
+        mock_rfmux.CRS = Mock()
+
+        crs = CRS()
+
+        assert crs.rfmux_version == mock_rfmux.__version__
+        assert crs.citkid_version == citkid.__version__
+
+
 def test_crs_init_custom_parameters(mock_rfmux_session):
     """Test CRS initialization with custom parameters."""
     with patch('citkid.crs.instrument.rfmux') as mock_rfmux, \

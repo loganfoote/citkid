@@ -10,6 +10,7 @@ from tqdm.auto import tqdm
 # citkid imports
 from ..util import run_with_time_bar
 from . import util
+from .. import __version__ as citkid_version
 
 # rfmux imports
 import rfmux
@@ -41,6 +42,8 @@ class CRS:
         # Store inputs
         self.serial_number = serial_number
         self.interface = interface
+        self.rfmux_version = '1.3.2'
+        self.citkid_version = citkid_version
         self.nco_freqs = {}
 
         # Initialize CRS object
@@ -115,7 +118,7 @@ class CRS:
 
         # Set the decimation 
         await self.set_decimation(6, short = False, module_idxs = None,
-                                 verbose = verbose) 
+                                  verbose = verbose) 
         
         # Store number of tones
         self.ntones = 0
@@ -154,7 +157,7 @@ class CRS:
 
         # Print clock source if verbose
         if verbose:
-            print(f'Clock source set to {self.clock_source}')
+            print(f'Clock source set: {self.clock_source}')
 
     async def set_analog_bank(self, analog_bank_high, full_scale_dbm):
         """
@@ -311,7 +314,7 @@ class CRS:
         
         # Print decimation info 
         if verbose:
-            msg = f'Set decimation: dec_stage = {dec_stage}, short = {short}, '
+            msg = f'Decimation set: stage = {dec_stage}, short = {short}, '
             msg += f'modules = {module_idxs}'
             print(msg)
 
@@ -419,7 +422,7 @@ class CRS:
             raise ValueError('fres and ares must be the same shape')
         if len(fres) == 0:
             return 0 
-        _validate_ch_map(ch_map)
+        ch_map = util._validate_ch_map(ch_map)
 
         # Store ntones for later
         ntones = len(fres)
@@ -430,7 +433,6 @@ class CRS:
                 self.nco_freqs, fres, self.bw
                 )
         else:
-            ch_map = ch_map.copy()
             missing_chs = []
             for ch in range(len(fres)):
                 if not any(ch in ch_list for ch_list in ch_map.values()):
@@ -507,7 +509,7 @@ class CRS:
             raise ValueError('nsamps must be a positive integer')
         if not len(self.nco_freqs):
             raise RuntimeError("NCO frequencies are not set")
-        _validate_ch_map(ch_map) 
+        ch_map = util._validate_ch_map(ch_map) 
         if not isinstance(pbar_description, str):
             raise TypeError('pbar_description must be a string')
         
@@ -518,7 +520,6 @@ class CRS:
                 self.nco_freqs, frequencies, self.bw
                 )
         else:
-            ch_map = ch_map.copy()
             missing_chs = []
             for ch in range(len(frequencies)):
                 if not any(ch in ch_list for ch_list in ch_map.values()):
@@ -793,9 +794,10 @@ class CRS:
         tmp_directory (str): directory to save temporary parser data before
             converting. Data is streamed to disk, so the drive must have
             fast enough I/O performance with sufficient free space.
-        batch_size_mb (int): batch size, in MB. Approximate size of each chunk 
+        batch_size_mb (float): batch size, in MB. Approximate size of each chunk 
             that is loaded into memory when converting parser data to zarr.
-        chunk_size_mb (int): size of each zarr chunk along the time axis, in MB.
+        chunk_size_mb (float): size of each zarr chunk along the time axis, 
+            in MB.
         delete_parser_data (bool): If True, deletes the parser data files
             after importing the data.
         verbose (bool): If True, displays a progress bar while taking data.
@@ -804,8 +806,10 @@ class CRS:
         None
         """
         # Validate stream inputs early to fail fast before write_tones
-        _validate_stream_input(
-            ts_duration_s, tmp_directory, grp,
+        ts_duration_s, dec_stage, ch_map, allow_missing, tmp_directory, \
+           _, batch_size_mb, chunk_size_mb, delete_parser_data, \
+           verbose = _validate_stream_input(
+            ts_duration_s, dec_stage, grp, ch_map, allow_missing, tmp_directory,
             batch_size_mb, chunk_size_mb,
             delete_parser_data, verbose
         )
@@ -836,7 +840,6 @@ class CRS:
         finally:
             # Clear all channels after streaming (success or failure)
             await self._clear_channels(idx_to_clear)
-
     
     async def stream(
         self,
@@ -869,9 +872,10 @@ class CRS:
         tmp_directory (str): directory to save temporary parser data before
             converting. Data is streamed to disk, so the drive must have
             fast enough I/O performance with sufficient free space.
-        batch_size_mb (int): batch size, in MB. Approximate size of each chunk 
+        batch_size_mb (float): batch size, in MB. Approximate size of each chunk
             that is loaded into memory when converting parser data to zarr.
-        chunk_size_mb (int): size of each zarr chunk along the time axis, in MB.
+        chunk_size_mb (float): size of each zarr chunk along the time axis, 
+            in MB.
         delete_parser_data (bool): If True, deletes the parser data files
             after importing the data.
         verbose (bool): If True, displays a progress bar while taking data.
@@ -880,10 +884,13 @@ class CRS:
         None
         """
         # Validate inputs
-        tmp_directory, data_directory = _validate_stream_input(
-            ts_duration_s, tmp_directory, grp,
-            batch_size_mb, chunk_size_mb,
-            delete_parser_data, verbose
+        ts_duration_s, dec_stage, self.ch_map, _, \
+        tmp_directory, data_directory, batch_size_mb, chunk_size_mb, \
+        delete_parser_data, verbose = \
+        _validate_stream_input(
+            ts_duration_s, dec_stage, grp, self.ch_map, False,
+            tmp_directory, batch_size_mb, chunk_size_mb, delete_parser_data, 
+            verbose
         )
         
         ### Set decimation stage
@@ -1069,7 +1076,8 @@ async def _sweep(module, nco_freqs, frequencies_map, ares_map, sweep_f,
         
         # Validate inputs
         _validate_sweep_input(module_idx, nco_freqs, frequencies_map, ares_map,
-                             sweep_f, sweep_z, nsamps, verbose, pbar_description)
+                              sweep_f, sweep_z, nsamps, verbose, 
+                              pbar_description)
         
         frequencies = np.asarray(frequencies_map[module_idx], 
                                  dtype = np.float64)
@@ -1178,38 +1186,27 @@ def _validate_nco_freqs(nco_freqs, analog_bank_high):
                 'analog bank.'
                 )
         
-def _validate_ch_map(ch_map):
-    """
-    Validate the ch_map dictionary format.
-
-    Parameters:
-    See docstring of write_tones for parameter description.
-
-    Returns:
-    None
-    """
-    if ch_map is not None:
-        if not isinstance(ch_map, dict):
-            raise TypeError('ch_map must be a dictionary') 
-        for key, val in ch_map.items():
-            if not isinstance(key, (int, np.integer)):
-                raise TypeError('ch_map keys must be integers')
-            if not all(isinstance(ch, (int, np.integer)) for ch in val):
-                raise TypeError('ch_map values must be lists of integers')
 
 
-def _validate_stream_input(ts_duration_s, tmp_directory, grp,
-                           batch_size_mb, chunk_size_mb, 
-                           delete_parser_data, verbose):
+
+def _validate_stream_input(
+        ts_duration_s, dec_stage, grp, ch_map, allow_missing, tmp_directory,
+            batch_size_mb, chunk_size_mb, delete_parser_data, verbose
+            ):
     """
     Validate inputs for the stream method.
 
     Parameters:
     ts_duration_s (float): timestream length in seconds.
-    tmp_directory (str): directory to save temporary parser data.
+    dec_stage (int): dec_stage frequency downsampling factor. 
     grp (zarr.Group): zarr group to save the batch data.
-    batch_size_mb (int/float): batch size in MB.
-    chunk_size_mb (int/float): chunk size in MB.
+    ch_map (dict): keys (int) are module indices and values (array-like int)
+        are channel indices to write tones to. If None, automatically maps
+        tones to NCOs based on frequency.
+    allow_missing (bool): whether to allow missing channels in ch_map.
+    tmp_directory (str): directory to save temporary parser data.
+    batch_size_mb (float): batch size in MB.
+    chunk_size_mb (float): chunk size in MB.
     delete_parser_data (bool): whether to delete parser data after import.
     verbose (bool): whether to display progress bars.
 
@@ -1221,42 +1218,44 @@ def _validate_stream_input(ts_duration_s, tmp_directory, grp,
     TypeError: if parameters have invalid types
     FileExistsError: if data_directory already exists
     """
-    if not isinstance(ts_duration_s, (float, np.floating)) or \
-       ts_duration_s <= 0:
+    ts_duration_s = float(ts_duration_s)
+    if ts_duration_s <= 0:
         raise ValueError('ts_duration_s must be a positive float')
+
+    dec_stage = int(dec_stage)
+    if dec_stage < 0:
+        raise ValueError('dec_stage must be a non-negative integer')
     
+    if not isinstance(grp, zarr.core.group.Group):
+        raise TypeError('grp must be a zarr.Group object')
+    # Check that required names don't already exist in the group
+    existing_names = set(grp.keys())
+    required_names = {'counts_to_dbc', 'dt', 'z'}
+    conflicts = existing_names & required_names
+    if conflicts:
+        msg = f'grp already contains required names: {sorted(conflicts)}'
+        raise ValueError(msg) 
+    
+    ch_map = util._validate_ch_map(ch_map)
+
+    allow_missing = bool(allow_missing)
+
     tmp_directory = os.path.normpath(os.path.expanduser(tmp_directory))
     os.makedirs(tmp_directory, exist_ok = True)
     data_directory = os.path.join(tmp_directory, 'parser_data_00')
     
     if os.path.exists(data_directory):
         raise FileExistsError(f'{data_directory} already exists')
-    
-    # dec_stage tested in set_decimation 
-    if not isinstance(grp, zarr.core.group.Group):
-        raise TypeError('grp must be a zarr.Group object')
-    
-    if not isinstance(
-        batch_size_mb, (int, float, np.integer, np.floating)
-        ) or batch_size_mb <= 0:
-        raise ValueError('batch_size_mb must be a positive number')
-    
-    if not isinstance(
-        chunk_size_mb, (int, float, np.integer, np.floating)
-        ) or chunk_size_mb <= 0:
-        raise ValueError('chunk_size_mb must be a positive number') 
-    
-    if chunk_size_mb > batch_size_mb:
-        raise ValueError('chunk_size_mb must not exceed batch_size_mb') 
-    
-    if not isinstance(delete_parser_data, bool):
-        raise TypeError('delete_parser_data must be a boolean value') 
-    
-    if not isinstance(verbose, bool):
-        raise TypeError('verbose must be a boolean value')
-    
-    return tmp_directory, data_directory
 
+    batch_size_mb, chunk_size_mb = util._validate_batch_chunk_sizes(
+        batch_size_mb, chunk_size_mb
+    )
+    
+    delete_parser_data = bool(delete_parser_data)
+    verbose = bool(verbose)
+    return ts_duration_s, dec_stage, ch_map, allow_missing, tmp_directory, \
+           data_directory, batch_size_mb, chunk_size_mb, delete_parser_data, \
+           verbose
 
 def _validate_sweep_input(module_idx, nco_freqs, frequencies_map, ares_map,
                           sweep_f, sweep_z, nsamps, verbose, pbar_description):

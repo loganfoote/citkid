@@ -58,7 +58,7 @@ async def test_set_decimation_explicit_parameters(
     
     # Verify verbose output
     captured = capsys.readouterr()
-    assert 'Set decimation: dec_stage = 6' in captured.out
+    assert 'Decimation set: stage = 6' in captured.out
     assert 'short = True' in captured.out
     assert 'modules = [1, 2]' in captured.out
 

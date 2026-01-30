@@ -1,4 +1,5 @@
 import pytest
+import warnings
 import numpy as np
 from citkid.xcal import corr 
 
@@ -69,9 +70,11 @@ def test_calc_cm(x, N_comp, N_iter, dt, lowpass_params,  highpass_params,
 ])
 def test_find_cm_invalid(x, N_comp, N_iter, dt, lowpass_params, highpass_params, 
                          verbose):
-    with pytest.raises(Exception):
-        corr.calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params, 
-                     verbose)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        with pytest.raises(Exception):
+            corr.calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params, 
+                         verbose)
 
 ################################################################################
 ################################## calc_sigma ##################################
@@ -84,11 +87,13 @@ def test_find_cm_invalid(x, N_comp, N_iter, dt, lowpass_params, highpass_params,
     ([[1, np.nan], [2, 2]], [np.nan, 2]), # NaN propagates
 ])  
 def test_calc_sigma(x, sig_exp):
-    x = np.array(x, dtype = np.float64)
-    sig_exp = np.array(sig_exp, dtype = np.float64)[:, np.newaxis]
-    sig = corr.calc_sig(x)
-    np.testing.assert_allclose(sig, sig_exp, equal_nan = True)
-    assert sig.shape == (x.shape[0], 1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        x = np.array(x, dtype = np.float64)
+        sig_exp = np.array(sig_exp, dtype = np.float64)[:, np.newaxis]
+        sig = corr.calc_sig(x)
+        np.testing.assert_allclose(sig, sig_exp, equal_nan = True)
+        assert sig.shape == (x.shape[0], 1)
 
 @pytest.mark.parametrize("x", [
     (1), # 0D input
@@ -263,9 +268,11 @@ m = "z,theta,N_comp,N_iter,dt,lowpass_params,highpass_params,verbose"
 ])
 def test_calc_cm_complex_invalid(z, theta, N_comp, N_iter, dt, lowpass_params, 
                                  highpass_params, verbose):
-    with pytest.raises(Exception):
-        corr.calc_cm_complex(z, theta, N_comp, N_iter, dt, lowpass_params, 
-                             highpass_params, verbose)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        with pytest.raises(Exception):
+            corr.calc_cm_complex(z, theta, N_comp, N_iter, dt, lowpass_params, 
+                                 highpass_params, verbose)
         
 ################################################################################
 ################################## remove_cm ###################################

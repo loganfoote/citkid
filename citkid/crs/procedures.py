@@ -1,6 +1,7 @@
 import numpy as np
 import zarr
 from citkid.multitone.fres import update_fres
+from . import util
 
 async def target_sweep(
     crs,
@@ -134,6 +135,89 @@ async def target_sweep(
             pbar_description = 'Fine sweep',
         )
     _save_sweep_data(grp, 's21_fine', f_fine, z_fine)
+
+################################################################################
+# CRS config saving helper 
+################################################################################
+def write_crs_config_to_zarr(crs, grp):
+    """
+    Write CRS configuration parameters to a Zarr group. 
+
+    Parameters:
+    crs (CRS): initialized CRS instrument class.
+    grp (zarr.Group): Zarr group to which configuration data is saved.
+
+    Returns:
+    None
+    """
+    # Input validation 
+    if not isinstance(crs, crs.CRS):
+        raise TypeError("crs must be an instance of CRS class.")
+    if not isinstance(grp, zarr.core.group.Group):
+        raise TypeError("grp must be a zarr Group instance.") 
+    for name in ['ch_map', 'nco_freqs', 'firmware_release',
+                 'analog_bank_high', 'bw', 'clock_source',
+                 'dec_module_idxs', 'dec_short', 'dec_stage',
+                 'extended_bw', 'sample_freq', 'serial_number',
+                 'rfmux_version', 'citkid_version']:
+        if not hasattr(crs, name):
+            raise ValueError(f"crs is missing attribute '{name}'.")
+        if name in grp.keys():
+            raise ValueError(f"Zarr group already contains dataset '{name}'.")
+    if not hasattr(crs.firmware_release, 'version') or \
+        not isinstance(crs.firmware_release.version, str):
+        raise ValueError("crs.firmware_release.version must be a string.")
+    util._validate_ch_map(crs.ch_map)
+    
+    # ch_map
+    for module_idx, chs in crs.ch_map.items():
+        grp.create_array(
+            name = f'chs_module{module_idx:d}',
+            data = np.asarray(
+                chs, 
+                dtype = np.int32
+            )
+        ) 
+    # nco_freqs
+    for module_idx, nco in crs.nco_freqs.items():
+        name = f'nco_module{module_idx:d}'
+        grp.create_array(
+            name = name,
+            data = np.asarray(
+                nco, 
+                dtype = np.float64
+            )
+        )
+    # CRS firmware version
+    name = 'firmware_version'
+    grp.create_array(
+        name = name,
+        data = np.array(
+            crs.firmware_release.version,
+            dtype = None
+        )
+    )
+    # Other single-value parameters
+    for name, dtype in [
+        ('analog_bank_high', np.bool_), 
+        ('bw', np.float64), 
+        ('clock_source', None),
+        ('dec_module_idxs', np.uint8),
+        ('dec_short', np.bool_),
+        ('dec_stage', np.uint8),
+        ('extended_bw', np.bool_),
+        ('sample_freq', np.float64),
+        ('serial_number', np.uint16),
+        ('rfmux_version', None),
+        ('citkid_version', None)
+    ]:
+        grp.create_array(
+            name = name,
+            data = np.asarray(
+                getattr(crs, name),
+                dtype = dtype
+            )
+        )
 
 ################################################################################
 ########################### Zarr saving helper #################################

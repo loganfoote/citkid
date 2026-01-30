@@ -141,7 +141,7 @@ def test_iterate_of():
     assert h.dtype == np.float64, "Output h should be of type float64"
     assert isinstance(start_idx, np.ndarray), \
         "Output start_idx should be a numpy array"
-    assert start_idx.dtype in [np.integer, np.int32, np.int64], \
+    assert np.issubdtype(start_idx.dtype, np.integer), \
         "Output start_idx should be of integer type"
     
     assert a.shape[0] == 6, "Output a should have shape (N_iter + 1, M)"

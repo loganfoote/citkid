@@ -40,7 +40,7 @@ async def test_set_clock_source_vcxo_success(mock_crs_for_set_clock,
     
     # Verify verbose output
     captured = capsys.readouterr()
-    assert 'Clock source set to VCXO' in captured.out
+    assert 'Clock source set: VCXO' in captured.out
 
 
 @pytest.mark.asyncio
@@ -61,7 +61,7 @@ async def test_set_clock_source_sma_success(mock_crs_for_set_clock,
     
     # Verify verbose output
     captured = capsys.readouterr()
-    assert 'Clock source set to SMA' in captured.out
+    assert 'Clock source set: SMA' in captured.out
 
 
 @pytest.mark.asyncio
@@ -94,7 +94,7 @@ async def test_set_clock_source_verbose_false_no_print(
     
     # Verify no output
     captured = capsys.readouterr()
-    assert 'Clock source set to' not in captured.out
+    assert 'Clock source set:' not in captured.out
 
 
 @pytest.mark.asyncio
@@ -111,7 +111,7 @@ async def test_set_clock_source_verbose_true_with_warning(
     
     # Verify output shows actual clock source
     captured = capsys.readouterr()
-    assert 'Clock source set to VCXO' in captured.out
+    assert 'Clock source set: VCXO' in captured.out
 
 
 ################################################################################

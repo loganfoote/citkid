@@ -94,5 +94,5 @@ def test_filter_pt_single_spike():
     y_filt = psd.filter_pt(f, y.copy(), n = 2, pt_frequency = 1.0)
     # Only the 1.0 bin should be replaced by mean of neighbor and itself
     expected = y.copy()
-    expected[2] = np.mean([y[1:2], y[2:3]], axis = 0)
+    expected[2] = np.mean(y[1:3])
     assert np.allclose(y_filt, expected)

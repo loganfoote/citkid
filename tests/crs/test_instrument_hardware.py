@@ -1,15 +1,21 @@
 import pytest
+import rfmux
 import numpy as np 
 import zarr 
 import os 
+import shutil
 import re
-import rfmux
+import time
 from citkid.crs.instrument import CRS
 from citkid.crs import util
+import matplotlib.pyplot as plt 
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend for tests
+
 ################################################################################
 # Fixtures
 ################################################################################
-@pytest.fixture(scope = "module", autouse = True)
+@pytest.fixture(scope="module", autouse=True)
 def require_hardware(pytestconfig):
     sn = pytestconfig.getoption("--crs_sn")
     if sn is None:
@@ -84,8 +90,9 @@ async def test_crs_config(pytestconfig, capsys):
         analog_bank_high = False, verbose = True
     )
     captured = capsys.readouterr() 
-    msg = "Set decimation: dec_stage = 0, short = False, modules = []\n"
-    msg += "System configured\nClocking source is VCXO\n" 
+    msg = "Clock source set: VCXO\n"
+    msg += "Decimation set: stage = 6, short = False, modules = []\n"
+    msg += "System configured\n" 
     assert captured.out == msg
     assert captured.err == ""
 
@@ -439,13 +446,14 @@ async def test_stream(pytestconfig, monkeypatch, tmp_path):
         grp = grp,
         tmp_directory = os.path.join(tmp_path, 'tmp/'),
         batch_size_mb = 1,
+        chunk_size_mb = 1,
         delete_parser_data = True,
         verbose = True
     )
-    _, zsweep = await crs.sweep_linear(
+    _, zsweep = await crs.sweep_span(
         fres, ares, 1e3, 1, 100, 
         allow_missing = False, center_fres = True, downward = True,
-        verbose = False
+        log = False, verbose = False
     )
     assert len(spy.calls) == 1 # one for each module
     _, kwargs1, stub1 = spy.calls[0]
@@ -469,7 +477,6 @@ async def test_stream(pytestconfig, monkeypatch, tmp_path):
     z_avg = np.mean(z, axis = 1) 
     zsweep = zsweep[:, 0]
 
-    raise NotImplementedError("Need to make sure tolerance check is correct")
     abs_tol = 1e-2
     abs_diff = np.abs(zsweep - z_avg)
     flat_idx = np.nanargmax(abs_diff)
@@ -480,23 +487,374 @@ async def test_stream(pytestconfig, monkeypatch, tmp_path):
         za_val = z_avg.ravel()[flat_idx]
         raise AssertionError(
             "Max absolute diff exceeds tolerance: "
-            f"idx = {max_idx}, zsweep = {zs_val}, z_avg = {za_val}, "
-            f"abs_diff = {max_abs} (tol = {abs_tol})"
+            f"idx={max_idx}, zsweep={zs_val}, z_avg={za_val}, "
+            f"abs_diff={max_abs} (tol={abs_tol})"
         )
-
-def test_parser_to_zarr():
-    raise Exception("Known bug: parser_to_zarr cannot handle missing tones.")
 
 ################################################################################
 # Loopback tests 
 ################################################################################
-def test_loopback_placeholder():
+@pytest.mark.asyncio 
+async def test_loopback(pytestconfig, tmp_path):
     """ Placeholder for future loopback tests. 
     Tests all CRS modules in loopback mode across the first and second Nyquist 
     zones. Ensures that loopback profile is within 5 dB of specifications. 
     Ensures that streaming matches loopback values.
     """
-    pass
+    # raise NotImplementedError("Need to add phase to loopback test plots.")
+    ### Initialize board 
+    t0 = time.perf_counter()
+    crs = initialize_crs(pytestconfig)
+    init_s = time.perf_counter() - t0
+    full_scale_dbm = 7
+    t0 = time.perf_counter()
+    await crs.configure_system(
+        clock_source = "VCXO", full_scale_dbm = full_scale_dbm,
+        analog_bank_high = False, verbose = False
+    )
+    configure_s = time.perf_counter() - t0
+
+    # Setup sweep parameters
+    ncos = [0.25, 0.75, 1.25, 1.75, 2.25, 
+        2.75, 3.25, 3.75, 4.25, 4.75] 
+    ncos = np.array(ncos, dtype = np.float64) * 1e9 
+    amplitude = -50 
+    npoints = 1 
+    nsamps = 10
+
+    data = {} 
+    data_ts = {}
+    tmp_directory = 'tmp/'
+    zarr_path = os.path.join(tmp_directory, 'tmp_zarr.zarr')
+    root = zarr.open(zarr_path, mode = 'a')
+    run_idx = 0
+    ts_path = None # For error handling
+    timing_rows = []
+    timing_globals = {}
+    try:
+        for analog_bank_high in [False, True]:
+            await crs.set_analog_bank(analog_bank_high,
+                                        full_scale_dbm)
+            for nco in ncos:
+                if analog_bank_high:
+                    all_modules = range(5, 9)  
+                else:
+                    all_modules = range(1, 5)
+                await crs.set_nco(
+                    {idx: nco for idx in all_modules},
+                    verbose = False
+                )
+                
+                # Create fres and ares arrays -> same as sweep_full, 
+                # but with custom channel map since all NCOs are the 
+                # same
+                tone_bw = crs.bw / 1024 + 200
+                # spacing = tone_bw / npoints
+                fres = np.concatenate(
+                    [np.linspace(nco - crs.bw / 2 + 10 + tone_bw,
+                                nco + crs.bw / 2 - 10 - tone_bw,
+                                1024) 
+                    for nco in crs.nco_freqs.values()]
+                )
+                ares = amplitude * np.ones(len(fres))
+                
+                ch_map = {}
+                offset = min(all_modules)
+                for idx in all_modules:
+                    ch_map[idx] = list(
+                        range((idx - offset) * 1024, 
+                            (idx - offset) * 1024 + 1024)
+                    )
+                ch_map0 = ch_map.copy()
+                # Sweep
+                t0 = time.perf_counter()
+                f, z = await crs.sweep_span(
+                    fres, ares, tone_bw, npoints, nsamps, 
+                    ch_map = ch_map, allow_missing = False, 
+                    center_fres = True, downward = True, 
+                    verbose = False, log = True
+                    )
+                sweep_span_s = time.perf_counter() - t0
+                subdata = {k: [f[v].flatten(), z[v].flatten()] 
+                        for k, v in ch_map.items()
+                        }
+                # Append to data
+                for idx in subdata:
+                    if idx in data:
+                        for i in range(2):
+                            data[idx][i] = np.concatenate(
+                                [data[idx][i], subdata[idx][i]]
+                            )
+                    else:
+                        data[idx] = subdata[idx]
+                # Take short ts 
+                ts_duration_s = 0.2 
+                dec_stage = 5 
+                grp = root.require_group(f'run_{run_idx:d}')
+                run_idx += 1
+                ts_path = os.path.join(tmp_directory, 'parser/') 
+                os.makedirs(ts_path, exist_ok = True)
+
+                # ch_map sanity check 
+                for k, v in ch_map0.items():
+                    assert k in ch_map
+                    assert np.array_equal(v, ch_map[k])
+
+                t0 = time.perf_counter()
+                await crs.capture_ts(
+                    fres,
+                    ares, 
+                    ts_duration_s,
+                    dec_stage,
+                    grp,
+                    ch_map = ch_map,
+                    allow_missing = False,
+                    tmp_directory = ts_path,
+                    batch_size_mb = 1000,
+                    chunk_size_mb = 128,
+                    delete_parser_data = True,
+                    verbose = False
+                )
+                capture_ts_s = time.perf_counter() - t0
+                if not timing_globals:
+                    timing_globals = {
+                        "ts_duration_s": ts_duration_s,
+                        "dec_stage": dec_stage,
+                        "sweep_npoints": npoints,
+                        "sweep_nsamps": nsamps,
+                    }
+                timing_rows.append(
+                    {
+                        "analog_bank_high": analog_bank_high,
+                        "nco_MHz": int(round(nco / 1e6)),
+                        "sweep_span_s": sweep_span_s,
+                        "capture_ts_s": capture_ts_s,
+                    }
+                )
+
+                # Import ts and append to ts_data
+                z = np.array(grp['z'], dtype = np.float64)
+                s = np.array(grp['counts_to_dbc'])
+                z *= s[np.newaxis, :, np.newaxis]
+                z = z[0] + 1j * z[1]
+                for k, chs in ch_map.items():
+                    if k in data_ts:
+                        data_ts[k][0] = np.concatenate(
+                            [data_ts[k][0], fres[chs]]
+                        )
+                        data_ts[k][1].extend(z[chs])
+                    else:
+                        data_ts[k] = [fres[chs], 
+                                    [zi for zi in z[chs]]]
+
+        # Plot loopback profiles
+        fig, axs = plt.subplots(
+            2, 4, figsize = [16, 8], 
+            sharey = True, sharex = True, layout = 'tight'
+        ) 
+        for ax in axs[-1, :]:
+            ax.set(xlabel = 'Frequency (GHz)')
+        for ax in axs[:, 0]:
+            ax.set(ylabel = r'$|S_{21}|$ (dBc)')
+
+        ax2_ref = None
+        c = plt.cm.cividis(0.0)
+        c2 = plt.cm.cividis(0.5)
+        for (module_idx, (fi, zi)), ax in zip(
+            data.items(), axs.flatten()
+        ):
+            ax2 = ax.twinx()
+            if ax2_ref is None:
+                ax2_ref = ax2
+            else:
+                ax2.sharey(ax2_ref)
+            ax2.set(ylabel = 'Phase (rad)')
+            ax2.tick_params(axis = 'y', which = 'both',
+                            right = True, labelright = True)
+
+            mask = (fi > 50e6)
+            fi, zi = fi[mask], zi[mask] 
+            mask = fi < 2.4e9
+            dB = 20 * np.log10(np.abs(zi[mask])) 
+            phase = np.unwrap(np.angle(zi[mask]))
+            # Fit line to phase
+            ax.plot(fi[mask] / 1e9, dB, 
+                    color = c, aa = False)
+            ax2.plot(fi[mask] / 1e9, phase,
+                    color = c2, aa = False)
+            mask = fi > 2.6e9
+            dB = 20 * np.log10(np.abs(zi[mask])) 
+            phase = np.unwrap(np.angle(zi[mask]))
+            ax.plot(fi[mask] / 1e9, dB, 
+                    color = c, aa = False, label = r"$|S_{21}|$")
+            ax.plot([], [],
+                    color = c2, aa = False, label = r"Phase")
+            ax2.plot(fi[mask] / 1e9, phase, 
+                    color = c2, aa = False)
+            ax.set(title = f'Module: {module_idx:d}')
+        axs[0, 0].legend(loc = 'lower left')
+        # Save figure for reference regardless of test outcome
+        artifact_dir = pytestconfig.rootpath / 'crs_test_data'
+        artifact_dir.mkdir(parents = True, exist_ok = True)
+        fig_paths = [
+            tmp_path / 'loopback_profile.png',
+            artifact_dir / 'loopback_profile.png'
+        ]
+        for fig_path in fig_paths:
+            fig.savefig(fig_path, dpi = 150)
+
+        status_paths = [
+            tmp_path / 'loopback_profile_status.txt',
+            artifact_dir / 'loopback_profile_status.txt'
+        ]
+        try:
+            # Confirms that streamed noise matches IQ to within 0.01
+            results = []
+            max_abs_overall = -np.inf
+            max_abs_module = None
+            max_abs_idx = None
+            for module_idx, (_, zsweep) in data.items():
+                zt = data_ts[module_idx][1] 
+                z_avg = np.array([np.mean(zi) for zi in zt])
+                abs_tol = 1e-2
+                abs_diff = np.abs(zsweep - z_avg)
+                flat_idx = np.nanargmax(abs_diff)
+                max_idx = np.unravel_index(flat_idx, abs_diff.shape)
+                max_abs = abs_diff.ravel()[flat_idx]
+                mean_abs = np.nanmean(abs_diff)
+                sweep_vals = zsweep
+                if "nsamples_ts" not in timing_globals:
+                    timing_globals["nsamples_ts"] = abs_diff.size
+                results.append(
+                    {
+                        "module_idx": module_idx,
+                        "max_abs": max_abs,
+                        "max_idx": max_idx,
+                        "mean_abs": mean_abs,
+                        "sweep_vals": sweep_vals,
+                    }
+                )
+                if max_abs > max_abs_overall:
+                    max_abs_overall = max_abs
+                    max_abs_module = module_idx
+                    max_abs_idx = max_idx
+                if max_abs > abs_tol:
+                    zs_val = zsweep.ravel()[flat_idx]
+                    za_val = z_avg.ravel()[flat_idx]
+                    raise AssertionError(
+                        "Max absolute diff exceeds tolerance: "
+                        f"idx={max_idx}, zsweep={zs_val}, z_avg={za_val}, "
+                        f"abs_diff={max_abs} (tol={abs_tol})"
+                    )
+            lines = ["PASS"]
+            lines.append(
+                f"init_s={init_s:.3f} configure_s={configure_s:.3f}"
+            )
+            if timing_globals:
+                lines.append(
+                    "ts_duration_s={ts_duration_s} dec_stage={dec_stage} "
+                    "sweep_npoints={sweep_npoints} sweep_nsamps={sweep_nsamps} "
+                    "nsamples_ts={nsamples_ts}"
+                    .format(**timing_globals)
+                )
+            for row in timing_rows:
+                lines.append(
+                    "Timing (bank_high={analog_bank_high}, nco_MHz={nco_MHz}): "
+                    "sweep_span_s={sweep_span_s:.3f} "
+                    "capture_ts_s={capture_ts_s:.3f}".format(**row)
+                )
+            lines.append("")
+            lines.append("Timestream vs sweep absolute differences")
+            lines.append(f"abs_tol={abs_tol:.6f}")
+            max_rel_overall = None
+            if max_abs_module is not None:
+                for result in results:
+                    if result["module_idx"] == max_abs_module:
+                        sweep_at_max_overall = result["sweep_vals"][max_abs_idx]
+                        sweep_abs_overall = np.abs(sweep_at_max_overall)
+                        if sweep_abs_overall > 0:
+                            max_rel_overall = max_abs_overall / sweep_abs_overall
+                        break
+            max_abs_line = (
+                f"max_abs_overall={max_abs_overall:.6f} "
+                f"(module={max_abs_module}, idx={max_abs_idx})"
+            )
+            lines.append(max_abs_line)
+            if max_rel_overall is not None:
+                lines.append(f"max_rel_overall={max_rel_overall:.6f}")
+            for result in results:
+                sweep_at_max = result["sweep_vals"][result["max_idx"]]
+                sweep_at_max_str = (
+                    f"{sweep_at_max.real:.6f}"
+                    f"{sweep_at_max.imag:+.6f}j"
+                )
+                lines.append(
+                    "Module {module_idx}: max_abs={max_abs:.6f}, "
+                    "mean_abs={mean_abs:.6f}, sweep_at_max={sweep_at_max}".
+                    format(**result, sweep_at_max=sweep_at_max_str)
+                )
+            status_text = "\n".join(lines) + "\n"
+            for status_path in status_paths:
+                status_path.write_text(status_text)
+        except AssertionError as exc:
+            lines = [f"FAIL: {exc}"]
+            if results:
+                lines.append(
+                    f"init_s={init_s:.3f} configure_s={configure_s:.3f}"
+                )
+                if timing_globals:
+                    lines.append(
+                        "ts_duration_s={ts_duration_s} dec_stage={dec_stage} "
+                        "sweep_npoints={sweep_npoints} sweep_nsamps={sweep_nsamps} "
+                        "nsamples_ts={nsamples_ts}"
+                        .format(**timing_globals)
+                    )
+                for row in timing_rows:
+                    lines.append(
+                        "Timing (bank_high={analog_bank_high}, nco_MHz={nco_MHz}): "
+                        "sweep_span_s={sweep_span_s:.3f} "
+                        "capture_ts_s={capture_ts_s:.3f}".format(**row)
+                    )
+                lines.append("")
+                lines.append("Timestream vs sweep absolute differences")
+                lines.append(f"abs_tol={abs_tol:.6f}")
+                max_rel_overall = None
+                if max_abs_module is not None:
+                    for result in results:
+                        if result["module_idx"] == max_abs_module:
+                            sweep_at_max_overall = result["sweep_vals"][max_abs_idx]
+                            sweep_abs_overall = np.abs(sweep_at_max_overall)
+                            if sweep_abs_overall > 0:
+                                max_rel_overall = max_abs_overall / sweep_abs_overall
+                            break
+                max_abs_line = (
+                    f"max_abs_overall={max_abs_overall:.6f} "
+                    f"(module={max_abs_module}, idx={max_abs_idx})"
+                )
+                lines.append(max_abs_line)
+                if max_rel_overall is not None:
+                    lines.append(f"max_rel_overall={max_rel_overall:.6f}")
+                for result in results:
+                    sweep_at_max = result["sweep_vals"][result["max_idx"]]
+                    sweep_at_max_str = (
+                        f"{sweep_at_max.real:.6f}"
+                        f"{sweep_at_max.imag:+.6f}j"
+                    )
+                    lines.append(
+                        "Module {module_idx}: max_abs={max_abs:.6f}, "
+                        "mean_abs={mean_abs:.6f}, sweep_at_max={sweep_at_max}".
+                        format(**result, sweep_at_max=sweep_at_max_str)
+                    )
+            status_text = "\n".join(lines) + "\n"
+            for status_path in status_paths:
+                status_path.write_text(status_text)
+            raise
+    finally:
+        if os.path.exists(zarr_path):
+            shutil.rmtree(zarr_path, ignore_errors = True)
+        if ts_path is not None and os.path.exists(ts_path):
+            shutil.rmtree(ts_path, ignore_errors = True)
+        
 
 ################################################################################
 # Helper functions
@@ -562,7 +920,7 @@ class TqdmSpy:
 
 
 class _TqdmStub:
-    def __init__(self, iterable, kwargs = None):
+    def __init__(self, iterable, kwargs=None):
         self.iterable = iterable
         self.desc = None if kwargs is None else kwargs.get("desc")
         self.n = 0

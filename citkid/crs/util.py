@@ -154,8 +154,8 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
         arrays where values (float) are power in dBm. Used to create scaling 
         from CRS amplitude to dBc.
     dt (float): sample time in seconds.
-    batch_size_mb (int): total input read size per batch, in MB.
-    chunk_size_mb (int): target Zarr chunk size, in MB. If None,
+    batch_size_mb (float): total input read size per batch, in MB.
+    chunk_size_mb (float): target Zarr chunk size, in MB. If None,
         defaults to batch_size_mb. The chunk length is capped to the total
         available samples to avoid oversized final chunks.
 
@@ -163,6 +163,7 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
     None
     """
     ### Input validation 
+    path, crs_sn, ch_map, ares_map, dt, batch_size_mb, chunk_size_mb = \
     _validate_parser_to_zarr_inputs(
         path, grp, crs_sn, ntones, max_ntones, ch_map, ares_map, dt, 
         batch_size_mb, chunk_size_mb
@@ -208,7 +209,9 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
     )
     # Total bytes read per batch across all files is ~batch_size_mb
     # Each file stores max_ntones records per time sample
-    read_count = max(max_ntones, batch_size_bytes // (len(files) * dtype.itemsize))
+    read_count = max(
+        max_ntones, batch_size_bytes // (len(files) * dtype.itemsize)
+        )
     # read_count must be multiple of max_ntones
     read_count = (read_count // max_ntones) * max_ntones
     # Chunk length in time samples for output array (decoupled from read size)
@@ -365,14 +368,18 @@ def interface_exists(iface):
 
 ################################################################################
 ########################### input validation ###################################
-################################################################################  
+################################################################################ 
 def _validate_parser_to_zarr_inputs(
     path, grp, crs_sn, ntones, max_ntones, ch_map, ares_map, dt, 
     batch_size_mb, chunk_size_mb
 ):
     """Validate inputs for parser_to_zarr function."""
+    if not isinstance(path, str):
+        raise TypeError('path must be a str')
+    path = os.path.normpath(path)
     if not os.path.isdir(path):
-        raise ValueError(f'path {path} is not a valid directory') 
+        raise ValueError(f'path {path} is not a valid directory')
+     
     if not isinstance(grp, zarr.core.group.Group):
         raise TypeError('grp must be a zarr.core.group.Group object')
     # Check that required names don't already exist in the group
@@ -382,33 +389,80 @@ def _validate_parser_to_zarr_inputs(
     if conflicts:
         msg = f'grp already contains required names: {sorted(conflicts)}'
         raise ValueError(msg) 
-    if not isinstance(crs_sn, (int, np.integer)):
-        raise TypeError('crs_sn must be an int') 
+    
+    crs_sn = int(crs_sn)
+    if crs_sn < 0:
+        raise ValueError('crs_sn must be a positive int')
+
     if not isinstance(ntones, (int, np.integer)) or ntones < 0:
         raise ValueError('ntones must be a positive int')
+    
     if not isinstance(max_ntones, (int, np.integer)) or max_ntones <= 0:
         raise ValueError('max_ntones must be a positive int')
-    if not isinstance(ch_map, dict):
-        raise TypeError('ch_map must be a dict')
-    if not all(isinstance(k, (int, np.integer)) for k in ch_map.keys()):
-        raise ValueError('All keys in ch_map must be int')
-    if not all(isinstance(v, np.ndarray) and 
-               np.issubdtype(v.dtype, np.integer) 
-               for v in ch_map.values()):
-        raise ValueError('All values in ch_map must be numpy arrays of int')
+    
+    ch_map = _validate_ch_map(ch_map)
+
     if not isinstance(ares_map, dict):
         raise TypeError('ares_map must be a dict')
-    if not all(isinstance(k, (int, np.integer)) for k in ares_map.keys()):
-        raise ValueError('All keys in ares_map must be int')
-    if not all(isinstance(v, np.ndarray) and 
-               np.issubdtype(v.dtype, np.floating) 
-               for v in ares_map.values()):
-        raise ValueError('All values in ares_map must be numpy arrays of float')
-    if not isinstance(dt, (float, np.floating)) or dt <= 0:
+    for k, v in ares_map.items():
+        if k not in [1, 2, 3, 4, 5, 6, 7, 8]:
+            raise ValueError('ares_map keys must be integer module indices')
+        try:
+            ares_map[k] = np.asarray(v, dtype = np.float64)
+        except Exception as e:
+            msg = f'ares_map values could not be converted to float arrays: {e}'
+            raise ValueError(msg)
+        
+    dt = float(dt)
+    if dt <= 0:
         raise ValueError('dt must be a positive float')
-    if not isinstance(batch_size_mb, (int, np.integer)) or batch_size_mb <= 0:
-        raise ValueError('batch_size_mb must be a positive int')
-    if not isinstance(chunk_size_mb, (int, np.integer)) or \
-        chunk_size_mb <= 0:
-        raise ValueError('chunk_size_mb must be a positive int or None')
+    
+    batch_size_mb, chunk_size_mb = _validate_batch_chunk_sizes(
+        batch_size_mb, chunk_size_mb
+    )
+    return path, crs_sn, ch_map, ares_map, dt, batch_size_mb, chunk_size_mb
+
+def _validate_ch_map(ch_map):
+    """
+    Validate the ch_map dictionary format. Converts values to int32 arrays.
+
+    Parameters:
+    See docstring of write_tones for parameter description.
+
+    Returns:
+    None
+    """
+    if ch_map is not None:
+        if not isinstance(ch_map, dict):
+            raise TypeError('ch_map must be a dictionary') 
+        ch_map = ch_map.copy() # to avoid modifying input
+        for k, v in ch_map.items():
+            if k not in [1, 2, 3, 4, 5, 6, 7, 8]:
+                raise ValueError('ch_map keys must be integer module indices')
+            try:
+                ch_map[k] = np.asarray(v, dtype = np.int32)
+            except Exception as e:
+                raise ValueError(f'ch_map could not be converted to int32')
+    return ch_map
+
+def _validate_batch_chunk_sizes(batch_size_mb, chunk_size_mb):
+    """
+    Validate batch_size_mb and chunk_size_mb parameters.
+
+    Parameters:
+    batch_size_mb (float): batch size in MB.
+    chunk_size_mb (float): chunk size in MB.
+
+    Returns:
+    tuple: validated (batch_size_mb, chunk_size_mb)
+    """
+    batch_size_mb = float(batch_size_mb)
+    chunk_size_mb = float(chunk_size_mb)
+    if batch_size_mb <= 0:
+        raise ValueError('batch_size_mb must be a positive float')
+    if chunk_size_mb <= 0:
+        raise ValueError('chunk_size_mb must be a positive float')
+    if chunk_size_mb > batch_size_mb:
+        raise ValueError('chunk_size_mb must be <= batch_size_mb')
+    return batch_size_mb, chunk_size_mb 
 
