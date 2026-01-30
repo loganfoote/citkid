@@ -3,6 +3,7 @@ import asyncio
 import shutil
 import warnings
 import time
+import zarr
 import numpy as np
 from tqdm.auto import tqdm
 
@@ -591,14 +592,14 @@ class CRS:
         z /= 10 ** (ares[:, np.newaxis] / 20)
         return f, z
 
-    async def sweep_linear(
+    async def sweep_span(
             self, fres, ares, span, npoints, nsamps, ch_map = None, 
             allow_missing = False, center_fres = True, downward = True, 
-            verbose = True, pbar_description = 'Sweeping'
+            log = False, verbose = True, pbar_description = 'Sweeping'
             ):
         """
         Performs a frequency sweep where each channel is swept over the same
-        frequency span.
+        frequency span, with either linear or logarithmic spacing.
 
         Parameters:
         fres (array-like): center frequencies in Hz.
@@ -616,6 +617,8 @@ class CRS:
             fres is the starting frequency.
         downward (bool): if True, sweeps from high to low frequency. Else,
             sweeps from low to high frequency.
+        log (bool): If True, uses logarithmic spacing between points. Else,
+            uses linear spacing.
         verbose (bool): If True, displays a progress bar while sweeping.
         pbar_description (str): description for the progress bar.
 
@@ -635,16 +638,17 @@ class CRS:
         # other validation is performed in self.sweep
 
         # Create freqs array
+        func = np.geomspace if log else np.linspace
         if center_fres:
             if downward:
-                freqs = np.linspace(fres + span / 2, fres - span / 2, npoints).T
+                freqs = func(fres + span / 2, fres - span / 2, npoints).T
             else:
-                freqs = np.linspace(fres - span / 2, fres + span / 2, npoints).T
+                freqs = func(fres - span / 2, fres + span / 2, npoints).T
         else:
             if downward:
-                freqs = np.linspace(fres + span, fres, npoints).T
+                freqs = func(fres + span, fres, npoints).T
             else:
-                freqs = np.linspace(fres, fres + span, npoints).T
+                freqs = func(fres, fres + span, npoints).T
 
         # Sweep and return 
         f, z = await self.sweep(
@@ -702,7 +706,7 @@ class CRS:
         return f, z
 
     async def sweep_full(
-            self, amplitude, npoints, nsamps,
+            self, amplitude, npoints_per_tone, nsamps, log = False,
             verbose = True, pbar_description = 'Sweeping'
             ):
         """
@@ -711,8 +715,10 @@ class CRS:
 
         Parameters:
         amplitude (float): amplitude in dBm.
-        npoints (int): number of sweep points per channel.
+        npoints_per_tone (int): number of sweep points per tone.
         nsamps (int): number of samples to average per point.
+        log (bool): If True, uses logarithmic spacing between points. Else,
+            uses linear spacing.
         verbose (bool): If True, displays a progress bar while sweeping.
         pbar_description (str): description for the progress bar.
 
@@ -722,7 +728,7 @@ class CRS:
         """
         # Input validation 
         amplitude = float(amplitude)
-        if not isinstance(npoints, int) or npoints <= 0:
+        if not isinstance(npoints_per_tone, int) or npoints_per_tone <= 0:
             raise ValueError('npoints must be a positive integer') 
         # other validation is performed in self.sweep_linear
 
@@ -730,23 +736,26 @@ class CRS:
         ncos = self.nco_freqs.values()
         tone_bw = self.bw / 1024 + 200
         # spacing = tone_bw / npoints
-        fres = np.concatenate([np.linspace(nco - self.bw / 2 + 10 + tone_bw,
-                                           nco + self.bw / 2 - 10 - tone_bw,
-                                           1024) for nco in ncos])
+        func = np.geomspace if log else np.linspace
+        fres = np.concatenate([
+            func(nco - self.bw / 2 + 1 + tone_bw,
+                 nco + self.bw / 2 - 1 - tone_bw,
+                 1024) 
+            for nco in ncos])
         ares = amplitude * np.ones(len(fres))
         
         # Sweep
-        f, z = await self.sweep_linear(
-            fres, ares, tone_bw, npoints, nsamps, ch_map = None, 
+        f, z = await self.sweep_span(
+            fres, ares, tone_bw, npoints_per_tone, nsamps, ch_map = None, 
             allow_missing = False, center_fres = True, downward = True, 
-            verbose = verbose, pbar_description = pbar_description
+            log = log, verbose = verbose, pbar_description = pbar_description
             )
         
         # Flatten and sort
         f, z = f.flatten(), z.flatten()
         ix = np.argsort(f)
         f, z = f[ix], z[ix]
-        return f, z
+        return f, z    
 
     async def capture_ts(
             self,
@@ -794,8 +803,13 @@ class CRS:
         Returns:
         None
         """
-        # fres and ares validation perfomed in self.write_tones 
-        # Remaining input validation performed in self.stream
+        # Validate stream inputs early to fail fast before write_tones
+        _validate_stream_input(
+            ts_duration_s, tmp_directory, grp,
+            batch_size_mb, chunk_size_mb,
+            delete_parser_data, verbose
+        )
+        # fres and ares validation performed in self.write_tones
 
         # Clear all channels - ensures that unused modules are cleared 
         idx_to_clear = range(5, 9) if self.analog_bank_high else range(1, 5)
@@ -819,13 +833,9 @@ class CRS:
                 delete_parser_data = delete_parser_data,
                 verbose = verbose
             )
-        except Exception as e:
-            # On failure to stream, clear all channels 
-            await self._clear_channels(idx_to_clear) 
-            raise e 
-        
-        # Clear all channels after streaming
-        await self._clear_channels(idx_to_clear)
+        finally:
+            # Clear all channels after streaming (success or failure)
+            await self._clear_channels(idx_to_clear)
 
     
     async def stream(
@@ -869,12 +879,12 @@ class CRS:
         Returns:
         None
         """
-        ### Input validation -> move to util to use in take_ts?
-        tmp_directory = os.path.normpath(os.path.expanduser(tmp_directory))
-        os.makedirs(tmp_directory, exist_ok = True)
-        data_directory = os.path.join(tmp_directory, 'parser_data_00')
-        if os.path.exists(data_directory):
-            raise FileExistsError(f'{data_directory} already exists')
+        # Validate inputs
+        tmp_directory, data_directory = _validate_stream_input(
+            ts_duration_s, tmp_directory, grp,
+            batch_size_mb, chunk_size_mb,
+            delete_parser_data, verbose
+        )
         
         ### Set decimation stage
         await self.set_decimation(dec_stage, verbose = verbose)
@@ -926,7 +936,6 @@ class CRS:
             batch_size_mb = batch_size_mb,
             chunk_size_mb = chunk_size_mb
         )
-
         
         ### Delete parser data
         if delete_parser_data:
@@ -1187,6 +1196,66 @@ def _validate_ch_map(ch_map):
                 raise TypeError('ch_map keys must be integers')
             if not all(isinstance(ch, (int, np.integer)) for ch in val):
                 raise TypeError('ch_map values must be lists of integers')
+
+
+def _validate_stream_input(ts_duration_s, tmp_directory, grp,
+                           batch_size_mb, chunk_size_mb, 
+                           delete_parser_data, verbose):
+    """
+    Validate inputs for the stream method.
+
+    Parameters:
+    ts_duration_s (float): timestream length in seconds.
+    tmp_directory (str): directory to save temporary parser data.
+    grp (zarr.Group): zarr group to save the batch data.
+    batch_size_mb (int/float): batch size in MB.
+    chunk_size_mb (int/float): chunk size in MB.
+    delete_parser_data (bool): whether to delete parser data after import.
+    verbose (bool): whether to display progress bars.
+
+    Returns:
+    tuple: (tmp_directory, data_directory) - normalized paths
+
+    Raises:
+    ValueError: if parameters have invalid values
+    TypeError: if parameters have invalid types
+    FileExistsError: if data_directory already exists
+    """
+    if not isinstance(ts_duration_s, (float, np.floating)) or \
+       ts_duration_s <= 0:
+        raise ValueError('ts_duration_s must be a positive float')
+    
+    tmp_directory = os.path.normpath(os.path.expanduser(tmp_directory))
+    os.makedirs(tmp_directory, exist_ok = True)
+    data_directory = os.path.join(tmp_directory, 'parser_data_00')
+    
+    if os.path.exists(data_directory):
+        raise FileExistsError(f'{data_directory} already exists')
+    
+    # dec_stage tested in set_decimation 
+    if not isinstance(grp, zarr.core.group.Group):
+        raise TypeError('grp must be a zarr.Group object')
+    
+    if not isinstance(
+        batch_size_mb, (int, float, np.integer, np.floating)
+        ) or batch_size_mb <= 0:
+        raise ValueError('batch_size_mb must be a positive number')
+    
+    if not isinstance(
+        chunk_size_mb, (int, float, np.integer, np.floating)
+        ) or chunk_size_mb <= 0:
+        raise ValueError('chunk_size_mb must be a positive number') 
+    
+    if chunk_size_mb > batch_size_mb:
+        raise ValueError('chunk_size_mb must not exceed batch_size_mb') 
+    
+    if not isinstance(delete_parser_data, bool):
+        raise TypeError('delete_parser_data must be a boolean value') 
+    
+    if not isinstance(verbose, bool):
+        raise TypeError('verbose must be a boolean value')
+    
+    return tmp_directory, data_directory
 
 
 def _validate_sweep_input(module_idx, nco_freqs, frequencies_map, ares_map,

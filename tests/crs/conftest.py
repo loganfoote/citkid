@@ -23,7 +23,7 @@ def mock_rfmux_base():
     """
     with patch('citkid.crs.instrument.rfmux') as mock_rfmux, \
          patch('citkid.crs.instrument.util.interface_exists',
-               return_value=True):
+               return_value = True):
         
         mock_rfmux.__version__ = '1.3.2'
         mock_rfmux.CRS = Mock()

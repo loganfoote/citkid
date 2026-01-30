@@ -57,23 +57,27 @@ def test_validate_sweep_input_numpy_arrays():
 
 def test_validate_sweep_input_nco_freqs_not_dict():
     """Test that non-dict nco_freqs raises TypeError."""
-    with pytest.raises(TypeError, match='nco_freqs must be a dictionary'):
+    with pytest.raises(TypeError, match = 'nco_freqs must be a dictionary'):
         _validate_sweep_input(1, [4.0e9], {1: [[3.9e9]]}, {1: [-50]},
                              {}, {}, 10, True, "Test")
 
 
 def test_validate_sweep_input_nco_freqs_missing_module_idx():
     """Test that nco_freqs missing module_idx raises ValueError."""
-    with pytest.raises(ValueError, match='nco_freqs does not contain module index 1'):
+    with pytest.raises(ValueError, match = 
+        'nco_freqs does not contain module index 1'):
         _validate_sweep_input(1, {2: 4.0e9}, {1: [[3.9e9]]}, {1: [-50]},
                              {}, {}, 10, True, "Test")
 
 
 def test_validate_sweep_input_nco_freqs_value_not_float():
     """Test that non-float nco_freqs value raises TypeError."""
-    with pytest.raises(TypeError, match='nco_freqs\\[1\\] must be a float'):
-        _validate_sweep_input(1, {1: 4000000000, 2: 4.5e9}, {1: [[3.9e9]]}, {1: [-50]},
-                             {}, {}, 10, True, "Test")
+    with pytest.raises(TypeError, match = 'nco_freqs\\[1\\] must be a float'):
+        _validate_sweep_input(
+            1, {1: 4000000000, 2: 4.5e9},
+            {1: [[3.9e9]]}, {1: [-50]},
+            {}, {}, 10, True, "Test"
+        )
 
 
 def test_validate_sweep_input_nco_freqs_accepts_numpy_float():
@@ -94,28 +98,36 @@ def test_validate_sweep_input_nco_freqs_accepts_numpy_float():
 
 def test_validate_sweep_input_frequencies_map_not_dict():
     """Test that non-dict frequencies_map raises TypeError."""
-    with pytest.raises(TypeError, match='frequencies_map must be a dictionary'):
+    with pytest.raises(
+        TypeError, match = 'frequencies_map must be a dictionary'
+        ):
         _validate_sweep_input(1, {1: 4.0e9}, [[3.9e9]], {1: [-50]},
                              {}, {}, 10, True, "Test")
 
 
 def test_validate_sweep_input_frequencies_map_missing_module_idx():
     """Test that frequencies_map missing module_idx raises ValueError."""
-    with pytest.raises(ValueError, match='frequencies_map does not contain module index 1'):
+    with pytest.raises(ValueError, match = 
+        'frequencies_map does not contain module index 1'):
         _validate_sweep_input(1, {1: 4.0e9}, {2: [[3.9e9]]}, {1: [-50]},
                              {}, {}, 10, True, "Test")
 
 
 def test_validate_sweep_input_frequencies_map_value_not_2d():
     """Test that 1D frequencies_map value raises TypeError."""
-    with pytest.raises(TypeError, match='frequencies_map\\[1\\] must be 2D array-like of floats'):
-        _validate_sweep_input(1, {1: 4.0e9}, {1: [3.9e9, 4.0e9], 2: [[4.5e9]]}, {1: [-50]},
-                             {}, {}, 10, True, "Test")
+    with pytest.raises(TypeError, match = 
+        'frequencies_map\\[1\\] must be 2D array-like of floats'):
+        _validate_sweep_input(
+            1, {1: 4.0e9},
+            {1: [3.9e9, 4.0e9], 2: [[4.5e9]]}, {1: [-50]},
+            {}, {}, 10, True, "Test"
+        )
 
 
 def test_validate_sweep_input_frequencies_map_value_3d():
     """Test that 3D frequencies_map value raises TypeError."""
-    with pytest.raises(TypeError, match='frequencies_map\\[1\\] must be 2D array-like of floats'):
+    with pytest.raises(TypeError, match = 
+        'frequencies_map\\[1\\] must be 2D array-like of floats'):
         _validate_sweep_input(1, {1: 4.0e9}, 
                              {1: [[[3.9e9, 4.0e9]]], 2: [[4.5e9]]}, {1: [-50]},
                              {}, {}, 10, True, "Test")
@@ -123,9 +135,11 @@ def test_validate_sweep_input_frequencies_map_value_3d():
 
 def test_validate_sweep_input_frequencies_map_value_not_numeric():
     """Test that non-numeric frequencies_map value raises TypeError."""
-    with pytest.raises(TypeError, match='frequencies_map\\[1\\] must be 2D array-like of floats'):
-        _validate_sweep_input(1, {1: 4.0e9}, {1: [['not', 'numbers']], 2: [[4.5e9]]}, 
-                             {1: [-50]}, {}, {}, 10, True, "Test")
+    with pytest.raises(TypeError, match = 
+        'frequencies_map\\[1\\] must be 2D array-like of floats'):
+        _validate_sweep_input(1, {1: 4.0e9}, 
+                              {1: [['not', 'numbers']], 2: [[4.5e9]]}, 
+                              {1: [-50]}, {}, {}, 10, True, "Test")
 
 
 ################################################################################
@@ -134,30 +148,39 @@ def test_validate_sweep_input_frequencies_map_value_not_numeric():
 
 def test_validate_sweep_input_ares_map_not_dict():
     """Test that non-dict ares_map raises TypeError."""
-    with pytest.raises(TypeError, match='ares_map must be a dictionary'):
+    with pytest.raises(TypeError, match = 'ares_map must be a dictionary'):
         _validate_sweep_input(1, {1: 4.0e9}, {1: [[3.9e9]]}, [-50],
                              {}, {}, 10, True, "Test")
 
 
 def test_validate_sweep_input_ares_map_missing_module_idx():
     """Test that ares_map missing module_idx raises ValueError."""
-    with pytest.raises(ValueError, match='ares_map does not contain module index 1'):
+    with pytest.raises(ValueError, match = 
+        'ares_map does not contain module index 1'):
         _validate_sweep_input(1, {1: 4.0e9}, {1: [[3.9e9]]}, {2: [-50]},
                              {}, {}, 10, True, "Test")
 
 
 def test_validate_sweep_input_ares_map_value_not_1d():
     """Test that 2D ares_map value raises TypeError."""
-    with pytest.raises(TypeError, match='ares_map\\[1\\] must be 1D array-like of floats'):
-        _validate_sweep_input(1, {1: 4.0e9}, {1: [[3.9e9]]}, 
-                             {1: [[-50, -51]], 2: [-52]}, {}, {}, 10, True, "Test")
+    with pytest.raises(TypeError, match = 
+        'ares_map\\[1\\] must be 1D array-like of floats'):
+        _validate_sweep_input(
+            1, {1: 4.0e9}, {1: [[3.9e9]]}, 
+            {1: [[-50, -51]], 2: [-52]}, {}, {}, 
+            10, True, "Test"
+        )
 
 
 def test_validate_sweep_input_ares_map_value_not_numeric():
     """Test that non-numeric ares_map value raises TypeError."""
-    with pytest.raises(TypeError, match='ares_map\\[1\\] must be 1D array-like of floats'):
-        _validate_sweep_input(1, {1: 4.0e9}, {1: [[3.9e9]]}, 
-                             {1: ['not', 'numbers'], 2: [-52]}, {}, {}, 10, True, "Test")
+    with pytest.raises(TypeError, match = 
+        'ares_map\\[1\\] must be 1D array-like of floats'):
+        _validate_sweep_input(
+            1, {1: 4.0e9}, {1: [[3.9e9]]}, 
+            {1: ['not', 'numbers'], 2: [-52]}, {}, {}, 
+            10, True, "Test"
+        )
 
 
 ################################################################################
@@ -166,28 +189,32 @@ def test_validate_sweep_input_ares_map_value_not_numeric():
 
 def test_validate_sweep_input_sweep_f_not_dict():
     """Test that non-dict sweep_f raises TypeError."""
-    with pytest.raises(TypeError, match='sweep_f must be a dictionary'):
+    with pytest.raises(TypeError, match = 'sweep_f must be a dictionary'):
         _validate_sweep_input(1, {1: 4.0e9}, {1: [[3.9e9]]}, {1: [-50]},
                              [], {}, 10, True, "Test")
 
 
 def test_validate_sweep_input_sweep_f_contains_module_idx():
     """Test that sweep_f containing module_idx raises ValueError."""
-    with pytest.raises(ValueError, match='sweep_f already contains module index 1'):
+    with pytest.raises(
+        ValueError, match = 'sweep_f already contains module index 1'
+        ):
         _validate_sweep_input(1, {1: 4.0e9}, {1: [[3.9e9]]}, {1: [-50]},
                              {1: [[3.9e9]]}, {}, 10, True, "Test")
 
 
 def test_validate_sweep_input_sweep_z_not_dict():
     """Test that non-dict sweep_z raises TypeError."""
-    with pytest.raises(TypeError, match='sweep_z must be a dictionary'):
+    with pytest.raises(TypeError, match = 'sweep_z must be a dictionary'):
         _validate_sweep_input(1, {1: 4.0e9}, {1: [[3.9e9]]}, {1: [-50]},
                              {}, [], 10, True, "Test")
 
 
 def test_validate_sweep_input_sweep_z_contains_module_idx():
     """Test that sweep_z containing module_idx raises ValueError."""
-    with pytest.raises(ValueError, match='sweep_z already contains module index 1'):
+    with pytest.raises(
+        ValueError, match = 'sweep_z already contains module index 1'
+        ):
         _validate_sweep_input(1, {1: 4.0e9}, {1: [[3.9e9]]}, {1: [-50]},
                              {}, {1: [[1+1j]]}, 10, True, "Test")
 
@@ -212,21 +239,21 @@ def test_validate_sweep_input_sweep_dicts_can_contain_other_modules():
 
 def test_validate_sweep_input_nsamps_not_int():
     """Test that non-int nsamps raises TypeError."""
-    with pytest.raises(TypeError, match='nsamps must be an integer'):
+    with pytest.raises(TypeError, match = 'nsamps must be an integer'):
         _validate_sweep_input(1, {1: 4.0e9}, {1: [[3.9e9]]}, {1: [-50]},
                              {}, {}, 10.5, True, "Test")
 
 
 def test_validate_sweep_input_nsamps_zero():
     """Test that nsamps=0 raises ValueError."""
-    with pytest.raises(ValueError, match='nsamps must be greater than 0'):
+    with pytest.raises(ValueError, match = 'nsamps must be greater than 0'):
         _validate_sweep_input(1, {1: 4.0e9}, {1: [[3.9e9]]}, {1: [-50]},
                              {}, {}, 0, True, "Test")
 
 
 def test_validate_sweep_input_nsamps_negative():
     """Test that negative nsamps raises ValueError."""
-    with pytest.raises(ValueError, match='nsamps must be greater than 0'):
+    with pytest.raises(ValueError, match = 'nsamps must be greater than 0'):
         _validate_sweep_input(1, {1: 4.0e9}, {1: [[3.9e9]]}, {1: [-50]},
                              {}, {}, -1, True, "Test")
 
@@ -249,14 +276,14 @@ def test_validate_sweep_input_nsamps_accepts_numpy_int():
 
 def test_validate_sweep_input_verbose_not_bool():
     """Test that non-bool verbose raises TypeError."""
-    with pytest.raises(TypeError, match='verbose must be a boolean'):
+    with pytest.raises(TypeError, match = 'verbose must be a boolean'):
         _validate_sweep_input(1, {1: 4.0e9}, {1: [[3.9e9]]}, {1: [-50]},
                              {}, {}, 10, 1, "Test")
 
 
 def test_validate_sweep_input_verbose_string():
     """Test that string verbose raises TypeError."""
-    with pytest.raises(TypeError, match='verbose must be a boolean'):
+    with pytest.raises(TypeError, match = 'verbose must be a boolean'):
         _validate_sweep_input(1, {1: 4.0e9}, {1: [[3.9e9]]}, {1: [-50]},
                              {}, {}, 10, "True", "Test")
 
@@ -267,7 +294,7 @@ def test_validate_sweep_input_verbose_string():
 
 def test_validate_sweep_input_pbar_description_not_string():
     """Test that non-string pbar_description raises TypeError."""
-    with pytest.raises(TypeError, match='pbar_description must be a string'):
+    with pytest.raises(TypeError, match = 'pbar_description must be a string'):
         _validate_sweep_input(1, {1: 4.0e9}, {1: [[3.9e9]]}, {1: [-50]},
                              {}, {}, 10, True, 123)
 
@@ -292,6 +319,6 @@ def test_validate_sweep_input_catches_first_error():
     """Test that validation catches the first error encountered."""
     # Multiple errors: nco_freqs not dict, nsamps not int, etc.
     # Should raise error for nco_freqs first
-    with pytest.raises(TypeError, match='nco_freqs must be a dictionary'):
+    with pytest.raises(TypeError, match = 'nco_freqs must be a dictionary'):
         _validate_sweep_input(1, "not_dict", {1: [[3.9e9]]}, {1: [-50]},
                              {}, {}, "not_int", "not_bool", 123)

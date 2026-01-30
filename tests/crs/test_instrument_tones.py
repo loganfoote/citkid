@@ -55,7 +55,7 @@ async def test_clear_channels_basic_functionality(
     await crs._clear_channels([1])
     
     # Check device method was called
-    crs.d.clear_channels.assert_called_once_with(module=1)
+    crs.d.clear_channels.assert_called_once_with(module = 1)
     
     # Check module 1 was removed from all maps
     assert 1 not in crs.fres_map
@@ -96,8 +96,8 @@ async def test_clear_channels_multiple_modules(
     
     # Check device method was called twice
     assert crs.d.clear_channels.call_count == 2
-    crs.d.clear_channels.assert_any_call(module=0)
-    crs.d.clear_channels.assert_any_call(module=2)
+    crs.d.clear_channels.assert_any_call(module = 0)
+    crs.d.clear_channels.assert_any_call(module = 2)
     
     # Check both modules removed from maps
     assert 0 not in crs.fres_map
@@ -138,7 +138,7 @@ async def test_clear_channels_nonexistent_module(
     await crs._clear_channels([10])
     
     # Should still call device method
-    crs.d.clear_channels.assert_called_once_with(module=10)
+    crs.d.clear_channels.assert_called_once_with(module = 10)
     
     # ntones should be unchanged (no channels to remove)
     assert crs.ntones == 9
@@ -208,7 +208,7 @@ async def test_clear_channels_validates_input_type(
     crs = mock_crs_for_clear_channels
     
     # Test with non-integer in list
-    with pytest.raises(TypeError, match='must be a list of integers'):
+    with pytest.raises(TypeError, match = 'must be a list of integers'):
         await crs._clear_channels([1, 'not_int', 3])
 
 
@@ -218,7 +218,7 @@ async def test_clear_channels_validates_floats(
     """Test _clear_channels rejects floats."""
     crs = mock_crs_for_clear_channels
     
-    with pytest.raises(TypeError, match='must be a list of integers'):
+    with pytest.raises(TypeError, match = 'must be a list of integers'):
         await crs._clear_channels([1, 2.5, 3])
 
 
@@ -322,7 +322,7 @@ def mock_crs_for_write_tones(base_crs):
         
         # Mock _safe_concatenate_frequencies to return input unchanged
         mock_netanal._safe_concatenate_frequencies = MagicMock(
-            side_effect=lambda f, nco: f
+            side_effect = lambda f, nco: f
         )
         
         # Mock get_modules to return object with _write_tones
@@ -370,7 +370,7 @@ async def test_write_tones_validates_nco_freqs_set(
     
     crs.nco_freqs = {}
     
-    with pytest.raises(RuntimeError, match='NCO frequencies are not set'):
+    with pytest.raises(RuntimeError, match = 'NCO frequencies are not set'):
         await crs.write_tones([4.0e9], [-50])
 
 
@@ -403,7 +403,7 @@ async def test_write_tones_validates_matching_shapes(
     fres = np.array([3.9e9, 4.0e9, 4.1e9])
     ares = np.array([-50, -51])  # Different length
     
-    with pytest.raises(ValueError, match='same shape'):
+    with pytest.raises(ValueError, match = 'same shape'):
         await crs.write_tones(fres, ares)
 
 
@@ -432,7 +432,7 @@ async def test_write_tones_with_provided_ch_map(mock_crs_for_write_tones):
     ares = np.array([-50, -51, -52, -53])
     ch_map = {1: [0, 1, 2], 2: [3]}
     
-    await crs.write_tones(fres, ares, ch_map=ch_map)
+    await crs.write_tones(fres, ares, ch_map = ch_map)
     
     # Should not call create_ch_map
     mock_create.assert_not_called()
@@ -453,8 +453,8 @@ async def test_write_tones_detects_missing_channels_with_ch_map(
     # ch_map missing channel 2
     ch_map = {1: [0, 1, 3]}
     
-    with pytest.raises(ValueError, match='Tones must be within'):
-        await crs.write_tones(fres, ares, ch_map=ch_map)
+    with pytest.raises(ValueError, match = 'Tones must be within'):
+        await crs.write_tones(fres, ares, ch_map = ch_map)
 
 
 @pytest.mark.asyncio
@@ -472,9 +472,9 @@ async def test_write_tones_missing_channels_with_allow_missing(
     fres = np.array([3.9e9, 4.0e9, 4.4e9, 4.5e9])
     ares = np.array([-50, -51, -52, -53])
     
-    with warnings.catch_warnings(record=True) as w:
+    with warnings.catch_warnings(record = True) as w:
         warnings.simplefilter("always")
-        await crs.write_tones(fres, ares, allow_missing=True)
+        await crs.write_tones(fres, ares, allow_missing = True)
         
         assert len(w) == 1
         assert 'Ignoring' in str(w[0].message)
@@ -496,8 +496,8 @@ async def test_write_tones_missing_channels_raises_without_allow(
     fres = np.array([3.9e9, 4.0e9, 4.4e9, 4.5e9])
     ares = np.array([-50, -51, -52, -53])
     
-    with pytest.raises(ValueError, match='Tones must be within'):
-        await crs.write_tones(fres, ares, allow_missing=False)
+    with pytest.raises(ValueError, match = 'Tones must be within'):
+        await crs.write_tones(fres, ares, allow_missing = False)
 
 
 @pytest.mark.asyncio
@@ -659,8 +659,8 @@ async def test_write_tones_validates_ch_map_format(
     ares = np.array([-50, -51])
     
     # Test invalid ch_map (not a dict)
-    with pytest.raises(TypeError, match='must be a dictionary'):
-        await crs.write_tones(fres, ares, ch_map=[1, 2, 3])
+    with pytest.raises(TypeError, match = 'must be a dictionary'):
+        await crs.write_tones(fres, ares, ch_map = [1, 2, 3])
 
 
 @pytest.mark.asyncio
@@ -672,8 +672,8 @@ async def test_write_tones_validates_ch_map_keys(mock_crs_for_write_tones):
     ares = np.array([-50, -51])
     
     # Test ch_map with non-integer key
-    with pytest.raises(TypeError, match='keys must be integers'):
-        await crs.write_tones(fres, ares, ch_map={'1': [0, 1]})
+    with pytest.raises(TypeError, match = 'keys must be integers'):
+        await crs.write_tones(fres, ares, ch_map = {'1': [0, 1]})
 
 
 @pytest.mark.asyncio
@@ -686,8 +686,8 @@ async def test_write_tones_validates_ch_map_values(
     ares = np.array([-50, -51])
     
     # Test ch_map with non-integer in value list
-    with pytest.raises(TypeError, match='values must be lists of integers'):
-        await crs.write_tones(fres, ares, ch_map={1: [0, '1']})
+    with pytest.raises(TypeError, match = 'values must be lists of integers'):
+        await crs.write_tones(fres, ares, ch_map = {1: [0, '1']})
 
 
 @pytest.mark.asyncio
@@ -701,7 +701,7 @@ async def test_write_tones_preserves_original_ch_map(
     original_ch_map = {1: [0, 1]}
     original_copy = {k: v.copy() for k, v in original_ch_map.items()}
     
-    await crs.write_tones(fres, ares, ch_map=original_ch_map)
+    await crs.write_tones(fres, ares, ch_map = original_ch_map)
     
     # Input ch_map should be unchanged
     assert original_ch_map == original_copy
@@ -716,7 +716,7 @@ def mock_module_for_write_tones():
     """Fixture for testing _write_tones macro."""
     import rfmux
     
-    mock_module = MagicMock(spec=rfmux.ReadoutModule)
+    mock_module = MagicMock(spec = rfmux.ReadoutModule)
     mock_module.module = 1
     mock_crs = Mock()
     mock_module.crs = mock_crs
@@ -741,10 +741,10 @@ def mock_module_for_write_tones():
     
     mock_crs.tuber_context = MagicMock()
     mock_crs.tuber_context.return_value.__aenter__ = AsyncMock(
-        return_value=mock_ctx
+        return_value = mock_ctx
     )
     mock_crs.tuber_context.return_value.__aexit__ = AsyncMock(
-        return_value=None
+        return_value = None
     )
     
     yield mock_module, mock_crs, mock_ctx
@@ -797,7 +797,7 @@ async def test_write_tones_macro_raises_if_nco_not_set(
     fres_map = {1: np.array([3.9e9])}
     ares_map = {1: np.array([-50])}
     
-    with pytest.raises(Exception, match='NCO frequency has not been set'):
+    with pytest.raises(Exception, match = 'NCO frequency has not been set'):
         await _write_tones(mock_module, nco_freqs, fres_map, ares_map)
 
 
@@ -814,7 +814,7 @@ async def test_write_tones_macro_raises_if_ares_exceeds_full_scale(
     fres_map = {1: np.array([3.9e9])}
     ares_map = {1: np.array([-5])}  # Exceeds -10 dBm
     
-    with pytest.raises(ValueError, match='ares must not exceed'):
+    with pytest.raises(ValueError, match = 'ares must not exceed'):
         await _write_tones(mock_module, nco_freqs, fres_map, ares_map)
 
 
@@ -830,7 +830,7 @@ async def test_write_tones_macro_warns_low_power_few_tones(
     fres_map = {1: np.array([3.9e9, 4.0e9])}  # < 100 tones
     ares_map = {1: np.array([-65, -70])}  # < -60 dBm
     
-    with warnings.catch_warnings(record=True) as w:
+    with warnings.catch_warnings(record = True) as w:
         warnings.simplefilter('always')
         await _write_tones(mock_module, nco_freqs, fres_map, ares_map)
         assert len(w) == 1
@@ -849,7 +849,7 @@ async def test_write_tones_macro_no_warn_low_power_many_tones(
     fres_map = {1: np.array([3.9e9] * 100)}  # >= 100 tones
     ares_map = {1: np.array([-65] * 100)}  # < -60 dBm
     
-    with warnings.catch_warnings(record=True) as w:
+    with warnings.catch_warnings(record = True) as w:
         warnings.simplefilter('always')
         await _write_tones(mock_module, nco_freqs, fres_map, ares_map)
         assert len(w) == 0
@@ -872,7 +872,7 @@ async def test_write_tones_macro_converts_ares_to_amplitude(
     
     # Check amplitude conversion: 10^((-6 - 0) / 20) = 10^(-0.3) ≈ 0.5012
     call_args = mock_ctx.set_amplitude.call_args[0]
-    assert np.isclose(call_args[0], 0.5012, rtol=1e-3)
+    assert np.isclose(call_args[0], 0.5012, rtol = 1e-3)
 
 
 @pytest.mark.asyncio
@@ -889,7 +889,7 @@ async def test_write_tones_macro_clears_channels(
     
     await _write_tones(mock_module, nco_freqs, fres_map, ares_map)
     
-    mock_crs.clear_channels.assert_called_once_with(module=1)
+    mock_crs.clear_channels.assert_called_once_with(module = 1)
 
 
 @pytest.mark.asyncio

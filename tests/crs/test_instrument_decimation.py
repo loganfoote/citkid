@@ -15,7 +15,7 @@ from citkid.crs.instrument import CRS
 def mock_crs_for_set_decimation(base_crs):
     """Extend base_crs with additional mocks for set_decimation tests."""
     with patch('citkid.crs.instrument.util.get_sample_freq',
-               return_value=596.0):
+               return_value = 596.0):
         crs = base_crs
         
         # Mock async methods
@@ -39,15 +39,15 @@ async def test_set_decimation_explicit_parameters(
     crs.fres_map = {1: [1e9, 2e9], 2: [3e9]}
     
     await crs.set_decimation(
-        dec_stage=6,
-        short=True,
-        module_idxs=[1, 2],
-        verbose=True
+        dec_stage = 6,
+        short = True,
+        module_idxs = [1, 2],
+        verbose = True
     )
     
     # Verify device method was called
     crs.d.set_decimation.assert_called_once_with(
-        6, short=True, module=[1, 2]
+        6, short = True, module = [1, 2]
     )
     
     # Verify attributes were set
@@ -72,12 +72,12 @@ async def test_set_decimation_auto_short_small(
     # 100 tones per module (< 128)
     crs.fres_map = {1: [1e9] * 100, 2: [2e9] * 50}
     
-    await crs.set_decimation(dec_stage=5, verbose=False)
+    await crs.set_decimation(dec_stage = 5, verbose = False)
     
     # Should auto-set short to True
     assert crs.dec_short is True
     crs.d.set_decimation.assert_called_once_with(
-        5, short=True, module=[1, 2]
+        5, short = True, module = [1, 2]
     )
 
 
@@ -90,12 +90,12 @@ async def test_set_decimation_auto_short_large(
     # 200 tones in one module (> 128)
     crs.fres_map = {1: [1e9] * 200, 2: [2e9] * 50}
     
-    await crs.set_decimation(dec_stage=4, verbose=False)
+    await crs.set_decimation(dec_stage = 4, verbose = False)
     
     # Should auto-set short to False
     assert crs.dec_short is False
     crs.d.set_decimation.assert_called_once_with(
-        4, short=False, module=[1, 2]
+        4, short = False, module = [1, 2]
     )
 
 
@@ -108,7 +108,7 @@ async def test_set_decimation_auto_short_exactly_128(
     # Exactly 128 tones
     crs.fres_map = {1: [1e9] * 128}
     
-    await crs.set_decimation(dec_stage=5, verbose=False)
+    await crs.set_decimation(dec_stage = 5, verbose = False)
     
     # Should auto-set short to True (128 <= 128)
     assert crs.dec_short is True
@@ -122,7 +122,7 @@ async def test_set_decimation_auto_short_empty_fres_map(
     crs = mock_crs_for_set_decimation
     crs.fres_map = {}
     
-    await crs.set_decimation(dec_stage=5, verbose=False)
+    await crs.set_decimation(dec_stage = 5, verbose = False)
     
     # Should default short to False
     assert crs.dec_short is False
@@ -137,9 +137,9 @@ async def test_set_decimation_auto_module_idxs_from_fres_map(
     crs.fres_map = {1: [1e9], 2: [], 3: [3e9], 5: [5e9]}
     
     await crs.set_decimation(
-        dec_stage=5,
-        short=True,
-        verbose=False
+        dec_stage = 5,
+        short = True,
+        verbose = False
     )
     
     # Should only include modules with non-empty values
@@ -155,10 +155,10 @@ async def test_set_decimation_auto_module_idxs_empty_list(
     crs.fres_map = {1: [1e9], 2: [2e9]}
     
     await crs.set_decimation(
-        dec_stage=5,
-        short=True,
-        module_idxs=[],
-        verbose=False
+        dec_stage = 5,
+        short = True,
+        module_idxs = [],
+        verbose = False
     )
     
     # Should use fres_map when module_idxs is empty
@@ -178,8 +178,8 @@ async def test_set_decimation_sleep_on_change(mock_crs_for_set_decimation):
     
     with patch('citkid.crs.instrument.time.sleep') as mock_sleep:
         # Change dec_stage
-        await crs.set_decimation(dec_stage=6, short=True,
-                                module_idxs=[1], verbose=False)
+        await crs.set_decimation(dec_stage = 6, short = True,
+                                module_idxs = [1], verbose = False)
         
         # Should have called sleep
         mock_sleep.assert_called_once_with(0.1)
@@ -200,8 +200,8 @@ async def test_set_decimation_no_sleep_when_unchanged(
     
     with patch('citkid.crs.instrument.time.sleep') as mock_sleep:
         # Call with same values
-        await crs.set_decimation(dec_stage=6, short=True,
-                                module_idxs=[1], verbose=False)
+        await crs.set_decimation(dec_stage = 6, short = True,
+                                module_idxs = [1], verbose = False)
         
         # Should NOT have called sleep
         mock_sleep.assert_not_called()
@@ -216,8 +216,8 @@ async def test_set_decimation_verbose_false_no_print(
     crs = mock_crs_for_set_decimation
     crs.fres_map = {1: [1e9]}
     
-    await crs.set_decimation(dec_stage=6, short=True,
-                            module_idxs=[1], verbose=False)
+    await crs.set_decimation(dec_stage = 6, short = True,
+                            module_idxs = [1], verbose = False)
     
     # Verify no output
     captured = capsys.readouterr()
@@ -231,8 +231,8 @@ async def test_set_decimation_all_stages(mock_crs_for_set_decimation):
     crs.fres_map = {1: [1e9]}
     
     for stage in range(7):
-        await crs.set_decimation(dec_stage=stage, short=True,
-                                module_idxs=[1], verbose=False)
+        await crs.set_decimation(dec_stage = stage, short = True,
+                                module_idxs = [1], verbose = False)
         assert crs.dec_stage == stage
 
 
@@ -249,9 +249,9 @@ async def test_set_decimation_dec_stage_not_int(
     
     with pytest.raises(
         ValueError,
-        match='dec_stage must be an integer between 0 and 6'
+        match = 'dec_stage must be an integer between 0 and 6'
     ):
-        await crs.set_decimation(dec_stage=5.5)
+        await crs.set_decimation(dec_stage = 5.5)
 
 
 @pytest.mark.asyncio
@@ -262,7 +262,7 @@ async def test_set_decimation_dec_stage_negative(
     crs = mock_crs_for_set_decimation
     
     with pytest.raises(ValueError):
-        await crs.set_decimation(dec_stage=-1)
+        await crs.set_decimation(dec_stage = -1)
 
 
 @pytest.mark.asyncio
@@ -273,7 +273,7 @@ async def test_set_decimation_dec_stage_too_large(
     crs = mock_crs_for_set_decimation
     
     with pytest.raises(ValueError):
-        await crs.set_decimation(dec_stage=7)
+        await crs.set_decimation(dec_stage = 7)
 
 
 @pytest.mark.asyncio
@@ -285,9 +285,9 @@ async def test_set_decimation_short_not_bool_or_none(
     
     with pytest.raises(
         TypeError,
-        match='short must be a boolean or None'
+        match = 'short must be a boolean or None'
     ):
-        await crs.set_decimation(dec_stage=5, short=1)
+        await crs.set_decimation(dec_stage = 5, short = 1)
 
 
 @pytest.mark.asyncio
@@ -296,7 +296,7 @@ async def test_set_decimation_short_string(mock_crs_for_set_decimation):
     crs = mock_crs_for_set_decimation
     
     with pytest.raises(TypeError):
-        await crs.set_decimation(dec_stage=5, short='True')
+        await crs.set_decimation(dec_stage = 5, short = 'True')
 
 
 @pytest.mark.asyncio
@@ -308,9 +308,9 @@ async def test_set_decimation_module_idxs_not_list(
     
     with pytest.raises(
         TypeError,
-        match='module_idxs must be a list of integers'
+        match = 'module_idxs must be a list of integers'
     ):
-        await crs.set_decimation(dec_stage=5, module_idxs=1)
+        await crs.set_decimation(dec_stage = 5, module_idxs = 1)
 
 
 @pytest.mark.asyncio
@@ -321,7 +321,7 @@ async def test_set_decimation_module_idxs_non_int_elements(
     crs = mock_crs_for_set_decimation
     
     with pytest.raises(TypeError):
-        await crs.set_decimation(dec_stage=5, module_idxs=[1, '2', 3])
+        await crs.set_decimation(dec_stage = 5, module_idxs = [1, '2', 3])
 
 
 @pytest.mark.asyncio
@@ -334,8 +334,8 @@ async def test_set_decimation_module_idxs_numpy_array_valid(
     
     # Should not raise error
     await crs.set_decimation(
-        dec_stage=5,
-        short=True,
-        module_idxs=np.array([1, 2, 3]),
-        verbose=False
+        dec_stage = 5,
+        short = True,
+        module_idxs = np.array([1, 2, 3]),
+        verbose = False
     )

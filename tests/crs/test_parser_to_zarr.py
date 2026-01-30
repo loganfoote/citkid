@@ -491,7 +491,7 @@ def test_parser_to_zarr_invalid_input(kwargs, expected_error, tmp_path):
         grp = root.require_group("test_group")
         # Add the conflicting name
         conflict_name = kwargs["grp"][4:]  # Remove "HAS_" prefix
-        grp.create_dataset(conflict_name, shape=(1,), dtype='f8')
+        grp.create_dataset(conflict_name, shape=(1,), dtype = 'f8')
         kwargs["grp"] = grp
     
     with pytest.raises(expected_error):
@@ -515,7 +515,7 @@ def _create_mock_parser_files(tmp_path, crs_sn, module_idxs, max_ntones,
         Expected data for each module {module_idx: (real, imag)}
     """
     serial_dir = os.path.join(tmp_path, f'serial_{crs_sn:04d}')
-    os.makedirs(serial_dir, exist_ok=True)
+    os.makedirs(serial_dir, exist_ok = True)
     
     file_paths = []
     expected_data = {}
@@ -532,8 +532,8 @@ def _create_mock_parser_files(tmp_path, crs_sn, module_idxs, max_ntones,
         # Create data with distinct patterns for each module
         # Real: module_idx * 1000 + time_idx * 10 + channel_in_module
         # Imag: -(module_idx * 1000 + time_idx * 10 + channel_in_module)
-        real_data = np.zeros(total_records, dtype=np.int32)
-        imag_data = np.zeros(total_records, dtype=np.int32)
+        real_data = np.zeros(total_records, dtype = np.int32)
+        imag_data = np.zeros(total_records, dtype = np.int32)
         
         for t in range(n_samples):
             for ch in range(max_ntones):
@@ -543,7 +543,7 @@ def _create_mock_parser_files(tmp_path, crs_sn, module_idxs, max_ntones,
                 imag_data[idx] = -value
         
         # Save to file
-        structured_array = np.zeros(total_records, dtype=dtype)
+        structured_array = np.zeros(total_records, dtype = dtype)
         structured_array['i'] = real_data
         structured_array['q'] = imag_data
         structured_array.tofile(file_path)
@@ -564,8 +564,8 @@ def test_parser_to_zarr_basic_functionality(tmp_path):
     module_idxs = [1, 2]
     
     ch_map = {
-        1: np.array([0, 1], dtype=np.int32),
-        2: np.array([2, 3], dtype=np.int32)
+        1: np.array([0, 1], dtype = np.int32),
+        2: np.array([2, 3], dtype = np.int32)
     }
     ares_map = {
         1: np.array([-50.0, -55.0]),
@@ -577,28 +577,28 @@ def test_parser_to_zarr_basic_functionality(tmp_path):
     
     # Create mock parser files
     parser_path = str(tmp_path / 'parser')
-    os.makedirs(parser_path, exist_ok=True)
+    os.makedirs(parser_path, exist_ok = True)
     file_paths, expected_data = _create_mock_parser_files(
         parser_path, crs_sn, module_idxs, max_ntones, n_samples_per_file, dtype
     )
     
     # Create zarr group
     zarr_path = str(tmp_path / 'test.zarr')
-    root = zarr.open(zarr_path, mode='a')
+    root = zarr.open(zarr_path, mode = 'a')
     grp = root.require_group('test_group')
     
     # Run parser_to_zarr
     util.parser_to_zarr(
-        path=parser_path,
-        grp=grp,
-        crs_sn=crs_sn,
-        ntones=ntones,
-        max_ntones=max_ntones,
-        ch_map=ch_map,
-        ares_map=ares_map,
-        dt=dt,
-        batch_size_mb=1,
-        chunk_size_mb=1
+        path = parser_path,
+        grp = grp,
+        crs_sn = crs_sn,
+        ntones = ntones,
+        max_ntones = max_ntones,
+        ch_map = ch_map,
+        ares_map = ares_map,
+        dt = dt,
+        batch_size_mb = 1,
+        chunk_size_mb = 1
     )
     
     # Verify outputs exist
@@ -643,8 +643,8 @@ def test_parser_to_zarr_counts_to_dbc_mapping(tmp_path):
     dt = 0.001
     
     ch_map = {
-        1: np.array([0, 1, 3], dtype=np.int32),
-        2: np.array([2, 4, 5], dtype=np.int32)
+        1: np.array([0, 1, 3], dtype = np.int32),
+        2: np.array([2, 4, 5], dtype = np.int32)
     }
     ares_map = {
         1: np.array([-50.0, -55.0, -60.0]),
@@ -656,26 +656,26 @@ def test_parser_to_zarr_counts_to_dbc_mapping(tmp_path):
     
     # Create mock parser files
     parser_path = str(tmp_path / 'parser')
-    os.makedirs(parser_path, exist_ok=True)
+    os.makedirs(parser_path, exist_ok = True)
     _create_mock_parser_files(
         parser_path, crs_sn, [1, 2], max_ntones, n_samples_per_file, dtype
     )
     
     # Create zarr group
     zarr_path = str(tmp_path / 'test.zarr')
-    root = zarr.open(zarr_path, mode='a')
+    root = zarr.open(zarr_path, mode = 'a')
     grp = root.require_group('test_group')
     
     # Run parser_to_zarr
     util.parser_to_zarr(
-        path=parser_path,
-        grp=grp,
-        crs_sn=crs_sn,
-        ntones=ntones,
-        max_ntones=max_ntones,
-        ch_map=ch_map,
-        ares_map=ares_map,
-        dt=dt
+        path = parser_path,
+        grp = grp,
+        crs_sn = crs_sn,
+        ntones = ntones,
+        max_ntones = max_ntones,
+        ch_map = ch_map,
+        ares_map = ares_map,
+        dt = dt
     )
     
     # Calculate expected scale factors
@@ -702,8 +702,8 @@ def test_parser_to_zarr_missing_channels(tmp_path):
     
     # Channel 2 is missing
     ch_map = {
-        1: np.array([0, 1], dtype=np.int32),
-        2: np.array([3, 4], dtype=np.int32)
+        1: np.array([0, 1], dtype = np.int32),
+        2: np.array([3, 4], dtype = np.int32)
     }
     ares_map = {
         1: np.array([-50.0, -55.0]),
@@ -715,33 +715,39 @@ def test_parser_to_zarr_missing_channels(tmp_path):
     
     # Create mock parser files
     parser_path = str(tmp_path / 'parser')
-    os.makedirs(parser_path, exist_ok=True)
+    os.makedirs(parser_path, exist_ok = True)
     _create_mock_parser_files(
         parser_path, crs_sn, [1, 2], max_ntones, n_samples_per_file, dtype
     )
     
     # Create zarr group
     zarr_path = str(tmp_path / 'test.zarr')
-    root = zarr.open(zarr_path, mode='a')
+    root = zarr.open(zarr_path, mode = 'a')
     grp = root.require_group('test_group')
     
     # Run parser_to_zarr
     util.parser_to_zarr(
-        path=parser_path,
-        grp=grp,
-        crs_sn=crs_sn,
-        ntones=ntones,
-        max_ntones=max_ntones,
-        ch_map=ch_map,
-        ares_map=ares_map,
-        dt=dt
+        path = parser_path,
+        grp = grp,
+        crs_sn = crs_sn,
+        ntones = ntones,
+        max_ntones = max_ntones,
+        ch_map = ch_map,
+        ares_map = ares_map,
+        dt = dt
     )
     
     z = grp['z']
     
     # Verify missing channel is all zeros
-    np.testing.assert_array_equal(z[0, 2, :], np.zeros(n_samples, dtype=np.int32))
-    np.testing.assert_array_equal(z[1, 2, :], np.zeros(n_samples, dtype=np.int32))
+    np.testing.assert_array_equal(
+        z[0, 2, :],
+        np.zeros(n_samples, dtype = np.int32)
+    )
+    np.testing.assert_array_equal(
+        z[1, 2, :],
+        np.zeros(n_samples, dtype = np.int32)
+    )
     
     # Verify non-missing channels have data (not all zeros)
     assert not np.all(z[0, 0, :] == 0)
@@ -759,8 +765,8 @@ def test_parser_to_zarr_different_file_lengths(tmp_path):
     n_samples_per_file = {1: 100, 2: 80}  # File 2 is shorter
     
     ch_map = {
-        1: np.array([0, 1], dtype=np.int32),
-        2: np.array([2, 3], dtype=np.int32)
+        1: np.array([0, 1], dtype = np.int32),
+        2: np.array([2, 3], dtype = np.int32)
     }
     ares_map = {
         1: np.array([-50.0, -55.0]),
@@ -771,26 +777,26 @@ def test_parser_to_zarr_different_file_lengths(tmp_path):
     
     # Create mock parser files
     parser_path = str(tmp_path / 'parser')
-    os.makedirs(parser_path, exist_ok=True)
+    os.makedirs(parser_path, exist_ok = True)
     _create_mock_parser_files(
         parser_path, crs_sn, [1, 2], max_ntones, n_samples_per_file, dtype
     )
     
     # Create zarr group
     zarr_path = str(tmp_path / 'test.zarr')
-    root = zarr.open(zarr_path, mode='a')
+    root = zarr.open(zarr_path, mode = 'a')
     grp = root.require_group('test_group')
     
     # Run parser_to_zarr
     util.parser_to_zarr(
-        path=parser_path,
-        grp=grp,
-        crs_sn=crs_sn,
-        ntones=ntones,
-        max_ntones=max_ntones,
-        ch_map=ch_map,
-        ares_map=ares_map,
-        dt=dt
+        path = parser_path,
+        grp = grp,
+        crs_sn = crs_sn,
+        ntones = ntones,
+        max_ntones = max_ntones,
+        ch_map = ch_map,
+        ares_map = ares_map,
+        dt = dt
     )
     
     z = grp['z']
@@ -808,8 +814,8 @@ def test_parser_to_zarr_batch_and_chunk_sizes(tmp_path):
     dt = 0.001
     
     ch_map = {
-        1: np.array([0, 1, 2, 3], dtype=np.int32),
-        2: np.array([4, 5, 6, 7], dtype=np.int32)
+        1: np.array([0, 1, 2, 3], dtype = np.int32),
+        2: np.array([4, 5, 6, 7], dtype = np.int32)
     }
     ares_map = {
         1: np.array([-50.0, -50.0, -50.0, -50.0]),
@@ -833,27 +839,27 @@ def test_parser_to_zarr_batch_and_chunk_sizes(tmp_path):
         test_dir.mkdir()
         
         parser_path = str(test_dir / 'parser')
-        os.makedirs(parser_path, exist_ok=True)
+        os.makedirs(parser_path, exist_ok = True)
         _create_mock_parser_files(
             parser_path, crs_sn, [1, 2], max_ntones, n_samples_per_file, dtype
         )
         
         zarr_path = str(test_dir / 'test.zarr')
-        root = zarr.open(zarr_path, mode='a')
+        root = zarr.open(zarr_path, mode = 'a')
         grp = root.require_group('test_group')
         
         # Run parser_to_zarr
         util.parser_to_zarr(
-            path=parser_path,
-            grp=grp,
-            crs_sn=crs_sn,
-            ntones=ntones,
-            max_ntones=max_ntones,
-            ch_map=ch_map,
-            ares_map=ares_map,
-            dt=dt,
-            batch_size_mb=batch_mb,
-            chunk_size_mb=chunk_mb
+            path = parser_path,
+            grp = grp,
+            crs_sn = crs_sn,
+            ntones = ntones,
+            max_ntones = max_ntones,
+            ch_map = ch_map,
+            ares_map = ares_map,
+            dt = dt,
+            batch_size_mb = batch_mb,
+            chunk_size_mb = chunk_mb
         )
         
         z = grp['z']
@@ -879,8 +885,8 @@ def test_parser_to_zarr_chunk_size_accuracy(tmp_path):
     dt = 0.001
     
     ch_map = {
-        1: np.array(list(range(0, 8)), dtype=np.int32),
-        2: np.array(list(range(8, 16)), dtype=np.int32)
+        1: np.array(list(range(0, 8)), dtype = np.int32),
+        2: np.array(list(range(8, 16)), dtype = np.int32)
     }
     ares_map = {
         1: np.array([-50.0] * 8),
@@ -892,7 +898,7 @@ def test_parser_to_zarr_chunk_size_accuracy(tmp_path):
     
     # Create mock parser files
     parser_path = str(tmp_path / 'parser')
-    os.makedirs(parser_path, exist_ok=True)
+    os.makedirs(parser_path, exist_ok = True)
     _create_mock_parser_files(
         parser_path, crs_sn, [1, 2], max_ntones, n_samples_per_file, dtype
     )
@@ -901,20 +907,20 @@ def test_parser_to_zarr_chunk_size_accuracy(tmp_path):
     chunk_size_mb = 1  # 1 MB
     
     zarr_path = str(tmp_path / 'test.zarr')
-    root = zarr.open(zarr_path, mode='a')
+    root = zarr.open(zarr_path, mode = 'a')
     grp = root.require_group('test_group')
     
     util.parser_to_zarr(
-        path=parser_path,
-        grp=grp,
-        crs_sn=crs_sn,
-        ntones=ntones,
-        max_ntones=max_ntones,
-        ch_map=ch_map,
-        ares_map=ares_map,
-        dt=dt,
-        batch_size_mb=10,
-        chunk_size_mb=chunk_size_mb
+        path = parser_path,
+        grp = grp,
+        crs_sn = crs_sn,
+        ntones = ntones,
+        max_ntones = max_ntones,
+        ch_map = ch_map,
+        ares_map = ares_map,
+        dt = dt,
+        batch_size_mb = 10,
+        chunk_size_mb = chunk_size_mb
     )
     
     z = grp['z']
@@ -939,8 +945,8 @@ def test_parser_to_zarr_small_dataset_chunking(tmp_path):
     dt = 0.001
     
     ch_map = {
-        1: np.array([0, 1], dtype=np.int32),
-        2: np.array([2, 3], dtype=np.int32)
+        1: np.array([0, 1], dtype = np.int32),
+        2: np.array([2, 3], dtype = np.int32)
     }
     ares_map = {
         1: np.array([-50.0, -55.0]),
@@ -952,27 +958,27 @@ def test_parser_to_zarr_small_dataset_chunking(tmp_path):
     
     # Create mock parser files
     parser_path = str(tmp_path / 'parser')
-    os.makedirs(parser_path, exist_ok=True)
+    os.makedirs(parser_path, exist_ok = True)
     _create_mock_parser_files(
         parser_path, crs_sn, [1, 2], max_ntones, n_samples_per_file, dtype
     )
     
     zarr_path = str(tmp_path / 'test.zarr')
-    root = zarr.open(zarr_path, mode='a')
+    root = zarr.open(zarr_path, mode = 'a')
     grp = root.require_group('test_group')
     
     # Use large chunk size
     util.parser_to_zarr(
-        path=parser_path,
-        grp=grp,
-        crs_sn=crs_sn,
-        ntones=ntones,
-        max_ntones=max_ntones,
-        ch_map=ch_map,
-        ares_map=ares_map,
-        dt=dt,
-        batch_size_mb=100,
-        chunk_size_mb=100
+        path = parser_path,
+        grp = grp,
+        crs_sn = crs_sn,
+        ntones = ntones,
+        max_ntones = max_ntones,
+        ch_map = ch_map,
+        ares_map = ares_map,
+        dt = dt,
+        batch_size_mb = 100,
+        chunk_size_mb = 100
     )
     
     z = grp['z']
@@ -991,8 +997,8 @@ def test_parser_to_zarr_ntones_not_equal_max_ntones(tmp_path):
     
     # Only using 6 channels out of possible 8 (2 modules * 4 max_ntones)
     ch_map = {
-        1: np.array([0, 1, 2], dtype=np.int32),
-        2: np.array([3, 4, 5], dtype=np.int32)
+        1: np.array([0, 1, 2], dtype = np.int32),
+        2: np.array([3, 4, 5], dtype = np.int32)
     }
     ares_map = {
         1: np.array([-50.0, -55.0, -60.0]),
@@ -1004,28 +1010,28 @@ def test_parser_to_zarr_ntones_not_equal_max_ntones(tmp_path):
     
     # Create mock parser files
     parser_path = str(tmp_path / 'parser')
-    os.makedirs(parser_path, exist_ok=True)
+    os.makedirs(parser_path, exist_ok = True)
     _create_mock_parser_files(
         parser_path, crs_sn, [1, 2], max_ntones, n_samples_per_file, dtype
     )
     
     zarr_path = str(tmp_path / 'test.zarr')
-    root = zarr.open(zarr_path, mode='a')
+    root = zarr.open(zarr_path, mode = 'a')
     grp = root.require_group('test_group')
     
     # Verify chunk size calculation uses ntones, not max_ntones
     chunk_size_mb = 1
     util.parser_to_zarr(
-        path=parser_path,
-        grp=grp,
-        crs_sn=crs_sn,
-        ntones=ntones,
-        max_ntones=max_ntones,
-        ch_map=ch_map,
-        ares_map=ares_map,
-        dt=dt,
-        batch_size_mb=10,
-        chunk_size_mb=chunk_size_mb
+        path = parser_path,
+        grp = grp,
+        crs_sn = crs_sn,
+        ntones = ntones,
+        max_ntones = max_ntones,
+        ch_map = ch_map,
+        ares_map = ares_map,
+        dt = dt,
+        batch_size_mb = 10,
+        chunk_size_mb = chunk_size_mb
     )
     
     z = grp['z']
@@ -1050,7 +1056,7 @@ def test_parser_to_zarr_single_module(tmp_path):
     dt = 0.001
     
     ch_map = {
-        1: np.array([0, 1, 2], dtype=np.int32)
+        1: np.array([0, 1, 2], dtype = np.int32)
     }
     ares_map = {
         1: np.array([-50.0, -55.0, -60.0])
@@ -1061,24 +1067,24 @@ def test_parser_to_zarr_single_module(tmp_path):
     
     # Create mock parser file
     parser_path = str(tmp_path / 'parser')
-    os.makedirs(parser_path, exist_ok=True)
+    os.makedirs(parser_path, exist_ok = True)
     _create_mock_parser_files(
         parser_path, crs_sn, [1], max_ntones, n_samples_per_file, dtype
     )
     
     zarr_path = str(tmp_path / 'test.zarr')
-    root = zarr.open(zarr_path, mode='a')
+    root = zarr.open(zarr_path, mode = 'a')
     grp = root.require_group('test_group')
     
     util.parser_to_zarr(
-        path=parser_path,
-        grp=grp,
-        crs_sn=crs_sn,
-        ntones=ntones,
-        max_ntones=max_ntones,
-        ch_map=ch_map,
-        ares_map=ares_map,
-        dt=dt
+        path = parser_path,
+        grp = grp,
+        crs_sn = crs_sn,
+        ntones = ntones,
+        max_ntones = max_ntones,
+        ch_map = ch_map,
+        ares_map = ares_map,
+        dt = dt
     )
     
     z = grp['z']
@@ -1094,8 +1100,8 @@ def test_parser_to_zarr_data_continuity(tmp_path):
     dt = 0.001
     
     ch_map = {
-        1: np.array([0, 1], dtype=np.int32),
-        2: np.array([2, 3], dtype=np.int32)
+        1: np.array([0, 1], dtype = np.int32),
+        2: np.array([2, 3], dtype = np.int32)
     }
     ares_map = {
         1: np.array([-50.0, -55.0]),
@@ -1107,27 +1113,27 @@ def test_parser_to_zarr_data_continuity(tmp_path):
     
     # Create mock parser files
     parser_path = str(tmp_path / 'parser')
-    os.makedirs(parser_path, exist_ok=True)
+    os.makedirs(parser_path, exist_ok = True)
     file_paths, expected_data = _create_mock_parser_files(
         parser_path, crs_sn, [1, 2], max_ntones, n_samples_per_file, dtype
     )
     
     zarr_path = str(tmp_path / 'test.zarr')
-    root = zarr.open(zarr_path, mode='a')
+    root = zarr.open(zarr_path, mode = 'a')
     grp = root.require_group('test_group')
     
     # Use small batch size to force multiple batches
     util.parser_to_zarr(
-        path=parser_path,
-        grp=grp,
-        crs_sn=crs_sn,
-        ntones=ntones,
-        max_ntones=max_ntones,
-        ch_map=ch_map,
-        ares_map=ares_map,
-        dt=dt,
-        batch_size_mb=1,  # Small batch to test multiple batches
-        chunk_size_mb=1
+        path = parser_path,
+        grp = grp,
+        crs_sn = crs_sn,
+        ntones = ntones,
+        max_ntones = max_ntones,
+        ch_map = ch_map,
+        ares_map = ares_map,
+        dt = dt,
+        batch_size_mb = 1,  # Small batch to test multiple batches
+        chunk_size_mb = 1
     )
     
     z = grp['z']

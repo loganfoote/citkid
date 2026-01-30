@@ -35,15 +35,15 @@ async def test_set_nco_single_module(mock_crs_for_set_nco, capsys):
         # Simulate measurement returning slightly different value
         for key in nco_dict.keys():
             nco_dict[key] = nco_dict[key] + 0.5  # Measured value
-    mock_modules._set_nco = AsyncMock(side_effect=mock_set_nco)
+    mock_modules._set_nco = AsyncMock(side_effect = mock_set_nco)
     
     # Mock _clear_channels
-    with patch.object(crs, '_clear_channels', new_callable=AsyncMock), \
+    with patch.object(crs, '_clear_channels', new_callable = AsyncMock), \
          patch('citkid.crs.instrument.util.get_modules',
-               return_value=mock_modules):
+               return_value = mock_modules):
         
         nco_freqs = {1: 4.5e9}
-        await crs.set_nco(nco_freqs, verbose=True)
+        await crs.set_nco(nco_freqs, verbose = True)
         
         # Verify util.get_modules was called
         from citkid.crs.instrument import util
@@ -75,14 +75,14 @@ async def test_set_nco_multiple_modules(mock_crs_for_set_nco):
         # Simulate measurement
         for key in nco_dict.keys():
             nco_dict[key] = nco_dict[key] + 1.0
-    mock_modules._set_nco = AsyncMock(side_effect=mock_set_nco)
+    mock_modules._set_nco = AsyncMock(side_effect = mock_set_nco)
     
-    with patch.object(crs, '_clear_channels', new_callable=AsyncMock), \
+    with patch.object(crs, '_clear_channels', new_callable = AsyncMock), \
          patch('citkid.crs.instrument.util.get_modules',
-               return_value=mock_modules):
+               return_value = mock_modules):
         
         nco_freqs = {1: 4.0e9, 2: 4.3e9, 3: 4.6e9}
-        await crs.set_nco(nco_freqs, verbose=False)
+        await crs.set_nco(nco_freqs, verbose = False)
         
         # Verify all modules were updated
         assert len(crs.nco_freqs) == 3
@@ -107,15 +107,15 @@ async def test_set_nco_updates_existing_nco_freqs(mock_crs_for_set_nco):
     async def mock_set_nco(nco_dict):
         for key in nco_dict.keys():
             nco_dict[key] = nco_dict[key] + 0.5
-    mock_modules._set_nco = AsyncMock(side_effect=mock_set_nco)
+    mock_modules._set_nco = AsyncMock(side_effect = mock_set_nco)
     
-    with patch.object(crs, '_clear_channels', new_callable=AsyncMock), \
+    with patch.object(crs, '_clear_channels', new_callable = AsyncMock), \
          patch('citkid.crs.instrument.util.get_modules',
-               return_value=mock_modules):
+               return_value = mock_modules):
         
         # Update module 1 and add module 2
         nco_freqs = {1: 4.5e9, 2: 4.8e9}
-        await crs.set_nco(nco_freqs, verbose=False)
+        await crs.set_nco(nco_freqs, verbose = False)
         
         # Verify updates
         assert crs.nco_freqs[1] == 4.5e9 + 0.5  # Updated
@@ -132,15 +132,15 @@ async def test_set_nco_copies_input_dict(mock_crs_for_set_nco):
     async def mock_set_nco(nco_dict):
         for key in nco_dict.keys():
             nco_dict[key] = nco_dict[key] + 1.0
-    mock_modules._set_nco = AsyncMock(side_effect=mock_set_nco)
+    mock_modules._set_nco = AsyncMock(side_effect = mock_set_nco)
     
-    with patch.object(crs, '_clear_channels', new_callable=AsyncMock), \
+    with patch.object(crs, '_clear_channels', new_callable = AsyncMock), \
          patch('citkid.crs.instrument.util.get_modules',
-               return_value=mock_modules):
+               return_value = mock_modules):
         
         # Original input dict
         original_nco_freqs = {1: 4.5e9}
-        await crs.set_nco(original_nco_freqs, verbose=False)
+        await crs.set_nco(original_nco_freqs, verbose = False)
         
         # Verify original dict is unchanged
         assert original_nco_freqs[1] == 4.5e9
@@ -154,12 +154,12 @@ async def test_set_nco_verbose_false_no_print(mock_crs_for_set_nco, capsys):
     mock_modules = MagicMock()
     mock_modules._set_nco = AsyncMock()
     
-    with patch.object(crs, '_clear_channels', new_callable=AsyncMock), \
+    with patch.object(crs, '_clear_channels', new_callable = AsyncMock), \
          patch('citkid.crs.instrument.util.get_modules',
-               return_value=mock_modules):
+               return_value = mock_modules):
         
         nco_freqs = {1: 4.5e9}
-        await crs.set_nco(nco_freqs, verbose=False)
+        await crs.set_nco(nco_freqs, verbose = False)
         
         # Verify no output
         captured = capsys.readouterr()
@@ -177,14 +177,14 @@ async def test_set_nco_high_analog_bank(mock_crs_for_set_nco):
     async def mock_set_nco(nco_dict):
         for key in nco_dict.keys():
             nco_dict[key] = nco_dict[key] + 0.5
-    mock_modules._set_nco = AsyncMock(side_effect=mock_set_nco)
+    mock_modules._set_nco = AsyncMock(side_effect = mock_set_nco)
     
-    with patch.object(crs, '_clear_channels', new_callable=AsyncMock), \
+    with patch.object(crs, '_clear_channels', new_callable = AsyncMock), \
          patch('citkid.crs.instrument.util.get_modules',
-               return_value=mock_modules):
+               return_value = mock_modules):
         
         nco_freqs = {5: 4.0e9, 6: 4.3e9, 7: 4.6e9}
-        await crs.set_nco(nco_freqs, verbose=False)
+        await crs.set_nco(nco_freqs, verbose = False)
         
         # Verify all modules were updated
         assert len(crs.nco_freqs) == 3
@@ -203,14 +203,14 @@ async def test_set_nco_verbose_output_format(mock_crs_for_set_nco, capsys):
         # Set exact value for predictable output
         for key in nco_dict.keys():
             nco_dict[key] = 4.567890e9
-    mock_modules._set_nco = AsyncMock(side_effect=mock_set_nco)
+    mock_modules._set_nco = AsyncMock(side_effect = mock_set_nco)
     
-    with patch.object(crs, '_clear_channels', new_callable=AsyncMock), \
+    with patch.object(crs, '_clear_channels', new_callable = AsyncMock), \
          patch('citkid.crs.instrument.util.get_modules',
-               return_value=mock_modules):
+               return_value = mock_modules):
         
         nco_freqs = {1: 4.5e9}
-        await crs.set_nco(nco_freqs, verbose=True)
+        await crs.set_nco(nco_freqs, verbose = True)
         
         # Verify output format (frequency in MHz, rounded to 6 decimals)
         captured = capsys.readouterr()
@@ -228,7 +228,7 @@ async def test_set_nco_not_dict(mock_crs_for_set_nco):
     
     with pytest.raises(
         TypeError,
-        match='nco_freqs must be a dictionary'
+        match = 'nco_freqs must be a dictionary'
     ):
         await crs.set_nco([1, 4.5e9])
 
@@ -240,7 +240,7 @@ async def test_set_nco_value_not_float(mock_crs_for_set_nco):
     
     with pytest.raises(
         TypeError,
-        match='nco_freqs values must be float NCO frequencies in Hz'
+        match = 'nco_freqs values must be float NCO frequencies in Hz'
     ):
         await crs.set_nco({1: 4500000000})  # int instead of float
 
@@ -252,7 +252,7 @@ async def test_set_nco_frequency_too_low(mock_crs_for_set_nco):
     
     with pytest.raises(
         ValueError,
-        match='NCO frequency.*is out of range'
+        match = 'NCO frequency.*is out of range'
     ):
         await crs.set_nco({1: 0.0})
 
@@ -262,7 +262,7 @@ async def test_set_nco_frequency_too_high(mock_crs_for_set_nco):
     """Test that NCO frequency >= 5 GHz raises ValueError."""
     crs = mock_crs_for_set_nco
     
-    with pytest.raises(ValueError, match='out of range'):
+    with pytest.raises(ValueError, match = 'out of range'):
         await crs.set_nco({1: 5.0e9})
 
 
@@ -273,7 +273,7 @@ async def test_set_nco_key_not_int(mock_crs_for_set_nco):
     
     with pytest.raises(
         TypeError,
-        match='nco_freqs keys must be integer module indices'
+        match = 'nco_freqs keys must be integer module indices'
     ):
         await crs.set_nco({'1': 4.5e9})
 
@@ -286,7 +286,7 @@ async def test_set_nco_module_out_of_range_low_bank(mock_crs_for_set_nco):
     
     with pytest.raises(
         ValueError,
-        match='Module index 5 is out of range \\[1, 4\\] for low'
+        match = 'Module index 5 is out of range \\[1, 4\\] for low'
     ):
         await crs.set_nco({5: 4.5e9})
 
@@ -299,7 +299,7 @@ async def test_set_nco_module_out_of_range_high_bank(mock_crs_for_set_nco):
     
     with pytest.raises(
         ValueError,
-        match='Module index 1 is out of range \\[5, 8\\] for high'
+        match = 'Module index 1 is out of range \\[5, 8\\] for high'
     ):
         await crs.set_nco({1: 4.5e9})
 
@@ -312,12 +312,12 @@ async def test_set_nco_numpy_float(mock_crs_for_set_nco):
     mock_modules = MagicMock()
     mock_modules._set_nco = AsyncMock()
     
-    with patch.object(crs, '_clear_channels', new_callable=AsyncMock), \
+    with patch.object(crs, '_clear_channels', new_callable = AsyncMock), \
          patch('citkid.crs.instrument.util.get_modules',
-               return_value=mock_modules):
+               return_value = mock_modules):
         
         # Should not raise error
-        await crs.set_nco({1: np.float64(4.5e9)}, verbose=False)
+        await crs.set_nco({1: np.float64(4.5e9)}, verbose = False)
 
 
 ################################################################################
@@ -332,10 +332,10 @@ def mock_crs_for_set_nco_macro():
     # Create mock device
     mock_device = MagicMock()
     mock_device.set_nco_frequency = AsyncMock()
-    mock_device.get_nco_frequency = AsyncMock(return_value=4.5e9)
+    mock_device.get_nco_frequency = AsyncMock(return_value = 4.5e9)
     
     # Create mock module object with correct spec
-    mock_module = MagicMock(spec=rfmux.ReadoutModule)
+    mock_module = MagicMock(spec = rfmux.ReadoutModule)
     mock_module.crs = mock_device
     mock_module.module = 1  # Module index
     
@@ -358,8 +358,8 @@ async def test_set_nco_macro_basic_functionality(
     
     # Check device methods were called correctly
     mock_device.set_nco_frequency.assert_called_once_with(
-        4.5e9, module=1)
-    mock_device.get_nco_frequency.assert_called_once_with(module=1)
+        4.5e9, module = 1)
+    mock_device.get_nco_frequency.assert_called_once_with(module = 1)
     
     # Check nco_freqs was updated with measured value
     assert nco_freqs[1] == 4.5e9
@@ -419,7 +419,7 @@ async def test_set_nco_macro_raises_error_outside_tolerance(
     # Set measured value outside tolerance (2 Hz difference)
     mock_device.get_nco_frequency.return_value = 4.5e9 + 2.0
     
-    with pytest.raises(RuntimeError, match='Failed to set NCO frequency'):
+    with pytest.raises(RuntimeError, match = 'Failed to set NCO frequency'):
         await _set_nco(mock_module, nco_freqs)
 
 
@@ -462,9 +462,9 @@ async def test_set_nco_macro_works_with_different_module_indices(
         
         # Check correct module was used
         mock_device.set_nco_frequency.assert_called_with(
-            3.5e9, module=module_idx)
+            3.5e9, module = module_idx)
         mock_device.get_nco_frequency.assert_called_with(
-            module=module_idx)
+            module = module_idx)
         
         # Check dict was updated
         assert nco_freqs[module_idx] == 3.5e9
@@ -606,7 +606,7 @@ async def test_disable_modules_validates_input_type(
     crs = mock_crs_for_disable_modules
     
     # Test with non-integer in list
-    with pytest.raises(TypeError, match='must be a list of integers'):
+    with pytest.raises(TypeError, match = 'must be a list of integers'):
         await crs.disable_modules([1, 'not_int', 3])
 
 
@@ -616,7 +616,7 @@ async def test_disable_modules_validates_floats(
     """Test disable_modules rejects floats."""
     crs = mock_crs_for_disable_modules
     
-    with pytest.raises(TypeError, match='must be a list of integers'):
+    with pytest.raises(TypeError, match = 'must be a list of integers'):
         await crs.disable_modules([1, 2.5, 3])
 
 

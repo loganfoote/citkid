@@ -17,7 +17,7 @@ def mock_crs_for_set_clock(base_crs):
     
     # Mock async methods
     crs.d.set_clock_source = AsyncMock()
-    crs.d.get_clock_source = AsyncMock(return_value='VCXO')
+    crs.d.get_clock_source = AsyncMock(return_value = 'VCXO')
     
     return crs
 
@@ -27,7 +27,7 @@ async def test_set_clock_source_vcxo_success(mock_crs_for_set_clock,
                                              capsys):
     """Test setting clock source to VCXO successfully."""
     crs = mock_crs_for_set_clock
-    crs.d.get_clock_source = AsyncMock(return_value='VCXO')
+    crs.d.get_clock_source = AsyncMock(return_value = 'VCXO')
     
     await crs.set_clock_source('VCXO')
     
@@ -48,7 +48,7 @@ async def test_set_clock_source_sma_success(mock_crs_for_set_clock,
                                             capsys):
     """Test setting clock source to SMA successfully."""
     crs = mock_crs_for_set_clock
-    crs.d.get_clock_source = AsyncMock(return_value='SMA')
+    crs.d.get_clock_source = AsyncMock(return_value = 'SMA')
     
     await crs.set_clock_source('SMA')
     
@@ -69,11 +69,11 @@ async def test_set_clock_source_fallback_warning(mock_crs_for_set_clock):
     """Test warning when requested clock source is unavailable."""
     crs = mock_crs_for_set_clock
     # Request SMA but get VCXO back
-    crs.d.get_clock_source = AsyncMock(return_value='VCXO')
+    crs.d.get_clock_source = AsyncMock(return_value = 'VCXO')
     
     with pytest.warns(
         UserWarning,
-        match='Requested clock source SMA unavailable.*Using VCXO instead'
+        match = 'Requested clock source SMA unavailable.*Using VCXO instead'
     ):
         await crs.set_clock_source('SMA')
     
@@ -88,9 +88,9 @@ async def test_set_clock_source_verbose_false_no_print(
 ):
     """Test that verbose=False suppresses output."""
     crs = mock_crs_for_set_clock
-    crs.d.get_clock_source = AsyncMock(return_value='VCXO')
+    crs.d.get_clock_source = AsyncMock(return_value = 'VCXO')
     
-    await crs.set_clock_source('VCXO', verbose=False)
+    await crs.set_clock_source('VCXO', verbose = False)
     
     # Verify no output
     captured = capsys.readouterr()
@@ -104,10 +104,10 @@ async def test_set_clock_source_verbose_true_with_warning(
 ):
     """Test that print occurs even when warning is raised."""
     crs = mock_crs_for_set_clock
-    crs.d.get_clock_source = AsyncMock(return_value='VCXO')
+    crs.d.get_clock_source = AsyncMock(return_value = 'VCXO')
     
     with pytest.warns(UserWarning):
-        await crs.set_clock_source('SMA', verbose=True)
+        await crs.set_clock_source('SMA', verbose = True)
     
     # Verify output shows actual clock source
     captured = capsys.readouterr()
@@ -125,7 +125,7 @@ async def test_set_clock_source_invalid_value(mock_crs_for_set_clock):
     
     with pytest.raises(
         ValueError,
-        match="clock_source must be 'VCXO' or 'SMA'"
+        match = "clock_source must be 'VCXO' or 'SMA'"
     ):
         await crs.set_clock_source('INVALID')
 

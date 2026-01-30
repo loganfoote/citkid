@@ -9,7 +9,7 @@ from citkid.crs import util
 ################################################################################
 # Fixtures
 ################################################################################
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(scope = "module", autouse = True)
 def require_hardware(pytestconfig):
     sn = pytestconfig.getoption("--crs_sn")
     if sn is None:
@@ -480,8 +480,8 @@ async def test_stream(pytestconfig, monkeypatch, tmp_path):
         za_val = z_avg.ravel()[flat_idx]
         raise AssertionError(
             "Max absolute diff exceeds tolerance: "
-            f"idx={max_idx}, zsweep={zs_val}, z_avg={za_val}, "
-            f"abs_diff={max_abs} (tol={abs_tol})"
+            f"idx = {max_idx}, zsweep = {zs_val}, z_avg = {za_val}, "
+            f"abs_diff = {max_abs} (tol = {abs_tol})"
         )
 
 def test_parser_to_zarr():
@@ -562,7 +562,7 @@ class TqdmSpy:
 
 
 class _TqdmStub:
-    def __init__(self, iterable, kwargs=None):
+    def __init__(self, iterable, kwargs = None):
         self.iterable = iterable
         self.desc = None if kwargs is None else kwargs.get("desc")
         self.n = 0

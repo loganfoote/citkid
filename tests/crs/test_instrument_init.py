@@ -14,7 +14,7 @@ def test_crs_init_default_parameters(mock_rfmux_session):
     """Test CRS initialization with default parameters."""
     with patch('citkid.crs.instrument.rfmux') as mock_rfmux, \
          patch('citkid.crs.instrument.util.interface_exists',
-               return_value=True):
+               return_value = True):
         
         mock_rfmux.__version__ = '1.3.2'
         mock_rfmux.load_session.return_value = mock_rfmux_session
@@ -48,13 +48,13 @@ def test_crs_init_custom_parameters(mock_rfmux_session):
     """Test CRS initialization with custom parameters."""
     with patch('citkid.crs.instrument.rfmux') as mock_rfmux, \
          patch('citkid.crs.instrument.util.interface_exists',
-               return_value=True):
+               return_value = True):
         
         mock_rfmux.__version__ = '1.3.2'
         mock_rfmux.load_session.return_value = mock_rfmux_session
         mock_rfmux.CRS = Mock()
         
-        crs = CRS(serial_number=42, interface='eth0')
+        crs = CRS(serial_number = 42, interface = 'eth0')
         
         # Check stored inputs
         assert crs.serial_number == 42
@@ -78,7 +78,7 @@ def test_crs_init_session_string_formatting(mock_rfmux_session):
     
     with patch('citkid.crs.instrument.rfmux') as mock_rfmux, \
          patch('citkid.crs.instrument.util.interface_exists',
-               return_value=True):
+               return_value = True):
         
         mock_rfmux.__version__ = '1.3.2'
         mock_rfmux.load_session.return_value = mock_rfmux_session
@@ -86,7 +86,7 @@ def test_crs_init_session_string_formatting(mock_rfmux_session):
         
         for serial_number, expected_str in test_cases:
             mock_rfmux.load_session.reset_mock()
-            crs = CRS(serial_number=serial_number)
+            crs = CRS(serial_number = serial_number)
             mock_rfmux.load_session.assert_called_once_with(expected_str)
 
 
@@ -94,13 +94,13 @@ def test_crs_init_wrong_rfmux_version():
     """Test that wrong rfmux version raises RuntimeError."""
     with patch('citkid.crs.instrument.rfmux') as mock_rfmux, \
          patch('citkid.crs.instrument.util.interface_exists',
-               return_value=True):
+               return_value = True):
         
         mock_rfmux.__version__ = '1.3.1'  # Wrong version
         
         with pytest.raises(
             RuntimeError,
-            match='rfmux version 1.3.2 is required'
+            match = 'rfmux version 1.3.2 is required'
         ):
             CRS()
 
@@ -109,60 +109,60 @@ def test_crs_init_serial_number_not_int():
     """Test that non-integer serial_number raises TypeError."""
     with patch('citkid.crs.instrument.rfmux') as mock_rfmux, \
          patch('citkid.crs.instrument.util.interface_exists',
-               return_value=True):
+               return_value = True):
         
         mock_rfmux.__version__ = '1.3.2'
         
         with pytest.raises(
             TypeError,
-            match='serial_number must be an integer'
+            match = 'serial_number must be an integer'
         ):
-            CRS(serial_number='27')
+            CRS(serial_number = '27')
 
 
 def test_crs_init_serial_number_float():
     """Test that float serial_number raises TypeError."""
     with patch('citkid.crs.instrument.rfmux') as mock_rfmux, \
          patch('citkid.crs.instrument.util.interface_exists',
-               return_value=True):
+               return_value = True):
         
         mock_rfmux.__version__ = '1.3.2'
         
         with pytest.raises(
             TypeError,
-            match='serial_number must be an integer'
+            match = 'serial_number must be an integer'
         ):
-            CRS(serial_number=27.0)
+            CRS(serial_number = 27.0)
 
 
 def test_crs_init_serial_number_none():
     """Test that None serial_number raises TypeError."""
     with patch('citkid.crs.instrument.rfmux') as mock_rfmux, \
          patch('citkid.crs.instrument.util.interface_exists',
-               return_value=True):
+               return_value = True):
         
         mock_rfmux.__version__ = '1.3.2'
         
         with pytest.raises(
             TypeError,
-            match='serial_number must be an integer'
+            match = 'serial_number must be an integer'
         ):
-            CRS(serial_number=None)
+            CRS(serial_number = None)
 
 
 def test_crs_init_interface_does_not_exist():
     """Test that non-existent interface raises ValueError."""
     with patch('citkid.crs.instrument.rfmux') as mock_rfmux, \
          patch('citkid.crs.instrument.util.interface_exists',
-               return_value=False):
+               return_value = False):
         
         mock_rfmux.__version__ = '1.3.2'
         
         with pytest.raises(
             ValueError,
-            match='interface fake_interface does not exist'
+            match = 'interface fake_interface does not exist'
         ):
-            CRS(interface='fake_interface')
+            CRS(interface = 'fake_interface')
 
 
 def test_crs_init_device_query_chain(mock_rfmux_session,
@@ -170,7 +170,7 @@ def test_crs_init_device_query_chain(mock_rfmux_session,
     """Test that the device query chain is called correctly."""
     with patch('citkid.crs.instrument.rfmux') as mock_rfmux, \
          patch('citkid.crs.instrument.util.interface_exists',
-               return_value=True):
+               return_value = True):
         
         mock_rfmux.__version__ = '1.3.2'
         mock_rfmux.load_session.return_value = mock_rfmux_session

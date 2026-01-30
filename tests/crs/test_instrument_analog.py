@@ -18,9 +18,9 @@ def mock_crs_for_set_analog_bank(base_crs):
     
     # Mock async methods
     crs.d.set_analog_bank = AsyncMock()
-    crs.d.get_analog_bank = AsyncMock(return_value=False)
+    crs.d.get_analog_bank = AsyncMock(return_value = False)
     crs.d.set_dac_scale = AsyncMock()
-    crs.d.get_dac_scale = AsyncMock(return_value=7)
+    crs.d.get_dac_scale = AsyncMock(return_value = 7)
     
     # Mock UNITS
     crs.d.UNITS = MagicMock()
@@ -39,13 +39,13 @@ def mock_crs_for_set_analog_bank(base_crs):
 async def test_set_analog_bank_low_success(mock_crs_for_set_analog_bank):
     """Test setting analog bank to low (modules 1-4) successfully."""
     crs = mock_crs_for_set_analog_bank
-    crs.d.get_analog_bank = AsyncMock(return_value=False)
-    crs.d.get_dac_scale = AsyncMock(return_value=5)
+    crs.d.get_analog_bank = AsyncMock(return_value = False)
+    crs.d.get_dac_scale = AsyncMock(return_value = 5)
     
-    await crs.set_analog_bank(analog_bank_high=False, full_scale_dbm=5)
+    await crs.set_analog_bank(analog_bank_high = False, full_scale_dbm = 5)
     
     # Verify device methods were called
-    crs.d.set_analog_bank.assert_called_once_with(high=False)
+    crs.d.set_analog_bank.assert_called_once_with(high = False)
     crs.d.get_analog_bank.assert_called_once()
     
     # Verify analog_bank_high attribute was set
@@ -83,13 +83,13 @@ async def test_set_analog_bank_low_success(mock_crs_for_set_analog_bank):
 async def test_set_analog_bank_high_success(mock_crs_for_set_analog_bank):
     """Test setting analog bank to high (modules 5-8) successfully."""
     crs = mock_crs_for_set_analog_bank
-    crs.d.get_analog_bank = AsyncMock(return_value=True)
-    crs.d.get_dac_scale = AsyncMock(return_value=6)
+    crs.d.get_analog_bank = AsyncMock(return_value = True)
+    crs.d.get_dac_scale = AsyncMock(return_value = 6)
     
-    await crs.set_analog_bank(analog_bank_high=True, full_scale_dbm=6)
+    await crs.set_analog_bank(analog_bank_high = True, full_scale_dbm = 6)
     
     # Verify device methods were called
-    crs.d.set_analog_bank.assert_called_once_with(high=True)
+    crs.d.set_analog_bank.assert_called_once_with(high = True)
     crs.d.get_analog_bank.assert_called_once()
     
     # Verify analog_bank_high attribute was set
@@ -123,11 +123,11 @@ async def test_set_analog_bank_failed_to_set(mock_crs_for_set_analog_bank):
     """Test that RuntimeError is raised when analog bank fails to set."""
     crs = mock_crs_for_set_analog_bank
     # Request high but get low back
-    crs.d.get_analog_bank = AsyncMock(return_value=False)
+    crs.d.get_analog_bank = AsyncMock(return_value = False)
     
-    with pytest.raises(RuntimeError, match='Failed to set analog bank'):
-        await crs.set_analog_bank(analog_bank_high=True,
-                                  full_scale_dbm=5)
+    with pytest.raises(RuntimeError, match = 'Failed to set analog bank'):
+        await crs.set_analog_bank(analog_bank_high = True,
+                                  full_scale_dbm = 5)
 
 
 @pytest.mark.asyncio
@@ -136,13 +136,13 @@ async def test_set_analog_bank_dac_scale_mismatch(
 ):
     """Test that RuntimeError is raised when DAC scale fails to set."""
     crs = mock_crs_for_set_analog_bank
-    crs.d.get_analog_bank = AsyncMock(return_value=False)
+    crs.d.get_analog_bank = AsyncMock(return_value = False)
     # Return wrong DAC scale values
-    crs.d.get_dac_scale = AsyncMock(return_value=3)
+    crs.d.get_dac_scale = AsyncMock(return_value = 3)
     
-    with pytest.raises(RuntimeError, match='Failed to set DAC full scale'):
-        await crs.set_analog_bank(analog_bank_high=False,
-                                  full_scale_dbm=5)
+    with pytest.raises(RuntimeError, match = 'Failed to set DAC full scale'):
+        await crs.set_analog_bank(analog_bank_high = False,
+                                  full_scale_dbm = 5)
 
 
 @pytest.mark.asyncio
@@ -151,8 +151,8 @@ async def test_set_analog_bank_removes_only_correct_modules(
 ):
     """Test that only the correct modules are removed from maps."""
     crs = mock_crs_for_set_analog_bank
-    crs.d.get_analog_bank = AsyncMock(return_value=True)
-    crs.d.get_dac_scale = AsyncMock(return_value=5)
+    crs.d.get_analog_bank = AsyncMock(return_value = True)
+    crs.d.get_dac_scale = AsyncMock(return_value = 5)
     
     # Add modules 3, 4, 7, 8 to verify boundary conditions
     crs.nco_freqs[3] = 7.0e9
@@ -160,7 +160,7 @@ async def test_set_analog_bank_removes_only_correct_modules(
     crs.nco_freqs[7] = 8.0e9
     crs.nco_freqs[8] = 8.5e9
     
-    await crs.set_analog_bank(analog_bank_high=True, full_scale_dbm=5)
+    await crs.set_analog_bank(analog_bank_high = True, full_scale_dbm = 5)
     
     # Verify modules 1-4 were removed
     for idx in [1, 2, 3, 4]:
@@ -175,8 +175,8 @@ async def test_set_analog_bank_removes_only_correct_modules(
 async def test_set_analog_bank_empty_maps(mock_crs_for_set_analog_bank):
     """Test setting analog bank when maps are already empty."""
     crs = mock_crs_for_set_analog_bank
-    crs.d.get_analog_bank = AsyncMock(return_value=False)
-    crs.d.get_dac_scale = AsyncMock(return_value=7)
+    crs.d.get_analog_bank = AsyncMock(return_value = False)
+    crs.d.get_dac_scale = AsyncMock(return_value = 7)
     
     # Clear all maps
     crs.nco_freqs = {}
@@ -185,7 +185,7 @@ async def test_set_analog_bank_empty_maps(mock_crs_for_set_analog_bank):
     crs.ch_map = {}
     
     # Should not raise any errors
-    await crs.set_analog_bank(analog_bank_high=False, full_scale_dbm=7)
+    await crs.set_analog_bank(analog_bank_high = False, full_scale_dbm = 7)
     
     assert crs.analog_bank_high is False
     assert crs.d.full_scale_dbm == 7
@@ -197,12 +197,12 @@ async def test_set_analog_bank_dac_scale_within_tolerance(
 ):
     """Test that DAC scale within tolerance (0.1) is accepted."""
     crs = mock_crs_for_set_analog_bank
-    crs.d.get_analog_bank = AsyncMock(return_value=False)
+    crs.d.get_analog_bank = AsyncMock(return_value = False)
     # Return values within 0.1 tolerance
-    crs.d.get_dac_scale = AsyncMock(return_value=5.05)
+    crs.d.get_dac_scale = AsyncMock(return_value = 5.05)
     
     # Should not raise error
-    await crs.set_analog_bank(analog_bank_high=False, full_scale_dbm=5)
+    await crs.set_analog_bank(analog_bank_high = False, full_scale_dbm = 5)
     
     assert crs.d.full_scale_dbm == 5
 
@@ -218,9 +218,9 @@ async def test_set_analog_bank_high_not_bool(mock_crs_for_set_analog_bank):
     
     with pytest.raises(
         TypeError,
-        match='analog_bank_high must be a boolean value'
+        match = 'analog_bank_high must be a boolean value'
     ):
-        await crs.set_analog_bank(analog_bank_high=1, full_scale_dbm=5)
+        await crs.set_analog_bank(analog_bank_high = 1, full_scale_dbm = 5)
 
 
 @pytest.mark.asyncio
@@ -229,8 +229,8 @@ async def test_set_analog_bank_high_none(mock_crs_for_set_analog_bank):
     crs = mock_crs_for_set_analog_bank
     
     with pytest.raises(TypeError):
-        await crs.set_analog_bank(analog_bank_high=None,
-                                  full_scale_dbm=5)
+        await crs.set_analog_bank(analog_bank_high = None,
+                                  full_scale_dbm = 5)
 
 
 @pytest.mark.asyncio
@@ -242,10 +242,10 @@ async def test_set_analog_bank_full_scale_not_number(
     
     with pytest.raises(
         TypeError,
-        match='full_scale_dbm must be a number'
+        match = 'full_scale_dbm must be a number'
     ):
-        await crs.set_analog_bank(analog_bank_high=False,
-                                  full_scale_dbm='5')
+        await crs.set_analog_bank(analog_bank_high = False,
+                                  full_scale_dbm = '5')
 
 
 @pytest.mark.asyncio
@@ -257,10 +257,10 @@ async def test_set_analog_bank_full_scale_below_range(
     
     with pytest.raises(
         ValueError,
-        match='full_scale_dbm must be in \\[0, 7\\]'
+        match = 'full_scale_dbm must be in \\[0, 7\\]'
     ):
-        await crs.set_analog_bank(analog_bank_high=False,
-                                  full_scale_dbm=-1)
+        await crs.set_analog_bank(analog_bank_high = False,
+                                  full_scale_dbm = -1)
 
 
 @pytest.mark.asyncio
@@ -272,10 +272,10 @@ async def test_set_analog_bank_full_scale_above_range(
     
     with pytest.raises(
         ValueError,
-        match='full_scale_dbm must be in \\[0, 7\\]'
+        match = 'full_scale_dbm must be in \\[0, 7\\]'
     ):
-        await crs.set_analog_bank(analog_bank_high=False,
-                                  full_scale_dbm=8)
+        await crs.set_analog_bank(analog_bank_high = False,
+                                  full_scale_dbm = 8)
 
 
 @pytest.mark.asyncio
@@ -284,12 +284,12 @@ async def test_set_analog_bank_full_scale_float_valid(
 ):
     """Test that float full_scale_dbm in valid range is accepted."""
     crs = mock_crs_for_set_analog_bank
-    crs.d.get_analog_bank = AsyncMock(return_value=False)
-    crs.d.get_dac_scale = AsyncMock(return_value=5.5)
+    crs.d.get_analog_bank = AsyncMock(return_value = False)
+    crs.d.get_dac_scale = AsyncMock(return_value = 5.5)
     
     # Should not raise error
-    await crs.set_analog_bank(analog_bank_high=False,
-                              full_scale_dbm=5.5)
+    await crs.set_analog_bank(analog_bank_high = False,
+                              full_scale_dbm = 5.5)
     
     assert crs.d.full_scale_dbm == 5.5
 
@@ -305,7 +305,7 @@ def mock_crs_for_set_extended_bw(base_crs):
     
     # Mock async methods
     crs.d.set_extended_module_bandwidth = AsyncMock()
-    crs.d.get_extended_module_bandwidth = AsyncMock(return_value=False)
+    crs.d.get_extended_module_bandwidth = AsyncMock(return_value = False)
     
     return crs
 
@@ -314,7 +314,7 @@ def mock_crs_for_set_extended_bw(base_crs):
 async def test_set_extended_bw_false_standard(mock_crs_for_set_extended_bw):
     """Test setting extended bandwidth to False (standard 500 MHz)."""
     crs = mock_crs_for_set_extended_bw
-    crs.d.get_extended_module_bandwidth = AsyncMock(return_value=False)
+    crs.d.get_extended_module_bandwidth = AsyncMock(return_value = False)
     
     await crs.set_extended_bw(False)
     
@@ -331,11 +331,11 @@ async def test_set_extended_bw_false_standard(mock_crs_for_set_extended_bw):
 async def test_set_extended_bw_true_extended(mock_crs_for_set_extended_bw):
     """Test setting extended bandwidth to True (600 MHz) with warning."""
     crs = mock_crs_for_set_extended_bw
-    crs.d.get_extended_module_bandwidth = AsyncMock(return_value=True)
+    crs.d.get_extended_module_bandwidth = AsyncMock(return_value = True)
     
     with pytest.warns(
         UserWarning,
-        match='Extended module bandwidth set'
+        match = 'Extended module bandwidth set'
     ):
         await crs.set_extended_bw(True)
     
@@ -352,7 +352,7 @@ async def test_set_extended_bw_true_extended(mock_crs_for_set_extended_bw):
 async def test_set_extended_bw_false_no_warning(mock_crs_for_set_extended_bw):
     """Test that False does not raise a warning."""
     crs = mock_crs_for_set_extended_bw
-    crs.d.get_extended_module_bandwidth = AsyncMock(return_value=False)
+    crs.d.get_extended_module_bandwidth = AsyncMock(return_value = False)
     
     # Should not raise any warnings
     with warnings.catch_warnings():
@@ -366,11 +366,11 @@ async def test_set_extended_bw_failed_to_set(mock_crs_for_set_extended_bw):
     """Test that RuntimeError is raised when bandwidth fails to set."""
     crs = mock_crs_for_set_extended_bw
     # Request True but get False back
-    crs.d.get_extended_module_bandwidth = AsyncMock(return_value=False)
+    crs.d.get_extended_module_bandwidth = AsyncMock(return_value = False)
     
     with pytest.raises(
         RuntimeError,
-        match='Failed to set extended module bandwidth'
+        match = 'Failed to set extended module bandwidth'
     ):
         await crs.set_extended_bw(True)
 
@@ -380,11 +380,11 @@ async def test_set_extended_bw_failed_to_unset(mock_crs_for_set_extended_bw):
     """Test that RuntimeError is raised when bandwidth fails to unset."""
     crs = mock_crs_for_set_extended_bw
     # Request False but get True back
-    crs.d.get_extended_module_bandwidth = AsyncMock(return_value=True)
+    crs.d.get_extended_module_bandwidth = AsyncMock(return_value = True)
     
     with pytest.raises(
         RuntimeError,
-        match='Failed to set extended module bandwidth'
+        match = 'Failed to set extended module bandwidth'
     ):
         await crs.set_extended_bw(False)
 
@@ -400,7 +400,7 @@ async def test_set_extended_bw_not_bool(mock_crs_for_set_extended_bw):
     
     with pytest.raises(
         TypeError,
-        match='extended must be a boolean value'
+        match = 'extended must be a boolean value'
     ):
         await crs.set_extended_bw(1)
 
