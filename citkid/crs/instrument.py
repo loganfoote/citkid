@@ -473,7 +473,8 @@ class CRS:
 
     async def sweep(
             self, frequencies, ares, nsamps, ch_map = None, 
-            allow_missing = False, verbose = True, pbar_description = 'Sweeping'
+            allow_missing = False, dec_grp = None, verbose = True, 
+            pbar_description = 'Sweeping'
             ):
         """
         Perform a frequency sweep and return complex S21 at each frequency.
@@ -491,6 +492,8 @@ class CRS:
             allowed frequency range and inserts NaNs in the output. If False,
             raises an error if any tones are outside the allowed frequency 
             range.
+        dec_grp (zarr.Group or None): if provided, writes decimation settings
+            to this zarr group.
         verbose (bool): If True, displays a progress bar while sweeping.
         pbar_description (str): description for the progress bar.
 
@@ -512,6 +515,10 @@ class CRS:
         ch_map = util._validate_ch_map(ch_map) 
         if not isinstance(pbar_description, str):
             raise TypeError('pbar_description must be a string')
+        if dec_grp is not None and not isinstance(
+            dec_grp, zarr.core.group.Group
+            ):
+            raise TypeError('dec_grp must be a zarr.Group or None')
         
         ### Map frequencies to modules/channels
         # Get ch_map
@@ -560,8 +567,10 @@ class CRS:
                     )
                 self.fres_map[key][:, idx] = freq_dithered
 
-        ### Set dec_stage to 6 for sweeping
+        ### Set dec_stage to 6 for sweeping, save if dec_grp is provided
         await self.set_decimation(6, verbose = verbose)
+        if dec_grp is not None:
+            util.write_acq_cfg_to_zarr(self, dec_grp)
 
         ### Sweep
         sweep_f, sweep_z = {}, {}
@@ -596,7 +605,8 @@ class CRS:
     async def sweep_span(
             self, fres, ares, span, npoints, nsamps, ch_map = None, 
             allow_missing = False, center_fres = True, downward = True, 
-            log = False, verbose = True, pbar_description = 'Sweeping'
+            log = False, dec_grp = None, verbose = True, 
+            pbar_description = 'Sweeping'
             ):
         """
         Performs a frequency sweep where each channel is swept over the same
@@ -620,6 +630,8 @@ class CRS:
             sweeps from low to high frequency.
         log (bool): If True, uses logarithmic spacing between points. Else,
             uses linear spacing.
+        dec_grp (zarr.Group or None): if provided, writes decimation settings
+            to this zarr group.
         verbose (bool): If True, displays a progress bar while sweeping.
         pbar_description (str): description for the progress bar.
 
@@ -636,6 +648,10 @@ class CRS:
             raise ValueError('span must be a positive float') 
         if not isinstance(npoints, int) or npoints <= 0:
             raise ValueError('npoints must be a positive integer')
+        if dec_grp is not None and not isinstance(
+            dec_grp, zarr.core.group.Group
+            ):
+            raise TypeError('dec_grp must be a zarr.Group or None')
         # other validation is performed in self.sweep
 
         # Create freqs array
@@ -654,13 +670,15 @@ class CRS:
         # Sweep and return 
         f, z = await self.sweep(
             freqs, ares, nsamps, ch_map = ch_map, allow_missing = allow_missing, 
-            verbose = verbose, pbar_description = pbar_description
+            dec_grp = dec_grp, verbose = verbose, 
+            pbar_description = pbar_description
             )
         return f, z
 
     async def sweep_qres(
             self, fres, ares, qres, npoints, nsamps, ch_map = None,
-            allow_missing = False, verbose = True, pbar_description = 'Sweeping'
+            allow_missing = False, dec_grp = None, verbose = True, 
+            pbar_description = 'Sweeping'
             ):
         """
         Performs a frequency sweep where the span around each frequency is set
@@ -679,6 +697,8 @@ class CRS:
         allow_missing (bool): If True, ignores tones that are outside the
             frequency range. If False, raises an error if any tones are
             outside the frequency range.
+        dec_grp (zarr.Group or None): if provided, writes decimation settings
+            to this zarr group.
         verbose (bool): If True, displays a progress bar while sweeping.
         pbar_description (str): description for the progress bar.
 
@@ -693,6 +713,10 @@ class CRS:
         qres = np.asarray(qres, dtype = np.float64)
         if not isinstance(npoints, int) or npoints <= 0:
             raise ValueError('npoints must be a positive integer')
+        if dec_grp is not None and not isinstance(
+            dec_grp, zarr.core.group.Group
+            ):
+            raise TypeError('dec_grp must be a zarr.Group or None')
         # other validation is performed in self.sweep
         
         # Create freqs array
@@ -702,13 +726,14 @@ class CRS:
         # Sweep and return
         f, z = await self.sweep(
             freqs, ares, nsamps, ch_map = ch_map, allow_missing = allow_missing, 
-            verbose = verbose, pbar_description = pbar_description
+            dec_grp = dec_grp, verbose = verbose, 
+            pbar_description = pbar_description
             )
         return f, z
 
     async def sweep_full(
             self, amplitude, npoints_per_tone, nsamps, log = False,
-            verbose = True, pbar_description = 'Sweeping'
+            dec_grp = None, verbose = True, pbar_description = 'Sweeping'
             ):
         """
         Performs a frequency sweep over the full bandwidth around the NCO
@@ -720,6 +745,8 @@ class CRS:
         nsamps (int): number of samples to average per point.
         log (bool): If True, uses logarithmic spacing between points. Else,
             uses linear spacing.
+        dec_grp (zarr.Group or None): if provided, writes decimation settings
+            to this zarr group.
         verbose (bool): If True, displays a progress bar while sweeping.
         pbar_description (str): description for the progress bar.
 
@@ -730,7 +757,11 @@ class CRS:
         # Input validation 
         amplitude = float(amplitude)
         if not isinstance(npoints_per_tone, int) or npoints_per_tone <= 0:
-            raise ValueError('npoints must be a positive integer') 
+            raise ValueError('npoints must be a positive integer')
+        if dec_grp is not None and not isinstance(
+            dec_grp, zarr.core.group.Group
+            ):
+            raise TypeError('dec_grp must be a zarr.Group or None')
         # other validation is performed in self.sweep_linear
 
         # Create fres and ares arrays
@@ -749,7 +780,8 @@ class CRS:
         f, z = await self.sweep_span(
             fres, ares, tone_bw, npoints_per_tone, nsamps, ch_map = None, 
             allow_missing = False, center_fres = True, downward = True, 
-            log = log, verbose = verbose, pbar_description = pbar_description
+            log = log, dec_grp = dec_grp, verbose = verbose, 
+            pbar_description = pbar_description
             )
         
         # Flatten and sort
@@ -813,7 +845,10 @@ class CRS:
             batch_size_mb, chunk_size_mb,
             delete_parser_data, verbose
         )
-        # fres and ares validation performed in self.write_tones
+        # fres and ares validation is performed in self.write_tones
+
+        ### Start CRS config group 
+        cfg_grp = grp.require_group('crs_config')
 
         # Clear all channels - ensures that unused modules are cleared 
         idx_to_clear = range(5, 9) if self.analog_bank_high else range(1, 5)
@@ -823,7 +858,12 @@ class CRS:
         await self.write_tones(
             fres, ares, ch_map = ch_map, allow_missing = allow_missing
             )
-        time.sleep(0.5) # frequency change has transient
+        
+        # Write configuration to zarr
+        util.write_system_cfg_to_zarr(self, cfg_grp)
+
+        # Sleep briefly to ensure tones are settled
+        time.sleep(0.5) 
         
         # Stream  
         try:
@@ -892,9 +932,13 @@ class CRS:
             tmp_directory, batch_size_mb, chunk_size_mb, delete_parser_data, 
             verbose
         )
+
+        ### Start CRS config group 
+        cfg_grp = grp.require_group('crs_config')
         
         ### Set decimation stage
         await self.set_decimation(dec_stage, verbose = verbose)
+        util.write_acq_cfg_to_zarr(self, cfg_grp)
 
         ### Run parser
         # Prepare parser arguments
@@ -1185,9 +1229,6 @@ def _validate_nco_freqs(nco_freqs, analog_bank_high):
                 f'Module index {mi} is out of range [1, 4] for low '
                 'analog bank.'
                 )
-        
-
-
 
 def _validate_stream_input(
         ts_duration_s, dec_stage, grp, ch_map, allow_missing, tmp_directory,
@@ -1230,7 +1271,7 @@ def _validate_stream_input(
         raise TypeError('grp must be a zarr.Group object')
     # Check that required names don't already exist in the group
     existing_names = set(grp.keys())
-    required_names = {'counts_to_dbc', 'dt', 'z'}
+    required_names = {'counts_to_s21', 'dt', 'z'}
     conflicts = existing_names & required_names
     if conflicts:
         msg = f'grp already contains required names: {sorted(conflicts)}'

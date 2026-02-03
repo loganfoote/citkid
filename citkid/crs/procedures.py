@@ -2,6 +2,7 @@ import numpy as np
 import zarr
 from citkid.multitone.fres import update_fres
 from . import util
+from .instrument import CRS
 
 async def target_sweep(
     crs,
@@ -10,6 +11,7 @@ async def target_sweep(
     qres,
     res_idxs,
     grp,
+    ch_map = None, 
     gain_span_factor = 10,
     npoints_fine = 500,
     npoints_gain = 50,
@@ -34,6 +36,8 @@ async def target_sweep(
         datasets. Resonances should span fres / qres.
     res_idxs (array-like int32): Array of resonator indices.
     grp (zarr.Group): Zarr group to which data is saved.
+    ch_map (dict or None): Channel mapping dictionary. If None, crs.ch_map is 
+        generated during the first sweep (rough or gain). 
     gain_span_factor (float): gain span is (gain_span_factor * fine_span).
     npoints_fine (int or None): number of points per resonator in the 
         fine sweep.
@@ -48,7 +52,8 @@ async def target_sweep(
     verbose (bool): If True, displays progress bars while taking data.
 
     Returns:
-    None
+    fres (np.ndarray, float64): updated resonant frequencies after rough sweep.
+    ch_map (dict): channel mapping dictionary after sweeps.
     """
     # Input validation 
     fres, ares, qres, res_idxs = _validate_target_sweep_inputs(
@@ -58,13 +63,15 @@ async def target_sweep(
     )
 
     # Save input data 
-    grp.create_array(name = f'ares', data = ares)
-    grp.create_array(name = f'qres', data = qres)
-    grp.create_array(name = f'res_idxs', data = res_idxs)
-    grp.create_array(name = f'nsamps', data = nsamps, dtype = np.int32)
+    grp.create_array(name = 'ares', data = ares)
+    grp.create_array(name = 'qres', data = qres)
+    grp.create_array(name = 'res_idxs', data = res_idxs)
+    grp['attrs']['nsamps'] = nsamps
+    util.write_system_cfg_to_zarr(crs, grp)
     
     if npoints_rough is not None:
         # Rough sweep 
+        grpr = grp.require_group('rough_sweep')
         fres_rough = fres.copy()
         f_rough, z_rough = await crs.sweep_qres(
                 fres_rough,
@@ -72,20 +79,24 @@ async def target_sweep(
                 qres,
                 npoints = npoints_rough,
                 nsamps = nsamps,
+                ch_map = ch_map,
+                dec_grp = grpr,
                 verbose = verbose,
                 pbar_description = 'Rough sweep',
             )
         
         # Save sweep data and fres_rough
-        _save_sweep_data(grp, 's21_rough', f_rough, z_rough)
-        grp.create_array(name = f'fres_rough', data = fres_rough)
+        _save_sweep_data(grpr, 's21', f_rough, z_rough)
+        grpr.create_array(name = 'fres', data = fres_rough)
         # Save fres update method and cable delay
-        grp.create_array(name = f'fres_update_method', 
-                         data = fres_update_method)
-        grp.create_array(name = f'cable_delay', data = cable_delay)
+        grpr.create_array(name = 'fres_update_method', 
+                         data = np.array(fres_update_method))
+        grpr.attrs['fres_update_method'] = fres_update_method 
+        grpr.attrs['cable_delay'] = cable_delay
 
         # Assign ch_map 
-        ch_map = crs.ch_map
+        ch_map = crs.ch_map 
+        # Is ch_map persistent after sweep? - it should be, but check
 
         # Update fres based on rough sweep
         fres = update_fres(
@@ -100,13 +111,12 @@ async def target_sweep(
         assert isinstance(fres, np.ndarray)
         assert fres.shape == len(res_idxs)
         assert fres.dtype == np.float64
-    else:
-        ch_map = None
         
-    # save fres here (after potential update) 
+    # save fres (after potential update) 
     grp.create_array(name = f'fres', data = fres)
 
     # Gain sweep 
+    grpg = grp.require_group('gain_sweep')
     f_gain, z_gain = await crs.sweep_qres(
             fres,
             ares,
@@ -114,16 +124,15 @@ async def target_sweep(
             npoints = npoints_gain,
             nsamps = nsamps,
             ch_map = ch_map,
+            dec_grp = grpg,
             verbose = verbose,
             pbar_description = 'Gain sweep',
         )
-    _save_sweep_data(grp, 's21_gain', f_gain, z_gain)
+    _save_sweep_data(grpg, 's21', f_gain, z_gain)
     ch_map = crs.ch_map
-    for module_idx, chs in ch_map.items():
-        chs = np.asarray(chs, dtype = np.int32)
-        grp.create_array(name = f'ch_map_mod{module_idx:d}', data = chs)
 
     # Fine sweep
+    grpf = grp.require_group('fine_sweep')
     f_fine, z_fine = await crs.sweep_qres(
             fres,
             ares,
@@ -131,93 +140,14 @@ async def target_sweep(
             npoints = npoints_fine,
             nsamps = nsamps,
             ch_map = ch_map,
+            dec_grp = grpf,
             verbose = verbose,
             pbar_description = 'Fine sweep',
         )
-    _save_sweep_data(grp, 's21_fine', f_fine, z_fine)
+    _save_sweep_data(grpf, 's21', f_fine, z_fine)
 
-################################################################################
-# CRS config saving helper 
-################################################################################
-def write_crs_config_to_zarr(crs, grp):
-    """
-    Write CRS configuration parameters to a Zarr group. 
-
-    Parameters:
-    crs (CRS): initialized CRS instrument class.
-    grp (zarr.Group): Zarr group to which configuration data is saved.
-
-    Returns:
-    None
-    """
-    # Input validation 
-    if not isinstance(crs, crs.CRS):
-        raise TypeError("crs must be an instance of CRS class.")
-    if not isinstance(grp, zarr.core.group.Group):
-        raise TypeError("grp must be a zarr Group instance.") 
-    for name in ['ch_map', 'nco_freqs', 'firmware_release',
-                 'analog_bank_high', 'bw', 'clock_source',
-                 'dec_module_idxs', 'dec_short', 'dec_stage',
-                 'extended_bw', 'sample_freq', 'serial_number',
-                 'rfmux_version', 'citkid_version']:
-        if not hasattr(crs, name):
-            raise ValueError(f"crs is missing attribute '{name}'.")
-        if name in grp.keys():
-            raise ValueError(f"Zarr group already contains dataset '{name}'.")
-    if not hasattr(crs.firmware_release, 'version') or \
-        not isinstance(crs.firmware_release.version, str):
-        raise ValueError("crs.firmware_release.version must be a string.")
-    util._validate_ch_map(crs.ch_map)
-    
-    # ch_map
-    for module_idx, chs in crs.ch_map.items():
-        grp.create_array(
-            name = f'chs_module{module_idx:d}',
-            data = np.asarray(
-                chs, 
-                dtype = np.int32
-            )
-        ) 
-    # nco_freqs
-    for module_idx, nco in crs.nco_freqs.items():
-        name = f'nco_module{module_idx:d}'
-        grp.create_array(
-            name = name,
-            data = np.asarray(
-                nco, 
-                dtype = np.float64
-            )
-        )
-    # CRS firmware version
-    name = 'firmware_version'
-    grp.create_array(
-        name = name,
-        data = np.array(
-            crs.firmware_release.version,
-            dtype = None
-        )
-    )
-    # Other single-value parameters
-    for name, dtype in [
-        ('analog_bank_high', np.bool_), 
-        ('bw', np.float64), 
-        ('clock_source', None),
-        ('dec_module_idxs', np.uint8),
-        ('dec_short', np.bool_),
-        ('dec_stage', np.uint8),
-        ('extended_bw', np.bool_),
-        ('sample_freq', np.float64),
-        ('serial_number', np.uint16),
-        ('rfmux_version', None),
-        ('citkid_version', None)
-    ]:
-        grp.create_array(
-            name = name,
-            data = np.asarray(
-                getattr(crs, name),
-                dtype = dtype
-            )
-        )
+    # return updated fres and ch_map 
+    return fres, ch_map
 
 ################################################################################
 ########################### Zarr saving helper #################################
@@ -285,7 +215,7 @@ def _validate_target_sweep_inputs(
     Returns:
     fres, ares, qres, res_idxs: validated and converted inputs.
     """
-    if not isinstance(crs, crs.CRS):
+    if not isinstance(crs, CRS):
         raise TypeError("crs must be an instance of CRS class.") 
     # Validate array-like inputs
     fres = np.asarray(fres, dtype = np.float64)

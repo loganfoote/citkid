@@ -461,11 +461,11 @@ async def test_stream(pytestconfig, monkeypatch, tmp_path):
     assert stub1.desc == "Streaming"
 
     # Check output 
-    counts_to_dbc = grp['counts_to_dbc']
+    counts_to_s21 = grp['counts_to_s21']
     dt = float(grp['dt'][...])
     z = grp['z']
 
-    assert counts_to_dbc.shape == (len(fres),)
+    assert counts_to_s21.shape == (len(fres),)
     assert np.isclose(dt, 1 / util.get_sample_freq(4))
     assert z.shape[0] == 2
     assert z.shape[1] == len(fres)
@@ -473,7 +473,7 @@ async def test_stream(pytestconfig, monkeypatch, tmp_path):
 
     # Check that sweep matches parser 
     z = z[0, :, :] + 1j * z[1, :, :]
-    z *= np.array(counts_to_dbc)[:, np.newaxis]
+    z *= np.array(counts_to_s21)[:, np.newaxis]
     z_avg = np.mean(z, axis = 1) 
     zsweep = zsweep[:, 0]
 
@@ -634,7 +634,7 @@ async def test_loopback(pytestconfig, tmp_path):
 
                 # Import ts and append to ts_data
                 z = np.array(grp['z'], dtype = np.float64)
-                s = np.array(grp['counts_to_dbc'])
+                s = np.array(grp['counts_to_s21'])
                 z *= s[np.newaxis, :, np.newaxis]
                 z = z[0] + 1j * z[1]
                 for k, chs in ch_map.items():

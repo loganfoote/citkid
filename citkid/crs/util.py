@@ -183,7 +183,7 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
 
     # Save scale_factor and dt  
     zarr_util.write_single_array(
-        grp, 'counts_to_dbc', scale_factor, dtype = np.float64
+        grp, 'counts_to_s21', scale_factor, dtype = np.float64
     )
     zarr_util.write_single_array(
         grp, 'dt', dt, dtype = np.float64
@@ -366,6 +366,134 @@ def interface_exists(iface):
     except OSError:
         return False
 
+
+################################################################################
+# CRS config saving helpers
+################################################################################
+def write_acq_cfg_to_zarr(crs, grp):
+    """
+    Write CRS acquisition configuration to a Zarr group.
+    
+    This includes parameters that typically change between measurements:
+    decimation settings, sample frequency, and channel mapping.
+
+    Parameters:
+    crs (CRS): initialized CRS instrument class.
+    grp (zarr.Group): Zarr group to which configuration data is saved.
+
+    Returns:
+    None
+    """
+    # Input validation 
+    if not isinstance(crs, crs.CRS):
+        raise TypeError("crs must be an instance of CRS class.")
+    if not isinstance(grp, zarr.core.group.Group):
+        raise TypeError("grp must be a zarr Group instance.") 
+    
+    for name in ['dec_module_idxs', 'dec_short', 'dec_stage', 'ch_map', 'sample_freq']:
+        if not hasattr(crs, name):
+            raise ValueError(f"crs is missing attribute '{name}'.")
+    
+    # Check for attribute conflicts
+    for name in ['dec_module_idxs', 'dec_short', 'dec_stage', 'sample_freq']:
+        if name in grp.attrs.keys():
+            raise ValueError(f"Zarr group already contains attribute '{name}'.")
+    
+    _validate_ch_map(crs.ch_map)
+    
+    # Check for array conflicts (ch_map)
+    existing_arrays = set(grp.keys())
+    required_arrays = set()
+    for module_idx in crs.ch_map.keys():
+        required_arrays.add(f'chs_module{module_idx:d}')
+    
+    array_conflicts = existing_arrays & required_arrays
+    if array_conflicts:
+        # Find first conflict for error message
+        conflict_name = sorted(array_conflicts)[0]
+        raise ValueError(
+            f"Zarr group already contains dataset '{conflict_name}'."
+        )
+
+    # Save decimation parameters as attributes
+    grp.attrs['dec_module_idxs'] = np.asarray(
+        crs.dec_module_idxs, dtype=np.uint8
+    ).tolist()
+    grp.attrs['dec_short'] = bool(crs.dec_short)
+    grp.attrs['dec_stage'] = int(np.uint8(crs.dec_stage))
+    grp.attrs['sample_freq'] = float(crs.sample_freq)
+    
+    # Save ch_map as arrays (one per module) - can be large
+    for module_idx, chs in crs.ch_map.items():
+        grp.create_array(
+            name=f'chs_module{module_idx:d}',
+            data=np.asarray(chs, dtype=np.int32)
+        )
+
+def write_system_cfg_to_zarr(crs, grp):
+    """
+    Write CRS system configuration to a Zarr group as attributes.
+    
+    This includes static system parameters that don't change during a measurement
+    procedure: NCO frequencies, firmware version, analog bank settings, etc.
+
+    Parameters:
+    crs (CRS): initialized CRS instrument class.
+    grp (zarr.Group): Zarr group to which configuration data is saved.
+
+    Returns:
+    None
+    """
+    # Input validation 
+    if not isinstance(crs, crs.CRS):
+        raise TypeError("crs must be an instance of CRS class.")
+    if not isinstance(grp, zarr.core.group.Group):
+        raise TypeError("grp must be a zarr Group instance.") 
+    
+    for name in ['nco_freqs', 'firmware_release',
+                 'analog_bank_high', 'bw', 'clock_source',
+                 'extended_bw', 'serial_number',
+                 'rfmux_version', 'citkid_version']:
+        if not hasattr(crs, name):
+            raise ValueError(f"crs is missing attribute '{name}'.")
+        
+    if not hasattr(crs.firmware_release, 'version') or \
+        not isinstance(crs.firmware_release.version, str):
+        raise ValueError("crs.firmware_release.version must be a string.")
+    
+    # Check for attribute conflicts
+    existing_attrs = set(grp.attrs.keys())
+    required_attrs = {
+        'analog_bank_high', 'bw', 'clock_source', 'extended_bw',
+        'serial_number', 'rfmux_version', 'citkid_version',
+        'firmware_version'
+    }
+    # Add nco_freqs module-specific attributes
+    for module_idx in crs.nco_freqs.keys():
+        required_attrs.add(f'nco_module{module_idx:d}')
+    
+    conflicts = existing_attrs & required_attrs
+    if conflicts:
+        # Find first conflict for error message
+        conflict_name = sorted(conflicts)[0]
+        raise ValueError(
+            f"Zarr group already contains attribute '{conflict_name}'."
+            )
+    
+    # Save nco_freqs as attributes (one per module)
+    for module_idx, nco in crs.nco_freqs.items():
+        grp.attrs[f'nco_module{module_idx:d}'] = float(nco)
+    
+    # Save other configuration as attributes
+    grp.attrs['firmware_version'] = str(crs.firmware_release.version)
+    grp.attrs['analog_bank_high'] = bool(crs.analog_bank_high)
+    grp.attrs['bw'] = float(crs.bw)
+    grp.attrs['clock_source'] = str(crs.clock_source)
+    grp.attrs['extended_bw'] = bool(crs.extended_bw)
+    grp.attrs['serial_number'] = int(np.uint16(crs.serial_number))
+    grp.attrs['rfmux_version'] = str(crs.rfmux_version)
+    grp.attrs['citkid_version'] = str(crs.citkid_version)
+
 ################################################################################
 ########################### input validation ###################################
 ################################################################################ 
@@ -384,7 +512,7 @@ def _validate_parser_to_zarr_inputs(
         raise TypeError('grp must be a zarr.core.group.Group object')
     # Check that required names don't already exist in the group
     existing_names = set(grp.keys())
-    required_names = {'counts_to_dbc', 'dt', 'z'}
+    required_names = {'counts_to_s21', 'dt', 'z'}
     conflicts = existing_names & required_names
     if conflicts:
         msg = f'grp already contains required names: {sorted(conflicts)}'

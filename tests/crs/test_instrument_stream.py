@@ -19,6 +19,9 @@ def create_mock_zarr_group():
     mock_grp = MagicMock(spec = Group)
     # Make isinstance check pass
     mock_grp.__class__ = Group
+    cfg_grp = MagicMock(spec = Group)
+    cfg_grp.__class__ = Group
+    mock_grp.require_group.return_value = cfg_grp
     return mock_grp
 
 
@@ -49,12 +52,24 @@ def mock_validate_stream_return(
     )
 
 
+@pytest.fixture(autouse=True)
+def mock_write_system_cfg_to_zarr():
+    with patch('citkid.crs.instrument.util.write_system_cfg_to_zarr') as mock_write:
+        yield mock_write
+
+
+@pytest.fixture(autouse=True)
+def mock_write_acq_cfg_to_zarr():
+    with patch('citkid.crs.instrument.util.write_acq_cfg_to_zarr') as mock_write:
+        yield mock_write
+
+
 ################################################################################
 ####################### CRS.capture_ts tests ###################################
 ################################################################################
 
 @pytest.mark.asyncio
-async def test_capture_ts_basic(base_crs):
+async def test_capture_ts_basic(base_crs, mock_write_system_cfg_to_zarr):
     """Test basic capture_ts workflow."""
     crs = base_crs
     crs.analog_bank_high = False
@@ -104,6 +119,11 @@ async def test_capture_ts_basic(base_crs):
     
     # Verify channels cleared after stream (in finally)
     assert crs._clear_channels.call_args_list[1] == call(range(1, 5))
+
+    grp.require_group.assert_called_once_with('crs_config')
+    mock_write_system_cfg_to_zarr.assert_called_once_with(
+        crs, grp.require_group.return_value
+    )
 
 
 @pytest.mark.asyncio
@@ -787,7 +807,7 @@ def test_validate_stream_input_numpy_float():
 ################################################################################
 
 @pytest.mark.asyncio
-async def test_stream_basic_workflow(base_crs):
+async def test_stream_basic_workflow(base_crs, mock_write_acq_cfg_to_zarr):
     """Test basic stream workflow without verbose."""
     crs = base_crs
     crs.fres_map = {1: [4.0e9, 4.1e9], 2: [4.2e9]}
@@ -834,6 +854,11 @@ async def test_stream_basic_workflow(base_crs):
         
         # Verify set_decimation called
         crs.set_decimation.assert_called_once_with(6, verbose=False)
+
+        grp.require_group.assert_called_once_with('crs_config')
+        mock_write_acq_cfg_to_zarr.assert_called_once_with(
+            crs, grp.require_group.return_value
+        )
         
         # Verify parser.main called
         mock_parser.main.assert_called_once()

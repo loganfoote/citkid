@@ -750,6 +750,172 @@ async def test_sweep_passes_verbose_and_description(base_crs):
                           pbar_description = "Custom Sweep")
 
 
+@pytest.mark.asyncio
+async def test_sweep_validation_dec_grp_invalid_type(base_crs):
+    """Test sweep raises error when dec_grp is not a zarr.Group or None."""
+    crs = base_crs
+    crs.nco_freqs = {1: 4.0e9}
+    
+    frequencies = np.array([[3.9e9, 4.0e9]])
+    ares = np.array([-50.0])
+    
+    with pytest.raises(TypeError, match = "must be a zarr.Group or None"):
+        await crs.sweep(frequencies, ares, 10, dec_grp = "not a group", 
+                       verbose = False)
+
+
+@pytest.mark.asyncio
+async def test_sweep_calls_write_acq_cfg_to_zarr_when_dec_grp_provided(base_crs):
+    """Test sweep calls util.write_acq_cfg_to_zarr when dec_grp is provided."""
+    import zarr
+    crs = base_crs
+    crs.nco_freqs = {1: 4.0e9}
+    
+    frequencies = np.array([[3.9e9, 4.0e9]])
+    ares = np.array([-50.0])
+    nsamps = 10
+    
+    # Create a mock zarr group
+    mock_grp = MagicMock(spec = zarr.Group)
+    mock_grp.__class__ = zarr.Group
+    
+    crs._clear_channels = AsyncMock()
+    crs.set_decimation = AsyncMock()
+    
+    mock_modules = MagicMock()
+    mock_modules._sweep = AsyncMock()
+    
+    async def mock_sweep_impl(
+        nco_freqs,
+        fres_map,
+        ares_map,
+        sweep_f,
+        sweep_z,
+        **kwargs
+    ):
+        for mod_idx, freqs in fres_map.items():
+            sweep_f[mod_idx] = freqs
+            sweep_z[mod_idx] = np.ones(freqs.shape, dtype = complex)
+    
+    mock_modules._sweep.side_effect = mock_sweep_impl
+    
+    with patch(
+        'citkid.crs.instrument.util.create_ch_map'
+    ) as mock_create_ch_map:
+        mock_create_ch_map.return_value = ({1: [0]}, [])
+        
+        with patch(
+            'citkid.crs.instrument.util.get_modules',
+            return_value = mock_modules
+        ):
+            with patch(
+                'citkid.crs.instrument.util.write_acq_cfg_to_zarr'
+            ) as mock_write_acq:
+                await crs.sweep(
+                    frequencies, ares, nsamps, dec_grp = mock_grp, 
+                    verbose = False
+                )
+                
+                # Verify write_acq_cfg_to_zarr was called with correct args
+                mock_write_acq.assert_called_once_with(crs, mock_grp)
+
+
+@pytest.mark.asyncio
+async def test_sweep_does_not_call_write_acq_cfg_to_zarr_when_dec_grp_none(base_crs):
+    """Test sweep does not call util.write_acq_cfg_to_zarr when dec_grp is None."""
+    crs = base_crs
+    crs.nco_freqs = {1: 4.0e9}
+    
+    frequencies = np.array([[3.9e9, 4.0e9]])
+    ares = np.array([-50.0])
+    nsamps = 10
+    
+    crs._clear_channels = AsyncMock()
+    crs.set_decimation = AsyncMock()
+    
+    mock_modules = MagicMock()
+    mock_modules._sweep = AsyncMock()
+    
+    async def mock_sweep_impl(
+        nco_freqs,
+        fres_map,
+        ares_map,
+        sweep_f,
+        sweep_z,
+        **kwargs
+    ):
+        for mod_idx, freqs in fres_map.items():
+            sweep_f[mod_idx] = freqs
+            sweep_z[mod_idx] = np.ones(freqs.shape, dtype = complex)
+    
+    mock_modules._sweep.side_effect = mock_sweep_impl
+    
+    with patch(
+        'citkid.crs.instrument.util.create_ch_map'
+    ) as mock_create_ch_map:
+        mock_create_ch_map.return_value = ({1: [0]}, [])
+        
+        with patch(
+            'citkid.crs.instrument.util.get_modules',
+            return_value = mock_modules
+        ):
+            with patch(
+                'citkid.crs.instrument.util.write_acq_cfg_to_zarr'
+            ) as mock_write_acq:
+                await crs.sweep(
+                    frequencies, ares, nsamps, dec_grp = None, 
+                    verbose = False
+                )
+                
+                # Verify write_acq_cfg_to_zarr was NOT called
+                mock_write_acq.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sweep_preserves_ch_map_when_provided(base_crs):
+    """Test that crs.ch_map equals the input ch_map after sweep when ch_map is provided."""
+    crs = base_crs
+    crs.nco_freqs = {1: 4.0e9}
+    
+    frequencies = np.array([[3.9e9, 4.0e9]])
+    ares = np.array([-50.0])
+    nsamps = 10
+    
+    # Provide a specific ch_map
+    input_ch_map = {1: [0]}
+    
+    crs._clear_channels = AsyncMock()
+    crs.set_decimation = AsyncMock()
+    
+    mock_modules = MagicMock()
+    mock_modules._sweep = AsyncMock()
+    
+    async def mock_sweep_impl(
+        nco_freqs,
+        fres_map,
+        ares_map,
+        sweep_f,
+        sweep_z,
+        **kwargs
+    ):
+        for mod_idx, freqs in fres_map.items():
+            sweep_f[mod_idx] = freqs
+            sweep_z[mod_idx] = np.ones(freqs.shape, dtype = complex)
+    
+    mock_modules._sweep.side_effect = mock_sweep_impl
+    
+    with patch(
+        'citkid.crs.instrument.util.get_modules',
+        return_value = mock_modules
+    ):
+        await crs.sweep(
+            frequencies, ares, nsamps, ch_map = input_ch_map, verbose = False
+        )
+        
+        # Verify that crs.ch_map is the same as the input ch_map
+        assert crs.ch_map == input_ch_map
+
+
 ################################################################################
 ####################### Placeholder for other sweep methods ####################
 ################################################################################
@@ -1214,6 +1380,58 @@ async def test_sweep_span_returns_sweep_output(base_crs):
     assert np.array_equal(z, expected_z)
 
 
+@pytest.mark.asyncio
+async def test_sweep_span_validation_dec_grp_invalid_type(base_crs):
+    """Test sweep_span raises error when dec_grp is not a zarr.Group or None."""
+    crs = base_crs
+    
+    fres = np.array([4.0e9])
+    ares = np.array([-50.0])
+    span = 1e6
+    npoints = 5
+    nsamps = 10
+    
+    with pytest.raises(TypeError, match = "must be a zarr.Group or None"):
+        await crs.sweep_span(
+            fres, ares, span, npoints, nsamps, 
+            dec_grp = "not a group", verbose = False
+        )
+
+
+@pytest.mark.asyncio
+async def test_sweep_span_passes_dec_grp_to_sweep(base_crs):
+    """Test sweep_span passes dec_grp parameter to sweep."""
+    import zarr
+    crs = base_crs
+    crs.nco_freqs = {1: 4.0e9}
+    
+    fres = np.array([4.0e9])
+    ares = np.array([-50.0])
+    span = 1e6
+    npoints = 5
+    nsamps = 10
+    
+    # Create a mock zarr group
+    mock_grp = MagicMock(spec = zarr.Group)
+    mock_grp.__class__ = zarr.Group
+    
+    captured_dec_grp = None
+    async def mock_sweep(frequencies, ares_in, nsamps_in, **kwargs):
+        nonlocal captured_dec_grp
+        captured_dec_grp = kwargs.get('dec_grp')
+        return frequencies, np.ones_like(frequencies, dtype = complex)
+    
+    crs.sweep = mock_sweep
+    
+    await crs.sweep_span(
+        fres, ares, span, npoints, nsamps, 
+        dec_grp = mock_grp, verbose = False
+    )
+    
+    # Verify dec_grp was passed through
+    assert captured_dec_grp is mock_grp
+
+
 ################################################################################
 ####################### Placeholder for other sweep methods ####################
 ################################################################################
@@ -1599,6 +1817,58 @@ async def test_sweep_qres_returns_sweep_output(base_crs):
     # Verify the returned values are from sweep
     assert np.array_equal(f, expected_f)
     assert np.array_equal(z, expected_z)
+
+
+@pytest.mark.asyncio
+async def test_sweep_qres_validation_dec_grp_invalid_type(base_crs):
+    """Test sweep_qres raises error when dec_grp is not a zarr.Group or None."""
+    crs = base_crs
+    
+    fres = np.array([4.0e9])
+    ares = np.array([-50.0])
+    qres = np.array([1000.0])
+    npoints = 5
+    nsamps = 10
+    
+    with pytest.raises(TypeError, match = "must be a zarr.Group or None"):
+        await crs.sweep_qres(
+            fres, ares, qres, npoints, nsamps, 
+            dec_grp = 123, verbose = False
+        )
+
+
+@pytest.mark.asyncio
+async def test_sweep_qres_passes_dec_grp_to_sweep(base_crs):
+    """Test sweep_qres passes dec_grp parameter to sweep."""
+    import zarr
+    crs = base_crs
+    crs.nco_freqs = {1: 4.0e9}
+    
+    fres = np.array([4.0e9])
+    ares = np.array([-50.0])
+    qres = np.array([1000.0])
+    npoints = 5
+    nsamps = 10
+    
+    # Create a mock zarr group
+    mock_grp = MagicMock(spec = zarr.Group)
+    mock_grp.__class__ = zarr.Group
+    
+    captured_dec_grp = None
+    async def mock_sweep(frequencies, ares_in, nsamps_in, **kwargs):
+        nonlocal captured_dec_grp
+        captured_dec_grp = kwargs.get('dec_grp')
+        return frequencies, np.ones_like(frequencies, dtype = complex)
+    
+    crs.sweep = mock_sweep
+    
+    await crs.sweep_qres(
+        fres, ares, qres, npoints, nsamps, 
+        dec_grp = mock_grp, verbose = False
+    )
+    
+    # Verify dec_grp was passed through
+    assert captured_dec_grp is mock_grp
 
 
 ################################################################################
@@ -2086,4 +2356,57 @@ async def test_sweep_full_tone_spacing_logarithmic(base_crs):
     linear_spacing = np.diff(captured_fres)
     assert not np.allclose(linear_spacing, linear_spacing[0], rtol = 1e-10), \
         "Tones are linearly spaced, expected logarithmic"
+
+
+@pytest.mark.asyncio
+async def test_sweep_full_validation_dec_grp_invalid_type(base_crs):
+    """Test sweep_full raises error when dec_grp is not a zarr.Group or None."""
+    crs = base_crs
+    crs.nco_freqs = {1: 4.0e9}
+    crs.bw = 512e6
+    
+    amplitude = -50.0
+    npoints = 5
+    nsamps = 10
+    
+    with pytest.raises(TypeError, match = "must be a zarr.Group or None"):
+        await crs.sweep_full(
+            amplitude, npoints, nsamps, 
+            dec_grp = ["not", "a", "group"], verbose = False
+        )
+
+
+@pytest.mark.asyncio
+async def test_sweep_full_passes_dec_grp_to_sweep_span(base_crs):
+    """Test sweep_full passes dec_grp parameter to sweep_span."""
+    import zarr
+    crs = base_crs
+    crs.nco_freqs = {1: 4.0e9}
+    crs.bw = 512e6
+    
+    amplitude = -50.0
+    npoints = 5
+    nsamps = 10
+    
+    # Create a mock zarr group
+    mock_grp = MagicMock(spec = zarr.Group)
+    mock_grp.__class__ = zarr.Group
+    
+    captured_dec_grp = None
+    async def mock_sweep_span(fres, ares, span, npts, ns, **kwargs):
+        nonlocal captured_dec_grp
+        captured_dec_grp = kwargs.get('dec_grp')
+        freqs = np.tile(fres[:, np.newaxis], (1, npts))
+        return freqs, np.ones_like(freqs, dtype = complex)
+    
+    crs.sweep_span = mock_sweep_span
+    
+    await crs.sweep_full(
+        amplitude, npoints, nsamps, 
+        dec_grp = mock_grp, verbose = False
+    )
+    
+    # Verify dec_grp was passed through to sweep_span
+    assert captured_dec_grp is mock_grp
+
 

@@ -52,11 +52,11 @@ from citkid.crs import util
             ),
             TypeError
         ),
-        # Invalid grp - already contains 'counts_to_dbc'
+        # Invalid grp - already contains 'counts_to_s21'
         (
             dict(
                 path = ".",
-                grp = "HAS_counts_to_dbc",  # Special marker for test
+                grp = "HAS_counts_to_s21",  # Special marker for test
                 crs_sn = 1,
                 ntones = 10,
                 max_ntones = 128,
@@ -596,7 +596,7 @@ def test_parser_to_zarr_basic_functionality(tmp_path):
     
     # Verify outputs exist
     assert 'z' in grp
-    assert 'counts_to_dbc' in grp
+    assert 'counts_to_s21' in grp
     assert 'dt' in grp
     
     # Verify dt
@@ -625,8 +625,8 @@ def test_parser_to_zarr_basic_functionality(tmp_path):
             np.testing.assert_array_equal(z[1, ch_idx, :], exp_imag_ch)
 
 
-def test_parser_to_zarr_counts_to_dbc_mapping(tmp_path):
-    """Test that counts_to_dbc correctly maps ares to each channel."""
+def test_parser_to_zarr_counts_to_s21_mapping(tmp_path):
+    """Test that counts_to_s21 correctly maps ares to each channel."""
     import rfmux.core.transferfunctions
     
     crs_sn = 1
@@ -682,7 +682,7 @@ def test_parser_to_zarr_counts_to_dbc_mapping(tmp_path):
         expected_scale[ch_idxs] = rfmux_scale * pscale
     
     # Verify
-    np.testing.assert_allclose(grp['counts_to_dbc'][:], expected_scale)
+    np.testing.assert_allclose(grp['counts_to_s21'][:], expected_scale)
 
 
 def test_parser_to_zarr_missing_channels(tmp_path):
