@@ -245,7 +245,7 @@ def test_validate_sweep_input_nsamps_not_int():
 
 
 def test_validate_sweep_input_nsamps_zero():
-    """Test that nsamps=0 raises ValueError."""
+    """Test that nsamps = 0 raises ValueError."""
     with pytest.raises(ValueError, match = 'nsamps must be greater than 0'):
         _validate_sweep_input(1, {1: 4.0e9}, {1: [[3.9e9]]}, {1: [-50]},
                              {}, {}, 0, True, "Test")

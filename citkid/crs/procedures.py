@@ -1,8 +1,11 @@
 import numpy as np
 import zarr
+from typing import TYPE_CHECKING
 from citkid.multitone.fres import update_fres
 from . import util
-from .instrument import CRS
+
+if TYPE_CHECKING:
+    from . import instrument as inst
 
 async def target_sweep(
     crs,
@@ -66,7 +69,7 @@ async def target_sweep(
     grp.create_array(name = 'ares', data = ares)
     grp.create_array(name = 'qres', data = qres)
     grp.create_array(name = 'res_idxs', data = res_idxs)
-    grp['attrs']['nsamps'] = nsamps
+    grp.attrs['nsamps'] = nsamps
     util.write_system_cfg_to_zarr(crs, grp)
     
     if npoints_rough is not None:
@@ -86,11 +89,10 @@ async def target_sweep(
             )
         
         # Save sweep data and fres_rough
-        _save_sweep_data(grpr, 's21', f_rough, z_rough)
+        _save_sweep_data(grpr, '', f_rough, z_rough)
         grpr.create_array(name = 'fres', data = fres_rough)
+
         # Save fres update method and cable delay
-        grpr.create_array(name = 'fres_update_method', 
-                         data = np.array(fres_update_method))
         grpr.attrs['fres_update_method'] = fres_update_method 
         grpr.attrs['cable_delay'] = cable_delay
 
@@ -109,42 +111,46 @@ async def target_sweep(
             )
         # Some assertions until update_fres is well-tested
         assert isinstance(fres, np.ndarray)
-        assert fres.shape == len(res_idxs)
+        assert fres.shape == res_idxs.shape
         assert fres.dtype == np.float64
         
     # save fres (after potential update) 
     grp.create_array(name = f'fres', data = fres)
 
     # Gain sweep 
-    grpg = grp.require_group('gain_sweep')
-    f_gain, z_gain = await crs.sweep_qres(
-            fres,
-            ares,
-            qres / gain_span_factor,
-            npoints = npoints_gain,
-            nsamps = nsamps,
-            ch_map = ch_map,
-            dec_grp = grpg,
-            verbose = verbose,
-            pbar_description = 'Gain sweep',
-        )
-    _save_sweep_data(grpg, 's21', f_gain, z_gain)
-    ch_map = crs.ch_map
+    if npoints_gain is not None:
+        grpg = grp.require_group('gain_sweep')
+        f_gain, z_gain = await crs.sweep_qres(
+                fres,
+                ares,
+                qres / gain_span_factor,
+                npoints = npoints_gain,
+                nsamps = nsamps,
+                ch_map = ch_map,
+                dec_grp = grpg,
+                verbose = verbose,
+                pbar_description = 'Gain sweep',
+            )
+        _save_sweep_data(grpg, '', f_gain, z_gain)
+        # If ch_map was determined within the gain sweep, 
+        # # save here so fine sweep is consistent
+        ch_map = crs.ch_map 
 
     # Fine sweep
-    grpf = grp.require_group('fine_sweep')
-    f_fine, z_fine = await crs.sweep_qres(
-            fres,
-            ares,
-            qres,
-            npoints = npoints_fine,
-            nsamps = nsamps,
-            ch_map = ch_map,
-            dec_grp = grpf,
-            verbose = verbose,
-            pbar_description = 'Fine sweep',
-        )
-    _save_sweep_data(grpf, 's21', f_fine, z_fine)
+    if npoints_fine is not None:
+        grpf = grp.require_group('fine_sweep')
+        f_fine, z_fine = await crs.sweep_qres(
+                fres,
+                ares,
+                qres,
+                npoints = npoints_fine,
+                nsamps = nsamps,
+                ch_map = ch_map,
+                dec_grp = grpf,
+                verbose = verbose,
+                pbar_description = 'Fine sweep',
+            )
+        _save_sweep_data(grpf, '', f_fine, z_fine)
 
     # return updated fres and ch_map 
     return fres, ch_map
@@ -176,16 +182,16 @@ def _save_sweep_data(grp, prefix, f, z):
         raise TypeError("prefix must be a string.") 
     
     # Save to group
-    grp.create_array(name = f'{prefix}_f', 
-                    data = f, 
-                    chunks = (1, f.shape[1]), 
-                    dtype = np.float64
+    if prefix:
+        prefix += '_'
+    grp.create_array(name = f'{prefix}f', 
+                     data = f, 
+                     chunks = (1, f.shape[1])
                     )
-    grp.create_array(name = f'{prefix}_z', 
-                    data = z, 
-                    chunks = (1, z.shape[1]), 
-                    dtype = np.complex128
-                    )
+    grp.create_array(name = f'{prefix}z', 
+                     data = z, 
+                     chunks = (1, z.shape[1])
+                     )
     
 ################################################################################
 ########################### Input validation helpers ###########################
@@ -215,7 +221,8 @@ def _validate_target_sweep_inputs(
     Returns:
     fres, ares, qres, res_idxs: validated and converted inputs.
     """
-    if not isinstance(crs, CRS):
+    # Check if it's a CRS instance by verifying class name
+    if type(crs).__name__ != 'CRS' and type(crs).__name__ != 'DummyCRS':
         raise TypeError("crs must be an instance of CRS class.") 
     # Validate array-like inputs
     fres = np.asarray(fres, dtype = np.float64)

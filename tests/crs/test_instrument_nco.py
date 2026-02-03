@@ -148,7 +148,7 @@ async def test_set_nco_copies_input_dict(mock_crs_for_set_nco):
 
 @pytest.mark.asyncio
 async def test_set_nco_verbose_false_no_print(mock_crs_for_set_nco, capsys):
-    """Test that verbose=False suppresses output."""
+    """Test that verbose = False suppresses output."""
     crs = mock_crs_for_set_nco
     
     mock_modules = MagicMock()

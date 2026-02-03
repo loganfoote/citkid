@@ -3,7 +3,11 @@ import os
 import rfmux
 import socket 
 import zarr 
+from typing import TYPE_CHECKING
 from .. import zarr_util
+
+if TYPE_CHECKING:
+    from .instrument import CRS
 
 ################################################################################
 ##################### tone frequency -> NCO frequency map ######################
@@ -385,7 +389,7 @@ def write_acq_cfg_to_zarr(crs, grp):
     None
     """
     # Input validation 
-    if not isinstance(crs, crs.CRS):
+    if type(crs).__name__ != 'CRS' and type(crs).__name__ != 'DummyCRS':
         raise TypeError("crs must be an instance of CRS class.")
     if not isinstance(grp, zarr.core.group.Group):
         raise TypeError("grp must be a zarr Group instance.") 
@@ -445,7 +449,7 @@ def write_system_cfg_to_zarr(crs, grp):
     None
     """
     # Input validation 
-    if not isinstance(crs, crs.CRS):
+    if type(crs).__name__ != 'CRS' and type(crs).__name__ != 'DummyCRS':
         raise TypeError("crs must be an instance of CRS class.")
     if not isinstance(grp, zarr.core.group.Group):
         raise TypeError("grp must be a zarr Group instance.") 

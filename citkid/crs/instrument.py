@@ -99,8 +99,9 @@ class CRS:
 
         # Validate firmware version
         self.firmware_release = await self.d.get_firmware_release() 
-        if self.firmware_release.version != '1.6.0rc3':
-            raise RuntimeError("CRS firmware must be version 1.6.0rc3")
+        req_version = '1.6.0'
+        if self.firmware_release.version != req_version:
+            raise RuntimeError(f"CRS firmware must be version {req_version}")
 
         # Set the timestamp port. Bypass if already set
         just_booted = await self.d.get_timestamp_port() != 'TEST'

@@ -484,7 +484,7 @@ def test_parser_to_zarr_invalid_input(kwargs, expected_error, tmp_path):
         grp = root.require_group("test_group")
         # Add the conflicting name
         conflict_name = kwargs["grp"][4:]  # Remove "HAS_" prefix
-        grp.create_array(conflict_name, shape=(1,), dtype = 'f8')
+        grp.create_array(conflict_name, shape = (1,), dtype = 'f8')
         kwargs["grp"] = grp
     
     with pytest.raises(expected_error):

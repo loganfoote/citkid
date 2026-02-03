@@ -4,6 +4,14 @@ from ..res.plot import plot_circle
 from .psd import bin_psd
 from ..util import combine_figures_horizontally
 
+import warnings 
+
+warnings.warn(
+    "citkid.noise.plot is deprecated and will be removed in version 1.0.0",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 def plot_cal(ffine, zfine, popt_circle, fnoise, znoise, znoise_offres,
              theta_range, theta_fine, theta, poly, ixs):
     """

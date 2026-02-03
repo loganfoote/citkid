@@ -96,7 +96,7 @@ def test_create_nsd_amplitude():
     # The mean of the PSD should be approximately equal to the variance of s
     variance_s = np.var(s)
     mean_SJ = np.mean(SJ)
-    assert np.isclose(mean_SJ / 2, variance_s, rtol=0.2), \
+    assert np.isclose(mean_SJ / 2, variance_s, rtol = 0.2), \
         "Mean of SJ should be close to variance of s * 2"
 
 def test_create_nsd_zero_input():
@@ -121,7 +121,7 @@ def test_iterate_of():
     # Just checking output types and shapes here
     # simple build_template and get_start_idx functions
     def build_template(s, start_idx):
-        return np.mean([s[i:i+8] for i in start_idx], axis=0)
+        return np.mean([s[i:i+8] for i in start_idx], axis = 0)
     def get_start_idx(y):
         return np.array([5, 20, 35, 50, 65, 80], dtype = np.int32) 
     s = np.random.rand(100)
@@ -154,7 +154,7 @@ def test_iterate_of():
 
 def test_iterate_of_invalid_iter():
     def build_template(s, start_idx):
-        return np.mean([s[i:i+4] for i in start_idx], axis=0)
+        return np.mean([s[i:i+4] for i in start_idx], axis = 0)
     def get_start_idx(y):
         return np.array([1, 5, 9], dtype = np.int32)
     s = np.random.rand(20)

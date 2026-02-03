@@ -1,4 +1,14 @@
 import numpy as np
+
+import warnings 
+
+warnings.warn(
+    "citkid.noise.update_fres is deprecated and will be removed in a future"
+    "version. Please use multitone.fres instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 def update_fres(f, z, npoints, fcal_indices = [], method = 'mins21',
                     cut_other_resonators = False, fres = None, Qres = None):
     """

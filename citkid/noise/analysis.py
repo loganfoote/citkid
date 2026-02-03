@@ -3,6 +3,13 @@ from ..xcal.circle import fit_iq_circle
 from .plot import plot_cal, plot_timestream, plot_psd
 from ..signal.psd import *
 from .cosmic_rays import remove_cosmic_rays
+import warnings
+
+warnings.warn(
+    "citkid.noise.analysis is deprecated and will be removed in version 1.0.0",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
                 znoise_offres = None, dt_offres = None, flag_crs = True,

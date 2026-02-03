@@ -13,6 +13,15 @@ from ..noise.analysis import compute_psd
 from ..noise.data_io import save_psd
 from .data_io import import_iq_noise
 
+import warnings 
+
+warnings.warn(
+    "citkid.primecam.analysis is deprecated, and will be removed in a future"
+    "version. Please use pipeline instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
            constant_atten, temperature_index, temperature,
            resonator_indices = None, extra_fitdata_values = {}, downward = True,

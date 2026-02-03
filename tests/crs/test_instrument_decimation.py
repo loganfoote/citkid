@@ -212,7 +212,7 @@ async def test_set_decimation_verbose_false_no_print(
     mock_crs_for_set_decimation,
     capsys
 ):
-    """Test that verbose=False suppresses output."""
+    """Test that verbose = False suppresses output."""
     crs = mock_crs_for_set_decimation
     crs.fres_map = {1: [1e9]}
     

@@ -1,5 +1,12 @@
 from scipy.signal import find_peaks
 import numpy as np
+import warnings 
+
+warnings.warn(
+    "citkid.noise.cosmic_rays is deprecated and will be removed in version 1.0.0",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 def remove_cosmic_rays(theta, A, tsample, cr_nstd = 5, cr_width = 100e-6,
                        cr_peak_spacing = 100e-6, cr_removal_time = 1e-3):

@@ -52,13 +52,13 @@ def mock_validate_stream_return(
     )
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse = True)
 def mock_write_system_cfg_to_zarr():
     with patch('citkid.crs.instrument.util.write_system_cfg_to_zarr') as mock_write:
         yield mock_write
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse = True)
 def mock_write_acq_cfg_to_zarr():
     with patch('citkid.crs.instrument.util.write_acq_cfg_to_zarr') as mock_write:
         yield mock_write
@@ -433,16 +433,16 @@ def test_validate_stream_input_valid():
             delete_parser_data,
             verbose,
         ) = _validate_stream_input(
-            ts_duration_s=10.0,
-            dec_stage=6,
-            grp=grp,
-            ch_map=None,
-            allow_missing=False,
-            tmp_directory=tmp_dir,
-            batch_size_mb=1000,
-            chunk_size_mb=128,
-            delete_parser_data=True,
-            verbose=False
+            ts_duration_s = 10.0,
+            dec_stage = 6,
+            grp = grp,
+            ch_map = None,
+            allow_missing = False,
+            tmp_directory = tmp_dir,
+            batch_size_mb = 1000,
+            chunk_size_mb = 128,
+            delete_parser_data = True,
+            verbose = False
         )
         
         # Should return normalized paths
@@ -464,18 +464,18 @@ def test_validate_stream_input_invalid_ts_duration_negative():
     """Test _validate_stream_input rejects negative ts_duration_s."""
     from citkid.crs.instrument import _validate_stream_input
     
-    with pytest.raises(ValueError, match='ts_duration_s must be a positive'):
+    with pytest.raises(ValueError, match = 'ts_duration_s must be a positive'):
         _validate_stream_input(
-            ts_duration_s=-10.0,
-            dec_stage=6,
-            tmp_directory='tmp',
-            grp=create_mock_zarr_group(),
-            ch_map=None,
-            allow_missing=False,
-            batch_size_mb=1000,
-            chunk_size_mb=128,
-            delete_parser_data=True,
-            verbose=False
+            ts_duration_s = -10.0,
+            dec_stage = 6,
+            tmp_directory = 'tmp',
+            grp = create_mock_zarr_group(),
+            ch_map = None,
+            allow_missing = False,
+            batch_size_mb = 1000,
+            chunk_size_mb = 128,
+            delete_parser_data = True,
+            verbose = False
         )
 
 
@@ -483,18 +483,18 @@ def test_validate_stream_input_invalid_ts_duration_zero():
     """Test _validate_stream_input rejects zero ts_duration_s."""
     from citkid.crs.instrument import _validate_stream_input
     
-    with pytest.raises(ValueError, match='ts_duration_s must be a positive'):
+    with pytest.raises(ValueError, match = 'ts_duration_s must be a positive'):
         _validate_stream_input(
-            ts_duration_s=0.0,
-            dec_stage=6,
-            tmp_directory='tmp',
-            grp=create_mock_zarr_group(),
-            ch_map=None,
-            allow_missing=False,
-            batch_size_mb=1000,
-            chunk_size_mb=128,
-            delete_parser_data=True,
-            verbose=False
+            ts_duration_s = 0.0,
+            dec_stage = 6,
+            tmp_directory = 'tmp',
+            grp = create_mock_zarr_group(),
+            ch_map = None,
+            allow_missing = False,
+            batch_size_mb = 1000,
+            chunk_size_mb = 128,
+            delete_parser_data = True,
+            verbose = False
         )
 
 
@@ -504,16 +504,16 @@ def test_validate_stream_input_invalid_ts_duration_type():
     
     with pytest.raises(ValueError):
         _validate_stream_input(
-            ts_duration_s="not_a_float",
-            dec_stage=6,
-            tmp_directory='tmp',
-            grp=create_mock_zarr_group(),
-            ch_map=None,
-            allow_missing=False,
-            batch_size_mb=1000,
-            chunk_size_mb=128,
-            delete_parser_data=True,
-            verbose=False
+            ts_duration_s = "not_a_float",
+            dec_stage = 6,
+            tmp_directory = 'tmp',
+            grp = create_mock_zarr_group(),
+            ch_map = None,
+            allow_missing = False,
+            batch_size_mb = 1000,
+            chunk_size_mb = 128,
+            delete_parser_data = True,
+            verbose = False
         )
 
 
@@ -529,18 +529,18 @@ def test_validate_stream_input_data_directory_exists():
     os.makedirs(data_dir)
     
     try:
-        with pytest.raises(FileExistsError, match='already exists'):
+        with pytest.raises(FileExistsError, match = 'already exists'):
             _validate_stream_input(
-                ts_duration_s=10.0,
-                dec_stage=6,
-                tmp_directory=tmp_dir,
-                grp=create_mock_zarr_group(),
-                ch_map=None,
-                allow_missing=False,
-                batch_size_mb=1000,
-                chunk_size_mb=128,
-                delete_parser_data=True,
-                verbose=False
+                ts_duration_s = 10.0,
+                dec_stage = 6,
+                tmp_directory = tmp_dir,
+                grp = create_mock_zarr_group(),
+                ch_map = None,
+                allow_missing = False,
+                batch_size_mb = 1000,
+                chunk_size_mb = 128,
+                delete_parser_data = True,
+                verbose = False
             )
     finally:
         shutil.rmtree(tmp_dir)
@@ -550,18 +550,18 @@ def test_validate_stream_input_invalid_grp_type():
     """Test _validate_stream_input rejects non-zarr.Group grp."""
     from citkid.crs.instrument import _validate_stream_input
     
-    with pytest.raises(TypeError, match='grp must be a zarr.Group object'):
+    with pytest.raises(TypeError, match = 'grp must be a zarr.Group object'):
         _validate_stream_input(
-            ts_duration_s=10.0,
-            dec_stage=6,
-            tmp_directory='tmp',
-            grp="not_a_group",
-            ch_map=None,
-            allow_missing=False,
-            batch_size_mb=1000,
-            chunk_size_mb=128,
-            delete_parser_data=True,
-            verbose=False
+            ts_duration_s = 10.0,
+            dec_stage = 6,
+            tmp_directory = 'tmp',
+            grp = "not_a_group",
+            ch_map = None,
+            allow_missing = False,
+            batch_size_mb = 1000,
+            chunk_size_mb = 128,
+            delete_parser_data = True,
+            verbose = False
         )
 
 
@@ -573,19 +573,19 @@ def test_validate_stream_input_conflicting_grp_keys(tmp_path):
     grp.keys.return_value = ["z"]
 
     with pytest.raises(
-        ValueError, match=r"grp already contains required names:.*z"
+        ValueError, match = r"grp already contains required names:.*z"
         ):
         _validate_stream_input(
-            ts_duration_s=10.0,
-            dec_stage=6,
-            tmp_directory=str(tmp_path),
-            grp=grp,
-            ch_map=None,
-            allow_missing=False,
-            batch_size_mb=1000,
-            chunk_size_mb=128,
-            delete_parser_data=True,
-            verbose=False,
+            ts_duration_s = 10.0,
+            dec_stage = 6,
+            tmp_directory = str(tmp_path),
+            grp = grp,
+            ch_map = None,
+            allow_missing = False,
+            batch_size_mb = 1000,
+            chunk_size_mb = 128,
+            delete_parser_data = True,
+            verbose = False,
         )
 
 
@@ -593,18 +593,18 @@ def test_validate_stream_input_invalid_batch_size_negative():
     """Test _validate_stream_input rejects negative batch_size_mb."""
     from citkid.crs.instrument import _validate_stream_input
     
-    with pytest.raises(ValueError, match='batch_size_mb must be a positive'):
+    with pytest.raises(ValueError, match = 'batch_size_mb must be a positive'):
         _validate_stream_input(
-            ts_duration_s=10.0,
-            dec_stage=6,
-            tmp_directory='tmp',
-            grp=create_mock_zarr_group(),
-            ch_map=None,
-            allow_missing=False,
-            batch_size_mb=-100,
-            chunk_size_mb=128,
-            delete_parser_data=True,
-            verbose=False
+            ts_duration_s = 10.0,
+            dec_stage = 6,
+            tmp_directory = 'tmp',
+            grp = create_mock_zarr_group(),
+            ch_map = None,
+            allow_missing = False,
+            batch_size_mb = -100,
+            chunk_size_mb = 128,
+            delete_parser_data = True,
+            verbose = False
         )
 
 
@@ -612,18 +612,18 @@ def test_validate_stream_input_invalid_batch_size_zero():
     """Test _validate_stream_input rejects zero batch_size_mb."""
     from citkid.crs.instrument import _validate_stream_input
     
-    with pytest.raises(ValueError, match='batch_size_mb must be a positive'):
+    with pytest.raises(ValueError, match = 'batch_size_mb must be a positive'):
         _validate_stream_input(
-            ts_duration_s=10.0,
-            dec_stage=6,
-            tmp_directory='tmp',
-            grp=create_mock_zarr_group(),
-            ch_map=None,
-            allow_missing=False,
-            batch_size_mb=0,
-            chunk_size_mb=128,
-            delete_parser_data=True,
-            verbose=False
+            ts_duration_s = 10.0,
+            dec_stage = 6,
+            tmp_directory = 'tmp',
+            grp = create_mock_zarr_group(),
+            ch_map = None,
+            allow_missing = False,
+            batch_size_mb = 0,
+            chunk_size_mb = 128,
+            delete_parser_data = True,
+            verbose = False
         )
 
 
@@ -631,18 +631,18 @@ def test_validate_stream_input_invalid_chunk_size_negative():
     """Test _validate_stream_input rejects negative chunk_size_mb."""
     from citkid.crs.instrument import _validate_stream_input
     
-    with pytest.raises(ValueError, match='chunk_size_mb must be a positive'):
+    with pytest.raises(ValueError, match = 'chunk_size_mb must be a positive'):
         _validate_stream_input(
-            ts_duration_s=10.0,
-            dec_stage=6,
-            tmp_directory='tmp',
-            grp=create_mock_zarr_group(),
-            ch_map=None,
-            allow_missing=False,
-            batch_size_mb=1000,
-            chunk_size_mb=-128,
-            delete_parser_data=True,
-            verbose=False
+            ts_duration_s = 10.0,
+            dec_stage = 6,
+            tmp_directory = 'tmp',
+            grp = create_mock_zarr_group(),
+            ch_map = None,
+            allow_missing = False,
+            batch_size_mb = 1000,
+            chunk_size_mb = -128,
+            delete_parser_data = True,
+            verbose = False
         )
 
 
@@ -652,19 +652,19 @@ def test_validate_stream_input_invalid_chunk_size_exceeds_batch():
     
     with pytest.raises(
         ValueError,
-        match='chunk_size_mb must be <= batch_size_mb'
+        match = 'chunk_size_mb must be <= batch_size_mb'
     ):
         _validate_stream_input(
-            ts_duration_s=10.0,
-            dec_stage=6,
-            tmp_directory='tmp',
-            grp=create_mock_zarr_group(),
-            ch_map=None,
-            allow_missing=False,
-            batch_size_mb=100,
-            chunk_size_mb=200,
-            delete_parser_data=True,
-            verbose=False
+            ts_duration_s = 10.0,
+            dec_stage = 6,
+            tmp_directory = 'tmp',
+            grp = create_mock_zarr_group(),
+            ch_map = None,
+            allow_missing = False,
+            batch_size_mb = 100,
+            chunk_size_mb = 200,
+            delete_parser_data = True,
+            verbose = False
         )
 
 
@@ -673,16 +673,16 @@ def test_validate_stream_input_coerces_delete_parser_data():
     from citkid.crs.instrument import _validate_stream_input
     
     result = _validate_stream_input(
-        ts_duration_s=10.0,
-        dec_stage=6,
-        tmp_directory='tmp',
-        grp=create_mock_zarr_group(),
-        ch_map=None,
-        allow_missing=False,
-        batch_size_mb=1000,
-        chunk_size_mb=128,
-        delete_parser_data="yes",
-        verbose=False
+        ts_duration_s = 10.0,
+        dec_stage = 6,
+        tmp_directory = 'tmp',
+        grp = create_mock_zarr_group(),
+        ch_map = None,
+        allow_missing = False,
+        batch_size_mb = 1000,
+        chunk_size_mb = 128,
+        delete_parser_data = "yes",
+        verbose = False
     )
     assert result[-2] is True
 
@@ -692,16 +692,16 @@ def test_validate_stream_input_coerces_verbose():
     from citkid.crs.instrument import _validate_stream_input
     
     result = _validate_stream_input(
-        ts_duration_s=10.0,
-        dec_stage=6,
-        tmp_directory='tmp',
-        grp=create_mock_zarr_group(),
-        ch_map=None,
-        allow_missing=False,
-        batch_size_mb=1000,
-        chunk_size_mb=128,
-        delete_parser_data=True,
-        verbose="yes"
+        ts_duration_s = 10.0,
+        dec_stage = 6,
+        tmp_directory = 'tmp',
+        grp = create_mock_zarr_group(),
+        ch_map = None,
+        allow_missing = False,
+        batch_size_mb = 1000,
+        chunk_size_mb = 128,
+        delete_parser_data = True,
+        verbose = "yes"
     )
     assert result[-1] is True
 
@@ -721,16 +721,16 @@ def test_validate_stream_input_creates_tmp_directory():
         assert not os.path.exists(tmp_dir)
         
         result = _validate_stream_input(
-            ts_duration_s=10.0,
-            dec_stage=6,
-            tmp_directory=tmp_dir,
-            grp=create_mock_zarr_group(),
-            ch_map=None,
-            allow_missing=False,
-            batch_size_mb=1000,
-            chunk_size_mb=128,
-            delete_parser_data=True,
-            verbose=False
+            ts_duration_s = 10.0,
+            dec_stage = 6,
+            tmp_directory = tmp_dir,
+            grp = create_mock_zarr_group(),
+            ch_map = None,
+            allow_missing = False,
+            batch_size_mb = 1000,
+            chunk_size_mb = 128,
+            delete_parser_data = True,
+            verbose = False
         )
         tmp_directory, data_directory = result[4], result[5]
         
@@ -755,16 +755,16 @@ def test_validate_stream_input_normalizes_path():
         messy_path = tmp_dir + os.sep + '.' + os.sep + 'subdir'
         
         result = _validate_stream_input(
-            ts_duration_s=10.0,
-            dec_stage=6,
-            tmp_directory=messy_path,
-            grp=create_mock_zarr_group(),
-            ch_map=None,
-            allow_missing=False,
-            batch_size_mb=1000,
-            chunk_size_mb=128,
-            delete_parser_data=True,
-            verbose=False
+            ts_duration_s = 10.0,
+            dec_stage = 6,
+            tmp_directory = messy_path,
+            grp = create_mock_zarr_group(),
+            ch_map = None,
+            allow_missing = False,
+            batch_size_mb = 1000,
+            chunk_size_mb = 128,
+            delete_parser_data = True,
+            verbose = False
         )
         tmp_directory, data_directory = result[4], result[5]
         
@@ -785,16 +785,16 @@ def test_validate_stream_input_numpy_float():
     try:
         # Pass numpy float64
         result = _validate_stream_input(
-            ts_duration_s=np.float64(10.0),
-            dec_stage=6,
-            tmp_directory=tmp_dir,
-            grp=create_mock_zarr_group(),
-            ch_map=None,
-            allow_missing=False,
-            batch_size_mb=1000,
-            chunk_size_mb=128,
-            delete_parser_data=True,
-            verbose=False
+            ts_duration_s = np.float64(10.0),
+            dec_stage = 6,
+            tmp_directory = tmp_dir,
+            grp = create_mock_zarr_group(),
+            ch_map = None,
+            allow_missing = False,
+            batch_size_mb = 1000,
+            chunk_size_mb = 128,
+            delete_parser_data = True,
+            verbose = False
         )
         
         assert result[4] == tmp_dir
@@ -824,7 +824,7 @@ async def test_stream_basic_workflow(base_crs, mock_write_acq_cfg_to_zarr):
     crs.set_decimation = AsyncMock()
     
     with patch('citkid.crs.instrument._validate_stream_input') as mock_validate, \
-         patch('rfmux.tools.parser', create=True) as mock_parser, \
+         patch('rfmux.tools.parser', create = True) as mock_parser, \
          patch('citkid.crs.util.parser_to_zarr') as mock_p2z, \
          patch('citkid.crs.instrument.shutil.rmtree') as mock_rmtree:
         
@@ -840,20 +840,20 @@ async def test_stream_basic_workflow(base_crs, mock_write_acq_cfg_to_zarr):
             True,
             False,
         )
-        mock_parser.main = MagicMock(side_effect=SystemExit(0))
+        mock_parser.main = MagicMock(side_effect = SystemExit(0))
         
         await crs.stream(
-            ts_duration_s=10.0,
-            dec_stage=6,
-            grp=grp,
-            verbose=False
+            ts_duration_s = 10.0,
+            dec_stage = 6,
+            grp = grp,
+            verbose = False
         )
         
         # Verify validation called
         mock_validate.assert_called_once()
         
         # Verify set_decimation called
-        crs.set_decimation.assert_called_once_with(6, verbose=False)
+        crs.set_decimation.assert_called_once_with(6, verbose = False)
 
         grp.require_group.assert_called_once_with('crs_config')
         mock_write_acq_cfg_to_zarr.assert_called_once_with(
@@ -872,7 +872,7 @@ async def test_stream_basic_workflow(base_crs, mock_write_acq_cfg_to_zarr):
 
 @pytest.mark.asyncio
 async def test_stream_verbose_mode(base_crs):
-    """Test stream uses run_with_time_bar when verbose=True."""
+    """Test stream uses run_with_time_bar when verbose = True."""
     crs = base_crs
     crs.fres_map = {1: [4.0e9]}
     crs.ares_map = {1: [-50.0]}
@@ -886,8 +886,8 @@ async def test_stream_verbose_mode(base_crs):
     crs.set_decimation = AsyncMock()
     
     with patch('citkid.crs.instrument._validate_stream_input') as mock_validate, \
-         patch('rfmux.tools.parser', create=True) as mock_parser, \
-         patch('citkid.crs.instrument.run_with_time_bar', new_callable=AsyncMock) as mock_time_bar, \
+         patch('rfmux.tools.parser', create = True) as mock_parser, \
+         patch('citkid.crs.instrument.run_with_time_bar', new_callable = AsyncMock) as mock_time_bar, \
          patch('citkid.crs.util.parser_to_zarr'), \
          patch('citkid.crs.instrument.shutil.rmtree'):
         
@@ -905,10 +905,10 @@ async def test_stream_verbose_mode(base_crs):
         )
         
         await crs.stream(
-            ts_duration_s=10.0,
-            dec_stage=6,
-            grp=grp,
-            verbose=True
+            ts_duration_s = 10.0,
+            dec_stage = 6,
+            grp = grp,
+            verbose = True
         )
         
         # Verify run_with_time_bar called instead of parser.main
@@ -938,7 +938,7 @@ async def test_stream_parser_arguments(base_crs):
     crs.set_decimation = AsyncMock()
     
     with patch('citkid.crs.instrument._validate_stream_input') as mock_validate, \
-         patch('citkid.crs.util.parser_to_zarr'), patch('rfmux.tools.parser', create=True) as mock_parser, \
+         patch('citkid.crs.util.parser_to_zarr'), patch('rfmux.tools.parser', create = True) as mock_parser, \
          patch('citkid.crs.util.parser_to_zarr'), \
          patch('citkid.crs.instrument.shutil.rmtree'):
         
@@ -954,13 +954,13 @@ async def test_stream_parser_arguments(base_crs):
             True,
             False,
         )
-        mock_parser.main = MagicMock(side_effect=SystemExit(0))
+        mock_parser.main = MagicMock(side_effect = SystemExit(0))
         
         await crs.stream(
-            ts_duration_s=20.0,
-            dec_stage=7,
-            grp=grp,
-            verbose=False
+            ts_duration_s = 20.0,
+            dec_stage = 7,
+            grp = grp,
+            verbose = False
         )
         
         # Verify parser.main called with correct arguments
@@ -996,7 +996,7 @@ async def test_stream_parser_to_zarr_arguments(base_crs):
     crs.set_decimation = AsyncMock()
     
     with patch('citkid.crs.instrument._validate_stream_input') as mock_validate, \
-         patch('citkid.crs.util.parser_to_zarr'), patch('rfmux.tools.parser', create=True) as mock_parser, \
+         patch('citkid.crs.util.parser_to_zarr'), patch('rfmux.tools.parser', create = True) as mock_parser, \
          patch('citkid.crs.util.parser_to_zarr') as mock_p2z, \
          patch('citkid.crs.instrument.shutil.rmtree'):
         
@@ -1012,16 +1012,16 @@ async def test_stream_parser_to_zarr_arguments(base_crs):
             True,
             False,
         )
-        mock_parser.main = MagicMock(side_effect=SystemExit(0))
+        mock_parser.main = MagicMock(side_effect = SystemExit(0))
         
         await crs.stream(
-            ts_duration_s=15.0,
-            dec_stage=6,
-            grp=grp,
-            tmp_directory='/custom',
-            batch_size_mb=500,
-            chunk_size_mb=64,
-            verbose=False
+            ts_duration_s = 15.0,
+            dec_stage = 6,
+            grp = grp,
+            tmp_directory = '/custom',
+            batch_size_mb = 500,
+            chunk_size_mb = 64,
+            verbose = False
         )
         
         # Verify parser_to_zarr called with correct arguments
@@ -1034,14 +1034,14 @@ async def test_stream_parser_to_zarr_arguments(base_crs):
             {1: [0, 1], 2: [2]},  # ch_map
             {1: [-50.0, -51.0], 2: [-52.0]},  # ares_map
             1 / 2e6,  # 1 / sample_freq
-            batch_size_mb=500,
-            chunk_size_mb=64
+            batch_size_mb = 500,
+            chunk_size_mb = 64
         )
 
 
 @pytest.mark.asyncio
 async def test_stream_delete_parser_data_true(base_crs):
-    """Test stream deletes parser data when delete_parser_data=True."""
+    """Test stream deletes parser data when delete_parser_data = True."""
     crs = base_crs
     crs.fres_map = {1: [4.0e9]}
     crs.ares_map = {1: [-50.0]}
@@ -1055,7 +1055,7 @@ async def test_stream_delete_parser_data_true(base_crs):
     crs.set_decimation = AsyncMock()
     
     with patch('citkid.crs.instrument._validate_stream_input') as mock_validate, \
-         patch('citkid.crs.util.parser_to_zarr'), patch('rfmux.tools.parser', create=True) as mock_parser, \
+         patch('citkid.crs.util.parser_to_zarr'), patch('rfmux.tools.parser', create = True) as mock_parser, \
          patch('citkid.crs.util.parser_to_zarr'), \
          patch('citkid.crs.instrument.shutil.rmtree') as mock_rmtree:
         
@@ -1071,14 +1071,14 @@ async def test_stream_delete_parser_data_true(base_crs):
             True,
             False,
         )
-        mock_parser.main = MagicMock(side_effect=SystemExit(0))
+        mock_parser.main = MagicMock(side_effect = SystemExit(0))
         
         await crs.stream(
-            ts_duration_s=10.0,
-            dec_stage=6,
-            grp=grp,
-            delete_parser_data=True,
-            verbose=False
+            ts_duration_s = 10.0,
+            dec_stage = 6,
+            grp = grp,
+            delete_parser_data = True,
+            verbose = False
         )
         
         # Verify rmtree called
@@ -1087,7 +1087,7 @@ async def test_stream_delete_parser_data_true(base_crs):
 
 @pytest.mark.asyncio
 async def test_stream_delete_parser_data_false(base_crs):
-    """Test stream keeps parser data when delete_parser_data=False."""
+    """Test stream keeps parser data when delete_parser_data = False."""
     crs = base_crs
     crs.fres_map = {1: [4.0e9]}
     crs.ares_map = {1: [-50.0]}
@@ -1101,7 +1101,7 @@ async def test_stream_delete_parser_data_false(base_crs):
     crs.set_decimation = AsyncMock()
     
     with patch('citkid.crs.instrument._validate_stream_input') as mock_validate, \
-         patch('citkid.crs.util.parser_to_zarr'), patch('rfmux.tools.parser', create=True) as mock_parser, \
+         patch('citkid.crs.util.parser_to_zarr'), patch('rfmux.tools.parser', create = True) as mock_parser, \
          patch('citkid.crs.util.parser_to_zarr'), \
          patch('citkid.crs.instrument.shutil.rmtree') as mock_rmtree:
         
@@ -1117,14 +1117,14 @@ async def test_stream_delete_parser_data_false(base_crs):
             False,
             False,
         )
-        mock_parser.main = MagicMock(side_effect=SystemExit(0))
+        mock_parser.main = MagicMock(side_effect = SystemExit(0))
         
         await crs.stream(
-            ts_duration_s=10.0,
-            dec_stage=6,
-            grp=grp,
-            delete_parser_data=False,
-            verbose=False
+            ts_duration_s = 10.0,
+            dec_stage = 6,
+            grp = grp,
+            delete_parser_data = False,
+            verbose = False
         )
         
         # Verify rmtree NOT called
@@ -1147,7 +1147,7 @@ async def test_stream_catches_system_exit(base_crs):
     crs.set_decimation = AsyncMock()
     
     with patch('citkid.crs.instrument._validate_stream_input') as mock_validate, \
-         patch('citkid.crs.util.parser_to_zarr'), patch('rfmux.tools.parser', create=True) as mock_parser, \
+         patch('citkid.crs.util.parser_to_zarr'), patch('rfmux.tools.parser', create = True) as mock_parser, \
          patch('citkid.crs.util.parser_to_zarr') as mock_p2z, \
          patch('citkid.crs.instrument.shutil.rmtree'):
         
@@ -1164,14 +1164,14 @@ async def test_stream_catches_system_exit(base_crs):
             False,
         )
         # parser.main raises SystemExit
-        mock_parser.main = MagicMock(side_effect=SystemExit(0))
+        mock_parser.main = MagicMock(side_effect = SystemExit(0))
         
         # Should not raise - SystemExit should be caught
         await crs.stream(
-            ts_duration_s=10.0,
-            dec_stage=6,
-            grp=grp,
-            verbose=False
+            ts_duration_s = 10.0,
+            dec_stage = 6,
+            grp = grp,
+            verbose = False
         )
         
         # Verify parser_to_zarr still called after SystemExit
@@ -1194,7 +1194,7 @@ async def test_stream_empty_fres_map(base_crs):
     crs.set_decimation = AsyncMock()
     
     with patch('citkid.crs.instrument._validate_stream_input') as mock_validate, \
-         patch('citkid.crs.util.parser_to_zarr'), patch('rfmux.tools.parser', create=True) as mock_parser, \
+         patch('citkid.crs.util.parser_to_zarr'), patch('rfmux.tools.parser', create = True) as mock_parser, \
          patch('citkid.crs.util.parser_to_zarr'), \
          patch('citkid.crs.instrument.shutil.rmtree'):
         
@@ -1210,13 +1210,13 @@ async def test_stream_empty_fres_map(base_crs):
             True,
             False,
         )
-        mock_parser.main = MagicMock(side_effect=SystemExit(0))
+        mock_parser.main = MagicMock(side_effect = SystemExit(0))
         
         await crs.stream(
-            ts_duration_s=10.0,
-            dec_stage=6,
-            grp=grp,
-            verbose=False
+            ts_duration_s = 10.0,
+            dec_stage = 6,
+            grp = grp,
+            verbose = False
         )
         
         # Verify parser arguments use max_ntones = 0
@@ -1245,7 +1245,7 @@ async def test_stream_set_decimation_called_first(base_crs):
     crs.set_decimation = mock_set_dec
     
     with patch('citkid.crs.instrument._validate_stream_input') as mock_validate, \
-         patch('citkid.crs.util.parser_to_zarr'), patch('rfmux.tools.parser', create=True) as mock_parser, \
+         patch('citkid.crs.util.parser_to_zarr'), patch('rfmux.tools.parser', create = True) as mock_parser, \
          patch('citkid.crs.util.parser_to_zarr'), \
          patch('citkid.crs.instrument.shutil.rmtree'):
         
@@ -1269,10 +1269,10 @@ async def test_stream_set_decimation_called_first(base_crs):
         mock_parser.main = mock_parser_main
         
         await crs.stream(
-            ts_duration_s=10.0,
-            dec_stage=6,
-            grp=grp,
-            verbose=False
+            ts_duration_s = 10.0,
+            dec_stage = 6,
+            grp = grp,
+            verbose = False
         )
         
         # Verify set_decimation called before parser

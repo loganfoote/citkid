@@ -21,7 +21,7 @@ def mock_crs_for_configure(base_crs):
     
     # Mock firmware release
     firmware_release = MagicMock()
-    firmware_release.version = '1.6.0rc3'
+    firmware_release.version = '1.6.0'
     crs.d.get_firmware_release = AsyncMock(return_value = firmware_release)
     
     # Mock timestamp port
@@ -167,7 +167,7 @@ async def test_configure_system_wrong_firmware_version(
     
     with pytest.raises(
         RuntimeError,
-        match = 'CRS firmware must be version 1.6.0rc3'
+        match = 'CRS firmware must be version 1.6.0'
     ):
         await crs.configure_system()
 
@@ -177,7 +177,7 @@ async def test_configure_system_verbose_false_no_print(
     mock_crs_for_configure,
     capsys
 ):
-    """Test that verbose=False suppresses output."""
+    """Test that verbose = False suppresses output."""
     crs = mock_crs_for_configure
     
     with patch.object(crs, 'set_clock_source',

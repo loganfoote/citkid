@@ -463,7 +463,7 @@ def test_get_fit_bound_curves_linear_model():
         return a * x + b
     
     x = np.linspace(0, 10, 50)
-    popt = [2.0, 1.0]  # a=2, b=1
+    popt = [2.0, 1.0]  # a = 2, b = 1
     perr = [0.1, 0.1]
     
     y_best, y_lower, y_upper = util.get_fit_bound_curves(

@@ -455,7 +455,7 @@ def test_interface_exists_passes_through_str(monkeypatch):
 ################################################################################
 
 class DummyFirmwareRelease:
-    def __init__(self, version="1.2.3"):
+    def __init__(self, version = "1.2.3"):
         self.version = version
 
 
@@ -472,7 +472,7 @@ def make_dummy_crs(**overrides):
     crs.analog_bank_high = False
     crs.bw = 500e6
     crs.clock_source = "VCXO"
-    crs.dec_module_idxs = np.array([1], dtype=np.uint8)
+    crs.dec_module_idxs = np.array([1], dtype = np.uint8)
     crs.dec_short = False
     crs.dec_stage = 6
     crs.extended_bw = False
@@ -486,11 +486,11 @@ def make_dummy_crs(**overrides):
     return crs
 
 def test_write_system_cfg_to_zarr_writes_expected_arrays(tmp_path):
-    grp = zarr.open_group(tmp_path / "config.zarr", mode="w")
+    grp = zarr.open_group(tmp_path / "config.zarr", mode = "w")
     crs = make_dummy_crs()
 
     with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=Warning, message=".*Zarr V3 specification.*")
+        warnings.filterwarnings("ignore", category = Warning, message = ".*Zarr V3 specification.*")
         util.write_system_cfg_to_zarr(crs, grp)
 
     # Check that all config is stored as attributes (ch_map and sample_freq are in write_acq_cfg_to_zarr now)
@@ -519,7 +519,7 @@ def test_write_system_cfg_to_zarr_writes_expected_arrays(tmp_path):
 
 
 def test_write_system_cfg_to_zarr_invalid_crs_type(tmp_path):
-    grp = zarr.open_group(tmp_path / "config.zarr", mode="w")
+    grp = zarr.open_group(tmp_path / "config.zarr", mode = "w")
 
     class NotCRS:
         pass
@@ -527,13 +527,13 @@ def test_write_system_cfg_to_zarr_invalid_crs_type(tmp_path):
     not_crs = NotCRS()
     not_crs.CRS = DummyCRS
 
-    with pytest.raises(TypeError, match="crs must be an instance of CRS class"):
+    with pytest.raises(TypeError, match = "crs must be an instance of CRS class"):
         util.write_system_cfg_to_zarr(not_crs, grp)
 
 
 def test_write_system_cfg_to_zarr_invalid_grp_type():
     crs = make_dummy_crs()
-    with pytest.raises(TypeError, match="grp must be a zarr Group instance"):
+    with pytest.raises(TypeError, match = "grp must be a zarr Group instance"):
         util.write_system_cfg_to_zarr(crs, "not_a_group")
 
 
@@ -549,11 +549,11 @@ def test_write_system_cfg_to_zarr_invalid_grp_type():
     "citkid_version",
 ])
 def test_write_system_cfg_to_zarr_missing_crs_attribute(tmp_path, missing_name):
-    grp = zarr.open_group(tmp_path / "config.zarr", mode="w")
+    grp = zarr.open_group(tmp_path / "config.zarr", mode = "w")
     crs = make_dummy_crs()
     delattr(crs, missing_name)
 
-    with pytest.raises(ValueError, match=f"crs is missing attribute '{missing_name}'"):
+    with pytest.raises(ValueError, match = f"crs is missing attribute '{missing_name}'"):
         util.write_system_cfg_to_zarr(crs, grp)
 
 
@@ -569,7 +569,7 @@ def test_write_system_cfg_to_zarr_missing_crs_attribute(tmp_path, missing_name):
     "citkid_version",
 ])
 def test_write_system_cfg_to_zarr_conflicting_dataset(tmp_path, conflict_name):
-    grp = zarr.open_group(tmp_path / "config.zarr", mode="w")
+    grp = zarr.open_group(tmp_path / "config.zarr", mode = "w")
     # Map the old dataset names to the actual names saved
     # All are now stored as attributes
     if conflict_name == "nco_freqs":
@@ -587,20 +587,20 @@ def test_write_system_cfg_to_zarr_conflicting_dataset(tmp_path, conflict_name):
     
     crs = make_dummy_crs()
 
-    with pytest.raises(ValueError, match=error_msg.replace('[', r'\[').replace(']', r'\]')):
+    with pytest.raises(ValueError, match = error_msg.replace('[', r'\[').replace(']', r'\]')):
         util.write_system_cfg_to_zarr(crs, grp)
 
 
 def test_write_system_cfg_to_zarr_invalid_firmware_version(tmp_path):
-    grp = zarr.open_group(tmp_path / "config.zarr", mode="w")
-    crs = make_dummy_crs(firmware_release=DummyFirmwareRelease(version=123))
+    grp = zarr.open_group(tmp_path / "config.zarr", mode = "w")
+    crs = make_dummy_crs(firmware_release = DummyFirmwareRelease(version = 123))
 
-    with pytest.raises(ValueError, match="crs.firmware_release.version must be a string"):
+    with pytest.raises(ValueError, match = "crs.firmware_release.version must be a string"):
         util.write_system_cfg_to_zarr(crs, grp)
 
 
 def test_write_acq_cfg_to_zarr_writes_expected_arrays(tmp_path):
-    grp = zarr.open_group(tmp_path / "config.zarr", mode="w")
+    grp = zarr.open_group(tmp_path / "config.zarr", mode = "w")
     crs = make_dummy_crs()
 
     util.write_acq_cfg_to_zarr(crs, grp)
@@ -616,7 +616,7 @@ def test_write_acq_cfg_to_zarr_writes_expected_arrays(tmp_path):
     # Check ch_map is stored as array
     expected_arrays = {"chs_module1"}
     assert expected_arrays.issubset(set(grp.keys()))
-    np.testing.assert_array_equal(grp["chs_module1"][:], np.array([0, 1], dtype=np.int32))
+    np.testing.assert_array_equal(grp["chs_module1"][:], np.array([0, 1], dtype = np.int32))
 
 
 @pytest.mark.parametrize("missing_name", [
@@ -627,11 +627,11 @@ def test_write_acq_cfg_to_zarr_writes_expected_arrays(tmp_path):
     "sample_freq",
 ])
 def test_write_acq_cfg_to_zarr_missing_crs_attribute(tmp_path, missing_name):
-    grp = zarr.open_group(tmp_path / "config.zarr", mode="w")
+    grp = zarr.open_group(tmp_path / "config.zarr", mode = "w")
     crs = make_dummy_crs()
     delattr(crs, missing_name)
 
-    with pytest.raises(ValueError, match=f"crs is missing attribute '{missing_name}'"):
+    with pytest.raises(ValueError, match = f"crs is missing attribute '{missing_name}'"):
         util.write_acq_cfg_to_zarr(crs, grp)
 
 
@@ -643,10 +643,10 @@ def test_write_acq_cfg_to_zarr_missing_crs_attribute(tmp_path, missing_name):
     "chs_module1",
 ])
 def test_write_acq_cfg_to_zarr_conflicting_dataset(tmp_path, conflict_name):
-    grp = zarr.open_group(tmp_path / "config.zarr", mode="w")
+    grp = zarr.open_group(tmp_path / "config.zarr", mode = "w")
     if conflict_name == "chs_module1":
         # ch_map is stored as array
-        grp.create_array(conflict_name, data=np.array([1]))
+        grp.create_array(conflict_name, data = np.array([1]))
         error_msg = f"Zarr group already contains dataset '{conflict_name}'"
     else:
         # decimation parameters are stored as attributes
@@ -654,13 +654,13 @@ def test_write_acq_cfg_to_zarr_conflicting_dataset(tmp_path, conflict_name):
         error_msg = f"Zarr group already contains attribute '{conflict_name}'"
     crs = make_dummy_crs()
 
-    with pytest.raises(ValueError, match=error_msg.replace('[', r'\[').replace(']', r'\]')):
+    with pytest.raises(ValueError, match = error_msg.replace('[', r'\[').replace(']', r'\]')):
         util.write_acq_cfg_to_zarr(crs, grp)
 
 
 def test_write_acq_cfg_to_zarr_invalid_ch_map(tmp_path):
-    grp = zarr.open_group(tmp_path / "config.zarr", mode="w")
-    crs = make_dummy_crs(ch_map={1: ["a"]})
+    grp = zarr.open_group(tmp_path / "config.zarr", mode = "w")
+    crs = make_dummy_crs(ch_map = {1: ["a"]})
 
     with pytest.raises((TypeError, ValueError)):
         util.write_acq_cfg_to_zarr(crs, grp)

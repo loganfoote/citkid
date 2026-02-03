@@ -86,7 +86,7 @@ async def test_set_clock_source_verbose_false_no_print(
     mock_crs_for_set_clock,
     capsys
 ):
-    """Test that verbose=False suppresses output."""
+    """Test that verbose = False suppresses output."""
     crs = mock_crs_for_set_clock
     crs.d.get_clock_source = AsyncMock(return_value = 'VCXO')
     

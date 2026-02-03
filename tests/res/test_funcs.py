@@ -29,7 +29,7 @@ def test_get_y(y0, a):
         for y0i in y0:
             coeffs = [4, -4 * y0i, 1, -(y0i + a)]
             roots = np.roots(coeffs)
-            real_mask = np.isclose(roots.imag, 0, atol=1e-12)
+            real_mask = np.isclose(roots.imag, 0, atol = 1e-12)
             real_roots = roots[real_mask].real
             y_exp.append(np.max(real_roots) if largest else np.min(real_roots))
         y_exp = np.array(y_exp, dtype = np.float64)

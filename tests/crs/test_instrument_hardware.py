@@ -15,7 +15,7 @@ matplotlib.use('Agg')  # Use non-interactive backend for tests
 ################################################################################
 # Fixtures
 ################################################################################
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(scope = "module", autouse = True)
 def require_hardware(pytestconfig):
     sn = pytestconfig.getoption("--crs_sn")
     if sn is None:
@@ -487,8 +487,8 @@ async def test_stream(pytestconfig, monkeypatch, tmp_path):
         za_val = z_avg.ravel()[flat_idx]
         raise AssertionError(
             "Max absolute diff exceeds tolerance: "
-            f"idx={max_idx}, zsweep={zs_val}, z_avg={za_val}, "
-            f"abs_diff={max_abs} (tol={abs_tol})"
+            f"idx = {max_idx}, zsweep = {zs_val}, z_avg = {za_val}, "
+            f"abs_diff = {max_abs} (tol = {abs_tol})"
         )
 
 ################################################################################
@@ -743,29 +743,29 @@ async def test_loopback(pytestconfig, tmp_path):
                     za_val = z_avg.ravel()[flat_idx]
                     raise AssertionError(
                         "Max absolute diff exceeds tolerance: "
-                        f"idx={max_idx}, zsweep={zs_val}, z_avg={za_val}, "
-                        f"abs_diff={max_abs} (tol={abs_tol})"
+                        f"idx = {max_idx}, zsweep = {zs_val}, z_avg = {za_val}, "
+                        f"abs_diff = {max_abs} (tol = {abs_tol})"
                     )
             lines = ["PASS"]
             lines.append(
-                f"init_s={init_s:.3f} configure_s={configure_s:.3f}"
+                f"init_s = {init_s:.3f} configure_s = {configure_s:.3f}"
             )
             if timing_globals:
                 lines.append(
-                    "ts_duration_s={ts_duration_s} dec_stage={dec_stage} "
-                    "sweep_npoints={sweep_npoints} sweep_nsamps={sweep_nsamps} "
-                    "nsamples_ts={nsamples_ts}"
+                    "ts_duration_s = {ts_duration_s} dec_stage = {dec_stage} "
+                    "sweep_npoints = {sweep_npoints} sweep_nsamps = {sweep_nsamps} "
+                    "nsamples_ts = {nsamples_ts}"
                     .format(**timing_globals)
                 )
             for row in timing_rows:
                 lines.append(
-                    "Timing (bank_high={analog_bank_high}, nco_MHz={nco_MHz}): "
-                    "sweep_span_s={sweep_span_s:.3f} "
-                    "capture_ts_s={capture_ts_s:.3f}".format(**row)
+                    "Timing (bank_high = {analog_bank_high}, nco_MHz = {nco_MHz}): "
+                    "sweep_span_s = {sweep_span_s:.3f} "
+                    "capture_ts_s = {capture_ts_s:.3f}".format(**row)
                 )
             lines.append("")
             lines.append("Timestream vs sweep absolute differences")
-            lines.append(f"abs_tol={abs_tol:.6f}")
+            lines.append(f"abs_tol = {abs_tol:.6f}")
             max_rel_overall = None
             if max_abs_module is not None:
                 for result in results:
@@ -776,12 +776,12 @@ async def test_loopback(pytestconfig, tmp_path):
                             max_rel_overall = max_abs_overall / sweep_abs_overall
                         break
             max_abs_line = (
-                f"max_abs_overall={max_abs_overall:.6f} "
-                f"(module={max_abs_module}, idx={max_abs_idx})"
+                f"max_abs_overall = {max_abs_overall:.6f} "
+                f"(module = {max_abs_module}, idx = {max_abs_idx})"
             )
             lines.append(max_abs_line)
             if max_rel_overall is not None:
-                lines.append(f"max_rel_overall={max_rel_overall:.6f}")
+                lines.append(f"max_rel_overall = {max_rel_overall:.6f}")
             for result in results:
                 sweep_at_max = result["sweep_vals"][result["max_idx"]]
                 sweep_at_max_str = (
@@ -789,9 +789,9 @@ async def test_loopback(pytestconfig, tmp_path):
                     f"{sweep_at_max.imag:+.6f}j"
                 )
                 lines.append(
-                    "Module {module_idx}: max_abs={max_abs:.6f}, "
-                    "mean_abs={mean_abs:.6f}, sweep_at_max={sweep_at_max}".
-                    format(**result, sweep_at_max=sweep_at_max_str)
+                    "Module {module_idx}: max_abs = {max_abs:.6f}, "
+                    "mean_abs = {mean_abs:.6f}, sweep_at_max = {sweep_at_max}".
+                    format(**result, sweep_at_max = sweep_at_max_str)
                 )
             status_text = "\n".join(lines) + "\n"
             for status_path in status_paths:
@@ -800,24 +800,24 @@ async def test_loopback(pytestconfig, tmp_path):
             lines = [f"FAIL: {exc}"]
             if results:
                 lines.append(
-                    f"init_s={init_s:.3f} configure_s={configure_s:.3f}"
+                    f"init_s = {init_s:.3f} configure_s = {configure_s:.3f}"
                 )
                 if timing_globals:
                     lines.append(
-                        "ts_duration_s={ts_duration_s} dec_stage={dec_stage} "
-                        "sweep_npoints={sweep_npoints} sweep_nsamps={sweep_nsamps} "
-                        "nsamples_ts={nsamples_ts}"
+                        "ts_duration_s = {ts_duration_s} dec_stage = {dec_stage} "
+                        "sweep_npoints = {sweep_npoints} sweep_nsamps = {sweep_nsamps} "
+                        "nsamples_ts = {nsamples_ts}"
                         .format(**timing_globals)
                     )
                 for row in timing_rows:
                     lines.append(
-                        "Timing (bank_high={analog_bank_high}, nco_MHz={nco_MHz}): "
-                        "sweep_span_s={sweep_span_s:.3f} "
-                        "capture_ts_s={capture_ts_s:.3f}".format(**row)
+                        "Timing (bank_high = {analog_bank_high}, nco_MHz = {nco_MHz}): "
+                        "sweep_span_s = {sweep_span_s:.3f} "
+                        "capture_ts_s = {capture_ts_s:.3f}".format(**row)
                     )
                 lines.append("")
                 lines.append("Timestream vs sweep absolute differences")
-                lines.append(f"abs_tol={abs_tol:.6f}")
+                lines.append(f"abs_tol = {abs_tol:.6f}")
                 max_rel_overall = None
                 if max_abs_module is not None:
                     for result in results:
@@ -828,12 +828,12 @@ async def test_loopback(pytestconfig, tmp_path):
                                 max_rel_overall = max_abs_overall / sweep_abs_overall
                             break
                 max_abs_line = (
-                    f"max_abs_overall={max_abs_overall:.6f} "
-                    f"(module={max_abs_module}, idx={max_abs_idx})"
+                    f"max_abs_overall = {max_abs_overall:.6f} "
+                    f"(module = {max_abs_module}, idx = {max_abs_idx})"
                 )
                 lines.append(max_abs_line)
                 if max_rel_overall is not None:
-                    lines.append(f"max_rel_overall={max_rel_overall:.6f}")
+                    lines.append(f"max_rel_overall = {max_rel_overall:.6f}")
                 for result in results:
                     sweep_at_max = result["sweep_vals"][result["max_idx"]]
                     sweep_at_max_str = (
@@ -841,9 +841,9 @@ async def test_loopback(pytestconfig, tmp_path):
                         f"{sweep_at_max.imag:+.6f}j"
                     )
                     lines.append(
-                        "Module {module_idx}: max_abs={max_abs:.6f}, "
-                        "mean_abs={mean_abs:.6f}, sweep_at_max={sweep_at_max}".
-                        format(**result, sweep_at_max=sweep_at_max_str)
+                        "Module {module_idx}: max_abs = {max_abs:.6f}, "
+                        "mean_abs = {mean_abs:.6f}, sweep_at_max = {sweep_at_max}".
+                        format(**result, sweep_at_max = sweep_at_max_str)
                     )
             status_text = "\n".join(lines) + "\n"
             for status_path in status_paths:
@@ -920,7 +920,7 @@ class TqdmSpy:
 
 
 class _TqdmStub:
-    def __init__(self, iterable, kwargs=None):
+    def __init__(self, iterable, kwargs = None):
         self.iterable = iterable
         self.desc = None if kwargs is None else kwargs.get("desc")
         self.n = 0

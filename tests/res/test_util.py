@@ -78,10 +78,10 @@ def test_calc_qc_qi_near_endpoints():
     eps = 1e-9
     qc_small, qi_small = util.calc_qc_qi(qr, eps)
     assert np.isfinite(qc_small) and qc_small > qr
-    assert np.isclose(qi_small, qr, rtol=1e-6)
+    assert np.isclose(qi_small, qr, rtol = 1e-6)
     qc_near_one, qi_near_one = util.calc_qc_qi(qr, 1 - eps)
-    assert np.isclose(qc_near_one, qr / (1 - eps), rtol=1e-6)
-    assert np.isclose(qi_near_one, qr / eps, rtol=1e-6)
+    assert np.isclose(qc_near_one, qr / (1 - eps), rtol = 1e-6)
+    assert np.isclose(qi_near_one, qr / eps, rtol = 1e-6)
 
 @pytest.mark.parametrize("qr,amp,qc_expected,qi_expected", [
     (np.nan, 0.5, np.nan, np.nan),
@@ -285,7 +285,7 @@ def test_cardan_no_real_roots():
     a, b, c, d = 1.0, 0.0, 1.0, 1.0
     root = util.cardan(a, b, c, d, True)
     # The only real root is approximately -0.6823
-    assert pytest.approx(root, rel=1e-4) == -0.6823
+    assert pytest.approx(root, rel = 1e-4) == -0.6823
 
 def test_cardan_degenerate_case():
     # Degenerate case: all coefficients zero

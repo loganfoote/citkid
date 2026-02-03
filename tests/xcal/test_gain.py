@@ -92,7 +92,7 @@ def test_fit_gain_full_cut_warns_nan():
     z = np.ones_like(f, dtype = np.complex128)
     # Span that covers entire f range
     fr_spans = [(2, 10)]
-    with pytest.warns(UserWarning, match="Gain fit failed, returning NAN"):
+    with pytest.warns(UserWarning, match = "Gain fit failed, returning NAN"):
         p_amp, p_phase, mask = gain.fit_gain(f, z, fr_spans)
     assert p_amp.dtype == np.float64 and p_phase.dtype == np.float64
     assert np.isnan(p_amp).all()
