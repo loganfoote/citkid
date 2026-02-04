@@ -867,7 +867,8 @@ async def test_stream_basic_workflow(base_crs, mock_write_acq_cfg_to_zarr):
         mock_p2z.assert_called_once()
         
         # Verify cleanup (default delete_parser_data=True)
-        mock_rmtree.assert_called_once_with('/tmp/parser_data_00')
+        actual_path = mock_rmtree.call_args[0][0]
+        assert os.path.normpath(actual_path) == os.path.normpath('/tmp/parser_data_00')
 
 
 @pytest.mark.asyncio
@@ -970,7 +971,7 @@ async def test_stream_parser_arguments(base_crs):
         assert args[0] == '-i'
         assert args[1] == 'eth1'
         assert args[2] == '-d'
-        assert args[3] == '/tmp/parser_data_00'
+        assert os.path.normpath(args[3]) == os.path.normpath('/tmp/parser_data_00')
         assert args[4] == '-c'
         assert args[5] == '1-3'  # max_ntones from fres_map
         assert args[6] == '-s'
@@ -1025,18 +1026,20 @@ async def test_stream_parser_to_zarr_arguments(base_crs):
         )
         
         # Verify parser_to_zarr called with correct arguments
-        mock_p2z.assert_called_once_with(
-            '/custom/parser_data_00',
-            grp,
-            1234,  # serial_number
-            3,     # ntones
-            2,     # max_ntones (max from fres_map)
-            {1: [0, 1], 2: [2]},  # ch_map
-            {1: [-50.0, -51.0], 2: [-52.0]},  # ares_map
-            1 / 2e6,  # 1 / sample_freq
-            batch_size_mb = 500,
-            chunk_size_mb = 64
-        )
+        assert mock_p2z.call_count == 1
+        call_args = mock_p2z.call_args
+        actual_path = call_args[0][0]
+        p = os.path.normpath('/custom/parser_data_00')
+        assert os.path.normpath(actual_path) == p
+        assert call_args[0][1] == grp
+        assert call_args[0][2] == 1234  # serial_number
+        assert call_args[0][3] == 3     # ntones
+        assert call_args[0][4] == 2     # max_ntones
+        assert call_args[0][5] == {1: [0, 1], 2: [2]}  # ch_map
+        assert call_args[0][6] == {1: [-50.0, -51.0], 2: [-52.0]}  # ares_map
+        assert call_args[0][7] == 1 / 2e6  # 1 / sample_freq
+        assert call_args[1]['batch_size_mb'] == 500.0
+        assert call_args[1]['chunk_size_mb'] == 64.0
 
 
 @pytest.mark.asyncio
@@ -1082,7 +1085,8 @@ async def test_stream_delete_parser_data_true(base_crs):
         )
         
         # Verify rmtree called
-        mock_rmtree.assert_called_once_with('/tmp/parser_data_00')
+        actual_path = mock_rmtree.call_args[0][0]
+        assert os.path.normpath(actual_path) == os.path.normpath('/tmp/parser_data_00')
 
 
 @pytest.mark.asyncio

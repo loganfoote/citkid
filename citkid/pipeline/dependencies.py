@@ -100,6 +100,99 @@ def _get_lowest_runs(sub_deps):
                 conflicts = True
     return lowest_runs, conflicts
 
+def _flatten_all_deps(deps, sub_deps):
+    """
+    Flatten all dependencies into a single view showing all parameters and their 
+    run indices.
+    
+    Parameters:
+    deps (dict): Input parameter names mapped to their run indices.
+    sub_deps (dict): Input parameters mapped to their dependencies
+        {dep_name: dep_run}.
+    
+    Returns:
+    dict: {param_name: [(run_idx, source), ...]} where source is the input param 
+        that requires it.
+    """
+    flattened = {}
+    
+    # Add all sub-dependencies
+    for source, deps_dict in sub_deps.items():
+        for param_name, run_idx in deps_dict.items():
+            if param_name not in flattened:
+                flattened[param_name] = []
+            flattened[param_name].append((run_idx, source))
+    
+    # Also add input parameters themselves (they might appear in sub_deps)
+    for param_name, run_idx in deps.items():
+        if param_name not in flattened:
+            flattened[param_name] = []
+        flattened[param_name].append((run_idx, param_name))
+    
+    return flattened
+
+def _find_conflicting_params(flattened_deps):
+    """
+    Find parameters that have conflicting run indices.
+    
+    Parameters:
+    flattened_deps (dict): Output from _flatten_all_deps.
+    
+    Returns:
+    set: Parameter names that have different run indices.
+    """
+    conflicts = set()
+    for param_name, runs_list in flattened_deps.items():
+        if len(runs_list) > 1:
+            # Check if all run indices are the same
+            run_indices = [r for r, _ in runs_list]
+            if len(set(run_indices)) > 1:
+                conflicts.add(param_name)
+    return conflicts
+
+def _identify_params_to_backtrack(
+        deps, sub_deps, conflicting_params, flattened_deps
+        ):
+    """
+    Identify which input parameters need to be backtracked to resolve conflicts.
+    
+    Parameters:
+    deps (dict): Input parameter names mapped to their run indices.
+    sub_deps (dict): Input parameters mapped to their dependencies.
+    conflicting_params (set): Parameter names with conflicts.
+    flattened_deps (dict): Output from _flatten_all_deps.
+    
+    Returns:
+    set: Input parameter names that should be backtracked.
+    """
+    to_backtrack = set()
+    
+    for conflict_param in conflicting_params:
+        # Find the lowest required run for this parameter
+        runs_list = flattened_deps[conflict_param]
+        lowest_run = min(r for r, _ in runs_list)
+        
+        # Find all sources that require a higher run
+        for run_idx, source in runs_list:
+            if run_idx > lowest_run and source in deps:
+                to_backtrack.add(source)
+    
+    # Also backtrack parameters that depend on backtracked parameters
+    # This handles the case where one input depends on another input
+    changed = True
+    while changed:
+        changed = False
+        for param_name, param_deps in sub_deps.items():
+            if param_name not in to_backtrack and param_name in deps:
+                # Check if this parameter depends on any backtracked parameter
+                for dep_name in param_deps.keys():
+                    if dep_name in to_backtrack:
+                        to_backtrack.add(param_name)
+                        changed = True
+                        break
+    
+    return to_backtrack
+
 def get_deps(param_names, deps_map):
     """
     Determine appropriate run versions and resolve dependency conflicts.
@@ -142,22 +235,40 @@ def get_deps(param_names, deps_map):
         sub_deps[name] = prev_deps
 
     # Resolve conflicts in sub-dependencies by backtracking runs
-    lowest_runs, conflicts = _get_lowest_runs(sub_deps)
-    conflicts = True
     mod_runs = {}
-    while conflicts:
-        for name, dep in sub_deps.items():
-            for n, run_idx in dep.items():
-                if lowest_runs[n] < run_idx:
-                    # backtrack this dependency
-                    deps[name] -= 1 
-                    sub_deps[name] = _get_sub_deps(
-                        name,
-                        deps[name],
-                        deps_map,
-                    )
-                    mod_runs[name] = deps[name]
-        lowest_runs, conflicts = _get_lowest_runs(sub_deps)
+    max_iterations = 100  # Safety limit
+    iteration = 0
+    
+    while iteration < max_iterations:
+        iteration += 1
+        
+        # Flatten all dependencies to see the full picture
+        flattened = _flatten_all_deps(deps, sub_deps)
+        
+        # Find parameters with conflicting run indices
+        conflicts = _find_conflicting_params(flattened)
+        
+        if not conflicts:
+            break  # No conflicts, we're done
+        
+        # Identify which input parameters need to be backtracked
+        to_backtrack = _identify_params_to_backtrack(
+            deps, sub_deps, conflicts, flattened
+            )
+        
+        if not to_backtrack:
+            # No input parameters can be backtracked, something is wrong
+            break
+        
+        # Backtrack the identified parameters
+        for param_name in to_backtrack:
+            deps[param_name] -= 1
+            sub_deps[param_name] = _get_sub_deps(
+                param_name,
+                deps[param_name],
+                deps_map,
+            )
+            mod_runs[param_name] = deps[param_name]
 
     # Warn if any runs were modified
     if len(mod_runs):
@@ -170,11 +281,13 @@ def get_deps(param_names, deps_map):
         msg = msg[:-2] + "] to resolve dependency conflicts."
         warnings.warn(msg)
 
-    # Sanity check: ensure no input names depend on subfunction input names
-    if any([k in deps.keys() for k in lowest_runs.keys()]):
-        m = "Function input names cannot depend on subfunction input names"
-        raise ValueError(m)
-
-    # Merge sub-dependencies of each parameter into dependencies
-    deps.update(lowest_runs)
+    # Merge all dependencies - add any from sub_deps that aren't already in deps
+    flattened = _flatten_all_deps(deps, sub_deps)
+    for param_name in flattened.keys():
+        if param_name not in deps:
+            # Get the run index 
+            # (should all be the same after conflict resolution)
+            runs = [r for r, _ in flattened[param_name]]
+            deps[param_name] = runs[0]
+    
     return deps

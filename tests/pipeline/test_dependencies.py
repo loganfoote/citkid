@@ -130,6 +130,163 @@ def test_get_lowest_runs_invalid_subdep_value():
         rv._get_lowest_runs({"param1": [1, 2]})
 
 ################################################################################
+########################### New helper functions ###############################
+################################################################################
+def test_flatten_all_deps():
+    deps = {'a1': 2, 'b1': 2}
+    sub_deps = {
+        'a1': {'directory': 0},
+        'b1': {'a1': 1, 'directory': 0}
+    }
+    flattened = rv._flatten_all_deps(deps, sub_deps)
+    
+    assert 'directory' in flattened
+    assert 'a1' in flattened
+    assert 'b1' in flattened
+    # a1 appears both as input and in b1's deps
+    assert len(flattened['a1']) == 2
+    assert (2, 'a1') in flattened['a1']
+    assert (1, 'b1') in flattened['a1']
+
+def test_find_conflicting_params():
+    flattened = {
+        'directory': [(0, 'a1'), (0, 'b1')],
+        'a1': [(2, 'a1'), (1, 'b1')],  # Conflict!
+        'b1': [(2, 'b1')]
+    }
+    conflicts = rv._find_conflicting_params(flattened)
+    assert conflicts == {'a1'}
+
+def test_identify_params_to_backtrack():
+    deps = {'a1': 2, 'b1': 2}
+    sub_deps = {
+        'a1': {'directory': 0},
+        'b1': {'a1': 1, 'directory': 0}
+    }
+    flattened = {
+        'directory': [(0, 'a1'), (0, 'b1')],
+        'a1': [(2, 'a1'), (1, 'b1')],
+    }
+    conflicting_params = {'a1'}
+    
+    to_backtrack = rv._identify_params_to_backtrack(deps, sub_deps, conflicting_params, flattened)
+    # a1 at run 2 is higher than required run 1, so backtrack a1
+    assert 'a1' in to_backtrack
+
+def test_flatten_all_deps_empty():
+    """Test flattening with empty inputs."""
+    flattened = rv._flatten_all_deps({}, {})
+    assert flattened == {}
+
+def test_flatten_all_deps_no_overlap():
+    """Test when input params don't appear in sub-dependencies."""
+    deps = {'a1': 1, 'b1': 1}
+    sub_deps = {'a1': {'x': 0}, 'b1': {'y': 0}}
+    flattened = rv._flatten_all_deps(deps, sub_deps)
+    
+    assert 'a1' in flattened
+    assert 'b1' in flattened
+    assert 'x' in flattened
+    assert 'y' in flattened
+    assert len(flattened['a1']) == 1
+    assert len(flattened['b1']) == 1
+
+def test_find_conflicting_params_empty():
+    """Test conflict detection with empty input."""
+    conflicts = rv._find_conflicting_params({})
+    assert conflicts == set()
+
+def test_find_conflicting_params_no_conflicts():
+    """Test when all parameters have consistent run indices."""
+    flattened = {
+        'a1': [(1, 'source1'), (1, 'source2')],
+        'b1': [(2, 'source3')]
+    }
+    conflicts = rv._find_conflicting_params(flattened)
+    assert conflicts == set()
+
+def test_get_deps_three_level_cascade():
+    """Test cascading dependencies: a1 → b1 → c1 where all are inputs."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0},
+            'b1': {'a1': 1, 'directory': 0},
+            'c1': {'b1': 1, 'a1': 1, 'directory': 0}},
+        2: {'a1': {'directory': 0},
+            'b1': {'a1': 1, 'directory': 0},
+            'c1': {'b1': 1, 'a1': 1, 'directory': 0}},
+        3: {'a1': {'directory': 0},
+            'b1': {'a1': 2, 'directory': 0},
+            'c1': {'b1': 2, 'a1': 2, 'directory': 0}}
+    }
+    
+    # Request all three at their highest runs - should backtrack to run 1
+    with pytest.warns(UserWarning):
+        result = rv.get_deps(['a1', 'b1', 'c1'], deps_map)
+        expected = {'a1': 1, 'b1': 1, 'c1': 1, 'directory': 0}
+        assert result == expected
+
+def test_get_deps_multiple_independent_params():
+    """Test requesting multiple independent parameters at most recent run."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0},
+            'a2': {'directory': 0},
+            'c1': {'a1': 1, 'directory': 0},
+            'c2': {'a2': 1, 'directory': 0}},
+        2: {'a1': {'directory': 0},
+            'a2': {'directory': 0},
+            'c1': {'a1': 2, 'directory': 0},  # c1 updated to use a1:2
+            'c2': {'a2': 2, 'directory': 0},  # c2 updated to use a2:2
+            'b1': {'a1': 2, 'c1': 2, 'directory': 0},  # includes all transitive deps
+            'b2': {'a2': 2, 'c2': 2, 'directory': 0}}  # includes all transitive deps
+    }
+
+    # b1 and b2 use most recent runs with all dependencies included
+    result = rv.get_deps(['b1', 'b2'], deps_map)
+    expected = {'b1': 2, 'b2': 2, 'a1': 2, 'a2': 2, 'c1': 2, 'c2': 2, 'directory': 0}
+    assert result == expected
+
+def test_get_deps_shared_dependency_different_levels():
+    """Test parameters that share some dependencies but not all."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'shared': {'directory': 0},
+            'unique1': {'directory': 0},
+            'unique2': {'directory': 0},
+            'b1': {'shared': 1, 'unique1': 1, 'directory': 0},
+            'b2': {'shared': 1, 'unique2': 1, 'directory': 0}},
+        2: {'shared': {'directory': 0},
+            'unique1': {'directory': 0},
+            'unique2': {'directory': 0},
+            'b1': {'shared': 2, 'unique1': 2, 'directory': 0},
+            'b2': {'shared': 2, 'unique2': 2, 'directory': 0}}
+    }
+    
+    # b1 and b2 both depend on shared but have different unique deps
+    result = rv.get_deps(['b1', 'b2'], deps_map)
+    # Should be at same run since they share 'shared' dependency
+    expected = {'b1': 2, 'b2': 2, 'shared': 2, 'unique1': 2, 'unique2': 2, 'directory': 0}
+    assert result == expected
+
+def test_get_deps_all_transitive_deps_included():
+    """Test that all transitive dependencies are included from deps_map."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0},
+            'b1': {'a1': 1, 'directory': 0},
+            'c1': {'a1': 1, 'b1': 1, 'directory': 0}},  # c1 includes all transitive deps
+        2: {'a1': {'directory': 0},
+            'b1': {'a1': 2, 'directory': 0},
+            'c1': {'b1': 2, 'a1': 2, 'directory': 0}}  # c1 includes a1 transitively from b1
+    }
+
+    # c1:2 depends on b1:2 and transitively on a1:2 (all in deps_map)
+    result = rv.get_deps(['c1'], deps_map)
+    expected = {'c1': 2, 'b1': 2, 'a1': 2, 'directory': 0}
+    assert result == expected
+
+################################################################################
 ################################### get_deps ###################################
 ################################################################################
 deps_map0 = {0: {"param1": {}}}
@@ -223,15 +380,6 @@ def test_get_deps_AAAABB():
     expected = {'b1': 2, 'a1': 4, 'directory': 0} 
     assert rv.get_deps(['b1'], deps_map) == expected
 
-def test_get_deps_overlap_inputs_with_subdeps_error():
-    deps_map = {0: {'directory': {}},
-             1: {'a1': {'directory': 0},
-                 'a2': {'directory': 0},
-                 'b1': {'a1': 1, 'directory': 0}}}
-    # Requesting both an input ('directory') and a param that depends on it
-    with pytest.raises(ValueError):
-        rv.get_deps(['directory', 'a1'], deps_map)
-
 def test_get_deps_multi_param_no_conflict():
     deps_map = {0: {'directory': {}},
              1: {'a1': {'directory': 0},
@@ -240,6 +388,68 @@ def test_get_deps_multi_param_no_conflict():
                  'd1': {'a2': 1, 'directory': 0}}}
     expected = {'b1': 1, 'd1': 1, 'a1': 1, 'a2': 1, 'directory': 0}
     assert rv.get_deps(['b1', 'd1'], deps_map) == expected
+
+def test_get_deps_input_depends_on_input_same_run():
+    # Test case where one input parameter depends on another at same run
+    # Function A outputs a1, Function B takes [a1] and outputs b1
+    # Request [a1, b1] where b1 depends on a1, both at run 1
+    deps_map = {0: {'directory': {}},
+             1: {'a1': {'directory': 0},
+                 'b1': {'a1': 1, 'directory': 0}}}
+    expected = {'a1': 1, 'b1': 1, 'directory': 0}
+    result = rv.get_deps(['a1', 'b1'], deps_map)
+    assert result == expected
+
+def test_get_deps_input_depends_on_input_different_runs():
+    # Test case where one input parameter depends on another at different run
+    # a1 is at run 2, but b1 at run 2 depends on a1 at run 1
+    # Should backtrack both to run 1
+    deps_map = {0: {'directory': {}},
+             1: {'a1': {'directory': 0},
+                 'b1': {'a1': 1, 'directory': 0}},
+             2: {'a1': {'directory': 0},
+                 'b1': {'a1': 1, 'directory': 0}}}
+    
+    with pytest.warns(UserWarning):
+        expected = {'a1': 1, 'b1': 1, 'directory': 0}
+        result = rv.get_deps(['a1', 'b1'], deps_map)
+        assert result == expected
+
+def test_get_deps_input_in_subdeps_no_backtrack():
+    # Test case where an input parameter also appears in subdeps
+    # but at the same run - no backtracking needed
+    deps_map = {0: {'directory': {}},
+             1: {'a1': {'directory': 0},
+                 'a2': {'directory': 0},
+                 'b1': {'a1': 1, 'a2': 1, 'directory': 0}}}
+    expected = {'a1': 1, 'b1': 1, 'a2': 1, 'directory': 0}
+    result = rv.get_deps(['a1', 'b1'], deps_map)
+    assert result == expected
+
+def test_get_deps_overlap_inputs_with_subdeps():
+    # Requesting both an input ('directory') and a param that depends on it
+    # This is now valid - directory should remain, a1 should not be overwritten
+    deps_map = {0: {'directory': {}},
+             1: {'a1': {'directory': 0},
+                 'a2': {'directory': 0},
+                 'b1': {'a1': 1, 'directory': 0}}}
+    expected = {'directory': 0, 'a1': 1}
+    assert rv.get_deps(['directory', 'a1'], deps_map) == expected
+
+def test_get_deps_two_inputs_conflicting_subdeps():
+    # Two input parameters with conflicting sub-dependencies
+    # e1 depends on a2:1, c1 depends on a2:2 - should backtrack c1 to run 1
+    deps_map = {0: {'directory': {}},
+             1: {'a2': {'directory': 0},
+                 'e1': {'a2': 1, 'directory': 0},
+                 'c1': {'a2': 1, 'directory': 0}},
+             2: {'a2': {'directory': 0},
+                 'c1': {'a2': 2, 'directory': 0}}}
+    
+    with pytest.warns(UserWarning):
+        expected = {'e1': 1, 'c1': 1, 'a2': 1, 'directory': 0}
+        result = rv.get_deps(['e1', 'c1'], deps_map)
+        assert result == expected
 
 
 @pytest.mark.parametrize("param_names,deps_map", [
