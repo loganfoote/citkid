@@ -775,11 +775,13 @@ class CRS:
                  nco + self.bw / 2 - 1 - tone_bw,
                  1024) 
             for nco in ncos])
+        ch_map = {idx: range(i * 1024, (i + 1) * 1024) 
+                  for i, idx in enumerate(self.nco_freqs.keys())}
         ares = amplitude * np.ones(len(fres))
         
         # Sweep
         f, z = await self.sweep_span(
-            fres, ares, tone_bw, npoints_per_tone, nsamps, ch_map = None, 
+            fres, ares, tone_bw, npoints_per_tone, nsamps, ch_map = ch_map, 
             allow_missing = False, center_fres = True, downward = True, 
             log = log, dec_grp = dec_grp, verbose = verbose, 
             pbar_description = pbar_description

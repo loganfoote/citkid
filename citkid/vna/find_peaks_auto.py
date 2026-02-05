@@ -10,12 +10,12 @@ peak finder.
 import numpy as np
 import h5py
 import pyqtgraph as pg
-from pyqtgraph.Qt import QtCore, QtWidgets
+from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 from scipy.signal import butter, filtfilt, find_peaks
 import os
 
 
-def run_auto_peak_finder(f, z, outpath, overwrite = True):
+def run_auto_peak_finder(f, z, outpath, overwrite = False):
     """
     Run the automatic peak finder.
     
@@ -291,10 +291,10 @@ class AutoPeakFinder:
         layout.addStretch()
         
         # Setup keyboard shortcuts
-        self.save_action = QtWidgets.QShortcut(QtCore.Qt.Key_S, self.win)
+        self.save_action = QtGui.QShortcut(QtCore.Qt.Key_S, self.win)
         self.save_action.activated.connect(self.save_data)
         
-        self.help_action = QtWidgets.QShortcut(QtCore.Qt.Key_H, self.win)
+        self.help_action = QtGui.QShortcut(QtCore.Qt.Key_H, self.win)
         self.help_action.activated.connect(self.show_help)
         
     def update_smoothing_controls(self):
@@ -402,12 +402,12 @@ class AutoPeakFinder:
         self.plot_original.setXLink(self.plot_filtered)
         
         # Setup keyboard shortcuts for panning
-        self.pan_left_action = QtWidgets.QShortcut(
+        self.pan_left_action = QtGui.QShortcut(
             QtCore.Qt.Key_Z, self.win
         )
         self.pan_left_action.activated.connect(self.pan_left)
         
-        self.pan_right_action = QtWidgets.QShortcut(
+        self.pan_right_action = QtGui.QShortcut(
             QtCore.Qt.Key_X, self.win
         )
         self.pan_right_action.activated.connect(self.pan_right)

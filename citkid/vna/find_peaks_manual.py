@@ -9,7 +9,7 @@ visualization, and undo support.
 import numpy as np
 import h5py
 import pyqtgraph as pg
-from pyqtgraph.Qt import QtCore, QtWidgets
+from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 import os
 
 
@@ -245,25 +245,25 @@ class PeakFinder:
         None
         """
         # Save shortcut
-        self.save_action = QtWidgets.QShortcut(QtCore.Qt.Key_S, self.win)
+        self.save_action = QtGui.QShortcut(QtCore.Qt.Key_S, self.win)
         self.save_action.activated.connect(self.save_data)
         
         # Undo shortcut
-        self.undo_action = QtWidgets.QShortcut(
+        self.undo_action = QtGui.QShortcut(
             QtCore.Qt.ControlModifier | QtCore.Qt.Key_Z, self.win
         )
         self.undo_action.activated.connect(self.undo)
         
         # Pan left shortcut
-        self.pan_left_action = QtWidgets.QShortcut(QtCore.Qt.Key_Z, self.win)
+        self.pan_left_action = QtGui.QShortcut(QtCore.Qt.Key_Z, self.win)
         self.pan_left_action.activated.connect(self.pan_left)
         
         # Pan right shortcut
-        self.pan_right_action = QtWidgets.QShortcut(QtCore.Qt.Key_X, self.win)
+        self.pan_right_action = QtGui.QShortcut(QtCore.Qt.Key_X, self.win)
         self.pan_right_action.activated.connect(self.pan_right)
         
         # Help shortcut
-        self.help_action = QtWidgets.QShortcut(QtCore.Qt.Key_H, self.win)
+        self.help_action = QtGui.QShortcut(QtCore.Qt.Key_H, self.win)
         self.help_action.activated.connect(self.show_help)
         
     def on_click(self, event):
