@@ -7,7 +7,7 @@ import copy
 
 from .dependencies import get_most_recent_run, get_deps
 from . import framework as pf
-from ..zarr_util import deep_union
+from .util import deep_union
 
 class DataSet:
     def __init__(self, custom_path, zarr_path, cal_yaml_path, analysis_yaml_path=None):
@@ -60,7 +60,7 @@ class DataSet:
         # hard-coded nres for now
         self.nres = 1600
                 
-        # Load YAML and convert to calibration pipeline
+        # Load calibration YAML file and convert it to calibration pipeline
         yaml_dict = self._load_yaml(self.cal_yaml_path)
         self.cal_pl = self._convert_yaml_to_steps(yaml_dict)
 
@@ -77,25 +77,74 @@ class DataSet:
             
             # Load analysis YAML and user-specified analysis parameters
             yaml_dict = self._load_yaml(self.analysis_yaml_path)
-            yaml_dict = yaml_dict['ANALYSIS_STEPS']
-            self.analysis_params = {}
-            step_names = np.array([s.name for s in self.analysis_steps])
-            for step_dict in yaml_dict.values():
-                name = step_dict['task']
-                ixs = np.where(step_names == name)[0]
-                if len(ixs):
-                    step = self.analysis_steps[ixs[0]]
-                    if 'params' in step_dict.keys():
-                        params_dict = step_dict['params']
-                        for param_name, param_val in params_dict.items():
-                            if param_name in step.param_names:
-                                if param_val == 'None':
-                                    param_val = None
-                                self.analysis_params[param_name] = param_val
-                                self.global_cache[param_name] = True
-                                if 1 not in self.deps_map['global']:
-                                    self.deps_map['global'][1] = {}
-                                self.deps_map['global'][1][param_name] = {}
+            self.analysis_user_params = self._collect_user_params(yaml_dict)
+            self._add_user_params_to_cache_and_deps(self.analysis_user_params)
+        
+    def _add_user_params_to_cache_and_deps(self, user_params):
+        """
+        Add user-specified parameters to the global dependencies map,
+        and to the global cache as 'global'-type attributes.
+        
+        Parameters:
+        user_params (dictionary): Keys are function names, and values are dictionaries
+            of parameter names and their values.
+        
+        Returns:
+        None
+        """
+        if 1 not in self.deps_map['global']:
+            self.deps_map['global'][1] = {}
+        for d in user_params.values():
+            for param_name in d.keys():
+                self.global_cache[param_name] = True
+                self.deps_map['global'][1][param_name] = {}
+        
+    def _collect_user_params(self, obj, result=None):
+        """
+        Recurcsively loads user-specified parameters from the analysis YAML file.
+        
+        Parameters:
+        obj: Dictionary from loading the YAML file.
+        
+        Returns:
+        result (dictionary): Keys are function names, and values are dictionaries
+            of parameter names and their values
+        """
+        if result is None:
+            result = {}
+
+        if isinstance(obj, dict):
+            # Check current level
+            if "params" in obj:
+                if "task" not in obj:
+                    raise KeyError("Found 'params' without a sibling 'task'")
+                params_dict = obj["params"]
+                for param_name, param_val in params_dict.items():
+                    if param_val in ['None', 'none']:
+                        params_dict[param_name] = None
+                result[obj["task"]] = params_dict
+
+            # Recurse
+            for v in obj.values():
+                self._collect_user_params(v, result)
+
+        elif isinstance(obj, list):
+            for item in obj:
+                self._collect_user_params(item, result)
+
+        return result
+
+        
+    def _load_user_params_from_yaml(self, d):
+        """
+        Loads user-specified parameters from either the calibration
+        or analysis YAML file.
+        
+        Parameters:
+        d: Dictionary from loading the YAML file.
+        
+        Returns:
+        """
         
     def _load_custom_steps(self):
         """
@@ -224,45 +273,30 @@ class DataSet:
         None
         """
         self.confirm_valid_path(path)
-        for step in path:
+        for ii, step in enumerate(path):
             this_data_idx = data_idx
             if step.func_type in ['global', 'global-res']:
                 this_data_idx = None
+
+            # If we are at an intermediate step of the path, check if
+            # the outputs of this step are already attributes of the DataSet.
+            # If all of the outputs already exist as attributes, then return.
+            if ii < len(path)-1:
+                if step.func_type in ['global', 'global-res']:
+                    if all([self.has_attr(name) for name in step.return_names]):
+                        continue
+                else:
+                    this_data_idx = np.atleast_1d(this_data_idx)
+                    # Find data indices for which at least one of the outputs
+                    # of this step does not exist, if any.
+                    exists_arrs = np.array([self.has_attr(name, this_data_idx)
+                                            for name in step.return_names])
+                    do_run_mask = ~np.all(exists_arrs, axis=0)
+                    this_data_idx = this_data_idx[do_run_mask]
+                    if not any(do_run_mask):
+                        continue
+                    
             step.run(self, this_data_idx)
-        
-
-    def read_data(self, name, data_idx, run_idx = None):
-        """
-        Read data attribute 'name' for data indices 'data_idx' from dataset.
-
-        Parameters:
-        name (str): The name of the data attribute to read.
-        data_idx (int or list): The data index or indices to read.
-        run_idx (int or None): run index, or None for most recent run.
-            that produced the desired data attribute.
-
-        Returns:
-        np.ndarray or scalar: The requested data attribute value(s).
-        """
-        data_idx = np.atleast_1d(data_idx)
-        if run_idx is None:
-            run_idx = self.get_attr_version(name)
-            # If the run index was not specified, and the
-            # data does not exist in any run, raise an error.
-            if run_idx is None:
-                m = f"'{name}' was not found under any run index "
-                m += "in the zarr file."
-                raise ValueError(m)
-        else:
-            # If the data does not exist in the user-specified
-            # run index, raise an error.
-            if not self.run_exists(name, run_idx):
-                m = f"'{name}' was not found under run index {run_idx} "
-                m += "in the zarr file."
-                raise ValueError(m)
-                
-        grp = self.root[str(run_idx)]
-        return grp[name].oindex[data_idx]
         
     
     def write_data(self, return_name, step, value, data_idx, dtype = None):
@@ -319,7 +353,7 @@ class DataSet:
             )
             
             values_arr[...] = value
-            # Store parameter dependencies and 'global(-res)' status.
+            # Store parameter dependencies and 'global' status.
             return_grp.attrs['deps'] = deps
             return_grp.attrs['global'] = self.global_cache[return_name]
             
@@ -461,8 +495,16 @@ class DataSet:
                 
             return attr
 
-        if name in self.analysis_params.keys():
-            return self.analysis_params[name]
+        # Search the user-specified analysis parameters
+        paths = self._find_key_paths(self.analysis_user_params, name)
+        if len(paths):
+            if len(paths) > 1:
+                raise ValueError(f"User-specified attribute {name} was found multiple times "
+                                 "in the analysis YAML file.")
+            attr = self._get_dict_value_from_path(self.analysis_user_params, paths[0])
+            object.__setattr__(self, name, attr)
+            return attr
+
 
         # Only run when normal lookup fails
         cal_pl = object.__getattribute__(self, "cal_pl")
@@ -487,17 +529,54 @@ class DataSet:
         
         return attr
             
-    def has_attr(obj, name):
+    def has_attr(self, name, data_idx=None):
         """
-        Function to check if an attribute or method is present, without
+        Function to check if an attribute is present, without
         calling __getattr__.
+        
+        Parameters:
+        name (str): attribute to look for.
+        data_idx (int or None): Data index to search for within the attribute,
+            if it is not a 'global'-type attribute.
+            
+        Returns:
+        (bool, or array of bool): True if the attribute is present, False if not.
         """
-        # 1. Instance attributes
-        if name in obj.__dict__:
-            return True
-
-        # 2. Class + base classes (methods live here)
-        for cls in type(obj).__mro__:
+        if name in self.__dict__:
+            if data_idx is None:
+                return True
+            else:
+                data_idx = np.atleast_1d(data_idx)
+                attr = object.__getattribute__(self, name)
+                exists_arr = np.full(len(data_idx), False)
+                for ii, di in enumerate(data_idx):
+                    try:
+                        attr[di]
+                        exists_arr[ii] = True
+                    except:
+                        pass
+                return exists_arr
+        else:
+            if data_idx is None:
+                return False
+            else:
+                exists_arr = np.full(len(data_idx), False)
+                return exists_arr
+        
+    def has_method(self, name):
+        """
+        Function to check if a method is present, without
+        calling __getattr__.
+        
+        Parameters:
+        name (str): attribute to look for.
+        data_idx (int or None): Data index to search for within the attribute,
+            if it is not a 'global'-type attribute.
+            
+        Returns:
+        (bool, or array of bool): True if the attribute is present, False if not.
+        """
+        for cls in type(self).__mro__:
             if name in cls.__dict__:
                 return True
 
@@ -657,3 +736,48 @@ class DataSet:
                     
                 self.write_data(return_name, step,
                                  value, data_idx)
+                
+                
+    def _find_key_paths(self, d, target, path=()):
+        """
+        Finds the paths to a key in a dictionary.
+        
+        Parameters:
+        d: Dictionary.
+        target: The key to find.
+        path: The path to start with, if you only want to search a 
+            subset of the dictionary.
+            
+        Returns:
+        path (list of tuples): Paths to the target key.
+        """
+        paths = []
+
+        if isinstance(d, dict):
+            for k, v in d.items():
+                new_path = path + (k,)
+                if k == target:
+                    paths.append(new_path)
+                paths.extend(self._find_key_paths(v, target, new_path))
+
+        elif isinstance(d, list):
+            for i, item in enumerate(d):
+                paths.extend(self._find_key_paths(item, target, path + (i,)))
+
+        return paths
+
+    def _get_dict_value_from_path(self, d, path):
+        """
+        Gets a value from a path pointing into a nested dictionary.
+        
+        Parameters:
+        d: Dictionary.
+        path (array-like): 1D list of keys.
+        
+        Returns:
+        value: The value at the end of the path.
+        """
+        for key in path:
+            d = d[key]
+        value = d
+        return value

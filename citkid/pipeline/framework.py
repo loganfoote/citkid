@@ -15,7 +15,7 @@ class LazyAttr:
         name (str): The name of the attribute.
         """
         for a in ['cal_pl', 'execute_path', 'nres']:
-            if not DS.has_attr(a):
+            if not (DS.has_attr(a) or DS.has_method(a)):
                 raise AttributeError(f"DS must have '{a}' attribute")
         if not isinstance(name, str):
             raise ValueError("name must be a string")
@@ -23,15 +23,6 @@ class LazyAttr:
         self.name = name
         self._cache = {}        # maps row -> np.ndarray
         self.shape = ()
-        
-        ### Check if the attribute exists in the zarr file.
-        # self.run_idx = DS.get_attr_version(name)
-        # if self.run_idx is not None:
-        #     grp = DS.root[str(self.run_idx)]
-        #     self.data = grp[name]
-        #     self.data_idx = grp[f'{name}_idx']
-        # else:
-        #     self.run_idx = 1
 
     def _ensure_loaded(self, rows):
         """
@@ -106,11 +97,6 @@ class LazyAttr:
                 rows[idx] = self.DS.nres + r
             if not 0 <= rows[idx] < self.DS.nres:
                 raise ValueError(f"row index {r} out of bounds")
-
-        # # If the data was found in the zarr, then just load it from the zarr array.
-        # if self.run_idx is not None:
-        #     local_idxs = np.where(np.isin(self.data_idx, rows))[0]
-        #     out = self.data[local_idxs]
                 
         # else: # Otherwise, load data into the cache, and return it from the cache.
         self._ensure_loaded(rows)
@@ -286,7 +272,12 @@ class plStep:
                 
             for name, val in zip(self.return_names, results):
                 setattr(DS, name, val)  # store as normal attribute, no LazyAttr
-                DS.global_cache[name] = True
+                if self.func_type == 'global':
+                    DS.global_cache[name] = True
+                else:
+                    # If self.func_type == 'global-res', we want to preserve
+                    # the ability to index into this attribute using data_idx.
+                    DS.global_cache[name] = False
                 
         elif self.func_type == "vectorized":
             results = self.func(*params)
@@ -360,10 +351,10 @@ default_cal_steps =\
   ['zt_rmv', 'circ_origin', 'theta_phase_offset'], ['zt_cent'], 'per-row'),
 
  ('get_thetaf', circle.convert_to_theta, 
-  ['zf_cent', 'unwrap_thetaf'], ['thetaf'], 'per-row'),
+  ['zf_cent'], ['thetaf'], 'per-row'),
 
  ('get_thetat', circle.convert_to_theta, 
-  ['zt_cent', 'unwrap_thetat'], ['thetat'], 'per-row'),
+  ['zt_cent'], ['thetat'], 'per-row'),
 
   ('cut_xf', lambda x, t, mask: (x[mask], t[mask]), 
   ['xf', 'thetaf', 'xcal_mask'], ['xf_cut', 'thetaf_cut'], 'per-row'),

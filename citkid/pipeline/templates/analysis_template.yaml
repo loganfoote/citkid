@@ -30,8 +30,8 @@ ANALYSIS_STEPS:
   6 :
     task: get_xcal_mask 
     params:
-      xcal_idx0: 3 
-      xcal_idx1: 9
+      xcal_idx0_offset: 3 
+      xcal_idx1_offset: 9
       xcal_std_cutoff: 12.0 
   7 : 
     task: fit_x_theta 
