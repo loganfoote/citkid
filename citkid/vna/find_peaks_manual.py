@@ -1,10 +1,9 @@
 """
-Interactive peak finder using pyqtgraph for improved performance with
-large datasets.
+Interactive manual peak finder for VNA sweep data.
 
-This module provides a fast, responsive interface for identifying
-resonances in VNA sweep data with automatic y-axis scaling and phase
-visualization.
+This module provides a fast, responsive interface for manually identifying
+resonances in VNA sweep data with automatic y-axis scaling, phase
+visualization, and undo support.
 """
 
 import numpy as np
@@ -12,6 +11,38 @@ import h5py
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets
 import os
+
+
+def run_peak_finder(f, z, fres_initial, outpath, margin_factor = 0.15,
+                    overwrite = False):
+    """
+    Run the interactive manual peak finder.
+    
+    Parameters:
+    f (np.ndarray): Frequency data in Hz.
+    z (np.ndarray): Complex S21 data.
+    fres_initial (array-like or str): Initial resonant frequency
+        guesses in Hz, or path to .h5 file containing 'fres' dataset.
+    outpath (str): Path to save the resonance list (.h5 file).
+    margin_factor (float): Y-axis margin factor for auto-scaling.
+        Default is 0.15.
+    overwrite (bool): If False, raise error if output file already
+        exists. Default is False.
+        
+    Returns:
+    fres (np.ndarray): Final list of resonant frequencies.
+    """
+    # Handle loading fres from file if string is provided
+    if isinstance(fres_initial, str):
+        with h5py.File(fres_initial, 'r') as hf:
+            fres_initial = hf['fres'][:]
+    
+    finder = PeakFinder(
+        f, z, fres_initial, outpath, margin_factor, overwrite
+    )
+    finder.run()
+    return np.array(finder.fres)
+
 
 class PeakFinder:
     def __init__(self, f, z, fres_initial, outpath, margin_factor = 0.15,
@@ -67,11 +98,6 @@ class PeakFinder:
         # Setup the application
         self.app = pg.mkQApp("Peak Finder")
         self.setup_ui()
-        self.setup_plots()
-        self.update_resonance_markers()
-        
-        # Auto-scale initially
-        self.auto_scale_y()
         
     def setup_ui(self):
         """
@@ -125,6 +151,13 @@ class PeakFinder:
         log_proxy.setWidget(self.log_text)
         self.win.addItem(log_proxy, row = 3, col = 0, colspan = 2)
         
+        # Setup plots after UI is ready
+        self.setup_plots()
+        
+        # Initialize markers and auto-scale
+        self.update_resonance_markers()
+        self.auto_scale_y()
+        
     def log(self, message):
         """
         Append a message to the log display.
@@ -135,6 +168,8 @@ class PeakFinder:
         Returns:
         None
         """
+        if not hasattr(self, 'log_text'):
+            return  # UI not initialized
         self.log_text.append(message)
         # Auto-scroll to bottom
         self.log_text.verticalScrollBar().setValue(
@@ -325,7 +360,7 @@ class PeakFinder:
             return
         
         # Remove it
-        removed_freq = visible_fres[min_idx]
+        removed_freq = nearest
         
         # Save state for undo
         self.undo_stack.append(('remove', removed_freq))
@@ -377,6 +412,8 @@ class PeakFinder:
         Returns:
         None
         """
+        if not hasattr(self, 'mag_markers'):
+            return  # UI not initialized
         # Remove old markers
         for marker in self.mag_markers:
             self.plot_mag.removeItem(marker)
@@ -443,6 +480,8 @@ class PeakFinder:
         Returns:
         None
         """
+        if not hasattr(self, 'plot_mag'):
+            return  # UI not initialized
         x_range = self.plot_mag.viewRange()[0]
         
         # Find indices within the visible range
@@ -605,52 +644,3 @@ class PeakFinder:
         
         # Start the Qt event loop
         self.app.exec_()
-
-
-def run_peak_finder(f, z, fres_initial, outpath, margin_factor = 0.15,
-                    overwrite = False):
-    """
-    Convenience function to run the peak finder.
-    
-    Parameters:
-    f (np.ndarray): Frequency data in Hz.
-    z (np.ndarray): Complex S21 data.
-    fres_initial (array-like or str): Initial resonant frequency
-        guesses in Hz, or path to .h5 file containing 'fres' dataset.
-    outpath (str): Path to save the resonance list (.h5 file).
-    margin_factor (float): Y-axis margin factor for auto-scaling.
-        Default is 0.15.
-    overwrite (bool): If False, raise error if output file already
-        exists. Default is False.
-        
-    Returns:
-    fres (np.ndarray): Final list of resonant frequencies.
-    """
-    # Handle loading fres from file if string is provided
-    if isinstance(fres_initial, str):
-        with h5py.File(fres_initial, 'r') as hf:
-            fres_initial = hf['fres'][:]
-    
-    finder = PeakFinder(
-        f, z, fres_initial, outpath, margin_factor, overwrite
-    )
-    finder.run()
-    return np.array(finder.fres)
-
-
-if __name__ == "__main__":
-    # Example usage
-    print("Peak Finder requires data to run.")
-    print("Example usage:")
-    print("""
-    from citkid.vna.interactive_peak_finder_2 import run_peak_finder
-    import numpy as np
-    
-    # Your data
-    f = np.linspace(4e9, 8e9, 100000)  # Frequency in Hz
-    z = np.exp(-1j * 2 * np.pi * f / 1e9)  # Example S21 data
-    fres_initial = [5e9, 6e9, 7e9]  # Initial guesses
-    
-    # Run the peak finder
-    fres = run_peak_finder(f, z, fres_initial, 'resonances.h5')
-    """)
