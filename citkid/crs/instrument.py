@@ -682,8 +682,8 @@ class CRS:
             pbar_description = 'Sweeping'
             ):
         """
-        Performs a frequency sweep where the span around each frequency is set
-        equal to fres / qres.
+        Performs a downward frequency sweep where the span around each frequency
+        is set equal to fres / qres.
 
         Parameters:
         fres (array-like): center frequencies in Hz.

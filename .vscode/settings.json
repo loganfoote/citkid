@@ -3,8 +3,8 @@
         "-s",
         "-vv",
         "-rA",
-        "--crs_sn=45",
-        "--crs_iface=enp5s0",
+        // "--crs_sn=45",
+        // "--crs_iface=enp5s0",
         "."
     ],
     "python.testing.unittestEnabled": false,
