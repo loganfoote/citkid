@@ -145,11 +145,8 @@ def plot_circfit(z, origin, radius, zt = None, mask = None):
     """
     # Input validation
     z = np.asarray(z, dtype = np.complex128) 
-    if not isinstance(origin, (complex, np.complexfloating, 
-                               np.floating, np.integer, float, int)):
-        raise ValueError("origin must be complex.")
-    if not isinstance(radius, (float, np.floating)):
-        raise ValueError("radius must be float.") 
+    origin = complex(origin)
+    radius = float(radius) 
 
     # Create cut array based on mask
     if mask is not None:

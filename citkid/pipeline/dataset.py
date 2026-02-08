@@ -7,46 +7,70 @@ import copy
 
 from .dependencies import get_most_recent_run, get_deps
 from . import framework as pf
-from .util import deep_union
+from . import util 
 
 class DataSet:
-    def __init__(self, custom_path, zarr_path, cal_yaml_path, analysis_yaml_path=None):
+    def __init__(self, 
+        zarr_path, 
+        cal_yaml_path, 
+        custom_path = None, 
+        analysis_yaml_path = None
+        ):
         """
         Initialize the dataset with a calibration pipeline defined by a YAML 
         file.  
         
         Parameters:
-        custom_path (str): Directory to the .py file containing custom 
-            calibration functions.
         zarr_path (str): The path to the zarr file containing the analysis 
             outputs.
-        cal_yaml_path (str): The path to the YAML configuration file.
-        analysis_yaml_path (str): The path to the YAML analysis file.
+        cal_yaml_path (str): The path to the calibration YAML file.
+        custom_path (str or None): Directory to the .py file containing custom 
+            calibration functions, or None if no custom functions are used. 
+        analysis_yaml_path (str or None): The path to the analysis YAML file, or 
+            None if no analysis will be performed. 
         """
-        # Normalize paths 
+        ### Input validation and path normalization
         if custom_path is not None:
             self.custom_path = os.path.normpath(custom_path)
         else:
             self.custom_path = None
         self.zarr_path = os.path.normpath(zarr_path)
         self.root = zarr.open_group(self.zarr_path, mode = 'a')
-        self.cal_yaml_path = os.path.normpath(cal_yaml_path)
-        self.analysis_yaml_path = analysis_yaml_path
-        self.global_cache = {}
-        self.deps_map = {'global': {}}
+        self.cal_yaml_path = os.path.normpath(cal_yaml_path) 
+        if analysis_yaml_path is not None:
+            self.analysis_yaml_path = os.path.normpath(analysis_yaml_path)
+        else:
+            self.analysis_yaml_path = None
 
-        # Input validation 
+        # Validate file types 
+        # custom_path must be .py
         if self.custom_path is not None and \
             not self.custom_path.endswith('.py'):
             raise ValueError("custom_path must point to a .py file.")
+        # zarr_path must be .zarr
         if not self.zarr_path.endswith('.zarr'):
             raise ValueError("zarr_path must point to a .zarr file.")
-        is_yaml = self.cal_yaml_path.endswith('.yaml') 
-        is_yaml = is_yaml or self.cal_yaml_path.endswith('.yml')
+        # cal_yaml_path must be .yaml or .yml
+        is_yaml = self.cal_yaml_path.endswith('.yaml') \
+               or self.cal_yaml_path.endswith('.yml')
         if not is_yaml:
-            raise ValueError("cal_yaml_path must point to a .yaml or .yml file.")
+            raise ValueError(
+                "cal_yaml_path must point to a .yaml or .yml file."
+            )
+        # analysis_yaml_path (if provided) must be .yaml or .yml
+        if self.analysis_yaml_path is not None:
+            is_yaml = self.analysis_yaml_path.endswith('.yaml') \
+                or self.analysis_yaml_path.endswith('.yml')
+            if not is_yaml:
+                raise ValueError(
+                    "analysis_yaml_path must point to a .yaml or .yml file."
+                )
+        
+        ### Start global cache and dependencies map
+        self.global_cache = {}
+        self.deps_map = {'global': {}}
 
-        # Load steps from custom_steps.py if it exists
+        ### Load steps from custom_steps.py
         self.cal_steps, self.analysis_steps = self._load_custom_steps()
         # Add default calibration steps if not already present
         for step in pf.default_cal_steps:
@@ -56,9 +80,6 @@ class DataSet:
         for step in pf.default_analysis_steps:
             if step.name not in [s.name for s in self.analysis_steps]:
                 self.analysis_steps.append(step)
-
-        # hard-coded nres for now
-        self.nres = 1600
                 
         # Load calibration YAML file and convert it to calibration pipeline
         yaml_dict = self._load_yaml(self.cal_yaml_path)
@@ -67,18 +88,16 @@ class DataSet:
         # confirm that the cal_pl structure is valid
         pf.check_pl_tree_structure(self.cal_pl) 
         
-        if self.analysis_yaml_path is not None:
-            self.analysis_yaml_path = os.path.normpath(analysis_yaml_path)
-            
-            is_yaml = self.analysis_yaml_path.endswith('.yaml')
-            is_yaml = is_yaml or self.analysis_yaml_path.endswith('.yml')
-            if not is_yaml:
-                raise ValueError("analysis_yaml_path must point to a .yaml or .yml file.")
-            
-            # Load analysis YAML and user-specified analysis parameters
-            yaml_dict = self._load_yaml(self.analysis_yaml_path)
-            self.analysis_user_params = self._collect_user_params(yaml_dict)
-            self._add_user_params_to_cache_and_deps(self.analysis_user_params)
+        # load analysis YAML file if it exists
+        if self.analysis_yaml_path is None:
+            return
+
+        # Load analysis YAML and user-specified analysis parameters
+        yaml_dict = self._load_yaml(self.analysis_yaml_path) 
+        # pf.check_pl_tree_structure(yaml_dict)
+        print('Write validation for analysis YAML file')
+        self.analysis_user_params = self._collect_user_params(yaml_dict)
+        self._add_user_params_to_cache_and_deps(self.analysis_user_params)
         
     def _add_user_params_to_cache_and_deps(self, user_params):
         """
@@ -133,18 +152,6 @@ class DataSet:
                 self._collect_user_params(item, result)
 
         return result
-
-        
-    def _load_user_params_from_yaml(self, d):
-        """
-        Loads user-specified parameters from either the calibration
-        or analysis YAML file.
-        
-        Parameters:
-        d: Dictionary from loading the YAML file.
-        
-        Returns:
-        """
         
     def _load_custom_steps(self):
         """
@@ -295,7 +302,6 @@ class DataSet:
                     this_data_idx = this_data_idx[do_run_mask]
                     if not any(do_run_mask):
                         continue
-                    
             step.run(self, this_data_idx)
         
     
@@ -319,9 +325,14 @@ class DataSet:
         Returns:
         None
         """
+        if step.func_type in ['vectorized', 'per-row'] and data_idx is None:
+            data_idx = list(range(self.nres))
+
         # set dtype if not provided
         if dtype is None:
             dtype = value[data_idx].dtype
+
+        data_idx = np.atleast_1d(data_idx)
             
         root = self.root
         
@@ -358,9 +369,8 @@ class DataSet:
             return_grp.attrs['global'] = self.global_cache[return_name]
             
         elif step.func_type in ['per-row', 'vectorized']:
-            
             for local_idx, di in enumerate(data_idx):
-                di = di.item()
+                # di = di.item()
                 di_str = f'idx{di}'
                 deps_map = self.deps_map[di_str]
                 run_idx = get_most_recent_run(return_name, deps_map)
@@ -664,7 +674,7 @@ class DataSet:
                     self.deps_map[di_str] = {}
                 deps_map = self.deps_map[di_str]
                 # Unite global deps_map with the per-data_index deps_map
-                self.deps_map[di_str] = deep_union(deps_map, deps_map_global)
+                self.deps_map[di_str] = util.deep_union(deps_map, deps_map_global)
                 deps_map = self.deps_map[di_str]
                 
                 update_deps(param_names, return_names, deps_map)
@@ -781,3 +791,23 @@ class DataSet:
             d = d[key]
         value = d
         return value
+    
+    def show_cal_yaml_file(self):
+        util.open_in_file_explorer(os.path.dirname(self.cal_yaml_path))
+
+    def show_analysis_yaml_file(self):
+        if self.analysis_yaml_path is None:
+            m = "No analysis YAML file was provided for this dataset."
+            raise ValueError(m)
+        else:
+            util.open_in_file_explorer(os.path.dirname(self.analysis_yaml_path))
+
+    def show_custom_steps_file(self):
+        if self.custom_path is None:
+            m = "No custom steps file was provided for this dataset."
+            raise ValueError(m)
+        else:
+            util.open_in_file_explorer(os.path.dirname(self.custom_path)) 
+    
+    def show_zarr_file(self):
+        util.open_in_file_explorer(os.path.dirname(self.zarr_path))

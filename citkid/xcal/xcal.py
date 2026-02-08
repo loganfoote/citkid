@@ -65,6 +65,8 @@ def get_xcal_mask(ff, theta_f, theta_t, idx0_offset = 3, idx1_offset = 7,
     idx1 = min(len(theta_f) - 1, idx1 + idx1_offset)
     if idx1 < idx0:
         idx1 = idx0 - 1
+        
+    # Form mask from idx0, idx1
     mask = np.ones(len(ff), dtype = bool) * False 
     mask[idx0:idx1 + 1] = True
     return mask

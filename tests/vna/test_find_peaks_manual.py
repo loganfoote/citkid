@@ -25,8 +25,7 @@ from citkid.vna.find_peaks_manual import (
 class TestPeakFinderInit:
     """Test PeakFinder initialization."""
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_init_with_array(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_init_with_array(self, synthetic_vna_data, tmp_path):
         """Test initialization with array of initial resonances."""
         outpath = tmp_path / "test.h5"
         fres_initial = synthetic_vna_data['fres_true'][:2]  # Use first 2
@@ -49,8 +48,7 @@ class TestPeakFinderInit:
         assert len(finder.fres) == len(fres_initial)
         np.testing.assert_array_almost_equal(sorted(finder.fres), sorted(fres_initial))
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_init_phase_detrending(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_init_phase_detrending(self, synthetic_vna_data, tmp_path):
         """Test that phase is detrended during initialization."""
         outpath = tmp_path / "test.h5"
         
@@ -70,8 +68,7 @@ class TestPeakFinderInit:
         assert hasattr(finder, 'mag_db')
         assert hasattr(finder, 'phase')
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_init_file_exists_overwrite_false(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_init_file_exists_overwrite_false(self, synthetic_vna_data, tmp_path):
         """Test FileExistsError when overwrite=False."""
         outpath = tmp_path / "existing.h5"
         outpath.touch()
@@ -85,8 +82,7 @@ class TestPeakFinderInit:
                 overwrite=False
             )
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_init_file_exists_overwrite_true(self, mock_setup, synthetic_vna_data, tmp_path, capsys):
+    def test_init_file_exists_overwrite_true(self, synthetic_vna_data, tmp_path, capsys):
         """Test warning when file exists and overwrite=True."""
         outpath = tmp_path / "existing.h5"
         outpath.touch()
@@ -102,8 +98,7 @@ class TestPeakFinderInit:
         captured = capsys.readouterr()
         assert 'already exists' in captured.out
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_init_empty_fres(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_init_empty_fres(self, synthetic_vna_data, tmp_path):
         """Test initialization with empty initial resonance list."""
         outpath = tmp_path / "test.h5"
         
@@ -121,8 +116,7 @@ class TestPeakFinderInit:
 class TestPeakFinderAddRemove:
     """Test adding and removing resonances."""
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_add_resonance(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_add_resonance(self, synthetic_vna_data, tmp_path):
         """Test adding a resonance."""
         outpath = tmp_path / "test.h5"
         
@@ -141,8 +135,7 @@ class TestPeakFinderAddRemove:
         assert len(finder.fres) == 1
         assert finder.fres[0] == f_new
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_add_multiple_resonances(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_add_multiple_resonances(self, synthetic_vna_data, tmp_path):
         """Test adding multiple resonances."""
         outpath = tmp_path / "test.h5"
         
@@ -162,8 +155,7 @@ class TestPeakFinderAddRemove:
         assert len(finder.fres) == len(freqs)
         assert finder.fres == sorted(freqs)
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_remove_resonance(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_remove_resonance(self, synthetic_vna_data, tmp_path):
         """Test removing a resonance."""
         outpath = tmp_path / "test.h5"
         fres_initial = [4.5e9, 5.2e9, 6.1e9]
@@ -189,8 +181,7 @@ class TestPeakFinderAddRemove:
         assert len(finder.fres) == 2
         assert 5.2e9 not in finder.fres
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_remove_outside_view(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_remove_outside_view(self, synthetic_vna_data, tmp_path):
         """Test that removing outside view fails."""
         outpath = tmp_path / "test.h5"
         fres_initial = [4.5e9, 5.2e9, 6.1e9]
@@ -213,8 +204,7 @@ class TestPeakFinderAddRemove:
         assert result is None
         assert len(finder.fres) == 3  # Nothing removed
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_remove_no_resonances(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_remove_no_resonances(self, synthetic_vna_data, tmp_path):
         """Test removing when no resonances exist."""
         outpath = tmp_path / "test.h5"
         
@@ -239,8 +229,7 @@ class TestPeakFinderAddRemove:
 class TestPeakFinderUndo:
     """Test undo functionality."""
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_undo_add(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_undo_add(self, synthetic_vna_data, tmp_path):
         """Test undoing an add operation."""
         outpath = tmp_path / "test.h5"
         
@@ -259,8 +248,7 @@ class TestPeakFinderUndo:
         finder.undo()
         assert len(finder.fres) == 0
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_undo_remove(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_undo_remove(self, synthetic_vna_data, tmp_path):
         """Test undoing a remove operation."""
         outpath = tmp_path / "test.h5"
         fres_initial = [4.5e9, 5.2e9]
@@ -287,8 +275,7 @@ class TestPeakFinderUndo:
         assert len(finder.fres) == 2
         assert 4.5e9 in finder.fres
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_undo_multiple_operations(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_undo_multiple_operations(self, synthetic_vna_data, tmp_path):
         """Test undoing multiple operations in sequence."""
         outpath = tmp_path / "test.h5"
         
@@ -313,8 +300,7 @@ class TestPeakFinderUndo:
         assert len(finder.fres) == 1
         assert 6e9 not in finder.fres
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_undo_empty_stack(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_undo_empty_stack(self, synthetic_vna_data, tmp_path):
         """Test undo when undo stack is empty."""
         outpath = tmp_path / "test.h5"
         
@@ -329,8 +315,7 @@ class TestPeakFinderUndo:
         finder.undo()
         assert len(finder.fres) == 0
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_undo_stack_grows(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_undo_stack_grows(self, synthetic_vna_data, tmp_path):
         """Test that undo stack grows with operations."""
         outpath = tmp_path / "test.h5"
         
@@ -355,8 +340,7 @@ class TestPeakFinderUndo:
 class TestPeakFinderFileIO:
     """Test file save/load functionality."""
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_save_results(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_save_results(self, synthetic_vna_data, tmp_path):
         """Test saving results to HDF5."""
         outpath = tmp_path / "results.h5"
         fres_initial = [4.5e9, 5.2e9, 6.1e9]
@@ -383,8 +367,7 @@ class TestPeakFinderFileIO:
                 sorted(fres_initial)
             )
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_save_empty_results(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_save_empty_results(self, synthetic_vna_data, tmp_path):
         """Test saving empty resonance list."""
         outpath = tmp_path / "empty.h5"
         
@@ -405,8 +388,7 @@ class TestPeakFinderFileIO:
 class TestPeakFinderEdgeCases:
     """Test edge cases."""
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_single_data_point(self, mock_setup, tmp_path):
+    def test_single_data_point(self, tmp_path):
         """Test with single data point."""
         outpath = tmp_path / "test.h5"
         
@@ -419,8 +401,7 @@ class TestPeakFinderEdgeCases:
         assert len(finder.mag_db) == 1
         assert len(finder.phase) == 1
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_duplicate_resonances(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_duplicate_resonances(self, synthetic_vna_data, tmp_path):
         """Test handling of duplicate resonances in initial list."""
         outpath = tmp_path / "test.h5"
         
@@ -437,8 +418,7 @@ class TestPeakFinderEdgeCases:
         # Should still work (duplicates may or may not be removed automatically)
         assert len(finder.fres) > 0
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_unsorted_initial_resonances(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_unsorted_initial_resonances(self, synthetic_vna_data, tmp_path):
         """Test that resonances are sorted."""
         outpath = tmp_path / "test.h5"
         
@@ -538,8 +518,7 @@ class TestRunPeakFinder:
 class TestIntegration:
     """Integration tests for auto -> manual workflow."""
     
-    @patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui')
-    def test_auto_to_manual_workflow(self, mock_setup, synthetic_vna_data, tmp_path):
+    def test_auto_to_manual_workflow(self, synthetic_vna_data, tmp_path):
         """Test complete workflow from auto to manual peak finding."""
         # First run auto finder (mock the GUI parts)
         auto_outpath = tmp_path / "auto_results.h5"

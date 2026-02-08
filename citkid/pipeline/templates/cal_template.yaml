@@ -4,15 +4,15 @@
 
 CAL_STEPS:
   1 :
-    task: load_global_data # maybe this should be re-saved in zarr since it is small
+    task: load_global_data
   2 :
-    task: load_global_res_data # maybe this should be re-saved in zarr since it is small
+    task: load_global_res_data
     T_STEPS:
       1:
-        task: load_data_t
+        task: load_cal_data_t
       2:
         task: rmv_gain_t 
-        delete_input: [zt]
+        # delete_input: [zt]
       3:
         task: center_t 
       4:
@@ -31,7 +31,7 @@ CAL_STEPS:
         task: load_data_f # must be sorted on axis 1
       2:
         task: rmv_gain_f 
-        delete_input: [zf]
+        # delete_input: [zf]
         # Add nonlinear IQ fitting here when it is ready 
       3:
         task: center_f 
@@ -39,3 +39,8 @@ CAL_STEPS:
         task: get_thetaf
       5:
         task: get_xf
+      6:
+        task: cut_xf
+    G_STEPS:
+      1: 
+        task: load_data_g

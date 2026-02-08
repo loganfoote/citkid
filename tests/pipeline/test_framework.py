@@ -554,6 +554,9 @@ step5 = {'task': pf.plStep('step5', lambda x, y: (x + y, x - y),
     ({'CAL_STEPS': {1: {'task': step1['task'], 'A_STEPS': {1: step2, 2: step3}}, 
                     2: step5}}, 
      'c', ['step1', 'step2']),
+     ({'CAL_STEPS': {1: {'task': step1['task'], 'A_STEPS': {1: step2, 2: step3}}, 
+                     2: step5}}, 
+     'g', ['step1', 'step5']),
 ])
 def test_find_pl_path(tree, return_name, expected_path):
     path = pf.find_pl_path(tree, return_name)
@@ -573,6 +576,148 @@ def test_find_pl_path_invalid_input():
         pf.find_pl_path({}, 123) # name not str
     with pytest.raises(ValueError):
         pf.find_pl_path({1: step1}, 'test') # root keys must end in '_STEPS'
+
+################################################################################
+###################### find_pl_path - Additional Edge Cases ####################
+################################################################################
+# Create additional steps for edge case testing
+step6 = {'task': pf.plStep('step6', lambda x: x + 1, ['c'], ['h'], 'per-row')}
+step7 = {'task': pf.plStep('step7', lambda x: x + 1, ['h'], ['i'], 'per-row')}
+step8 = {'task': pf.plStep('step8', lambda x: x + 1, ['d'], ['j'], 'per-row')}
+step9 = {'task': pf.plStep('step9', lambda x, y: (x + y, x * y), ['a', 'b'], ['k', 'm'], 'per-row')}
+step10 = {'task': pf.plStep('step10', lambda x: x, ['b'], ['n', 'o', 'p'], 'per-row')}
+step11 = {'task': pf.plStep('step11', lambda: 'global', [], ['q'], 'global')}
+
+@pytest.mark.parametrize("tree,return_name,expected_path", [
+    # Test finding the first step in a sequence (no predecessors)
+    ({'CAL_STEPS': {1: step1, 2: step2}}, 'b', ['step1']),
+    
+    # Test deeply nested structure (multiple levels of child sequences)
+    ({'CAL_STEPS': {1: {'task': step1['task'], 
+                        'A_STEPS': {1: {'task': step2['task'],
+                                       'B_STEPS': {1: step6, 2: step7}}}}}}, 
+     'i', ['step1', 'step2', 'step6', 'step7']),
+    
+    # Test finding intermediate output in deeply nested structure
+    ({'CAL_STEPS': {1: {'task': step1['task'], 
+                        'A_STEPS': {1: {'task': step2['task'],
+                                       'B_STEPS': {1: step6}}}}}}, 
+     'h', ['step1', 'step2', 'step6']),
+     
+    # Test finding output at middle level (not deepest)
+    ({'CAL_STEPS': {1: {'task': step1['task'], 
+                        'A_STEPS': {1: {'task': step2['task'],
+                                       'B_STEPS': {1: step6}}}}}}, 
+     'c', ['step1', 'step2']),
+    
+    # Test multiple root sequences, finding in second sequence
+    ({'CAL_STEPS': {1: step1, 2: step2}, 
+      'ANALYSIS_STEPS': {1: step11}}, 
+     'q', ['step11']),
+     
+    # Test multiple root sequences, finding in first sequence
+    ({'CAL_STEPS': {1: step1, 2: step2}, 
+      'ANALYSIS_STEPS': {1: step11}}, 
+     'c', ['step1', 'step2']),
+    
+    # Test step with multiple return values (finding first return value)
+    ({'CAL_STEPS': {1: step9}}, 'k', ['step9']),
+    
+    # Test step with multiple return values (finding second return value)
+    ({'CAL_STEPS': {1: step9}}, 'm', ['step9']),
+    
+    # Test step with three return values
+    ({'CAL_STEPS': {1: step10}}, 'n', ['step10']),
+    ({'CAL_STEPS': {1: step10}}, 'o', ['step10']),
+    ({'CAL_STEPS': {1: step10}}, 'p', ['step10']),
+    
+    # Test finding in parallel branches at same level (first branch)
+    ({'CAL_STEPS': {1: {'task': step1['task'], 
+                        'A_STEPS': {1: step2}, 
+                        'B_STEPS': {1: step3}}}}, 
+     'c', ['step1', 'step2']),
+     
+    # Test finding in parallel branches at same level (second branch)
+    ({'CAL_STEPS': {1: {'task': step1['task'], 
+                        'A_STEPS': {1: step2}, 
+                        'B_STEPS': {1: step3}}}}, 
+     'd', ['step1', 'step3']),
+    
+    # Test complex: multiple sequences with nested children, finding deep output
+    ({'CAL_STEPS': {1: {'task': step1['task'],
+                        'A_STEPS': {1: step2, 2: step3}},
+                    2: {'task': step5['task'],
+                        'B_STEPS': {1: step6}}}},
+     'h', ['step1', 'step5', 'step6']),
+     
+    # Test finding output from parent task when it has children
+    ({'CAL_STEPS': {1: {'task': step1['task'],
+                        'A_STEPS': {1: step2, 2: step3}},
+                    2: {'task': step5['task'],
+                        'B_STEPS': {1: step6}}}},
+     'g', ['step1', 'step5']),
+     
+    # Test sequence with single step
+    ({'CAL_STEPS': {1: step1}}, 'b', ['step1']),
+    
+    # Test long linear sequence (step1 -> step2 -> step6 -> step7)
+    ({'CAL_STEPS': {1: step1, 2: step2, 3: step6, 4: step7}}, 
+     'i', ['step1', 'step2', 'step6', 'step7']),
+     
+    # Test finding intermediate in long sequence
+    ({'CAL_STEPS': {1: step1, 2: step2, 3: step6, 4: step7}}, 
+     'h', ['step1', 'step2', 'step6']),
+     
+    # Test output from second to last step in sequence
+    ({'CAL_STEPS': {1: step1, 2: step2, 3: step6, 4: step7}}, 
+     'h', ['step1', 'step2', 'step6']),
+    
+    # Test mixed: some steps with children, some without
+    ({'CAL_STEPS': {1: step1, 
+                    2: {'task': step2['task'], 'A_STEPS': {1: step6}},
+                    3: step11}}, 
+     'h', ['step1', 'step2', 'step6']),
+     
+    # Test finding global step output
+    ({'CAL_STEPS': {1: step11, 2: step1}}, 'q', ['step11']),
+    
+    # Test multiple nested levels with multiple children at each level
+    ({'CAL_STEPS': {1: {'task': step1['task'],
+                        'A_STEPS': {1: {'task': step2['task'],
+                                       'B_STEPS': {1: step6, 2: step7}},
+                                   2: {'task': step3['task'],
+                                       'C_STEPS': {1: step4}}}}}},
+     'i', ['step1', 'step2', 'step6', 'step7']),
+     
+    # Test accessing parallel branch stored in separate named sequence
+    ({'CAL_STEPS': {1: {'task': step1['task'],
+                        'A_STEPS': {1: {'task': step2['task'],
+                                       'B_STEPS': {1: step6}}},
+                        'C_STEPS': {1: {'task': step3['task'],
+                                       'D_STEPS': {1: step4}}}}}},
+     'e', ['step1', 'step3', 'step4']),
+])
+def test_find_pl_path_edge_cases(tree, return_name, expected_path):
+    """Test edge cases and complex scenarios for find_pl_path."""
+    path = pf.find_pl_path(tree, return_name)
+    if expected_path is None:
+        assert path is None
+    else:
+        assert path is not None
+        assert [step.name for step in path] == expected_path
+
+def test_find_pl_path_multiple_outputs_not_found():
+    """Test that non-existent output returns None even with multi-output steps."""
+    tree = {'CAL_STEPS': {1: step9}}
+    assert pf.find_pl_path(tree, 'nonexistent') is None
+
+def test_find_pl_path_empty_root_sequence():
+    """Test that empty sequences are handled (though they're unusual)."""
+    tree = {'CAL_STEPS': {1: step1}, 'ANALYSIS_STEPS': {}}
+    # Should still find in CAL_STEPS
+    path = pf.find_pl_path(tree, 'b')
+    assert path is not None
+    assert [step.name for step in path] == ['step1']
 
 ################################################################################
 ########################### check_pl_tree_structure ############################

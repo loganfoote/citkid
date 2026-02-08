@@ -1,4 +1,7 @@
 import copy
+import os
+import subprocess
+import sys
 
 def deep_union(a, b):
     """
@@ -21,3 +24,23 @@ def deep_union(a, b):
         else:
             out[k] = v
     return out
+
+def open_in_file_explorer(path):
+    """
+    Opens the given path in the system's file explorer.
+    
+    Parameters:
+    path (str): The path to open in the file explorer.
+    
+    Raises:
+    RuntimeError: If the operating system is unsupported.
+    """
+    path = os.path.abspath(path)
+    if sys.platform.startswith("win"):
+        os.startfile(path)
+    elif sys.platform.startswith("linux"):
+        subprocess.run(["xdg-open", path])
+    elif sys.platform.startswith("darwin"):
+        subprocess.run(["open", path])
+    else:
+        raise RuntimeError("Unsupported OS") 

@@ -240,16 +240,18 @@ class plStep:
             else:
                 data_idx = np.atleast_1d(data_idx)
         elif self.func_type in ['global', 'global-res']:
-            if data_idx is not None:
-                m = "data_idx must be None for global or global-res functions."
-                raise ValueError(m)         
-                
+            data_idx = None
+            # if data_idx is not None:
+            #     m = "data_idx must be None for global or global-res functions."
+            #     raise ValueError(m)         
+        
         # --- 1. Collect parameters ---
         params = []
         param_is_global = []
         for p in self.param_names:
             if p == 'data_idx':
                 params.append(data_idx)
+                param_is_global.append(False)
                 continue
             
             val = getattr(DS, p)
@@ -272,12 +274,7 @@ class plStep:
                 
             for name, val in zip(self.return_names, results):
                 setattr(DS, name, val)  # store as normal attribute, no LazyAttr
-                if self.func_type == 'global':
-                    DS.global_cache[name] = True
-                else:
-                    # If self.func_type == 'global-res', we want to preserve
-                    # the ability to index into this attribute using data_idx.
-                    DS.global_cache[name] = False
+                DS.global_cache[name] = self.func_type == 'global'
                 
         elif self.func_type == "vectorized":
             results = self.func(*params)
@@ -350,10 +347,10 @@ default_cal_steps =\
  ('center_t', circle.cent_rot_s21, 
   ['zt_rmv', 'circ_origin', 'theta_phase_offset'], ['zt_cent'], 'per-row'),
 
- ('get_thetaf', circle.convert_to_theta, 
+ ('get_thetaf', lambda z: circle.convert_to_theta(z, unwrap = True), 
   ['zf_cent'], ['thetaf'], 'per-row'),
 
- ('get_thetat', circle.convert_to_theta, 
+ ('get_thetat', lambda z: circle.convert_to_theta(z, unwrap = False), 
   ['zt_cent'], ['thetat'], 'per-row'),
 
   ('cut_xf', lambda x, t, mask: (x[mask], t[mask]), 
@@ -363,7 +360,7 @@ default_cal_steps =\
   ['ff', 'ft'], ['xf'], 'per-row'),
 
  ('get_xt', np.polyval, 
-  ['thetat', 'poly_x'], ['xt'], 'per-row'),
+  [ 'poly_x', 'thetat'], ['xt'], 'per-row'),
  # extra steps
  ('get_At', circle.convert_to_A, 
   ['zt_cent'], ['At'], 'per-row'),
@@ -383,17 +380,19 @@ default_analysis_steps =\
  ('fit_iq_circle', circle.fit_iq_circle, 
   ['zf_rmv', 'idx_circfit'], ['circ_origin', 'circ_radius'], 'per-row'),
 
- ('get_theta_phase_offset', np.median, 
-  ['zt_rmv'], ['theta_phase_offset'], 'per-row'),
+ ('get_theta_phase_offset', circle.get_theta_phase_offset, 
+  ['zt_rmv', 'circ_origin'], ['theta_phase_offset'], 'per-row'),
 
  ('get_xcal_mask', xcal.get_xcal_mask,
   ['ff', 'thetaf', 'thetat', 'xcal_idx0_offset', 'xcal_idx1_offset', 
    'xcal_std_cutoff'], ['xcal_mask'], 'per-row'),
 
  ('fit_x_theta', np.polyfit, 
-  ['xf_cut', 'thetaf_cut', 'poly_x_deg'], ['poly_x'], 'per-row'),
+  ['thetaf_cut', 'xf_cut', 'poly_x_deg'], ['poly_x'], 'per-row'),
   # This will probably be concatenated with 'cut_xf' and take the mask as input
 )
+
+
 
 
 default_cal_steps = [plStep(*cs) for cs in default_cal_steps]
@@ -512,10 +511,10 @@ def find_pl_path(tree, return_name):
         for idx, (key, stepnode) in enumerate(keys):
             res = contains_path_stepnode(stepnode)
             if res is not None:
-                # prepend full execution of all earlier steps in this sequence
+                # prepend only the tasks from earlier steps in this sequence
                 pref = []
                 for prev_key, prev_node in keys[:idx]:
-                    pref.extend(execute_full_stepnode(prev_node))
+                    pref.append(prev_node["task"])
                 return pref + res
         return None
 
@@ -617,18 +616,32 @@ def check_pl_tree_structure(tree):
                 raise ValueError(m)
             check_pl_tree_structure(tree[key])
 
-def print_pl_path(paths, indent = 0):
+def print_cal_pl(cal_pl, indent = 0):
     """
-    Print calibration paths in a readable format.
+    Print calibration dictionary in a readable format.
 
     Parameters:
-    paths (dict or list): The calibration paths to print.
+    cal_pl (dict or list): The calibration dictionary to print.
     indent (int): Current indentation level for nested structures.
     """
-    if isinstance(paths, dict):
-        for key, val in paths.items():
+    if isinstance(cal_pl, dict):
+        for key, val in cal_pl.items():
             print(f"{'  ' * indent}{key}:")
-            print_pl_path(val, indent + 1)
+            print_cal_pl(val, indent + 1)
     else:
-        p = '\n' + paths.__str__() 
+        p = '\n' + cal_pl.__str__() 
         p = p.replace('\n', f'\n{"  " * (indent + 1)}')[2:]
+        print(p)
+
+def print_path(path, indent = 0):
+    """
+    Print PL path in a readable format.
+
+    Parameters:
+    path (list): PL path to print.
+    indent (int): Current indentation level for nested structures.
+    """
+    for step in path:
+        p = '\n' + step.__str__() 
+        p = p.replace('\n', f'\n{"  " * (indent + 1)}')[2:]
+        print(p)

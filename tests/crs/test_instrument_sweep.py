@@ -2045,7 +2045,6 @@ async def test_sweep_full_passes_parameters(base_crs):
     async def mock_sweep_span(fres, ares, span, npts, ns, **kwargs):
         captured_params['npoints'] = npts
         captured_params['nsamps'] = ns
-        captured_params['ch_map'] = kwargs.get('ch_map')
         captured_params['allow_missing'] = kwargs.get('allow_missing')
         captured_params['verbose'] = kwargs.get('verbose')
         captured_params['pbar_description'] = kwargs.get('pbar_description')
@@ -2063,7 +2062,6 @@ async def test_sweep_full_passes_parameters(base_crs):
     # Verify parameters passed through
     assert captured_params['npoints'] == 7
     assert captured_params['nsamps'] == 15
-    assert captured_params['ch_map'] is None
     assert captured_params['allow_missing'] == False
     assert captured_params['verbose'] == False
     assert captured_params['pbar_description'] == "Custom Full Sweep"

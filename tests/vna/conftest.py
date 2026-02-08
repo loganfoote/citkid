@@ -2,6 +2,31 @@
 
 import numpy as np
 import pytest
+from unittest.mock import patch, MagicMock, Mock
+import os
+
+# Prevent Qt windows from opening during tests
+os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+
+
+@pytest.fixture(autouse=True)
+def mock_qt_ui():
+    """
+    Automatically mock Qt UI setup for all VNA tests to prevent windows from opening.
+    This fixture is autouse=True so it applies to all tests in this directory.
+    
+    Mocks the UI creation and provides a default mock for update_peaks.
+    Tests can override update_peaks behavior with their own patches if needed.
+    """
+    # Create a mock that does nothing for update_peaks by default
+    mock_update = Mock(return_value=None)
+    
+    with patch('citkid.vna.find_peaks_auto.AutoPeakFinder.setup_ui'), \
+         patch('citkid.vna.find_peaks_auto.AutoPeakFinder.setup_plot'), \
+         patch('citkid.vna.find_peaks_auto.AutoPeakFinder.update_peaks', mock_update), \
+         patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui'), \
+         patch('citkid.vna.find_peaks_manual.PeakFinder.run'):
+        yield
 
 
 @pytest.fixture
