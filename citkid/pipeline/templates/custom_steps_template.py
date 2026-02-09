@@ -9,7 +9,8 @@ def load_global_data(directory):
     fres_all = np.load(get_path('fres_all'))
     qres_all = np.load(get_path('qres_all'))
     dt = np.load(os.path.join(d, 'noise_3K_batch_tsample.npy'))
-    return fres_all, qres_all, dt
+    nrows = np.load(get_path('fres')).shape[0]
+    return fres_all, qres_all, dt, nrows 
 
 def load_global_res_data(directory):
     d = os.path.join(directory, 'raw/')
@@ -47,7 +48,7 @@ def load_data_f(directory, data_idx):
 
 custom_steps =\
 [('load_global_data', load_global_data, ['directory'],
-  ['fres_all', 'qres_all', 'dt'],
+  ['fres_all', 'qres_all', 'dt', 'nrows'],
    'global'),
  ('load_global_res_data', load_global_res_data,
   ['directory'], ['fres', 'qres', 'ares', 'res_idxs'], 'global-res'),

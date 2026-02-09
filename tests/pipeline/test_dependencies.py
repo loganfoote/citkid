@@ -129,82 +129,6 @@ def test_get_lowest_runs_invalid_subdep_value():
     with pytest.raises(ValueError):
         rv._get_lowest_runs({"param1": [1, 2]})
 
-################################################################################
-############################### helper functions ###############################
-################################################################################
-def test_flatten_all_deps():
-    deps = {'a1': 2, 'b1': 2}
-    sub_deps = {
-        'a1': {'directory': 0},
-        'b1': {'a1': 1, 'directory': 0}
-    }
-    flattened = rv._flatten_all_deps(deps, sub_deps)
-    
-    assert 'directory' in flattened
-    assert 'a1' in flattened
-    assert 'b1' in flattened
-    # a1 appears both as input and in b1's deps
-    assert len(flattened['a1']) == 2
-    assert (2, 'a1') in flattened['a1']
-    assert (1, 'b1') in flattened['a1']
-
-def test_find_conflicting_params():
-    flattened = {
-        'directory': [(0, 'a1'), (0, 'b1')],
-        'a1': [(2, 'a1'), (1, 'b1')],  # Conflict!
-        'b1': [(2, 'b1')]
-    }
-    conflicts = rv._find_conflicting_params(flattened)
-    assert conflicts == {'a1'}
-
-def test_identify_params_to_backtrack():
-    deps = {'a1': 2, 'b1': 2}
-    sub_deps = {
-        'a1': {'directory': 0},
-        'b1': {'a1': 1, 'directory': 0}
-    }
-    flattened = {
-        'directory': [(0, 'a1'), (0, 'b1')],
-        'a1': [(2, 'a1'), (1, 'b1')],
-    }
-    conflicting_params = {'a1'}
-    
-    to_backtrack = rv._identify_params_to_backtrack(deps, sub_deps, conflicting_params, flattened)
-    # a1 at run 2 is higher than required run 1, so backtrack a1
-    assert 'a1' in to_backtrack
-
-def test_flatten_all_deps_empty():
-    """Test flattening with empty inputs."""
-    flattened = rv._flatten_all_deps({}, {})
-    assert flattened == {}
-
-def test_flatten_all_deps_no_overlap():
-    """Test when input params don't appear in sub-dependencies."""
-    deps = {'a1': 1, 'b1': 1}
-    sub_deps = {'a1': {'x': 0}, 'b1': {'y': 0}}
-    flattened = rv._flatten_all_deps(deps, sub_deps)
-    
-    assert 'a1' in flattened
-    assert 'b1' in flattened
-    assert 'x' in flattened
-    assert 'y' in flattened
-    assert len(flattened['a1']) == 1
-    assert len(flattened['b1']) == 1
-
-def test_find_conflicting_params_empty():
-    """Test conflict detection with empty input."""
-    conflicts = rv._find_conflicting_params({})
-    assert conflicts == set()
-
-def test_find_conflicting_params_no_conflicts():
-    """Test when all parameters have consistent run indices."""
-    flattened = {
-        'a1': [(1, 'source1'), (1, 'source2')],
-        'b1': [(2, 'source3')]
-    }
-    conflicts = rv._find_conflicting_params(flattened)
-    assert conflicts == set()
-
 def test_get_deps_three_level_cascade():
     """Test cascading dependencies: a1 → b1 → c1 where all are inputs."""
     deps_map = {
@@ -220,10 +144,11 @@ def test_get_deps_three_level_cascade():
             'c1': {'b1': 2, 'a1': 2, 'directory': 0}}
     }
     
-    # Request all three at their highest runs - should backtrack to run 1
+    # Request all three at their highest runs - should backtrack a1 and b1 to run 1
+    # c1 can stay at run 2 since it's compatible with the backtracked versions
     with pytest.warns(UserWarning):
         result = rv.get_deps(['a1', 'b1', 'c1'], deps_map)
-        expected = {'a1': 1, 'b1': 1, 'c1': 1, 'directory': 0}
+        expected = {'a1': 1, 'b1': 1, 'c1': 2, 'directory': 0}
         assert result == expected
 
 ################################################################################
@@ -402,15 +327,15 @@ def test_get_deps_input_depends_on_input_same_run():
 def test_get_deps_input_depends_on_input_different_runs():
     # Test case where one input parameter depends on another at different run
     # a1 is at run 2, but b1 at run 2 depends on a1 at run 1
-    # Should backtrack both to run 1
+    # Should backtrack a1 to run 1, b1 can stay at run 2 (prefer later policy)
     deps_map = {0: {'directory': {}},
              1: {'a1': {'directory': 0},
                  'b1': {'a1': 1, 'directory': 0}},
              2: {'a1': {'directory': 0},
                  'b1': {'a1': 1, 'directory': 0}}}
-    
+
     with pytest.warns(UserWarning):
-        expected = {'a1': 1, 'b1': 1, 'directory': 0}
+        expected = {'a1': 1, 'b1': 2, 'directory': 0}
         result = rv.get_deps(['a1', 'b1'], deps_map)
         assert result == expected
 
@@ -600,7 +525,7 @@ def test_get_deps_enforced_max_runs_parameter_not_in_deps_map():
     }
     
     # Enforce run for 'b1' which doesn't exist - should fail during dependency lookup
-    with pytest.raises(ValueError, match="Missing dependencies"):
+    with pytest.raises(ValueError):
         rv.get_deps(['b1'], deps_map, enforced_max_runs={'b1': 1})
 
 
@@ -663,3 +588,229 @@ def test_get_deps_enforced_max_runs_empty_dict():
     # Empty dict should behave like no enforcement
     result = rv.get_deps(['a1'], deps_map, enforced_max_runs={})
     assert result == {'a1': 2, 'directory': 0}
+
+################################################################################
+############################## _detect_conflicts ###############################
+################################################################################
+
+def test_detect_conflicts_no_conflicts():
+    """Test _detect_conflicts returns empty list when no conflicts exist."""
+    sub_deps = {
+        'param1': {'a1': 2, 'b1': 3, 'directory': 0},
+        'param2': {'a1': 2, 'c1': 4, 'directory': 0}
+    }
+    result = rv._detect_conflicts(sub_deps)
+    assert result == []
+
+def test_detect_conflicts_single_conflict():
+    """Test _detect_conflicts identifies single conflicting parameter."""
+    sub_deps = {
+        'param1': {'a1': 2, 'b1': 3, 'directory': 0},
+        'param2': {'a1': 1, 'c1': 4, 'directory': 0}  # a1 differs
+    }
+    result = rv._detect_conflicts(sub_deps)
+    # Should identify param1 (has higher a1 value)
+    assert 'param1' in result
+
+def test_detect_conflicts_multiple_params_multiple_conflicts():
+    """Test _detect_conflicts with multiple conflicting dependencies."""
+    sub_deps = {
+        'param1': {'a1': 3, 'b1': 2, 'directory': 0},
+        'param2': {'a1': 1, 'b1': 4, 'directory': 0}
+    }
+    result = rv._detect_conflicts(sub_deps)
+    # Both params have conflicts (a1 and b1 differ)
+    assert len(result) > 0
+    assert any(p in result for p in ['param1', 'param2'])
+
+def test_detect_conflicts_three_way_conflict():
+    """Test _detect_conflicts with three parameters having conflicts."""
+    sub_deps = {
+        'param1': {'shared': 3, 'directory': 0},
+        'param2': {'shared': 1, 'directory': 0},
+        'param3': {'shared': 2, 'directory': 0}
+    }
+    result = rv._detect_conflicts(sub_deps)
+    # Should detect conflicts among params
+    assert len(result) > 0
+
+def test_detect_conflicts_empty_subdeps():
+    """Test _detect_conflicts with empty sub_deps."""
+    sub_deps = {}
+    result = rv._detect_conflicts(sub_deps)
+    assert result == []
+
+def test_detect_conflicts_single_param_no_conflict():
+    """Test _detect_conflicts with single parameter (no conflict possible)."""
+    sub_deps = {
+        'param1': {'a1': 2, 'b1': 3, 'directory': 0}
+    }
+    result = rv._detect_conflicts(sub_deps)
+    assert result == []
+
+def test_detect_conflicts_identifies_higher_run():
+    """Test that param with higher run value is identified for backtracking."""
+    sub_deps = {
+        'param_low': {'shared': 1, 'directory': 0},
+        'param_high': {'shared': 5, 'directory': 0}
+    }
+    result = rv._detect_conflicts(sub_deps)
+    # param_high should be in the list (has the higher value)
+    assert 'param_high' in result
+
+def test_detect_conflicts_complex_cascade():
+    """Test _detect_conflicts in complex multi-level scenario."""
+    sub_deps = {
+        'c1': {'a1': 2, 'b1': 2, 'directory': 0, 'c1': 2},
+        'b1': {'a1': 2, 'b1': 2, 'directory': 0},
+        'a1': {'a1': 2, 'directory': 0}
+    }
+    result = rv._detect_conflicts(sub_deps)
+    # No conflicts - all agree on run versions
+    assert result == []
+
+################################################################################
+######################## _find_best_deps_recursive #############################
+################################################################################
+
+def test_find_best_deps_recursive_no_conflicts():
+    """Test recursive function returns immediately when no conflicts."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0},
+            'b1': {'a1': 1, 'directory': 0}}
+    }
+    current_deps = {'a1': 1, 'b1': 1}
+    result = rv._find_best_deps_recursive(current_deps, deps_map, ['a1', 'b1'], {})
+    
+    assert result is not None
+    all_deps, run_sum, backtracked = result
+    assert all_deps == {'a1': 1, 'b1': 1, 'directory': 0}
+    assert run_sum == 2  # 1 + 1 + 0
+    assert backtracked == {}
+
+def test_find_best_deps_recursive_optimizes_run_sum():
+    """Test that recursive function chooses path with highest run_sum."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0},
+            'b1': {'a1': 1, 'directory': 0},
+            'c1': {'a1': 1, 'b1': 1, 'directory': 0}},
+        2: {'a1': {'directory': 0},
+            'b1': {'a1': 2, 'directory': 0},
+            'c1': {'a1': 1, 'b1': 1, 'directory': 0}}  # c1:2 would conflict
+    }
+    
+    # Start with c1:1, b1:2 - b1 depends on a1:2, but c1:1 depends on a1:1
+    # Should backtrack to b1:1 for compatibility and highest run_sum
+    current_deps = {'c1': 1, 'b1': 2}
+    result = rv._find_best_deps_recursive(current_deps, deps_map, ['c1', 'b1'], {})
+    
+    assert result is not None
+    all_deps, run_sum, backtracked = result
+    # Should have backtracked to b1:1 for consistency
+    assert all_deps['b1'] == 1
+    assert 'b1' in backtracked
+
+def test_find_best_deps_recursive_enforced_max_runs():
+    """Test that recursive function respects enforced_max_runs."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0},
+            'b1': {'a1': 1, 'directory': 0}},
+        2: {'a1': {'directory': 0},
+            'b1': {'a1': 2, 'directory': 0}},
+        3: {'a1': {'directory': 0},
+            'b1': {'a1': 3, 'directory': 0}}
+    }
+    
+    # When both params in current_deps, enforced_max_runs is checked
+    current_deps = {'b1': 2, 'a1': 2}
+    result = rv._find_best_deps_recursive(current_deps, deps_map, ['b1'], {'a1': 2})
+    
+    assert result is not None
+    all_deps, run_sum, backtracked = result
+    assert all_deps['a1'] <= 2  # Must respect enforced max
+    assert all_deps['b1'] == 2  # Compatible with a1:2
+
+def test_find_best_deps_recursive_no_valid_solution():
+    """Test recursive function returns None when no resolution possible."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0},
+            'b1': {'a1': 2, 'directory': 0}}  # b1:1 needs a1:2
+        # No a1 at run 2, and b1 has no other versions
+    }
+    
+    # Start with b1:1, which needs a1:2 that doesn't exist
+    # Even if we backtrack b1, there are no earlier versions
+    current_deps = {'b1': 1}
+    # Enforce a1 cannot exceed run 1 (but we need a1:2)
+    result = rv._find_best_deps_recursive(current_deps, deps_map, ['b1'], {'a1': 1})
+    
+    # Should return None: b1:1 needs a1:2 but enforced max is a1:1
+    assert result is None
+
+def test_find_best_deps_recursive_memoization():
+    """Test that memoization cache is used to avoid redundant computation."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0},
+            'b1': {'a1': 1, 'directory': 0},
+            'c1': {'a1': 1, 'directory': 0}}
+    }
+    
+    current_deps = {'a1': 1, 'b1': 1, 'c1': 1}
+    memo = {}
+    
+    # First call populates memo
+    result1 = rv._find_best_deps_recursive(current_deps, deps_map, ['a1', 'b1', 'c1'], {}, memo)
+    
+    # Second call with same state should use memoized result
+    result2 = rv._find_best_deps_recursive(current_deps, deps_map, ['a1', 'b1', 'c1'], {}, memo)
+    
+    assert result1 is result2  # Should be the exact same object from cache
+    assert len(memo) > 0  # Memo should have entries
+
+def test_find_best_deps_recursive_multiple_backtrack_paths():
+    """Test that function explores multiple backtracking paths and picks best."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0},
+            'b1': {'directory': 0},
+            'c1': {'a1': 1, 'b1': 1, 'directory': 0}},
+        2: {'a1': {'directory': 0},
+            'b1': {'directory': 0},
+            'c1': {'a1': 2, 'b1': 1, 'directory': 0}},
+        3: {'a1': {'directory': 0},
+            'b1': {'directory': 0},
+            'c1': {'a1': 1, 'b1': 3, 'directory': 0}}
+    }
+    
+    # Start with a1:2, b1:3 - conflicts because c1 versions don't match these
+    current_deps = {'a1': 2, 'b1': 3, 'c1': 2}
+    result = rv._find_best_deps_recursive(current_deps, deps_map, ['a1', 'b1', 'c1'], {})
+    
+    assert result is not None
+    all_deps, run_sum, backtracked = result
+    # Should find a valid combination
+    assert len(backtracked) > 0  # Something was backtracked
+
+def test_find_best_deps_recursive_prefers_higher_runs():
+    """Test that when multiple solutions exist, higher run_sum is chosen."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0},
+            'b1': {'a1': 1, 'directory': 0}},
+        2: {'a1': {'directory': 0},
+            'b1': {'a1': 2, 'directory': 0}}
+    }
+    
+    # Both b1:1 and b1:2 would work, should prefer b1:2 (higher run_sum)
+    current_deps = {'b1': 2}
+    result = rv._find_best_deps_recursive(current_deps, deps_map, ['b1'], {})
+    
+    assert result is not None
+    all_deps, run_sum, backtracked = result
+    assert all_deps['b1'] == 2  # Should use higher run
+    assert backtracked == {}  # No backtracking needed

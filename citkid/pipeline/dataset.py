@@ -75,8 +75,8 @@ class Analyzer:
         and to the global cache as 'global'-type attributes.
         
         Parameters:
-        user_params (dictionary): Keys are function names, and values are dictionaries
-            of parameter names and their values.
+        user_params (dictionary): Keys are function names, and values are 
+            dictionaries of parameter names and their values.
         
         Returns:
         None
@@ -89,6 +89,9 @@ class Analyzer:
                 self.deps_map['global'][1][param_name] = {}
 
 class DataSet:
+    # Reserved attribute names - computed dynamically from class attributes
+    _RESERVED_ATTRS = None
+    
     def __init__(self, 
         zarr_path, 
         cal_yaml_path, 
@@ -160,13 +163,35 @@ class DataSet:
 
         # start memory_cache, where data is stored referenced to run_idx 
         self._memory_cache = {}
+        
+        # start lazy_collections, which tracks LazyAttrCollections for per-row 
+        # params
+        self._lazy_collections = {}
+
+    def _get_reserved_attrs(self):
+        """Get all non-private DataSet attributes as reserved names.
+        
+        This dynamically computes the set of attribute names that cannot be used
+        as pipeline parameter names. The result is cached at the class level.
+        
+        Returns:
+            set: Set of reserved attribute names.
+        """
+        if DataSet._RESERVED_ATTRS is None:
+            # Get all non-private attributes from DataSet class
+            DataSet._RESERVED_ATTRS = {
+                name for name in dir(type(self)) 
+                if not name.startswith('_')
+            }
+        return DataSet._RESERVED_ATTRS
 
     def _execute_step(self, step, data_idx=None, enforced_max_runs={}):
         """
-        Execute a single pipeline step, storing results and dependencies in memory.
+        Execute a single pipeline step, storing results and dependencies in 
+        memory.
         
-        All input parameters must already exist in memory or on disk - this method
-        will NOT execute additional steps to generate missing inputs.
+        All input parameters must already exist in memory or on disk - this 
+        method will NOT execute additional steps to generate missing inputs.
         
         Parameters:
         step (plStep): The pipeline step to execute.
@@ -209,6 +234,8 @@ class DataSet:
             deps_map = self.deps_maps['global']
             run_idxs = [get_most_recent_run(name, deps_map) + 1 
                         for name in step.return_names]
+            # run that doesn't exist yet should be 1 
+            run_idxs = [1 if r == 0 else r for r in run_idxs]
             deps = get_deps(
                 step.param_names, 
                 deps_map, 
@@ -234,6 +261,14 @@ class DataSet:
 
             # Store outputs in memory cache, each with its own run_idx
             for (name, val), run_idx in zip(out.items(), run_idxs):
+                # Check for reserved attribute name collision
+                reserved = self._get_reserved_attrs()
+                if name in reserved:
+                    raise ValueError(
+                        f"Cannot create parameter '{name}' - this is a reserved "
+                        f"DataSet attribute name. Reserved names: {sorted(reserved)}"
+                    )
+                
                 # Ensure run_idx exists in memory cache
                 if run_idx not in self._memory_cache:
                     self._memory_cache[run_idx] = {}
@@ -252,6 +287,16 @@ class DataSet:
                     # Store data in LazyAttr cache
                     for i, v in enumerate(val):
                         self._memory_cache[run_idx][name]._cache[i] = v
+                    
+                    # Register with LazyAttrCollection
+                    if name not in self._lazy_collections:
+                        self._lazy_collections[name] = pf.LazyAttrCollection(
+                            self, name
+                            )
+                    self._lazy_collections[name].add_run(
+                        run_idx, 
+                        self._memory_cache[run_idx][name]
+                    )
                     
                     # Store dependencies for all rows
                     for i in range(self.nrows):
@@ -272,8 +317,10 @@ class DataSet:
             run_deps = []  # (run_idxs_tuple, deps) for each data_idx
             for di in data_idx:
                 deps_map = self.deps_maps[di]
-                run_idxs = tuple([get_most_recent_run(name, deps_map) + 1 
-                                  for name in step.return_names])
+                run_idxs = [get_most_recent_run(name, deps_map) + 1 
+                                  for name in step.return_names]
+                # run that doesn't exist yet should be 1
+                run_idxs = tuple([1 if r == 0 else r for r in run_idxs])
                 deps = get_deps(
                     step.param_names, 
                     deps_map, 
@@ -284,7 +331,9 @@ class DataSet:
             # Group by unique run_idxs/deps combinations
             unique_run_deps, indices_groups = util.group_unique_tuples(run_deps)
             
-            for (run_idxs, deps), local_idx in zip(unique_run_deps, indices_groups):
+            for (run_idxs, deps), local_idx in zip(
+                unique_run_deps, indices_groups
+                ):
                 # Collect parameters 
                 params = []
                 param_is_global = []
@@ -305,10 +354,18 @@ class DataSet:
                     params.append(val)
                 
                 # Run step 
-                out = step._run(params, param_is_global, data_idx[local_idx])
+                out = step._run(params, param_is_global)
 
                 # Store outputs in memory cache, each with its own run_idx
                 for (name, val), run_idx in zip(out.items(), run_idxs):
+                    # Check for reserved attribute name collision
+                    reserved = self._get_reserved_attrs()
+                    if name in reserved:
+                        raise ValueError(
+                            f"Cannot create parameter '{name}' - this is a reserved "
+                            f"DataSet attribute name. Reserved names: {sorted(reserved)}"
+                        )
+                    
                     # Ensure run_idx exists in memory cache
                     if run_idx not in self._memory_cache:
                         self._memory_cache[run_idx] = {}
@@ -317,6 +374,16 @@ class DataSet:
                     if name not in self._memory_cache[run_idx]:
                         self._memory_cache[run_idx][name] = pf.LazyAttr(
                             self, name, run_idx
+                        )
+                        
+                        # Register with LazyAttrCollection
+                        if name not in self._lazy_collections:
+                            self._lazy_collections[name]= pf.LazyAttrCollection(
+                                self, name
+                                )
+                        self._lazy_collections[name].add_run(
+                            run_idx, 
+                            self._memory_cache[run_idx][name]
                         )
                     
                     # Store data in LazyAttr cache
@@ -330,6 +397,132 @@ class DataSet:
                         self.deps_maps[di][run_idx][name] = deps
                     
                     self._is_global_cache[name] = False
+
+    def __getattr__(self, name):
+        """
+        Dynamic attribute access for pipeline parameters.
+        
+        Provides transparent access to parameters defined in the calibration
+        pipeline. Global parameters are computed and returned directly.
+        Per-row parameters return a LazyAttrCollection that supports indexing.
+        
+        Priority: memory → zarr → produce (if in pipeline) → AttributeError
+        
+        Parameters:
+        name (str): The name of the parameter to access.
+        
+        Returns:
+        For global parameters: The computed value (any type).
+        For per-row parameters: LazyAttrCollection instance.
+        
+        Raises:
+        AttributeError: If the parameter doesn't exist anywhere.
+        
+        Examples:
+        >>> DS.some_global_param  # Returns the value directly
+        42
+        >>> DS.some_per_row_param  # Returns LazyAttrCollection
+        LazyAttrCollection(some_per_row_param, runs=[1, 3])
+        >>> DS.some_per_row_param[0]  # Access specific row
+        array([...]) 
+        >>> DS.some_per_row_param[[0, 1, 2]]  # Access multiple rows
+        array([[...], [...], [...]])
+        """
+        # First check if we already know about this parameter
+        if name in self._is_global_cache:
+            is_global = self._is_global_cache[name]
+        else:
+            # Check memory cache to see if it exists there
+            runs_in_memory = [
+                run for run in self._memory_cache 
+                if name in self._memory_cache[run]
+            ]
+            
+            if runs_in_memory:
+                # Found in memory - infer type from structure
+                # Global params are stored as direct values
+                # Per-row params are stored as LazyAttr
+                run_idx = max(runs_in_memory)
+                val = self._memory_cache[run_idx][name]
+                is_global = not isinstance(val, pf.LazyAttr)
+                self._is_global_cache[name] = is_global
+            else:
+                # Check zarr to see if it exists there
+                found_in_zarr = False
+                is_global = None
+                
+                # Check global deps_maps
+                if 'global' in self.deps_maps:
+                    for run_idx in self.deps_maps['global']:
+                        if name in self.deps_maps['global'][run_idx]:
+                            found_in_zarr = True
+                            is_global = True
+                            break
+                
+                # Check per-row deps_maps if not found in global
+                if not found_in_zarr:
+                    for data_idx in self.deps_maps:
+                        if data_idx == 'global':
+                            continue
+                        for run_idx in self.deps_maps[data_idx]:
+                            if name in self.deps_maps[data_idx][run_idx]:
+                                found_in_zarr = True
+                                is_global = False
+                                break
+                        if found_in_zarr:
+                            break
+                
+                if found_in_zarr:
+                    self._is_global_cache[name] = is_global
+                else:
+                    # Not in memory or zarr - check if it can be produced
+                    path = pf.find_pl_path(self.cal_pl, name)
+                    if path is None:
+                        raise AttributeError(
+                            f"'{type(self).__name__}' object has no attribute '{name}'"
+                        )
+                    
+                    # Determine type from pipeline
+                    final_step = path[-1]
+                    is_global = final_step.func_type in ['global', 'global-res']
+                    self._is_global_cache[name] = is_global
+        
+        # Now handle based on whether it's global or per-row
+        if is_global:
+            # For global parameters: return the value directly
+            # Check memory first
+            runs_in_memory = [
+                run for run in self._memory_cache 
+                if name in self._memory_cache[run]
+            ]
+            if runs_in_memory:
+                run_idx = max(runs_in_memory)
+                return self._memory_cache[run_idx][name]
+            
+            # Check zarr
+            if 'global' in self.deps_maps:
+                runs_in_zarr = [
+                    run for run in self.deps_maps['global']
+                    if name in self.deps_maps['global'][run]
+                ]
+                if runs_in_zarr:
+                    run_idx = max(runs_in_zarr)
+                    deps = self.deps_maps['global'][run_idx][name]
+                    return self._get_existing(name, deps, data_idx=None)
+            
+            # Not found - produce it
+            self._produce_data(name, data_idx=None)
+            
+            # Retrieve from memory (should exist now)
+            run_idx = get_most_recent_run(name, self.deps_maps['global'])
+            return self._memory_cache[run_idx][name]
+        
+        else:
+            # For per-row parameters: return LazyAttrCollection
+            # The collection handles lazy loading when indexed
+            if name not in self._lazy_collections:
+                self._lazy_collections[name] = pf.LazyAttrCollection(self, name)
+            return self._lazy_collections[name]
 
     def _is_in_memory(self, name, run_idx, data_idx=None):
         """
@@ -502,6 +695,17 @@ class DataSet:
                     self._memory_cache[run_idx][name] = pf.LazyAttr(
                         self, name, run_idx
                     )
+                    
+                    # Register with LazyAttrCollection when first creating
+                    if name not in self._lazy_collections:
+                        self._lazy_collections[name] = pf.LazyAttrCollection(self, name)
+                    self._lazy_collections[name].add_run(
+                        run_idx,
+                        self._memory_cache[run_idx][name]
+                    )
+                    
+                    # Update _is_global_cache
+                    self._is_global_cache[name] = False
                 
                 # Update LazyAttr cache with loaded data
                 lazy_attr = self._memory_cache[run_idx][name]
@@ -517,9 +721,49 @@ class DataSet:
             f"does not exist in memory or zarr and cannot be computed here. "
             f"Use _execute_path to generate missing data."
         )
-
-    # Methods below are older code that needs to be refactored. 
-    def _get_data(self, name, run_idx, data_idx = None):
+    
+    def _produce_data(self, name, data_idx = None, enforced_max_runs = {}):
+        """
+        Produce data for a parameter by executing its pipeline path.
+        
+        Finds the pipeline path needed to produce the named parameter and 
+        executes each step in sequence. Each step's output is stored in memory
+        with appropriate run indices and dependency tracking.
+        
+        Parameters:
+        name (str): Name of the parameter to produce.
+        data_idx (int, array-like, or None): Data indices to produce. Required
+            for per-row/vectorized parameters, must be None for global parameters.
+        enforced_max_runs (dict): Optional dict mapping parameter names to 
+            maximum run indices. Used to ensure specific input versions are used
+            when producing the output. Format: {param_name: max_run_idx}.
+        
+        Returns:
+        None (results are stored in self._memory_cache and registered with
+             LazyAttrCollections for per-row parameters)
+        
+        Raises:
+        ValueError: If no pipeline path exists for the parameter.
+        
+        Notes:
+        - Only executes steps needed for the specific parameter
+        - Filters enforced_max_runs per step to only relevant parameters
+        - Works with _execute_step which handles actual computation and storage
+        """
+        path = pf.find_pl_path(self.cal_pl, name) 
+        for step in path:
+            enforced_max_runs_i = {
+                k: v for k, v in enforced_max_runs.items() 
+                if k in step.param_names
+            }
+            self._execute_step(
+                step, 
+                data_idx = data_idx, 
+                enforced_max_runs = enforced_max_runs_i)
+                
+    def _fetch_rows(
+            self, name, run_idx, data_idx = None, enforced_max_runs = {}
+            ):
         """
         Given a parameter name, run index, and data index (if not global), 
         return the data location in order of loading priority: 
@@ -537,110 +781,49 @@ class DataSet:
         Returns:
         data (misc): 
         """
-        # Check memory cache 
-        
-        # Check disk 
-        
-        # Check potential 
-
-        pass 
+        # if not in memory or zarr -> find and execute path
+        if not ( 
+            self._is_in_memory(name, run_idx, data_idx) or \
+            self._is_in_zarr(name, run_idx, data_idx)
+        ):
+            if self._is_global_cache[name]:
+                run_idx_potential = get_most_recent_run(
+                    name, self.deps_maps['global']) + 1
+                if run_idx_potential == 0:
+                    run_idx_potential = 1 
+            else:
+                runs = []
+                for di in data_idx:
+                    run = get_most_recent_run(name, self.deps_maps[di]) + 1 
+                    if run == 0:
+                        run = 1
+                    runs.append(run)
+                run_idx_potential = runs[0] 
+                if not all(r == run_idx_potential for r in runs):
+                    raise ValueError(
+                        f"Data indices {data_idx} for parameter '{name}' "
+                        f"have different potential run indices: {runs}"
+                    )
+            
+            if run_idx_potential != run_idx:
+                msg = {'with data_idx=' + '' if data_idx is None 
+                       else str(data_idx)}
+                raise ValueError(
+                    f"Cannot produce '{name}' at run_idx={run_idx} "
+                    f"{msg} "
+                    f"because it would require producing run_idx="
+                    f"{run_idx_potential}."
+                )
+            self._produce_data(
+                name, 
+                data_idx = data_idx, 
+                enforced_max_runs = enforced_max_runs
+                )
                 
-        
-    def _confirm_valid_path(self, path, raise_error = True):
-        """
-        Confirm that a list of plStep objects forms a valid path.
-
-        All inputs must exist or be generatable from the Zarr file or path.
-
-        Parameters:
-        path (list): List of plStep objects forming the path.
-        raise_error (bool): Set to True to raise an error message,
-            False to return the input which was not found and
-            the step for which it was not found.
-
-        Raises (if raise_error = True):
-        ValueError: If an input for any step is not found
-            and raise_error = True.
-            
-        Returns (if raise_error = False):
-        missing_input (str or None): Missing input name, or None
-            if there were no missing input names.
-        step (plStep or None): Step where input was missing, or None.
-
-        Returns:
-        None
-        """
-        # Need to modify this to check if values are in zarr
-        valid_inputs = [d for d in dir(self) if '__' not in d]
-        for step in path:
-            for inp in step.param_names:
-                if inp not in valid_inputs and inp != 'data_idx':
-                    
-                    run = get_attr_version(inp, self.root)
-                    
-                    if run is None:
-                        if raise_error:
-                            m = (
-                                f"Invalid path, input '{inp}' for step "
-                                f"'{step.name}'"
-                            )
-                            m += f" not found."
-                            raise ValueError(m)
-                        else:
-                            missing_input = inp
-                            return missing_input, step
-                            
-            valid_inputs.extend(step.return_names)
-            
-        if not raise_error:
-            missing_input = None
-            step = None
-            return missing_input, step
-
-    def execute_path(self, path, data_idx = None):
-        """
-        Execute a list of plStep objects in sequence for given data indices.
-
-        Parameters:
-        path (list): List of plStep objects forming the path.
-        data_idx (int or list): The data index or indices to process.
-
-        Returns:
-        None
-        """
-        self._confirm_valid_path(path)
-        for ii, step in enumerate(path):
-            this_data_idx = data_idx
-            if step.func_type in ['global', 'global-res']:
-                this_data_idx = None
-
-            # If we are at an intermediate step of the path, check if
-            # the outputs of this step are already attributes of the DataSet.
-            # If all of the outputs already exist as attributes, then return.
-            if ii < len(path)-1:
-                if step.func_type in ['global', 'global-res']:
-                    if all([self.has_attr(name) for name in step.return_names]):
-                        continue
-                else:
-                    this_data_idx = np.atleast_1d(this_data_idx)
-                    # Find data indices for which at least one of the outputs
-                    # of this step does not exist, if any.
-                    exists_arrs = np.array([self.has_attr(name, this_data_idx)
-                                            for name in step.return_names])
-                    do_run_mask = ~np.all(exists_arrs, axis=0)
-                    this_data_idx = this_data_idx[do_run_mask]
-                    if not any(do_run_mask):
-                        continue
-
-            params, param_is_global = self.collect_step_params(this_data_idx)
-
-            returns = step.run(params, param_is_global, this_data_idx) 
-            # for global_res runs, confirm that output is len(nrows)
-            for name, val in returns:
-                assert False, "Need to change behavior based on data_idx"
-                # For vectorized/per-row, make LazyAttr
-                setattr(self, name, val) 
-
+        # Return from memory or disk
+        return self._get_existing(name, run_idx, data_idx)
+    
+    # Methods below are older code that needs to be refactored. 
     def write_data(self, return_name, step, value, data_idx, dtype = None):
         """
         Write data attribute 'name' for dataset.
@@ -649,9 +832,11 @@ class DataSet:
         return_name (str): The name of the data attribute to write.
         func_type (str): The type of function that produced the data.
             Can be "per-row", "vectorized", or "global-res".
-        param_names (array-like): Parameter names used when calling the function.
-        dependencies (dictionary): Dictionary giving the dependencies for the input
-            parameters, where keys are parameter names and values are run indices.
+        param_names (array-like): Parameter names used when calling the 
+            function.
+        dependencies (dictionary): Dictionary giving the dependencies for the 
+            input parameters, where keys are parameter names and values are run 
+            indices.
         value (np.ndarray or scalar): The data to write.
         data_idx (int or list): The data index or indices to write.
         run_idx (int): run index that produced the output.
@@ -687,7 +872,7 @@ class DataSet:
             run_grp = root[str(run_idx)]
             return_grp = run_grp.create_group(return_name)
             
-            # If the func_type is global, we can't index it by row with data_idx.
+            # If the func_type is global, we can't index it by row with data_idx
             # So we always just write the full thing to zarr.
             shape = value.shape
             chunks = value.shape
@@ -702,13 +887,13 @@ class DataSet:
             values_arr[...] = value
             # Store parameter dependencies and 'global' status.
             return_grp.attrs['deps'] = deps
-            return_grp.attrs['global'] = self.global_cache[return_name]
+            return_grp.attrs['global'] = self._is_global_cache[return_name]
             
         elif step.func_type in ['per-row', 'vectorized']:
             for local_idx, di in enumerate(data_idx):
                 # di = di.item()
                 di_str = f'idx{di}'
-                deps_map = self.deps_map[di_str]
+                deps_map = self.deps_maps[di]
                 run_idx = get_most_recent_run(return_name, deps_map)
                 deps = get_deps(step.return_names, deps_map)
                 names_to_remove = [name for name in step.return_names
@@ -755,115 +940,8 @@ class DataSet:
                 zarr_deps = return_grp.attrs['deps']
                 zarr_deps[di_str] = deps
                 return_grp.attrs['deps'] = zarr_deps
-                return_grp.attrs['global'] = self.global_cache[return_name]
-
-    # ***EK - The zarr loading is causing inconsistent behavior where
-    # the outputs of a plStep.run call will be stored as a LazyAttr,
-    # but loading the same result from the zarr file is just 
-    # stored as a zarr file.
-    def __getattr__(self, name):
-        """
-        Custom attribute getter to handle LazyAttr creation for per-row
-        attributes.
-
-        Parameters:
-        name (str): The name of the attribute to get.
-
-        Returns:
-        Any: The requested attribute value or LazyAttr.
-        """
-        # Look up the attribute in the zarr file.
-        run_idx = get_attr_version(name, self.root)
-        if run_idx is not None:
-            grp = self.root[f'{run_idx}/{name}']
-            attr = grp['data']
-            object.__setattr__(self, name, attr)
-            self.global_cache[name] = grp.attrs['global']
-            # if self.global_cache[name]:
-            #     deps_to_add = grp.attrs['deps']
-            #     _update_deps_map_after_load(
-            #         self.deps_map, name, deps_to_add, di = None
-            #         )
-                
-            # else:
-            #     row_exists = grp['row_exists'][...]
-            #     dis = np.where(row_exists)[0]
-            #     for di in dis:
-            #         deps_to_add = grp.attrs['deps'][f'idx{di}']
-            #         _update_deps_map_after_load(
-            #             self.deps_map, name, deps_to_add, di = di
-            #             )
-                
-            return attr
-
-        # # Search the user-specified analysis parameters
-        # paths = _find_key_paths(self.analysis_user_params, name)
-        # if len(paths):
-        #     if len(paths) > 1:
-        #         raise ValueError(f"User-specified attribute {name} was found multiple times "
-        #                          "in the analysis YAML file.")
-        #     attr = _get_dict_value_from_path(self.analysis_user_params, paths[0])
-        #     object.__setattr__(self, name, attr)
-        #     return attr
-
-
-        # Only run when normal lookup fails
-        cal_pl = object.__getattribute__(self, "cal_pl")
-
-        # Find the path to produce this attribute
-        path = pf.find_pl_path(cal_pl, name)
-        if path is None:
-            raise AttributeError(name)
-
-        # Check if all steps are global or global-res 
-        if all(step.func_type in ["global", "global-res"] for step in path):
-            # Execute immediately, store result directly
-            self.execute_path(path, data_idx = None)
-            return object.__getattribute__(self, name)
-        
-        # Otherwise create LazyAttr for per-row/vectorized output
-        attr = pf.LazyAttr(self, name)
-        object.__setattr__(self, name, attr)
-        self.global_cache[name] = False
-        
-        attr = object.__getattribute__(self, name)
-        
-        return attr
-            
-    def has_attr(self, name, data_idx=None):
-        """
-        Function to check if an attribute is present, without
-        calling __getattr__.
-        
-        Parameters:
-        name (str): attribute to look for.
-        data_idx (int or None): Data index to search for within the attribute,
-            if it is not a 'global'-type attribute.
-            
-        Returns:
-        (bool, or array of bool): True if the attribute is present, False if not.
-        """
-        if name in self.__dict__:
-            if data_idx is None:
-                return True
-            else:
-                data_idx = np.atleast_1d(data_idx)
-                attr = object.__getattribute__(self, name)
-                exists_arr = np.full(len(data_idx), False)
-                for ii, di in enumerate(data_idx):
-                    try:
-                        attr[di]
-                        exists_arr[ii] = True
-                    except:
-                        pass
-                return exists_arr
-        else:
-            if data_idx is None:
-                return False
-            else:
-                exists_arr = np.full(len(data_idx), False)
-                return exists_arr
-    
+                return_grp.attrs['global'] = self._is_global_cache[return_name]
+ 
     def show_file(self, ftype):
         """
         Opens the file explorer to the location of a file associated with this 
@@ -1079,50 +1157,6 @@ def _load_deps_from_zarr(root):
 ################################################################################
 # Untested functions 
 ################################################################################
-def _find_key_paths(d, target, path=()):
-    """
-    Finds the paths to a key in a dictionary.
-    
-    Parameters:
-    d: Dictionary.
-    target: The key to find.
-    path: The path to start with, if you only want to search a 
-        subset of the dictionary.
-        
-    Returns:
-    path (list of tuples): Paths to the target key.
-    """
-    paths = []
-
-    if isinstance(d, dict):
-        for k, v in d.items():
-            new_path = path + (k,)
-            if k == target:
-                paths.append(new_path)
-            paths.extend(_find_key_paths(v, target, new_path))
-
-    elif isinstance(d, list):
-        for i, item in enumerate(d):
-            paths.extend(_find_key_paths(item, target, path + (i,)))
-
-    return paths
-
-def _get_dict_value_from_path(d, path):
-    """
-    Gets a value from a path pointing into a nested dictionary.
-    
-    Parameters:
-    d: Dictionary.
-    path (array-like): 1D list of keys.
-    
-    Returns:
-    value: The value at the end of the path.
-    """
-    for key in path:
-        d = d[key]
-    value = d
-    return value 
-
 def _convert_yaml_to_steps(pl_dict, cal_steps, key = None):
     """
     Converts YAML-defined path dictionary leaves to plStep objects.
@@ -1147,39 +1181,6 @@ def _convert_yaml_to_steps(pl_dict, cal_steps, key = None):
             raise ValueError(m)
         return x[0]
     return pl_dict
-
-def get_attr_version(name, root):
-    """
-    Finds the most recent run version of a given attribute.
-    Returns None if the attribute does not exist in any run.
-    
-    Parameters:
-    name (str): Name of the attribute to search for.
-    root (zarr group): The root group of the zarr file to search within.
-    
-    Returns:
-    attr_version (int): Most recent run version containing the attribute.
-    """
-    folders = list(root.keys())
-    runs = []
-    for folder in folders:
-        try:
-            int(folder)
-            runs.append(folder)
-        except ValueError:
-            pass
-    runs = np.array(runs, dtype=int)
-    runs = np.flip(np.sort(runs))
-    
-    attr_version = None
-    for run in runs:
-        grp = root[str(run)]
-        attrs = list(grp.keys())
-        if name in attrs:
-            attr_version = run
-            return attr_version
-
-
        
 def _collect_user_params(obj, result = None):
     """
@@ -1217,35 +1218,9 @@ def _collect_user_params(obj, result = None):
 
     return result
 
-
-    
 ################################################################################
 ######################## Functions not currently in use ########################
 ################################################################################
-def _run_exists(name, run, root):
-    """
-    Not currently in use. 
-
-    Returns True if data under "name" exists for a specified run,
-    otherwise return False.
-    
-    Parameters:
-    name (str): Name of the attribute to search for.
-    run (int): run index.
-    root (zarr group): The zarr group to search within.
-
-    Returns:
-    bool: True if data exists, False if not.
-    """
-    # Input validation 
-    run = int(run) 
-    name = str(name) 
-
-    # Check if run exists in root
-    run_grp = root.get(str(run)) 
-    if run_grp is None:
-        return False
-    return name in run_grp 
 
 def _validate_nrows(cal_pl, nrows):
     "Not currently in use"

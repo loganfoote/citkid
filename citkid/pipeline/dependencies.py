@@ -94,104 +94,13 @@ def _get_lowest_runs(sub_deps):
             if k not in lowest_runs:
                 # append if new
                 lowest_runs[k] = v
-            elif v < lowest_runs[k]:
-                # replace if lower, and set conflicts to True
-                lowest_runs[k] = v
+            elif v != lowest_runs[k]:
+                # Different value found - mark as conflict
                 conflicts = True
+                if v < lowest_runs[k]:
+                    # Replace with lower value
+                    lowest_runs[k] = v
     return lowest_runs, conflicts
-
-def _flatten_all_deps(deps, sub_deps):
-    """
-    Flatten all dependencies into a single view showing all parameters and their 
-    run indices.
-    
-    Parameters:
-    deps (dict): Input parameter names mapped to their run indices.
-    sub_deps (dict): Input parameters mapped to their dependencies
-        {dep_name: dep_run}.
-    
-    Returns:
-    dict: {param_name: [(run_idx, source), ...]} where source is the input param 
-        that requires it.
-    """
-    flattened = {}
-    
-    # Add all sub-dependencies
-    for source, deps_dict in sub_deps.items():
-        for param_name, run_idx in deps_dict.items():
-            if param_name not in flattened:
-                flattened[param_name] = []
-            flattened[param_name].append((run_idx, source))
-    
-    # Also add input parameters themselves (they might appear in sub_deps)
-    for param_name, run_idx in deps.items():
-        if param_name not in flattened:
-            flattened[param_name] = []
-        flattened[param_name].append((run_idx, param_name))
-    
-    return flattened
-
-def _find_conflicting_params(flattened_deps):
-    """
-    Find parameters that have conflicting run indices.
-    
-    Parameters:
-    flattened_deps (dict): Output from _flatten_all_deps.
-    
-    Returns:
-    set: Parameter names that have different run indices.
-    """
-    conflicts = set()
-    for param_name, runs_list in flattened_deps.items():
-        if len(runs_list) > 1:
-            # Check if all run indices are the same
-            run_indices = [r for r, _ in runs_list]
-            if len(set(run_indices)) > 1:
-                conflicts.add(param_name)
-    return conflicts
-
-def _identify_params_to_backtrack(
-        deps, sub_deps, conflicting_params, flattened_deps
-        ):
-    """
-    Identify which input parameters need to be backtracked to resolve conflicts.
-    
-    Parameters:
-    deps (dict): Input parameter names mapped to their run indices.
-    sub_deps (dict): Input parameters mapped to their dependencies.
-    conflicting_params (set): Parameter names with conflicts.
-    flattened_deps (dict): Output from _flatten_all_deps.
-    
-    Returns:
-    set: Input parameter names that should be backtracked.
-    """
-    to_backtrack = set()
-    
-    for conflict_param in conflicting_params:
-        # Find the lowest required run for this parameter
-        runs_list = flattened_deps[conflict_param]
-        lowest_run = min(r for r, _ in runs_list)
-        
-        # Find all sources that require a higher run
-        for run_idx, source in runs_list:
-            if run_idx > lowest_run and source in deps:
-                to_backtrack.add(source)
-    
-    # Also backtrack parameters that depend on backtracked parameters
-    # This handles the case where one input depends on another input
-    changed = True
-    while changed:
-        changed = False
-        for param_name, param_deps in sub_deps.items():
-            if param_name not in to_backtrack and param_name in deps:
-                # Check if this parameter depends on any backtracked parameter
-                for dep_name in param_deps.keys():
-                    if dep_name in to_backtrack:
-                        to_backtrack.add(param_name)
-                        changed = True
-                        break
-    
-    return to_backtrack
 
 def get_deps(param_names, deps_map, enforced_max_runs = {}):
     """
@@ -225,11 +134,9 @@ def get_deps(param_names, deps_map, enforced_max_runs = {}):
     for key, val in enforced_max_runs.items():
         if not isinstance(key, str):
             raise ValueError("Keys in enforced_max_runs must be strings")
-        if key not in param_names:
-            raise ValueError(f"Enforced parameter '{key}' not in param_names")
         if not isinstance(val, int):
             raise ValueError("Values in enforced_max_runs must be integers")
-    
+
     # Validate enforced runs don't exceed most recent available
     for param_name, enforced_run in enforced_max_runs.items():
         most_recent = get_most_recent_run(param_name, deps_map)
@@ -237,86 +144,185 @@ def get_deps(param_names, deps_map, enforced_max_runs = {}):
             raise ValueError(
                 f"Enforced run {enforced_run} for '{param_name}' exceeds "
                 f"most recent available run {most_recent}"
-            )
-    
+            ) 
+
     # Initialize: enforced runs or most recent for each parameter
-    deps = enforced_max_runs.copy()  
+    param_deps = enforced_max_runs.copy()  
     for param in param_names:
-        if param not in deps:
+        if param not in param_deps:
             run = get_most_recent_run(param, deps_map)
             if run == -1:
-                raise ValueError(f"Missing dependencies for parameters: [{param}]")
-            deps[param] = run
-    
-    # don't overwrite deps_map
-    deps_map = copy.deepcopy(deps_map)
-    deps0 = deps.copy()
+                raise ValueError(
+                    f"Missing dependencies for parameters: [{param}]"
+                    )
+            param_deps[param] = run
+    param_deps0 = param_deps.copy()
+
+
 
     # Raise error if any parameters are missing from deps_map
-    if any(v == -1 for v in deps.values()):
-        missing = [k for k, v in deps.items() if v == -1]
+    if any(v == -1 for v in param_deps.values()):
+        missing = [k for k, v in param_deps.items() if v == -1]
         raise ValueError(f"Missing dependencies for parameters: {missing}")
 
-    # Get sub-dependencies for each parameter
-    sub_deps = {}
-    for name, run_idx in deps.copy().items():
-        prev_deps = _get_sub_deps(name, run_idx, deps_map)
-        sub_deps[name] = prev_deps
-
-    # Resolve conflicts in sub-dependencies by backtracking runs
-    mod_runs = {}
-    max_iterations = 100  # Safety limit
-    iteration = 0
+    # Use recursive search to find optimal solution with highest run_sum
+    solution = _find_best_deps_recursive(
+        param_deps, deps_map, param_names, enforced_max_runs
+        )
     
-    while iteration < max_iterations:
-        iteration += 1
-        
-        # Flatten all dependencies to see the full picture
-        flattened = _flatten_all_deps(deps, sub_deps)
-        
-        # Find parameters with conflicting run indices
-        conflicts = _find_conflicting_params(flattened)
-        
-        if not conflicts:
-            break  # No conflicts, we're done
-        
-        # Identify which input parameters need to be backtracked
-        to_backtrack = _identify_params_to_backtrack(
-            deps, sub_deps, conflicts, flattened
-            )
-        
-        if not to_backtrack:
-            # No input parameters can be backtracked, something is wrong
-            break
-        
-        # Backtrack the identified parameters
-        for param_name in to_backtrack:
-            deps[param_name] -= 1
-            sub_deps[param_name] = _get_sub_deps(
-                param_name,
-                deps[param_name],
-                deps_map,
-            )
-            mod_runs[param_name] = deps[param_name]
+    if solution is None:
+        raise ValueError('dependencies could not be resolved')
+    
+    deps, run_sum, backtracked = solution
 
-    # Warn if any runs were modified
-    if len(mod_runs):
-        msg = f"Backtracking params {list(mod_runs.keys())} from runs ["
+    # Warn if backtracking 
+    if backtracked:
+        msg = f"Backtracking params {list(backtracked.keys())} from runs ["
         for r0, r1 in zip(
-            [deps0[k] for k in mod_runs.keys()],
-            mod_runs.values(),
+            [param_deps0[k] for k in backtracked.keys()],
+            backtracked.values(),
         ):
             msg += f"{r0} -> {r1}, "
         msg = msg[:-2] + "] to resolve dependency conflicts."
         warnings.warn(msg)
 
-    # Merge all dependencies - add any from sub_deps that aren't already in deps
-    flattened = _flatten_all_deps(deps, sub_deps)
-    for param_name in flattened.keys():
-        if param_name not in deps:
-            # Get the run index 
-            # (should all be the same after conflict resolution)
-            runs = [r for r, _ in flattened[param_name]]
-            deps[param_name] = runs[0]
-    
     return deps
+
+def _find_best_deps_recursive(
+        current_deps, 
+        deps_map, 
+        param_names, 
+        enforced_max_runs, 
+        memo=None
+        ):
+    """
+    Recursively try all backtracking options and return the one with highest 
+    run_sum.
+    
+    Parameters:
+    current_deps (dict): Current parameter run assignments 
+        {param_name: run_idx}.
+    deps_map (dict): The full dependency map.
+    param_names (list): Original input parameter names.
+    enforced_max_runs (dict): Maximum run indices for specific parameters.
+    memo (dict): Memoization cache.
+    
+    Returns:
+    tuple: (all_deps_dict, run_sum, backtracked_dict) or None if no valid 
+        solution.
+    """
+    if memo is None:
+        memo = {}
+    
+    # State key for memoization
+    state_key = tuple(sorted(current_deps.items()))
+    if state_key in memo:
+        return memo[state_key]
+    
+    # Helper to get sub-deps with error handling
+    def _get_sub_deps_local(param_deps):
+        sub_deps = {}
+        for name, run_idx in param_deps.items():
+            try:
+                sub_dep = _get_sub_deps(name, run_idx, deps_map).copy()
+                sub_dep[name] = run_idx
+                sub_deps[name] = sub_dep
+            except LookupError:
+                # Parameter doesn't exist at this run
+                return None
+        return sub_deps
+    
+    # Get sub-deps and check for conflicts
+    sub_deps = _get_sub_deps_local(current_deps)
+    if sub_deps is None:
+        # Invalid state
+        memo[state_key] = None
+        return None
+        
+    to_backtrack = _detect_conflicts(sub_deps)
+    
+    if not to_backtrack:
+        # No conflicts! Calculate result
+        all_deps = {k: v for d in sub_deps.values() for k, v in d.items()}
+        
+        # Check enforced_max_runs constraints
+        for param, max_run in enforced_max_runs.items():
+            if param in all_deps and all_deps[param] > max_run:
+                # Violates enforced max - invalid solution
+                memo[state_key] = None
+                return None
+        
+        run_sum = sum(all_deps.values())
+        # Track which params were backtracked (empty dict for this leaf)
+        result = (all_deps, run_sum, {})
+        memo[state_key] = result
+        return result
+    
+    # Has conflicts - try backtracking each possible param in the list
+    best_solution = None
+    best_run_sum = -1
+    
+    for param in to_backtrack:
+        # Try backtracking this param
+        new_deps = current_deps.copy()
+        new_run = current_deps[param] - 1
+        
+        # Find valid run (skip missing runs)
+        while new_run >= 0:
+            if new_run in deps_map and param in deps_map[new_run]:
+                break
+            new_run -= 1
+        
+        if new_run < 0:
+            continue  # Can't backtrack further
+        
+        new_deps[param] = new_run
+        
+        # Recursively solve from this new state
+        solution = _find_best_deps_recursive(
+            new_deps, deps_map, param_names, enforced_max_runs, memo
+            )
+        
+        if solution is not None:
+            deps_result, run_sum, child_backtracked = solution
+            if run_sum > best_run_sum:
+                best_run_sum = run_sum
+                # Update backtracked dict to include this param
+                updated_backtracked = child_backtracked.copy()
+                if param not in updated_backtracked:
+                    updated_backtracked[param] = new_run
+                best_solution = (deps_result, run_sum, updated_backtracked)
+    
+    memo[state_key] = best_solution
+    return best_solution
+
+
+def _detect_conflicts(sub_deps):
+    """
+    Detect conflicts across sub-dependencies and identify parameters to 
+    backtrack.
+    
+    Parameters:
+    sub_deps (dict): A dictionary where keys are parameter names and 
+        values are dictionaries of dependencies for that parameter, where keys 
+        are parameter names and values are their corresponding run indices.
+        
+    Returns:
+    list: List of parameter names that should be backtracked to resolve 
+        conflicts. If no conflicts are detected, returns an empty list.
+    """
+    flattened = {} # name: (param, run_idx) 
+    to_backtrack = [] # list of param names to backtrack
+    for param, sub_dep in sub_deps.items():
+        for k, v in sub_dep.items():
+            # k not in flattened: add key
+            if k not in flattened: 
+                flattened[k] = (param, v) 
+            # current run_idx < flattened run_idx -> return flattened name
+            elif v < flattened[k][1]: 
+                to_backtrack.append(flattened[k][0])
+            # flattened run_idx < current run_idx -> return current param
+            elif v > flattened[k][1]:
+                to_backtrack.append(param)
+    # no conflicts -> return None
+    return to_backtrack

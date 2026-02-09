@@ -645,7 +645,7 @@ class MockDataSetForLazyAttr:
         self.nrows = nrows
         self._fetch_calls = []  # Track calls to _fetch_rows
         
-    def _fetch_rows(self, name, run_idx, rows):
+    def _fetch_rows(self, name, run_idx, rows, enforced_max_runs={}):
         """Mock _fetch_rows that returns computed data."""
         self._fetch_calls.append((name, run_idx, rows))
         # Return simple computed values: row_idx * 10 + run_idx
@@ -1100,6 +1100,449 @@ def test_lazyattr_different_run_indices():
     
     assert np.array_equal(val1, [31])
     assert np.array_equal(val2, [35])
+
+
+################################################################################
+########################### LazyAttrCollection #################################
+################################################################################
+
+class MockDataSetForCollection:
+    """Mock DataSet for testing LazyAttrCollection."""
+    def __init__(self, nrows=10):
+        self.nrows = nrows
+        # deps_maps: {data_idx: {param_name: run_idx}}
+        # Default: all data_idx point to run 1 for any param
+        self.deps_maps = {
+            i: {} for i in range(nrows)
+        }
+        self.deps_maps['global'] = {}
+        
+
+def test_lazyattrcollection_init():
+    """Test LazyAttrCollection initialization."""
+    DS = MockDataSetForCollection()
+    name = 'test_param'
+    collection = pf.LazyAttrCollection(DS, name)
+    
+    assert collection.DS == DS
+    assert collection.name == name
+    assert collection._lazy_attrs == {}
+    assert len(collection) == DS.nrows
+
+
+def test_lazyattrcollection_add_run():
+    """Test adding LazyAttr to collection."""
+    DS = MockDataSetForCollection()
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    # Create and add LazyAttrs
+    la1 = pf.LazyAttr(DS, 'param', run_idx=1)
+    la2 = pf.LazyAttr(DS, 'param', run_idx=3)
+    
+    collection.add_run(1, la1)
+    collection.add_run(3, la2)
+    
+    assert 1 in collection._lazy_attrs
+    assert 3 in collection._lazy_attrs
+    assert collection._lazy_attrs[1] == la1
+    assert collection._lazy_attrs[3] == la2
+
+
+def test_lazyattrcollection_add_run_duplicate_error():
+    """Test that adding duplicate run_idx raises error."""
+    DS = MockDataSetForCollection()
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    la = pf.LazyAttr(DS, 'param', run_idx=1)
+    collection.add_run(1, la)
+    
+    # Try to add same run_idx again
+    la2 = pf.LazyAttr(DS, 'param', run_idx=1)
+    with pytest.raises(ValueError, match="Run 1 already exists"):
+        collection.add_run(1, la2)
+
+
+def test_lazyattrcollection_at_run():
+    """Test accessing specific run."""
+    DS = MockDataSetForCollection()
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    la1 = pf.LazyAttr(DS, 'param', run_idx=5)
+    la2 = pf.LazyAttr(DS, 'param', run_idx=10)
+    collection.add_run(5, la1)
+    collection.add_run(10, la2)
+    
+    assert collection.at_run(5) == la1
+    assert collection.at_run(10) == la2
+    
+    # Non-existent run should raise KeyError
+    with pytest.raises(KeyError):
+        collection.at_run(99)
+
+
+def test_lazyattrcollection_normalize_index_scalar():
+    """Test _normalize_index with scalar integer."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    data_idx_arr, is_scalar = collection._normalize_index(5)
+    assert np.array_equal(data_idx_arr, [5])
+    assert is_scalar == True
+
+
+def test_lazyattrcollection_normalize_index_negative():
+    """Test _normalize_index with negative indices."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    data_idx_arr, is_scalar = collection._normalize_index(-1)
+    assert np.array_equal(data_idx_arr, [9])
+    assert is_scalar == True
+    
+    data_idx_arr, is_scalar = collection._normalize_index(-3)
+    assert np.array_equal(data_idx_arr, [7])
+
+
+def test_lazyattrcollection_normalize_index_slice():
+    """Test _normalize_index with slices."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    # Simple slice
+    data_idx_arr, is_scalar = collection._normalize_index(slice(2, 5))
+    assert np.array_equal(data_idx_arr, [2, 3, 4])
+    assert is_scalar == False
+    
+    # Slice with step
+    data_idx_arr, is_scalar = collection._normalize_index(slice(0, 8, 2))
+    assert np.array_equal(data_idx_arr, [0, 2, 4, 6])
+    
+    # Negative slice
+    data_idx_arr, is_scalar = collection._normalize_index(slice(-3, None))
+    assert np.array_equal(data_idx_arr, [7, 8, 9])
+
+
+def test_lazyattrcollection_normalize_index_list():
+    """Test _normalize_index with lists."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    data_idx_arr, is_scalar = collection._normalize_index([1, 3, 5])
+    assert np.array_equal(data_idx_arr, [1, 3, 5])
+    assert is_scalar == False
+    
+    # List with negative indices
+    data_idx_arr, is_scalar = collection._normalize_index([0, -1, 5])
+    assert np.array_equal(data_idx_arr, [0, 9, 5])
+
+
+def test_lazyattrcollection_normalize_index_array():
+    """Test _normalize_index with numpy arrays."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    data_idx_arr, is_scalar = collection._normalize_index(np.array([2, 4, 6]))
+    assert np.array_equal(data_idx_arr, [2, 4, 6])
+    assert is_scalar == False
+
+
+def test_lazyattrcollection_normalize_index_boolean_mask():
+    """Test _normalize_index with boolean masks."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    mask = np.array([True, False, True, False, True, False, False, False, False, False])
+    data_idx_arr, is_scalar = collection._normalize_index(mask)
+    assert np.array_equal(data_idx_arr, [0, 2, 4])
+    assert is_scalar == False
+
+
+def test_lazyattrcollection_normalize_index_boolean_mask_wrong_length():
+    """Test _normalize_index with wrong length boolean mask."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    mask = np.array([True, False, True])  # Wrong length
+    with pytest.raises(IndexError, match="Boolean index length"):
+        collection._normalize_index(mask)
+
+
+def test_lazyattrcollection_normalize_index_out_of_bounds():
+    """Test _normalize_index with out of bounds indices."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    with pytest.raises(IndexError, match="out of bounds"):
+        collection._normalize_index(10)
+    
+    with pytest.raises(IndexError, match="out of bounds"):
+        collection._normalize_index(-11)
+    
+    with pytest.raises(IndexError, match="out of bounds"):
+        collection._normalize_index([1, 2, 15])
+
+
+def test_lazyattrcollection_normalize_index_invalid_type():
+    """Test _normalize_index with invalid types."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    with pytest.raises(TypeError, match="Invalid index type"):
+        collection._normalize_index("invalid")
+    
+    with pytest.raises(TypeError, match="Invalid index type"):
+        collection._normalize_index({'key': 'value'})
+
+
+def test_lazyattrcollection_getitem_single_index():
+    """Test __getitem__ with single index, single run."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    # Set up deps_maps so data_idx 5 uses run 3
+    DS.deps_maps[5] = {3: {'param': {}}}
+    
+    # Create LazyAttr for run 3 with pre-cached data
+    la = pf.LazyAttr(DS, 'param', run_idx=3)
+    la._cache = {5: np.array([100])}
+    collection.add_run(3, la)
+    
+    # Access data_idx 5
+    result = collection[5]
+    assert np.array_equal(result, [100])
+
+
+def test_lazyattrcollection_getitem_list():
+    """Test __getitem__ with list of indices from same run."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    # Set up deps_maps: data_idx 1, 3, 5 all use run 2
+    for di in [1, 3, 5]:
+        DS.deps_maps[di] = {2: {'param': {}}}
+    
+    # Create LazyAttr with cached data
+    la = pf.LazyAttr(DS, 'param', run_idx=2)
+    la._cache = {1: np.array([10]), 3: np.array([30]), 5: np.array([50])}
+    collection.add_run(2, la)
+    
+    result = collection[[1, 3, 5]]
+    expected = np.array([[10], [30], [50]])
+    assert np.array_equal(result, expected)
+
+
+def test_lazyattrcollection_getitem_mixed_runs():
+    """Test __getitem__ with indices from different runs."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    # Set up deps_maps: different data_idx use different runs
+    DS.deps_maps[0] = {1: {'param': {}}}
+    DS.deps_maps[1] = {1: {'param': {}}}
+    DS.deps_maps[2] = {3: {'param': {}}}
+    DS.deps_maps[3] = {3: {'param': {}}}
+    DS.deps_maps[4] = {5: {'param': {}}}
+    
+    # Create LazyAttrs for different runs
+    la1 = pf.LazyAttr(DS, 'param', run_idx=1)
+    la1._cache = {0: np.array([100]), 1: np.array([110])}
+    collection.add_run(1, la1)
+    
+    la3 = pf.LazyAttr(DS, 'param', run_idx=3)
+    la3._cache = {2: np.array([300]), 3: np.array([330])}
+    collection.add_run(3, la3)
+    
+    la5 = pf.LazyAttr(DS, 'param', run_idx=5)
+    la5._cache = {4: np.array([500])}
+    collection.add_run(5, la5)
+    
+    # Request indices from mixed runs
+    result = collection[[0, 2, 4, 1, 3]]
+    expected = np.array([[100], [300], [500], [110], [330]])
+    assert np.array_equal(result, expected)
+
+
+def test_lazyattrcollection_getitem_preserves_order():
+    """Test that __getitem__ preserves input order with mixed runs."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    # Set up different runs for different indices
+    DS.deps_maps[5] = {1: {'param': {}}}
+    DS.deps_maps[2] = {3: {'param': {}}}
+    DS.deps_maps[7] = {1: {'param': {}}}
+    
+    la1 = pf.LazyAttr(DS, 'param', run_idx=1)
+    la1._cache = {5: np.array([50]), 7: np.array([70])}
+    collection.add_run(1, la1)
+    
+    la3 = pf.LazyAttr(DS, 'param', run_idx=3)
+    la3._cache = {2: np.array([20])}
+    collection.add_run(3, la3)
+    
+    # Request in specific order
+    result = collection[[5, 2, 7]]
+    expected = np.array([[50], [20], [70]])
+    assert np.array_equal(result, expected)
+
+
+def test_lazyattrcollection_getitem_slice():
+    """Test __getitem__ with slice."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    # All use run 1
+    for i in range(10):
+        DS.deps_maps[i] = {1: {'param': {}}}
+    
+    la = pf.LazyAttr(DS, 'param', run_idx=1)
+    la._cache = {i: np.array([i * 10]) for i in range(10)}
+    collection.add_run(1, la)
+    
+    result = collection[2:5]
+    expected = np.array([[20], [30], [40]])
+    assert np.array_equal(result, expected)
+
+
+def test_lazyattrcollection_getitem_negative_index():
+    """Test __getitem__ with negative indices."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    DS.deps_maps[9] = {1: {'param': {}}}
+    DS.deps_maps[8] = {1: {'param': {}}}
+    
+    la = pf.LazyAttr(DS, 'param', run_idx=1)
+    la._cache = {8: np.array([80]), 9: np.array([90])}
+    collection.add_run(1, la)
+    
+    result = collection[-1]
+    assert np.array_equal(result, [90])
+    
+    result = collection[[-2, -1]]
+    expected = np.array([[80], [90]])
+    assert np.array_equal(result, expected)
+
+
+def test_lazyattrcollection_getitem_boolean_mask():
+    """Test __getitem__ with boolean mask."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    # Set up for indices 0, 2, 4
+    for i in [0, 2, 4]:
+        DS.deps_maps[i] = {1: {'param': {}}}
+    
+    la = pf.LazyAttr(DS, 'param', run_idx=1)
+    la._cache = {0: np.array([0]), 2: np.array([20]), 4: np.array([40])}
+    collection.add_run(1, la)
+    
+    mask = np.array([True, False, True, False, True, False, False, False, False, False])
+    result = collection[mask]
+    expected = np.array([[0], [20], [40]])
+    assert np.array_equal(result, expected)
+
+
+def test_lazyattrcollection_getitem_scalar_returns_scalar():
+    """Test that scalar index returns scalar, not array."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    DS.deps_maps[3] = {1: {'param': {}}}
+    
+    la = pf.LazyAttr(DS, 'param', run_idx=1)
+    la._cache = {3: np.array([300])}
+    collection.add_run(1, la)
+    
+    result = collection[3]
+    # Should be scalar, not wrapped in array
+    assert np.array_equal(result, [300])
+    assert not isinstance(result, list)
+
+
+def test_lazyattrcollection_getitem_defaults_to_run1():
+    """Test that __getitem__ defaults to run 1 when parameter doesn't exist yet for a data_idx.
+    
+    When get_most_recent_run returns -1 (parameter not in deps_maps for that data_idx),
+    the system should default to run 1, not run 0 (which is reserved as a special case).
+    """
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    # Set up run 1 as the default run with data for all indices
+    la1 = pf.LazyAttr(DS, 'param', run_idx=1)
+    la1._cache = {0: np.array([10]), 1: np.array([11]), 2: np.array([12])}
+    collection.add_run(1, la1)
+    
+    # Set up run 3 with data for some indices that have been updated
+    la3 = pf.LazyAttr(DS, 'param', run_idx=3)
+    la3._cache = {1: np.array([31])}
+    collection.add_run(3, la3)
+    
+    # data_idx 0: not in deps_maps → should default to run 1
+    # data_idx 1: in deps_maps with run 3 → should use run 3
+    # data_idx 2: not in deps_maps → should default to run 1
+    
+    # Only data_idx 1 is in deps_maps (at run 3)
+    DS.deps_maps[1] = {3: {'param': {}}}
+    
+    # Test single index that's not in deps_maps (should use run 1)
+    result = collection[0]
+    assert np.array_equal(result, [10])
+    
+    # Test single index that IS in deps_maps (should use run 3)
+    result = collection[1]
+    assert np.array_equal(result, [31])
+    
+    # Test mixed: some in deps_maps, some not (should use appropriate runs)
+    result = collection[[0, 1, 2]]
+    assert np.array_equal(result, [[10], [31], [12]])
+
+
+def test_lazyattrcollection_getitem_all_default_to_run1():
+    """Test when no data_idx are in deps_maps, all should default to run 1."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    # Set up run 1 with data
+    la1 = pf.LazyAttr(DS, 'param', run_idx=1)
+    la1._cache = {0: np.array([100]), 1: np.array([200]), 2: np.array([300])}
+    collection.add_run(1, la1)
+    
+    # Don't add anything to deps_maps - all should default to run 1
+    # (deps_maps entries would be empty dicts by default)
+    
+    result = collection[[0, 1, 2]]
+    assert np.array_equal(result, [[100], [200], [300]])
+
+
+def test_lazyattrcollection_repr():
+    """Test __repr__ method."""
+    DS = MockDataSetForCollection()
+    collection = pf.LazyAttrCollection(DS, 'my_param')
+    
+    collection.add_run(1, pf.LazyAttr(DS, 'my_param', 1))
+    collection.add_run(5, pf.LazyAttr(DS, 'my_param', 5))
+    collection.add_run(3, pf.LazyAttr(DS, 'my_param', 3))
+    
+    result = repr(collection)
+    assert "LazyAttrCollection" in result
+    assert "my_param" in result
+    assert "[1, 3, 5]" in result  # Sorted
+
+
+def test_lazyattrcollection_str():
+    """Test __str__ method."""
+    DS = MockDataSetForCollection(nrows=15)
+    collection = pf.LazyAttrCollection(DS, 'param_x')
+    
+    collection.add_run(2, pf.LazyAttr(DS, 'param_x', 2))
+    collection.add_run(7, pf.LazyAttr(DS, 'param_x', 7))
+    
+    result = str(collection)
+    assert "Lazy Attribute Collection: param_x" in result
+    assert "Available runs: [2, 7]" in result
+    assert "Number of data indices: 15" in result
 
 
 ################################################################################

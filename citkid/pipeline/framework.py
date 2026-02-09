@@ -1,5 +1,6 @@
 import numpy as np
- 
+from citkid.pipeline.dependencies import get_most_recent_run
+
 ################################################################################
 ############################### Lazy Attribute #################################
 ################################################################################
@@ -94,7 +95,9 @@ class LazyAttr:
         missing = [r for r in rows if r not in self._cache]
         if missing:
             # Delegate to DataSet to fetch the missing rows
-            fetched_data = self.DS._fetch_rows(self.name, self.run_idx, missing)
+            fetched_data = self.DS._fetch_rows(
+                self.name, self.run_idx, missing
+                )
             # Update cache with fetched data
             for r, data in zip(missing, fetched_data):
                 self._cache[r] = data
@@ -185,6 +188,238 @@ class LazyAttr:
         """
         s = f"Lazy Attribute: {self.name}\n"
         s += f"\tCached Rows: {sorted(self._cache.keys())}"
+        return s
+
+
+################################################################################
+######################### Lazy Attribute Collection ############################
+################################################################################
+class LazyAttrCollection:
+    """
+    Collection of LazyAttr objects for a single parameter across multiple runs.
+    
+    Manages access to per-row parameters that may exist at different run indices
+    for different data indices. Provides convenient access to the most recent
+    run for each data_idx, while also allowing access to specific historical runs.
+    
+    Typical usage:
+        # Get most recent run for data indices 0 and 1
+        data = DS.x[[0, 1]]
+        
+        # Access specific historical run
+        data = DS.x.at_run(5)[[0, 1]]
+    
+    Attributes:
+        DS (DataSet): The DataSet instance this collection belongs to.
+        name (str): The name of the parameter.
+        _lazy_attrs (dict): Maps run_idx → LazyAttr for that run.
+    """
+    
+    def __init__(self, DS, name):
+        """
+        Initialize a LazyAttrCollection for tracking parameter versions.
+        
+        Parameters:
+            DS (DataSet): The DataSet instance this collection belongs to.
+            name (str): The name of the parameter being tracked.
+        """
+        self.DS = DS
+        self.name = name
+        self._lazy_attrs = {}  # {run_idx: LazyAttr}
+        
+    def _normalize_index(self, key):
+        """
+        Normalize various key types to array of data indices.
+        
+        Handles slices, negative indices, boolean masks, scalar ints, and arrays.
+        
+        Parameters:
+            key (int, slice, list, np.ndarray): Index or indices to normalize.
+        
+        Returns:
+            tuple: (data_idx_arr, is_scalar) where data_idx_arr is np.ndarray of 
+                   int32, and is_scalar indicates if input was scalar.
+        """
+        is_scalar = False
+        
+        # Handle slices
+        if isinstance(key, slice):
+            indices = list(range(*key.indices(self.DS.nrows)))
+            data_idx_arr = np.array(indices, dtype=np.int32)
+        
+        # Handle boolean masks
+        elif isinstance(key, (list, np.ndarray)):
+            arr = np.asarray(key)
+            if arr.dtype == bool:
+                # Boolean indexing
+                if len(arr) != self.DS.nrows:
+                    raise IndexError(
+                        f"Boolean index length {len(arr)} doesn't match nrows {self.DS.nrows}"
+                    )
+                indices = np.where(arr)[0]
+                data_idx_arr = np.array(indices, dtype=np.int32)
+            else:
+                # Integer array indexing
+                data_idx_arr = np.asarray(arr, dtype=np.int32)
+        
+        # Handle scalar integer
+        elif isinstance(key, (int, np.integer)):
+            data_idx_arr = np.array([int(key)], dtype=np.int32)
+            is_scalar = True
+        
+        else:
+            raise TypeError(
+                f"Invalid index type: {type(key)}. "
+                f"Expected int, slice, list, or array."
+            )
+        
+        # Handle negative indices
+        data_idx_arr = np.where(
+            data_idx_arr < 0, 
+            data_idx_arr + self.DS.nrows, 
+            data_idx_arr
+        )
+        
+        # Validate bounds
+        if np.any((data_idx_arr < 0) | (data_idx_arr >= self.DS.nrows)):
+            raise IndexError(
+                f"Index out of bounds [0, {self.DS.nrows})"
+            )
+        
+        return data_idx_arr, is_scalar
+        
+    def __getitem__(self, data_idx):
+        """
+        Get data from the most recent run for each requested data_idx.
+        
+        For each data_idx, determines which run_idx is most recent according to
+        the dependency maps, then retrieves data from that run's LazyAttr.
+        Different data indices may return data from different runs.
+        
+        If the parameter doesn't exist yet for a data_idx (run_idx == -1),
+        the data will be produced and stored in run 1 (run 0 is reserved).
+        
+        Parameters:
+            data_idx (int, slice, list, array): Data index or indices to retrieve.
+                Supports numpy-like indexing: scalars, slices, lists, arrays, 
+                boolean masks, and negative indices.
+        
+        Returns:
+            scalar or np.ndarray: Data from most recent runs. Returns scalar if
+                input was scalar, array if input was array-like.
+        
+        Raises:
+            KeyError: If no run exists for a required run_idx.
+            IndexError: If indices are out of bounds.
+            
+        Examples:
+            >>> collection[0]           # Single index
+            >>> collection[-1]          # Negative index
+            >>> collection[0:5]         # Slice
+            >>> collection[[0, 1, 5]]   # List of indices
+            >>> collection[mask]        # Boolean mask
+        """
+        # Normalize input to array of indices
+        data_idx_arr, is_scalar = self._normalize_index(data_idx)
+
+        # Map each data_idx to its run_idx and preserve order
+        run_idx_to_data_idx = {}
+        di_to_position = {}  # Track original position
+        for pos, di in enumerate(data_idx_arr):
+            run_idx = get_most_recent_run(self.name, self.DS.deps_maps[di])
+            # If parameter doesn't exist yet for this data_idx, default to run 1
+            # (run 0 is reserved as a special case)
+            if run_idx == -1:
+                run_idx = 1
+                # Ensure run 1 LazyAttr exists in the collection
+                if run_idx not in self._lazy_attrs:
+                    self._lazy_attrs[run_idx] = LazyAttr(
+                        self.DS, self.name, run_idx
+                        )
+            if run_idx not in run_idx_to_data_idx:
+                run_idx_to_data_idx[run_idx] = []
+            run_idx_to_data_idx[run_idx].append(di)
+            di_to_position[di] = pos
+        
+        # Fetch data in groups
+        results = [None] * len(data_idx_arr)  # Pre-allocate in correct order
+        for run_idx, data_idxs in run_idx_to_data_idx.items():
+            lazy_attr = self._lazy_attrs[run_idx]
+            fetched = lazy_attr[data_idxs]  # Batch call - returns 2D array
+            # fetched is always 2D: (n_rows, ...), iterate through rows
+            for i, di in enumerate(data_idxs):
+                results[di_to_position[di]] = fetched[i]
+        
+        # Return scalar or array based on input
+        if is_scalar:
+            return results[0]
+        return np.array(results)
+        
+    def at_run(self, run_idx):
+        """
+        Access the LazyAttr for a specific run index.
+        
+        Useful for accessing historical versions of a parameter when multiple
+        runs exist. The returned LazyAttr can be indexed normally.
+        
+        Parameters:
+            run_idx (int): The run index to access.
+        
+        Returns:
+            LazyAttr: The LazyAttr object for the specified run.
+        
+        Raises:
+            KeyError: If the specified run_idx doesn't exist.
+            
+        Examples:
+            >>> collection.at_run(5)[0]        # Get data_idx 0 from run 5
+            >>> collection.at_run(3)[[0, 1]]   # Get multiple indices from run 3
+        """
+        return self._lazy_attrs[run_idx]
+        
+    def add_run(self, run_idx, lazy_attr):
+        """
+        Register a LazyAttr for a specific run index.
+        
+        Called internally when new data is produced or loaded from zarr.
+        Should not typically be called by users directly.
+        
+        Parameters:
+        run_idx (int): The run index being registered.
+        lazy_attr (LazyAttr): The LazyAttr object for this run.
+        
+        Raises:
+        ValueError: If run_idx already exists (prevents accidental 
+            overwrites).
+        """
+        if run_idx in self._lazy_attrs:
+            raise ValueError(
+                f"Run {run_idx} already exists for parameter '{self.name}'"
+            )
+        self._lazy_attrs[run_idx] = lazy_attr
+    
+    def __len__(self):
+        """
+        Return the number of data indices (nrows) in the dataset.
+        """
+        return self.DS.nrows
+    
+    def __repr__(self):
+        """
+        Return a concise string representation showing parameter name and 
+        available runs.
+        """
+        runs = sorted(self._lazy_attrs.keys())
+        return f"LazyAttrCollection({self.name}, runs={runs})"
+    
+    def __str__(self):
+        """
+        Return a detailed string representation.
+        """
+        runs = sorted(self._lazy_attrs.keys())
+        s = f"Lazy Attribute Collection: {self.name}\n"
+        s += f"\tAvailable runs: {runs}\n"
+        s += f"\tNumber of data indices: {self.DS.nrows}"
         return s
 
 ################################################################################
