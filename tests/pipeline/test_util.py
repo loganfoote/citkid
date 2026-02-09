@@ -27,6 +27,14 @@ class TestOpenInFileExplorer:
             f.write("test content")
         return filepath
     
+@pytest.fixture(autouse=True)
+def _always_exists(monkeypatch):
+    """Make os.path.exists return True by default for these tests so
+    we don't attempt to access the real filesystem for mocked absolute
+    paths used in some test cases."""
+    monkeypatch.setattr(os.path, 'exists', lambda p: True)
+    yield
+    
     # Windows platform tests
     @patch('sys.platform', 'win32')
     @patch('os.startfile')

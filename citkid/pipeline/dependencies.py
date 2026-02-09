@@ -193,7 +193,7 @@ def _identify_params_to_backtrack(
     
     return to_backtrack
 
-def get_deps(param_names, deps_map):
+def get_deps(param_names, deps_map, enforced_max_runs = {}):
     """
     Determine appropriate run versions and resolve dependency conflicts.
 
@@ -204,6 +204,11 @@ def get_deps(param_names, deps_map):
         The dependencies dictionary maps parameter names to their run indices,
         and represents all the other parameters with run index that the given
         parameter depends on.
+    enforced_max_runs (dict): Optional dict of parameter names to run indices
+        that should be enforced as maximum runs for those parameters. Parameters 
+        names that are not enforced will default to the most recent run in 
+        deps_map. Backtracking below enforced values is allowed if needed to 
+        resolve conflicts.
 
     Returns:
     deps (dict): Run indices for input parameters and sub-dependencies.
@@ -215,12 +220,36 @@ def get_deps(param_names, deps_map):
         raise ValueError("All elements in param_names must be strings")
     if not isinstance(deps_map, dict):
         raise ValueError("deps_map must be a dictionary")
+    if not isinstance(enforced_max_runs, dict):
+        raise ValueError("enforced_max_runs must be a dictionary")
+    for key, val in enforced_max_runs.items():
+        if not isinstance(key, str):
+            raise ValueError("Keys in enforced_max_runs must be strings")
+        if key not in param_names:
+            raise ValueError(f"Enforced parameter '{key}' not in param_names")
+        if not isinstance(val, int):
+            raise ValueError("Values in enforced_max_runs must be integers")
+    
+    # Validate enforced runs don't exceed most recent available
+    for param_name, enforced_run in enforced_max_runs.items():
+        most_recent = get_most_recent_run(param_name, deps_map)
+        if most_recent != -1 and enforced_run > most_recent:
+            raise ValueError(
+                f"Enforced run {enforced_run} for '{param_name}' exceeds "
+                f"most recent available run {most_recent}"
+            )
+    
+    # Initialize: enforced runs or most recent for each parameter
+    deps = enforced_max_runs.copy()  
+    for param in param_names:
+        if param not in deps:
+            run = get_most_recent_run(param, deps_map)
+            if run == -1:
+                raise ValueError(f"Missing dependencies for parameters: [{param}]")
+            deps[param] = run
     
     # don't overwrite deps_map
     deps_map = copy.deepcopy(deps_map)
-
-    # start with most recent run for each parameter
-    deps = {k: get_most_recent_run(k, deps_map) for k in param_names}
     deps0 = deps.copy()
 
     # Raise error if any parameters are missing from deps_map

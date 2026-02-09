@@ -3,60 +3,21 @@ import yaml
 import importlib.util 
 import numpy as np
 import zarr
-import copy
+import re 
 
 from .dependencies import get_most_recent_run, get_deps
 from . import framework as pf
 from . import util 
+from . import default_steps
 
-class DataSet:
-    def __init__(self, 
-        zarr_path, 
-        cal_yaml_path, 
-        custom_path = None, 
-        analysis_yaml_path = None
-        ):
-        """
-        Initialize the dataset with a calibration pipeline defined by a YAML 
-        file.  
-        
-        Parameters:
-        zarr_path (str): The path to the zarr file containing the analysis 
-            outputs.
-        cal_yaml_path (str): The path to the calibration YAML file.
-        custom_path (str or None): Directory to the .py file containing custom 
-            calibration functions, or None if no custom functions are used. 
-        analysis_yaml_path (str or None): The path to the analysis YAML file, or 
-            None if no analysis will be performed. 
-        """
-        ### Input validation and path normalization
-        if custom_path is not None:
-            self.custom_path = os.path.normpath(custom_path)
-        else:
-            self.custom_path = None
-        self.zarr_path = os.path.normpath(zarr_path)
-        self.root = zarr.open_group(self.zarr_path, mode = 'a')
-        self.cal_yaml_path = os.path.normpath(cal_yaml_path) 
+class Analyzer:
+    def __init__(self, DS, analysis_yaml_path = None):
         if analysis_yaml_path is not None:
-            self.analysis_yaml_path = os.path.normpath(analysis_yaml_path)
+            self.analysis_yaml_path = os.path.abspath(analysis_yaml_path)
         else:
             self.analysis_yaml_path = None
+            return 
 
-        # Validate file types 
-        # custom_path must be .py
-        if self.custom_path is not None and \
-            not self.custom_path.endswith('.py'):
-            raise ValueError("custom_path must point to a .py file.")
-        # zarr_path must be .zarr
-        if not self.zarr_path.endswith('.zarr'):
-            raise ValueError("zarr_path must point to a .zarr file.")
-        # cal_yaml_path must be .yaml or .yml
-        is_yaml = self.cal_yaml_path.endswith('.yaml') \
-               or self.cal_yaml_path.endswith('.yml')
-        if not is_yaml:
-            raise ValueError(
-                "cal_yaml_path must point to a .yaml or .yml file."
-            )
         # analysis_yaml_path (if provided) must be .yaml or .yml
         if self.analysis_yaml_path is not None:
             is_yaml = self.analysis_yaml_path.endswith('.yaml') \
@@ -65,40 +26,49 @@ class DataSet:
                 raise ValueError(
                     "analysis_yaml_path must point to a .yaml or .yml file."
                 )
-        
-        ### Start global cache and dependencies map
-        self.global_cache = {}
-        self.deps_map = {'global': {}}
-
-        ### Load steps from custom_steps.py
-        self.cal_steps, self.analysis_steps = self._load_custom_steps()
-        # Add default calibration steps if not already present
-        for step in pf.default_cal_steps:
-            if step.name not in [s.name for s in self.cal_steps]:
-                self.cal_steps.append(step)
-        # Add default analysis steps if not already present
-        for step in pf.default_analysis_steps:
-            if step.name not in [s.name for s in self.analysis_steps]:
-                self.analysis_steps.append(step)
-                
-        # Load calibration YAML file and convert it to calibration pipeline
-        yaml_dict = self._load_yaml(self.cal_yaml_path)
-        self.cal_pl = self._convert_yaml_to_steps(yaml_dict)
-
-        # confirm that the cal_pl structure is valid
-        pf.check_pl_tree_structure(self.cal_pl) 
-        
-        # load analysis YAML file if it exists
-        if self.analysis_yaml_path is None:
-            return
-
+            
         # Load analysis YAML and user-specified analysis parameters
-        yaml_dict = self._load_yaml(self.analysis_yaml_path) 
-        # pf.check_pl_tree_structure(yaml_dict)
-        print('Write validation for analysis YAML file')
-        self.analysis_user_params = self._collect_user_params(yaml_dict)
+        with open(self.analysis_yaml_path, 'r') as f:
+            yaml_dict = yaml.safe_load(f)
+        self.analysis_pl = _convert_yaml_to_steps(
+            yaml_dict, self.analysis_steps
+            )
+        pf.check_pl_tree_structure(self.analysis_pl, cal = False)
+
+        # Collect data from analysis YAML
+        self.analysis_user_params = _collect_user_params(yaml_dict)
         self._add_user_params_to_cache_and_deps(self.analysis_user_params)
+
+    def run_analysis_step(self, name, data_idx=None, save_to_zarr=True):
+        """
+        Run an analysis step and save the output to zarr.
         
+        Parameters:
+        name (str): The name of the analysis step.
+        data_idx (int or array-like): Data index (or indices) to
+            run the step on.
+        save_to_zarr (bool): If True, save the outputs to the
+            zarr store at Analyzer.dataset.root.
+
+        Returns:
+        None
+        """
+        x = [d for d in self.analysis_steps if d.name == name]
+        if not len(x):
+            m = f"Step '{name}' not found in available analysis steps."
+            raise ValueError(m)
+        
+        step = x[0]
+        step.run(self, data_idx)
+        
+        if save_to_zarr:
+                        
+            for return_name in step.return_names:
+                value = getattr(self, return_name)             
+                    
+                self.write_data(return_name, step,
+                                 value, data_idx) 
+
     def _add_user_params_to_cache_and_deps(self, user_params):
         """
         Add user-specified parameters to the global dependencies map,
@@ -117,107 +87,466 @@ class DataSet:
             for param_name in d.keys():
                 self.global_cache[param_name] = True
                 self.deps_map['global'][1][param_name] = {}
-        
-    def _collect_user_params(self, obj, result=None):
+
+class DataSet:
+    def __init__(self, 
+        zarr_path, 
+        cal_yaml_path, 
+        custom_path = None
+        ):
         """
-        Recurcsively loads user-specified parameters from the analysis YAML file.
+        Initialize the dataset with a calibration pipeline defined by a YAML 
+        file.  
         
         Parameters:
-        obj: Dictionary from loading the YAML file.
-        
-        Returns:
-        result (dictionary): Keys are function names, and values are dictionaries
-            of parameter names and their values
+        zarr_path (str): The path to the zarr file containing the analysis 
+            outputs.
+        cal_yaml_path (str): The path to the calibration YAML file.
+        custom_path (str or None): Directory to the .py file containing custom 
+            calibration functions, or None if no custom functions are used.
         """
-        if result is None:
-            result = {}
+        ### Input validation and path normalization
+        if custom_path is not None:
+            self.custom_path = os.path.abspath(custom_path)
+        else:
+            self.custom_path = None
+        self.zarr_path = os.path.abspath(zarr_path)
+        self.root = zarr.open_group(self.zarr_path, mode = 'a')
+        self.cal_yaml_path = os.path.abspath(cal_yaml_path) 
 
-        if isinstance(obj, dict):
-            # Check current level
-            if "params" in obj:
-                if "task" not in obj:
-                    raise KeyError("Found 'params' without a sibling 'task'")
-                params_dict = obj["params"]
-                for param_name, param_val in params_dict.items():
-                    if param_val in ['None', 'none']:
-                        params_dict[param_name] = None
-                result[obj["task"]] = params_dict
+        # Validate file types 
+        # custom_path must be .py
+        if self.custom_path is not None and \
+            not self.custom_path.endswith('.py'):
+            raise ValueError("custom_path must point to a .py file.")
+        # zarr_path must be .zarr
+        if not self.zarr_path.endswith('.zarr'):
+            raise ValueError("zarr_path must point to a .zarr file.")
+        # cal_yaml_path must be .yaml or .yml
+        is_yaml = self.cal_yaml_path.endswith('.yaml') \
+               or self.cal_yaml_path.endswith('.yml')
+        if not is_yaml:
+            raise ValueError(
+                "cal_yaml_path must point to a .yaml or .yml file."
+            )
 
-            # Recurse
-            for v in obj.values():
-                self._collect_user_params(v, result)
+        ### Load steps from custom_steps.py
+        self.cal_steps, self.analysis_steps = _load_custom_steps(
+            self.custom_path
+            )
+        # Add default calibration steps if not already present
+        for step in default_steps.default_cal_steps:
+            if step.name not in [s.name for s in self.cal_steps]:
+                self.cal_steps.append(step)
+        # Add default analysis steps if not already present
+        for step in default_steps.default_analysis_steps:
+            if step.name not in [s.name for s in self.analysis_steps]:
+                self.analysis_steps.append(step)
+                
+        # Load calibration YAML file and convert it to calibration pipeline
+        with open(self.cal_yaml_path, 'r') as f:
+            yaml_dict = yaml.safe_load(f) 
+        self.cal_pl = _convert_yaml_to_steps(yaml_dict, self.cal_steps)
 
-        elif isinstance(obj, list):
-            for item in obj:
-                self._collect_user_params(item, result)
+        # confirm that the cal_pl structure is valid
+        pf.check_pl_tree_structure(self.cal_pl, cal = True) 
 
-        return result
-        
-    def _load_custom_steps(self):
+        # Load deps_map from zarr - also validates zarr structure
+        self.deps_maps = _load_deps_from_zarr(self.root)
+
+        # start is_global cache, which maps param names to boolean indicating 
+        # whether or not the parameter is global 
+        self._is_global_cache = {}
+
+        # start memory_cache, where data is stored referenced to run_idx 
+        self._memory_cache = {}
+
+    def _execute_step(self, step, data_idx=None, enforced_max_runs={}):
         """
-        Load custom steps from 'custom_steps.py' in the dataset directory.
-
-        Returns:
-        list: A list of custom plStep objects.
-        """
-        if self.custom_path is None:
-            return []
+        Execute a single pipeline step, storing results and dependencies in memory.
         
-        if not os.path.exists(self.custom_path):
-            m = f"Custom path '{self.custom_path}' does not exist."
-            raise FileNotFoundError(m)
-
-        spec = importlib.util.spec_from_file_location("custom_cal_steps", 
-                                                      self.custom_path)
-        cs = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cs)
-        custom_cal_steps = cs.custom_cal_steps
+        All input parameters must already exist in memory or on disk - this method
+        will NOT execute additional steps to generate missing inputs.
         
-        spec = importlib.util.spec_from_file_location("custom_analysis_steps", 
-                                                      self.custom_path)
-        cs = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cs)
-        custom_analysis_steps = cs.custom_analysis_steps
-        
-        return custom_cal_steps, custom_analysis_steps
-    
-    def _load_yaml(self, path):
-        """
-        Load the YAML configuration file. 
-
         Parameters:
-        path: the path to the yaml file.
-
+        step (plStep): The pipeline step to execute.
+        data_idx (int, array-like, or None): Data indices to process. Required
+            for 'per-row' and 'vectorized' steps, must be None for 'global' and 
+            'global-res' steps.
+        enforced_max_runs (dict): Optional dict mapping parameter names to 
+            maximum run indices for dependency resolution.
+        
         Returns:
-        dict: The loaded YAML configuration as a dictionary.
+        None (results are stored in self._memory_cache)
+        
+        Raises:
+        TypeError: If step is not a plStep instance.
+        ValueError: If required inputs don't exist or data_idx is invalid.
         """
-        with open(path, 'r') as f:
-            return yaml.safe_load(f)        
+        # Input validation
+        if not isinstance(step, pf.plStep):
+            raise TypeError("step must be a plStep instance")
+        if not isinstance(enforced_max_runs, dict):
+            raise TypeError("enforced_max_runs must be a dictionary")
+        
+        # Handle data_idx based on function type
+        if step.func_type in ['global', 'global-res']:
+            if data_idx is not None:
+                raise ValueError(
+                    f"data_idx must be None for {step.func_type} functions"
+                )
+        else:
+            if data_idx is None:
+                raise ValueError(
+                    f"data_idx required for {step.func_type} functions"
+                )
+            data_idx = np.atleast_1d(np.asarray(data_idx, dtype=np.int32))
+
+        # global and global-res have only global parameters
+        if step.func_type in ['global', 'global-res']:
+            # Determine run_idx deps for outputs
+            # all global inputs -> single deps_map and run_idx per return name
+            deps_map = self.deps_maps['global']
+            run_idxs = [get_most_recent_run(name, deps_map) + 1 
+                        for name in step.return_names]
+            deps = get_deps(
+                step.param_names, 
+                deps_map, 
+                enforced_max_runs=enforced_max_runs
+            )
+
+            # Collect parameters 
+            params = []
+            param_is_global = []
+            for p in step.param_names:
+                # Special handling for 'data_idx' parameter
+                if p == 'data_idx':
+                    params.append(None)
+                    param_is_global.append(True)  # Treat as global-like
+                    continue
+                
+                val = self._get_existing(p, deps[p], data_idx=None)
+                param_is_global.append(self._is_global_cache[p])
+                params.append(val)
+
+            # Run step
+            out = step._run(params, param_is_global)
+
+            # Store outputs in memory cache, each with its own run_idx
+            for (name, val), run_idx in zip(out.items(), run_idxs):
+                # Ensure run_idx exists in memory cache
+                if run_idx not in self._memory_cache:
+                    self._memory_cache[run_idx] = {}
+                    
+                # Check for overwrite
+                if name in self._memory_cache[run_idx]:
+                    raise ValueError(
+                        f"Attempting to overwrite '{name}' at run {run_idx}"
+                    )
+                    
+                # For global-res, wrap outputs in LazyAttr
+                if step.func_type == 'global-res':
+                    self._memory_cache[run_idx][name] = pf.LazyAttr(
+                        self, name, run_idx
+                    )
+                    # Store data in LazyAttr cache
+                    for i, v in enumerate(val):
+                        self._memory_cache[run_idx][name]._cache[i] = v
+                    
+                    # Store dependencies for all rows
+                    for i in range(self.nrows):
+                        if run_idx not in self.deps_maps[i]:
+                            self.deps_maps[i][run_idx] = {}
+                        self.deps_maps[i][run_idx][name] = deps
+                    self._is_global_cache[name] = False
+                else:
+                    # For global, assign parameter directly 
+                    self._memory_cache[run_idx][name] = val
+                    if run_idx not in self.deps_maps['global']:
+                        self.deps_maps['global'][run_idx] = {}
+                    self.deps_maps['global'][run_idx][name] = deps
+                    self._is_global_cache[name] = True
+
+        else:  # vectorized or per-row 
+            # For vectorized/per-row, need to find run-idx for each data_idx 
+            run_deps = []  # (run_idxs_tuple, deps) for each data_idx
+            for di in data_idx:
+                deps_map = self.deps_maps[di]
+                run_idxs = tuple([get_most_recent_run(name, deps_map) + 1 
+                                  for name in step.return_names])
+                deps = get_deps(
+                    step.param_names, 
+                    deps_map, 
+                    enforced_max_runs=enforced_max_runs
+                )
+                run_deps.append((run_idxs, deps))
             
-    def _convert_yaml_to_steps(self, pl_dict, key = None):
+            # Group by unique run_idxs/deps combinations
+            unique_run_deps, indices_groups = util.group_unique_tuples(run_deps)
+            
+            for (run_idxs, deps), local_idx in zip(unique_run_deps, indices_groups):
+                # Collect parameters 
+                params = []
+                param_is_global = []
+                for p in step.param_names:
+                    # Special handling for 'data_idx' parameter
+                    if p == 'data_idx':
+                        params.append(data_idx[local_idx])
+                        param_is_global.append(False)
+                        continue
+                    
+                    param_is_global.append(self._is_global_cache[p])
+                    if param_is_global[-1]:
+                        val = self._get_existing(p, deps[p], data_idx=None)
+                    else:
+                        val = self._get_existing(
+                            p, deps[p], data_idx=data_idx[local_idx]
+                        )
+                    params.append(val)
+                
+                # Run step 
+                out = step._run(params, param_is_global, data_idx[local_idx])
+
+                # Store outputs in memory cache, each with its own run_idx
+                for (name, val), run_idx in zip(out.items(), run_idxs):
+                    # Ensure run_idx exists in memory cache
+                    if run_idx not in self._memory_cache:
+                        self._memory_cache[run_idx] = {}
+                    
+                    # Create LazyAttr if needed
+                    if name not in self._memory_cache[run_idx]:
+                        self._memory_cache[run_idx][name] = pf.LazyAttr(
+                            self, name, run_idx
+                        )
+                    
+                    # Store data in LazyAttr cache
+                    for idx, v in zip(data_idx[local_idx], val):
+                        self._memory_cache[run_idx][name]._cache[int(idx)] = v
+                    
+                    # Store dependencies for each data_idx
+                    for di in data_idx[local_idx]:
+                        if run_idx not in self.deps_maps[di]:
+                            self.deps_maps[di][run_idx] = {}
+                        self.deps_maps[di][run_idx][name] = deps
+                    
+                    self._is_global_cache[name] = False
+
+    def _is_in_memory(self, name, run_idx, data_idx=None):
         """
-        Converts YAML-defined path dictionary leaves to plStep objects.
+        Check if data exists in memory cache.
+        
+        Parameters:
+        name (str): The parameter name to check.
+        run_idx (int): The run index to check.
+        data_idx (int, array-like, or None): The data index/indices to check 
+            for per-row data. None for global data.
+        
+        Returns:
+        bool: True if data exists in memory cache, False otherwise.
+        """
+        # Input validation
+        if not isinstance(name, str):
+            raise TypeError("name must be a string")
+        run_idx = int(run_idx)
+        if data_idx is not None:
+            data_idx = np.atleast_1d(np.asarray(data_idx, dtype = np.int32))
+
+        # Check if run exists in cache
+        if run_idx not in self._memory_cache:
+            return False
+        
+        # Check if name exists in this run
+        if name not in self._memory_cache[run_idx]:
+            return False
+        
+        # Check if name is known to be global
+        if name not in self._is_global_cache:
+            # If not yet tracked, cannot determine - assume not in memory
+            return False
+        
+        # For global data, just check existence
+        if self._is_global_cache[name]:
+            return True
+        
+        # For per-row data, check if requested rows are cached in LazyAttr
+        if data_idx is None:
+            # Requesting per-row data without specifying rows is ambiguous
+            raise ValueError(
+                f"data_idx required for per-row parameter '{name}'"
+            )
+        
+        lazy_attr = self._memory_cache[run_idx][name]
+        if not isinstance(lazy_attr, pf.LazyAttr):
+            raise TypeError(
+                f"Expected LazyAttr for per-row parameter '{name}', "
+                f"got {type(lazy_attr)}"
+            )
+        
+        return np.all(np.isin(data_idx, list(lazy_attr._cache.keys())))
+    
+    def _is_in_zarr(self, name, run_idx, data_idx=None):
+        """
+        Check if data exists in zarr file on disk.
+        
+        Parameters:
+        name (str): The parameter name to check.
+        run_idx (int): The run index to check.
+        data_idx (int, array-like, or None): The data index/indices to check 
+            for per-row data. None for global data.
+        
+        Returns:
+        bool: True if data exists in zarr file, False otherwise.
+        """
+        # Input validation
+        if not isinstance(name, str):
+            raise TypeError("name must be a string")
+        run_idx = int(run_idx)
+        if data_idx is not None:
+            data_idx = np.atleast_1d(np.asarray(data_idx, dtype = np.int32))
+        
+        # Check if run group exists
+        run_str = f'run{run_idx:d}'
+        if run_str not in self.root:
+            return False
+        
+        run_grp = self.root[run_str]
+        
+        # Check if parameter exists in this run
+        if name not in run_grp:
+            return False
+        
+        # Check if it's global data
+        if 'global' not in run_grp[name].attrs:
+            # Missing metadata, assume False
+            return False
+        
+        is_global = run_grp[name].attrs['global']
+        
+        if is_global:
+            return True
+        
+        # For per-row data, check if requested rows exist
+        if data_idx is None:
+            raise ValueError(
+                f"data_idx required for per-row parameter '{name}'"
+            )
+        
+        if 'row_exists' not in run_grp[name]:
+            # Missing row tracking, cannot verify
+            return False
+        
+        return np.all(np.isin(data_idx, run_grp[name]['row_exists'][...]))
+    
+    def _get_existing(self, name, run_idx, data_idx = None):
+        """
+        Get data that already exists in memory or on disk.
+        Does NOT execute pipeline steps - raises error if data requires 
+        computation.
+        
+        This is the "safe" access method that ensures no side effects from
+        pipeline execution during dependency resolution.
+        
+        Parameters:
+        name (str): The parameter name to retrieve.
+        run_idx (int): The run index to retrieve.
+        data_idx (int, array-like, or None): The data index/indices to retrieve
+            for per-row data. None for global data.
+        
+        Returns:
+        np.ndarray or scalar: The requested data from memory or disk.
+        
+        Raises:
+        ValueError: If data does not exist and cannot be retrieved without 
+            computation.
+        TypeError: If input types are invalid.
+        """
+        # Input validation
+        if not isinstance(name, str):
+            raise TypeError("name must be a string")
+        run_idx = int(run_idx)
+        if data_idx is not None:
+            data_idx = np.atleast_1d(np.asarray(data_idx, dtype = np.int32))
+        
+        # Try memory first
+        if self._is_in_memory(name, run_idx, data_idx):
+            if self._is_global_cache[name]:
+                return self._memory_cache[run_idx][name]
+            else:
+                # Return indexed data from LazyAttr
+                lazy_attr = self._memory_cache[run_idx][name]
+                return lazy_attr[data_idx]
+        
+        # Try disk second
+        if self._is_in_zarr(name, run_idx, data_idx):
+            run_str = f'run{run_idx:d}'
+            run_grp = self.root[run_str]
+            
+            if run_grp[name].attrs['global']:
+                # Load global data from zarr
+                data = run_grp[name]['data'][...]
+                
+                # Cache it in memory for future access
+                if run_idx not in self._memory_cache:
+                    self._memory_cache[run_idx] = {}
+                self._memory_cache[run_idx][name] = data
+                
+                return data
+            else:
+                # Load per-row data from zarr
+                data = run_grp[name]['data'][data_idx]
+                
+                # Cache it in LazyAttr for future access
+                if run_idx not in self._memory_cache:
+                    self._memory_cache[run_idx] = {}
+                if name not in self._memory_cache[run_idx]:
+                    self._memory_cache[run_idx][name] = pf.LazyAttr(
+                        self, name, run_idx
+                    )
+                
+                # Update LazyAttr cache with loaded data
+                lazy_attr = self._memory_cache[run_idx][name]
+                for idx, val in zip(np.atleast_1d(data_idx), data):
+                    lazy_attr._cache[int(idx)] = val
+                
+                return data
+        
+        # Data doesn't exist - raise error
+        raise ValueError(
+            f"Parameter '{name}' at run_idx={run_idx} "
+            f"{'with data_idx=' + str(data_idx) if data_idx is not None else ''} "
+            f"does not exist in memory or zarr and cannot be computed here. "
+            f"Use _execute_path to generate missing data."
+        )
+
+    # Methods below are older code that needs to be refactored. 
+    def _get_data(self, name, run_idx, data_idx = None):
+        """
+        Given a parameter name, run index, and data index (if not global), 
+        return the data location in order of loading priority: 
+        memory -> disk -> potential -> None, 
+        where memory means the data exists at an attribute of DataSet, 
+        disk means the data exists in the zarr file, and potential means the
+        data can be generated from the calibration pipeline. 
 
         Parameters:
-        pl_dict (dict or str): The YAML-defined path dictionary or leaf.
-        key (str): The key associated with the current pl_dict, used to identify
-            task names.
+        name (str): The name of the parameter to look for.
+        run_idx (int): The run index to look for in the zarr file.
+        data_idx (int or None): The data index to look for if the parameter is 
+            not global, or None if the parameter is global.
 
         Returns:
-        dict or plStep: The converted paths with plStep objects.
+        data (misc): 
         """
-        if isinstance(pl_dict, dict):
-            for key, val in pl_dict.items():
-                pl_dict[key] = self._convert_yaml_to_steps(val, key)
-        if isinstance(pl_dict, str) and key == 'task':
-            x = [d for d in self.cal_steps if d.name == pl_dict]
-            if not len(x):
-                m = f"Step '{pl_dict}' not found in available steps."
-                raise ValueError(m)
-            return x[0]
-        return pl_dict
+        # Check memory cache 
         
-    def confirm_valid_path(self, path, raise_error = True):
+        # Check disk 
+        
+        # Check potential 
+
+        pass 
+                
+        
+    def _confirm_valid_path(self, path, raise_error = True):
         """
         Confirm that a list of plStep objects forms a valid path.
 
@@ -247,7 +576,7 @@ class DataSet:
             for inp in step.param_names:
                 if inp not in valid_inputs and inp != 'data_idx':
                     
-                    run = self.get_attr_version(inp)
+                    run = get_attr_version(inp, self.root)
                     
                     if run is None:
                         if raise_error:
@@ -268,7 +597,7 @@ class DataSet:
             step = None
             return missing_input, step
 
-    def execute_path(self, path, data_idx):
+    def execute_path(self, path, data_idx = None):
         """
         Execute a list of plStep objects in sequence for given data indices.
 
@@ -279,7 +608,7 @@ class DataSet:
         Returns:
         None
         """
-        self.confirm_valid_path(path)
+        self._confirm_valid_path(path)
         for ii, step in enumerate(path):
             this_data_idx = data_idx
             if step.func_type in ['global', 'global-res']:
@@ -302,9 +631,16 @@ class DataSet:
                     this_data_idx = this_data_idx[do_run_mask]
                     if not any(do_run_mask):
                         continue
-            step.run(self, this_data_idx)
-        
-    
+
+            params, param_is_global = self.collect_step_params(this_data_idx)
+
+            returns = step.run(params, param_is_global, this_data_idx) 
+            # for global_res runs, confirm that output is len(nrows)
+            for name, val in returns:
+                assert False, "Need to change behavior based on data_idx"
+                # For vectorized/per-row, make LazyAttr
+                setattr(self, name, val) 
+
     def write_data(self, return_name, step, value, data_idx, dtype = None):
         """
         Write data attribute 'name' for dataset.
@@ -326,7 +662,7 @@ class DataSet:
         None
         """
         if step.func_type in ['vectorized', 'per-row'] and data_idx is None:
-            data_idx = list(range(self.nres))
+            data_idx = list(range(self.nrows))
 
         # set dtype if not provided
         if dtype is None:
@@ -338,7 +674,7 @@ class DataSet:
         
         if step.func_type in ['global', 'global-res']:
             
-            deps_map = self.deps_map['global']
+            deps_map = self.deps_maps['global']
             run_idx = get_most_recent_run(return_name, deps_map)
             deps = get_deps(step.return_names, deps_map)
             names_to_remove = [name for name in step.return_names
@@ -390,7 +726,7 @@ class DataSet:
                 if 'data' not in return_grp:                    
                     # Initialize the full empty array with all rows.
                     # The array is chunked per-row.
-                    shape = (self.nres, *value.shape[1:])
+                    shape = (self.nrows, *value.shape[1:])
                     chunks = (1, *value.shape[1:])
                     
                     values_arr = return_grp.create_array(
@@ -404,7 +740,7 @@ class DataSet:
                     # have been saved to values_arr.
                     exists_arr = return_grp.create_array(
                         name = 'row_exists',
-                        data = np.full(self.nres, False)
+                        data = np.full(self.nrows, False)
                     )
                 else:
                     values_arr = return_grp['data']
@@ -420,55 +756,6 @@ class DataSet:
                 zarr_deps[di_str] = deps
                 return_grp.attrs['deps'] = zarr_deps
                 return_grp.attrs['global'] = self.global_cache[return_name]
-                
-        
-    def get_attr_version(self, name):
-        """
-        Finds the most recent run version of a given attribute.
-        Returns None if the attribute does not exist in any run.
-        
-        Parameters:
-        name (str): Name of the attribute to search for.
-        
-        Returns:
-        attr_version (int): Most recent run version containing the attribute.
-        """
-        folders = list(self.root.keys())
-        runs = []
-        for folder in folders:
-            try:
-                int(folder)
-                runs.append(folder)
-            except ValueError:
-                pass
-        runs = np.array(runs, dtype=int)
-        runs = np.flip(np.sort(runs))
-        
-        attr_version = None
-        for run in runs:
-            grp = self.root[str(run)]
-            attrs = list(grp.keys())
-            if name in attrs:
-                attr_version = run
-                return attr_version
-    
-    def run_exists(self, name, run):
-        """
-        Returns True if data under "name" exists for a specified run,
-        otherwise return False.
-        
-        Parameters:
-        name (str): Name of the attribute to search for.
-        run (int): run index.
-        """
-        data_exists = False
-        try:
-            self.root[f'{run}/{name}']
-            data_exists = True
-        except:
-            pass
-        return data_exists
-    
 
     # ***EK - The zarr loading is causing inconsistent behavior where
     # the outputs of a plStep.run call will be stored as a LazyAttr,
@@ -486,34 +773,38 @@ class DataSet:
         Any: The requested attribute value or LazyAttr.
         """
         # Look up the attribute in the zarr file.
-        run_idx = self.get_attr_version(name)
+        run_idx = get_attr_version(name, self.root)
         if run_idx is not None:
             grp = self.root[f'{run_idx}/{name}']
             attr = grp['data']
             object.__setattr__(self, name, attr)
             self.global_cache[name] = grp.attrs['global']
-            if self.global_cache[name]:
-                deps_to_add = grp.attrs['deps']
-                self.update_deps_map_after_load(name, deps_to_add, di=None)
+            # if self.global_cache[name]:
+            #     deps_to_add = grp.attrs['deps']
+            #     _update_deps_map_after_load(
+            #         self.deps_map, name, deps_to_add, di = None
+            #         )
                 
-            else:
-                row_exists = grp['row_exists'][...]
-                dis = np.where(row_exists)[0]
-                for di in dis:
-                    deps_to_add = grp.attrs['deps'][f'idx{di}']
-                    self.update_deps_map_after_load(name, deps_to_add, di=di)
+            # else:
+            #     row_exists = grp['row_exists'][...]
+            #     dis = np.where(row_exists)[0]
+            #     for di in dis:
+            #         deps_to_add = grp.attrs['deps'][f'idx{di}']
+            #         _update_deps_map_after_load(
+            #             self.deps_map, name, deps_to_add, di = di
+            #             )
                 
             return attr
 
-        # Search the user-specified analysis parameters
-        paths = self._find_key_paths(self.analysis_user_params, name)
-        if len(paths):
-            if len(paths) > 1:
-                raise ValueError(f"User-specified attribute {name} was found multiple times "
-                                 "in the analysis YAML file.")
-            attr = self._get_dict_value_from_path(self.analysis_user_params, paths[0])
-            object.__setattr__(self, name, attr)
-            return attr
+        # # Search the user-specified analysis parameters
+        # paths = _find_key_paths(self.analysis_user_params, name)
+        # if len(paths):
+        #     if len(paths) > 1:
+        #         raise ValueError(f"User-specified attribute {name} was found multiple times "
+        #                          "in the analysis YAML file.")
+        #     attr = _get_dict_value_from_path(self.analysis_user_params, paths[0])
+        #     object.__setattr__(self, name, attr)
+        #     return attr
 
 
         # Only run when normal lookup fails
@@ -572,242 +863,410 @@ class DataSet:
             else:
                 exists_arr = np.full(len(data_idx), False)
                 return exists_arr
-        
-    def has_method(self, name):
-        """
-        Function to check if a method is present, without
-        calling __getattr__.
-        
-        Parameters:
-        name (str): attribute to look for.
-        data_idx (int or None): Data index to search for within the attribute,
-            if it is not a 'global'-type attribute.
-            
-        Returns:
-        (bool, or array of bool): True if the attribute is present, False if not.
-        """
-        for cls in type(self).__mro__:
-            if name in cls.__dict__:
-                return True
-
-        return False
-
     
-    def _validate_nres(self):
-        path = pf.find_pl_path(self.cal_pl, 'nres')
-        step = path[-1] 
-
-        # Check that nres is the only returned name.
-        if len(step.return_names) != 1:
-            m = f"The function named '{step.name}' in "
-            m += "custom_steps.py must only return 'nres'."
-            raise ValueError(m)
-        
-        # Check that the step returning nres has func_type = 'global'.
-        if step.func_type != 'global':
-            m = f"The function named '{step.name}' in "
-            m += "custom_steps.py must have return_type = 'global'."
-            raise ValueError(m)
-        
-        # Load nres, and check that it is integer-valued and > 0.
-        if not (type(self.nres) is int and self.nres > 0):
-            m = "The return parameter 'nres' from the step named "
-            m += f"'{step.name}' in custom_steps.py must be "
-            m += "integer-valued and > 0."
-            raise ValueError(m)
-
-    def update_deps_map_after_run(self, param_names, return_names, data_idx):
+    def show_file(self, ftype):
         """
-        Updates the dependencies map after running a plStep.
-        
+        Opens the file explorer to the location of a file associated with this 
+        dataset.
+
         Parameters:
-        param_names (array-like (str)): The list of input parameter names
-            of the plStep: plStep.param_names
-        return_names (array-like (str)): The list of return parameter names
-            of the plStep: plStep.return_names
-        data_idx: The data indices that the plStep was run on, or None if
-            the function was 'global'-type.
+        ftype (str): The type of file to show. Can be 'cal', 'analysis', 
+            'custom', or 'zarr'.
+
+        Raises:
+        ValueError: If ftype is not one of the allowed values, or if the 
+            specified file does not exist for this dataset.
+        """
+        if ftype == 'cal': 
+            util.open_in_file_explorer(
+                os.path.dirname(self.cal_yaml_path)
+                ) 
+        elif ftype == 'analysis':
+            if self.analysis_yaml_path is None:
+                m = "No analysis YAML file was provided for this dataset."
+                raise ValueError(m)
+            else:
+                util.open_in_file_explorer(
+                    os.path.dirname(self.analysis_yaml_path)
+                    )
+        elif ftype == 'custom':
+            if self.custom_path is None:
+                m = "No custom steps file was provided for this dataset."
+                raise ValueError(m)
+            else:
+                util.open_in_file_explorer(
+                    os.path.dirname(self.custom_path)
+                    )
+        elif ftype == 'zarr':
+            util.open_in_file_explorer(
+                os.path.dirname(self.zarr_path)
+                )
+
+################################################################################ 
+# Custom steps 
+################################################################################
+def _load_custom_steps(custom_path):
+    """
+    Load custom steps from 'custom_steps.py' in the dataset directory.
+
+    Returns:
+    list: A list of custom plStep objects.
+    """
+    if custom_path is None:
+        return []
+    
+    if not os.path.exists(custom_path):
+        m = f"Custom path '{custom_path}' does not exist."
+        raise FileNotFoundError(m)
+
+    spec = importlib.util.spec_from_file_location("custom_cal_steps", 
+                                                    custom_path)
+    cs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cs)
+    custom_cal_steps = cs.custom_cal_steps
+    
+    spec = importlib.util.spec_from_file_location("custom_analysis_steps", 
+                                                    custom_path)
+    cs = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cs)
+    custom_analysis_steps = cs.custom_analysis_steps
+    
+    return custom_cal_steps, custom_analysis_steps
+
+def _load_deps_from_zarr(root):
+    """
+    Given the root on an analysis output file, load the dependencies map for 
+    each data_idx while validating the file structure.
+
+    Parameters:
+    root (zarr group): The root of the zarr file to load from.
+
+    Returns:
+    deps_maps (dictionary): A dictionary mapping data indices to their 
+        dependencies maps. The key-value map is: 
+        data_idx (int or 'global') -> run_idx (int) -> parameter name (str) 
+        -> dependencies (dict), 
+        where the dependencies dict represents parameter: run_idx pairs for 
+        each other parameter that the parameter depends on. Global parameters
+        use the key 'global' instead of a data_idx.
+    """
+    ### Input validation 
+    if not isinstance(root, zarr.core.group.Group):
+        raise ValueError("Input root must be a zarr group.")
+    if any(root.arrays()):
+        raise ValueError("root cannot have arrays.")
+    
+    ### Parse root to create deps_maps and validate file structure.
+    # deps_maps: data_idx (or 'global') -> run_idx -> param name -> dependencies 
+    deps_maps = {} 
+    # Iterate through runs
+    for run_str, grp in root.groups():
+        # Input validation
+        if any(grp.arrays()):
+            raise ValueError(f"{run_str} must not contain arrays.")
+        if re.fullmatch(r"run\d+", run_str) is None:
+            raise ValueError(f"root can only contain run folders: {run_str} group found") 
+        run_idx = int(run_str.replace('run', ''))
+    
+        # Iterate through params in the run
+        for name, subgrp in grp.groups():
+            # Input validation 
+            if 'deps' not in subgrp.attrs.keys():
+                raise ValueError(f"Missing 'deps' attr for {run_str} parameter {name}") 
+            if 'global' not in subgrp.attrs.keys():
+                raise ValueError(f"Missing 'global' attribute for {run_str} parameter {name}")
+            if any(subgrp.groups()):
+                raise ValueError(f"{run_str} parameter {name} contains a zarr group") 
+            array_names = [a[0] for a in subgrp.arrays()]
+            if "data" not in array_names:
+                raise ValueError(
+                    f"'data' array not found in {run_str} parameter {name}"
+                )
+            array_names = [d for d in array_names if d != 'data']
+            if subgrp.attrs['global']:
+                if len(array_names) != 0:
+                    raise ValueError(
+                        f"Extra array(s) found in {run_str} global parameter {name}: {array_names}"
+                    )
+            else:
+                if "row_exists" not in array_names:
+                    raise ValueError(f"'row_exists' array not found in {run_str} parameter {name}")
+                # Validate row_exists dtype
+                row_exists = subgrp['row_exists']
+                if row_exists.dtype != np.bool_:
+                    raise ValueError(
+                        f"'row_exists' array in {run_str} parameter {name} must have dtype bool, "
+                        f"got {row_exists.dtype}"
+                    )
+                array_names = [d for d in array_names if d != 'row_exists']
+                if len(array_names) != 0:
+                    raise ValueError(
+                        f"Extra array(s) found in {run_str} parameter {name}: {array_names}"
+                    )
             
-        Returns:
-        None
-        """
-        def update_deps(param_names, return_names, deps_map):
-            """
-            Updates individual leaves of the deps_map corresponding
-            to each return name in return_names.
-            """
-            param_names = [param_name for param_name in param_names
-                           if param_name != 'data_idx']
-            deps_to_add = get_deps(param_names, deps_map)
-            for name in return_names:
-                # This conditional is needed to distinguish between
-                # steps where an input parameter can change, so that 
-                # the run_idx can increase, and those where it can't,
-                # so that it should always be run_idx = 1.
-                if param_names:
-                    run_idx = get_most_recent_run(name, deps_map)
-                    run_idx = max(run_idx+1, 1)
-                else:
-                    run_idx = 1
-                if run_idx not in deps_map:
-                    deps_map[run_idx] = {}
-                deps_map[run_idx][name] = {}
-                for dep_name, dep_run_idx in deps_to_add.items():
-                    if dep_name != name:
-                        deps_map[run_idx][name][dep_name] = dep_run_idx
-        
-        if data_idx is None: # "global" case
-            if 'global' not in self.deps_map:
-                self.deps_map['global'] = {}
-            deps_map = self.deps_map['global']
-            update_deps(param_names, return_names, deps_map)
-
-        else: # "non-global" case
-            # Load the global deps_map so we can copy it over to 
-            # the deps_maps for each data index.
-            deps_map_global = {}
-            if 'global' in self.deps_map:
-                deps_map_global = copy.deepcopy(self.deps_map['global'])
-            for di in data_idx:
-                di_str = f'idx{di}'
-                if di_str not in self.deps_map:
-                    self.deps_map[di_str] = {}
-                deps_map = self.deps_map[di_str]
-                # Unite global deps_map with the per-data_index deps_map
-                self.deps_map[di_str] = util.deep_union(deps_map, deps_map_global)
-                deps_map = self.deps_map[di_str]
+            # Validate and process deps attribute based on global status
+            deps_attr = subgrp.attrs['deps']
+            if not isinstance(deps_attr, dict):
+                raise ValueError(
+                    f"'deps' attribute in {run_str} parameter {name} must be a dictionary"
+                )
+            
+            if subgrp.attrs['global']:
+                # For global parameters, deps should be {str: int}
+                for key, value in deps_attr.items():
+                    if not isinstance(key, str):
+                        raise ValueError(
+                            f"Global parameter {name} in {run_str}: deps keys must be strings, got {type(key)}"
+                        )
+                    if not isinstance(value, (int, np.integer)):
+                        raise ValueError(
+                            f"Global parameter {name} in {run_str}: deps values must be integers, got {type(value)}"
+                        )
                 
-                update_deps(param_names, return_names, deps_map)
-                       
-    def update_deps_map_after_load(self, name, deps_to_add, di=None):
-        """
-        Updates the dependencies map after loading data from the zarr file.
-        
-        Parameters:
-        name (str): The name of the analysis output.
-        deps_to_add (dictionary): Keys are return names, and values are run indices.
-            'name' should be included in the list of keys.
-        di (int or None): The data index of the output. If None, the 
-            output is of 'global' type and has no data index.
-        
-        Returns:
-        None
-        """
-        # Get the branch of self.deps_map that corresponds to 'global' attributes,
-        # or to the specified data index.
-        if di is None:
-            if 'global' not in self.deps_map:
-                self.deps_map['global'] = {}
-            deps_map = self.deps_map['global']
-        else:
-            di_str = f'idx{di}'
-            if di_str not in self.deps_map:
-                self.deps_map[di_str] = {}
-            deps_map = self.deps_map[di_str]
-        
-        # Initialize the dependencies leaf for this output name.
-        run_idx = deps_to_add[name]
-        if run_idx not in deps_map:
-            deps_map[run_idx] = {}
-        deps_map[run_idx][name] = {}
-        
-        # Add the dependencies to this leaf.
-        for key, value in deps_to_add.items():
-            if key != name:
-                deps_map[run_idx][name][key] = value
+                # Add to deps_maps under 'global' key
+                if 'global' not in deps_maps:
+                    deps_maps['global'] = {}
+                if run_idx not in deps_maps['global']:
+                    deps_maps['global'][run_idx] = {}
+                if name in deps_maps['global'][run_idx]:
+                    raise ValueError(
+                        f"Duplicate parameter {name} found in {run_str}"
+                    )
+                deps_maps['global'][run_idx][name] = deps_attr
                 
-                
-    def run_analysis_step(self, name, data_idx=None, save_to_zarr=True):
-        """
-        Run an analysis step and save the output to zarr.
-        
-        Parameters:
-        name (str): The name of the analysis step.
-        data_idx (int or array-like): Data index (or indices) to
-            run the step on.
-        save_to_zarr (bool): If True, save the outputs to the
-            zarr store at Analyzer.dataset.root.
-
-        Returns:
-        None
-        """
-        x = [d for d in self.analysis_steps if d.name == name]
-        if not len(x):
-            m = f"Step '{name}' not found in available analysis steps."
-            raise ValueError(m)
-        
-        step = x[0]
-        step.run(self, data_idx)
-        
-        if save_to_zarr:
-                        
-            for return_name in step.return_names:
-                value = getattr(self, return_name)             
+            else:
+                # For non-global parameters, deps should be {data_idx_str: {str: int}}
+                for data_idx_str, deps in deps_attr.items():
+                    # Validate data_idx_str can be converted to int
+                    try:
+                        data_idx = int(data_idx_str.replace('idx', '')) if isinstance(data_idx_str, str) and data_idx_str.startswith('idx') else int(data_idx_str)
+                    except (ValueError, AttributeError):
+                        raise ValueError(
+                            f"Non-global parameter {name} in {run_str}: deps keys must be convertible to int "
+                            f"(format 'idx<int>' or int), got {data_idx_str}"
+                        )
                     
-                self.write_data(return_name, step,
-                                 value, data_idx)
-                
-                
-    def _find_key_paths(self, d, target, path=()):
-        """
-        Finds the paths to a key in a dictionary.
-        
-        Parameters:
-        d: Dictionary.
-        target: The key to find.
-        path: The path to start with, if you only want to search a 
-            subset of the dictionary.
-            
-        Returns:
-        path (list of tuples): Paths to the target key.
-        """
-        paths = []
-
-        if isinstance(d, dict):
-            for k, v in d.items():
-                new_path = path + (k,)
-                if k == target:
-                    paths.append(new_path)
-                paths.extend(self._find_key_paths(v, target, new_path))
-
-        elif isinstance(d, list):
-            for i, item in enumerate(d):
-                paths.extend(self._find_key_paths(item, target, path + (i,)))
-
-        return paths
-
-    def _get_dict_value_from_path(self, d, path):
-        """
-        Gets a value from a path pointing into a nested dictionary.
-        
-        Parameters:
-        d: Dictionary.
-        path (array-like): 1D list of keys.
-        
-        Returns:
-        value: The value at the end of the path.
-        """
-        for key in path:
-            d = d[key]
-        value = d
-        return value
+                    # Validate deps structure
+                    if not isinstance(deps, dict):
+                        raise ValueError(
+                            f"Non-global parameter {name} in {run_str} data_idx {data_idx}: "
+                            f"deps must be a dictionary, got {type(deps)}"
+                        )
+                    for key, value in deps.items():
+                        if not isinstance(key, str):
+                            raise ValueError(
+                                f"Non-global parameter {name} in {run_str} data_idx {data_idx}: "
+                                f"deps keys must be strings, got {type(key)}"
+                            )
+                        if not isinstance(value, (int, np.integer)):
+                            raise ValueError(
+                                f"Non-global parameter {name} in {run_str} data_idx {data_idx}: "
+                                f"deps values must be integers, got {type(value)}"
+                            )
+                    
+                    # Add to deps_maps
+                    if data_idx not in deps_maps:
+                        deps_maps[data_idx] = {}
+                    if run_idx not in deps_maps[data_idx]:
+                        deps_maps[data_idx][run_idx] = {}
+                    if name in deps_maps[data_idx][run_idx]:
+                        raise ValueError(
+                            f"Duplicate parameter {name} found in {run_str} for data_idx {data_idx}"
+                        )
+                    deps_maps[data_idx][run_idx][name] = deps
     
-    def show_cal_yaml_file(self):
-        util.open_in_file_explorer(os.path.dirname(self.cal_yaml_path))
-
-    def show_analysis_yaml_file(self):
-        if self.analysis_yaml_path is None:
-            m = "No analysis YAML file was provided for this dataset."
-            raise ValueError(m)
-        else:
-            util.open_in_file_explorer(os.path.dirname(self.analysis_yaml_path))
-
-    def show_custom_steps_file(self):
-        if self.custom_path is None:
-            m = "No custom steps file was provided for this dataset."
-            raise ValueError(m)
-        else:
-            util.open_in_file_explorer(os.path.dirname(self.custom_path)) 
+    return deps_maps
+################################################################################
+# Untested functions 
+################################################################################
+def _find_key_paths(d, target, path=()):
+    """
+    Finds the paths to a key in a dictionary.
     
-    def show_zarr_file(self):
-        util.open_in_file_explorer(os.path.dirname(self.zarr_path))
+    Parameters:
+    d: Dictionary.
+    target: The key to find.
+    path: The path to start with, if you only want to search a 
+        subset of the dictionary.
+        
+    Returns:
+    path (list of tuples): Paths to the target key.
+    """
+    paths = []
+
+    if isinstance(d, dict):
+        for k, v in d.items():
+            new_path = path + (k,)
+            if k == target:
+                paths.append(new_path)
+            paths.extend(_find_key_paths(v, target, new_path))
+
+    elif isinstance(d, list):
+        for i, item in enumerate(d):
+            paths.extend(_find_key_paths(item, target, path + (i,)))
+
+    return paths
+
+def _get_dict_value_from_path(d, path):
+    """
+    Gets a value from a path pointing into a nested dictionary.
+    
+    Parameters:
+    d: Dictionary.
+    path (array-like): 1D list of keys.
+    
+    Returns:
+    value: The value at the end of the path.
+    """
+    for key in path:
+        d = d[key]
+    value = d
+    return value 
+
+def _convert_yaml_to_steps(pl_dict, cal_steps, key = None):
+    """
+    Converts YAML-defined path dictionary leaves to plStep objects.
+
+    Parameters:
+    pl_dict (dict or str): The YAML-defined path dictionary or leaf.
+    cal_steps (list of plStep): The list of available plStep objects to 
+        match against.
+    key (str): The key associated with the current pl_dict, used to identify
+        task names.
+
+    Returns:
+    dict or plStep: The converted paths with plStep objects.
+    """
+    if isinstance(pl_dict, dict):
+        for key, val in pl_dict.items():
+            pl_dict[key] = _convert_yaml_to_steps(val, cal_steps, key)
+    if isinstance(pl_dict, str) and key == 'task':
+        x = [d for d in cal_steps if d.name == pl_dict]
+        if not len(x):
+            m = f"Step '{pl_dict}' not found in available steps."
+            raise ValueError(m)
+        return x[0]
+    return pl_dict
+
+def get_attr_version(name, root):
+    """
+    Finds the most recent run version of a given attribute.
+    Returns None if the attribute does not exist in any run.
+    
+    Parameters:
+    name (str): Name of the attribute to search for.
+    root (zarr group): The root group of the zarr file to search within.
+    
+    Returns:
+    attr_version (int): Most recent run version containing the attribute.
+    """
+    folders = list(root.keys())
+    runs = []
+    for folder in folders:
+        try:
+            int(folder)
+            runs.append(folder)
+        except ValueError:
+            pass
+    runs = np.array(runs, dtype=int)
+    runs = np.flip(np.sort(runs))
+    
+    attr_version = None
+    for run in runs:
+        grp = root[str(run)]
+        attrs = list(grp.keys())
+        if name in attrs:
+            attr_version = run
+            return attr_version
+
+
+       
+def _collect_user_params(obj, result = None):
+    """
+    Recurcsively loads user-specified parameters from the analysis YAML 
+    file.
+    
+    Parameters:
+    obj: Dictionary from loading the YAML file.
+    
+    Returns:
+    result (dictionary): Keys are function names, and values are 
+        dictionaries of parameter names and their values.
+    """
+    if result is None:
+        result = {}
+
+    if isinstance(obj, dict):
+        # Check current level
+        if "params" in obj:
+            if "task" not in obj:
+                raise KeyError("Found 'params' without a sibling 'task'")
+            params_dict = obj["params"]
+            for param_name, param_val in params_dict.items():
+                if param_val in ['None', 'none']:
+                    params_dict[param_name] = None
+            result[obj["task"]] = params_dict
+
+        # Recurse
+        for v in obj.values():
+            _collect_user_params(v, result)
+
+    elif isinstance(obj, list):
+        for item in obj:
+            _collect_user_params(item, result)
+
+    return result
+
+
+    
+################################################################################
+######################## Functions not currently in use ########################
+################################################################################
+def _run_exists(name, run, root):
+    """
+    Not currently in use. 
+
+    Returns True if data under "name" exists for a specified run,
+    otherwise return False.
+    
+    Parameters:
+    name (str): Name of the attribute to search for.
+    run (int): run index.
+    root (zarr group): The zarr group to search within.
+
+    Returns:
+    bool: True if data exists, False if not.
+    """
+    # Input validation 
+    run = int(run) 
+    name = str(name) 
+
+    # Check if run exists in root
+    run_grp = root.get(str(run)) 
+    if run_grp is None:
+        return False
+    return name in run_grp 
+
+def _validate_nrows(cal_pl, nrows):
+    "Not currently in use"
+    path = pf.find_pl_path(cal_pl, 'nrows')
+    step = path[-1] 
+
+    # Check that nrows is the only returned name.
+    if len(step.return_names) != 1:
+        m = f"The function named '{step.name}' in "
+        m += "custom_steps.py must only return 'nrows'."
+        raise ValueError(m)
+    
+    # Check that the step returning nrows has func_type = 'global'.
+    if step.func_type != 'global':
+        m = f"The function named '{step.name}' in "
+        m += "custom_steps.py must have return_type = 'global'."
+        raise ValueError(m)
+    
+    # Load nrows, and check that it is integer-valued and > 0.
+    if not (type(nrows) is int and nrows > 0):
+        m = "The return parameter 'nrows' from the step named "
+        m += f"'{step.name}' in custom_steps.py must be "
+        m += "integer-valued and > 0."
+        raise ValueError(m)

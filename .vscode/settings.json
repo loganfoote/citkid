@@ -1,11 +1,6 @@
 {
     "python.testing.pytestArgs": [
-        "-s",
-        "-vv",
-        "-rA",
-        // "--crs_sn=45",
-        // "--crs_iface=enp5s0",
-        "."
+        "tests"
     ],
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,

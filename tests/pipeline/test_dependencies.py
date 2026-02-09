@@ -130,7 +130,7 @@ def test_get_lowest_runs_invalid_subdep_value():
         rv._get_lowest_runs({"param1": [1, 2]})
 
 ################################################################################
-########################### New helper functions ###############################
+############################### helper functions ###############################
 ################################################################################
 def test_flatten_all_deps():
     deps = {'a1': 2, 'b1': 2}
@@ -226,6 +226,9 @@ def test_get_deps_three_level_cascade():
         expected = {'a1': 1, 'b1': 1, 'c1': 1, 'directory': 0}
         assert result == expected
 
+################################################################################
+################################### get_deps ###################################
+################################################################################
 def test_get_deps_multiple_independent_params():
     """Test requesting multiple independent parameters at most recent run."""
     deps_map = {
@@ -285,10 +288,6 @@ def test_get_deps_all_transitive_deps_included():
     result = rv.get_deps(['c1'], deps_map)
     expected = {'c1': 2, 'b1': 2, 'a1': 2, 'directory': 0}
     assert result == expected
-
-################################################################################
-################################### get_deps ###################################
-################################################################################
 deps_map0 = {0: {"param1": {}}}
 deps_map1 = {0: {"param1": {}, "param2": {}}, 1: {"param1": {'param2': 0}}}
 @pytest.mark.parametrize("param_names,deps_map,expected", [
@@ -460,3 +459,207 @@ def test_get_deps_two_inputs_conflicting_subdeps():
 def test_get_deps_invalid_input(param_names, deps_map):
     with pytest.raises(ValueError):
         rv.get_deps(param_names, deps_map)
+
+################################################################################
+########################### enforced_max_runs tests ############################
+################################################################################
+def test_get_deps_enforced_max_runs_basic():
+    """Test enforcing a maximum run for a single parameter."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0}},
+        2: {'a1': {'directory': 0}},
+        3: {'a1': {'directory': 0}}
+    }
+    
+    # Without enforcement, would use run 3
+    result_default = rv.get_deps(['a1'], deps_map)
+    assert result_default == {'a1': 3, 'directory': 0}
+    
+    # With enforcement at run 2, should use run 2
+    result_enforced = rv.get_deps(['a1'], deps_map, enforced_max_runs={'a1': 2})
+    assert result_enforced == {'a1': 2, 'directory': 0}
+
+
+def test_get_deps_enforced_max_runs_allows_backtracking():
+    """Test that enforced parameters can still be backtracked if conflicts require it."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0},
+            'b1': {'a1': 1, 'directory': 0}},
+        2: {'a1': {'directory': 0},
+            'b1': {'a1': 1, 'directory': 0}},  # b1:2 still depends on a1:1
+        3: {'a1': {'directory': 0}}  # a1:3 exists but b1 doesn't
+    }
+    
+    # Enforce a1 at max run 3, but b1 at run 2 requires a1:1
+    # Should backtrack a1 from 3 to 1 to resolve conflict
+    with pytest.warns(UserWarning):
+        result = rv.get_deps(['a1', 'b1'], deps_map, enforced_max_runs={'a1': 3})
+        assert result == {'a1': 1, 'b1': 2, 'directory': 0}
+
+
+def test_get_deps_enforced_max_runs_multiple_params():
+    """Test enforcing maximum runs for multiple parameters."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0},
+            'a2': {'directory': 0}},
+        2: {'a1': {'directory': 0},
+            'a2': {'directory': 0}},
+        3: {'a1': {'directory': 0},
+            'a2': {'directory': 0}}
+    }
+    
+    # Enforce different max runs for different parameters
+    result = rv.get_deps(
+        ['a1', 'a2'], 
+        deps_map, 
+        enforced_max_runs={'a1': 1, 'a2': 2}
+    )
+    assert result == {'a1': 1, 'a2': 2, 'directory': 0}
+
+
+def test_get_deps_enforced_max_runs_with_dependencies():
+    """Test enforcing max run on a parameter that has dependencies."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0},
+            'b1': {'a1': 1, 'directory': 0}},
+        2: {'a1': {'directory': 0},
+            'b1': {'a1': 2, 'directory': 0}},
+        3: {'a1': {'directory': 0},
+            'b1': {'a1': 3, 'directory': 0}}
+    }
+    
+    # Enforce b1 at max run 2, should use b1:2 and a1:2
+    result = rv.get_deps(['b1'], deps_map, enforced_max_runs={'b1': 2})
+    assert result == {'b1': 2, 'a1': 2, 'directory': 0}
+
+
+def test_get_deps_enforced_max_runs_subdependency():
+    """Test enforcing max run on a subdependency (not in param_names)."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0},
+            'b1': {'a1': 1, 'directory': 0}},
+        2: {'a1': {'directory': 0},
+            'b1': {'a1': 2, 'directory': 0}},
+        3: {'a1': {'directory': 0},
+            'b1': {'a1': 3, 'directory': 0}}
+    }
+    
+    # Enforce a1 at max run 2, even though b1 would prefer run 3
+    # Should backtrack b1 to find version that uses a1:2 or earlier
+    with pytest.warns(UserWarning):
+        result = rv.get_deps(['b1'], deps_map, enforced_max_runs={'a1': 2})
+        assert result == {'b1': 2, 'a1': 2, 'directory': 0}
+
+
+def test_get_deps_enforced_max_runs_mixed_enforced_and_free():
+    """Test mix of enforced and non-enforced parameters."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0},
+            'a2': {'directory': 0},
+            'b1': {'a1': 1, 'a2': 1, 'directory': 0}},
+        2: {'a1': {'directory': 0},
+            'a2': {'directory': 0},
+            'b1': {'a1': 2, 'a2': 2, 'directory': 0}},
+        3: {'a1': {'directory': 0},
+            'a2': {'directory': 0},
+            'b1': {'a1': 3, 'a2': 3, 'directory': 0}}
+    }
+    
+    # Enforce a1 at run 1, let a2 use most recent (3)
+    # Should backtrack to find consistent versions
+    with pytest.warns(UserWarning):
+        result = rv.get_deps(['a1', 'a2', 'b1'], deps_map, enforced_max_runs={'a1': 1})
+        # All should backtrack to run 1 to be consistent with a1:1
+        assert result == {'a1': 1, 'a2': 1, 'b1': 1, 'directory': 0}
+
+
+def test_get_deps_enforced_max_runs_exceeds_available():
+    """Test error when enforced run exceeds available runs."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0}},
+        2: {'a1': {'directory': 0}}
+    }
+    
+    # Try to enforce a1 at run 5, but only runs 0-2 exist
+    with pytest.raises(ValueError, match="exceeds most recent available"):
+        rv.get_deps(['a1'], deps_map, enforced_max_runs={'a1': 5})
+
+
+def test_get_deps_enforced_max_runs_parameter_not_in_deps_map():
+    """Test enforcing run for parameter that doesn't exist in deps_map."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0}}
+    }
+    
+    # Enforce run for 'b1' which doesn't exist - should fail during dependency lookup
+    with pytest.raises(ValueError, match="Missing dependencies"):
+        rv.get_deps(['b1'], deps_map, enforced_max_runs={'b1': 1})
+
+
+def test_get_deps_enforced_max_runs_at_earliest_run():
+    """Test enforcing a parameter at its earliest available run."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0}},
+        2: {'a1': {'directory': 0}},
+        3: {'a1': {'directory': 0}}
+    }
+    
+    # Enforce at run 1 (earliest non-directory run)
+    result = rv.get_deps(['a1'], deps_map, enforced_max_runs={'a1': 1})
+    assert result == {'a1': 1, 'directory': 0}
+
+
+def test_get_deps_enforced_max_runs_complex_cascade():
+    """Test enforcing in a complex dependency cascade."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0},
+            'b1': {'a1': 1, 'directory': 0},
+            'c1': {'b1': 1, 'a1': 1, 'directory': 0}},
+        2: {'a1': {'directory': 0},
+            'b1': {'a1': 2, 'directory': 0},
+            'c1': {'b1': 2, 'a1': 2, 'directory': 0}},
+        3: {'a1': {'directory': 0},
+            'b1': {'a1': 3, 'directory': 0},
+            'c1': {'b1': 3, 'a1': 3, 'directory': 0}}
+    }
+    
+    # Enforce b1 at max run 2, requesting c1
+    # c1 at run 3 depends on b1:3, but b1 is capped at 2
+    # Should backtrack c1 to run 2
+    with pytest.warns(UserWarning):
+        result = rv.get_deps(['c1'], deps_map, enforced_max_runs={'b1': 2})
+        assert result == {'c1': 2, 'b1': 2, 'a1': 2, 'directory': 0}
+
+
+def test_get_deps_enforced_max_runs_invalid_type():
+    """Test that invalid enforced_max_runs type raises error."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0}}
+    }
+    
+    with pytest.raises(ValueError, match="enforced_max_runs must be a dictionary"):
+        rv.get_deps(['a1'], deps_map, enforced_max_runs="not_a_dict")
+
+
+def test_get_deps_enforced_max_runs_empty_dict():
+    """Test that empty enforced_max_runs dict works (no enforcement)."""
+    deps_map = {
+        0: {'directory': {}},
+        1: {'a1': {'directory': 0}},
+        2: {'a1': {'directory': 0}}
+    }
+    
+    # Empty dict should behave like no enforcement
+    result = rv.get_deps(['a1'], deps_map, enforced_max_runs={})
+    assert result == {'a1': 2, 'directory': 0}

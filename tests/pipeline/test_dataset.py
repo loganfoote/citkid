@@ -1,6 +1,10 @@
 import pytest 
 import os 
 from citkid.pipeline import dataset as pds
+from citkid.pipeline import util
+from io import StringIO, BytesIO
+from contextlib import contextmanager
+import builtins
 
 ################################################################################
 ################################### __init__ ###################################
@@ -8,10 +12,10 @@ from citkid.pipeline import dataset as pds
 # __init__, _load_custom_steps, _load_yaml, _convert_yaml_to_steps
 def test_paths_are_normalized(monkeypatch):
     DS = pds.DataSet.__new__(pds.DataSet)
-    # patch subfunctions to avoid file I/O and custom code
-    monkeypatch.setattr(pds.DataSet, "_load_custom_steps", lambda self: ([], []))
-    monkeypatch.setattr(pds.DataSet, "_load_yaml", lambda self, path: {})
-    monkeypatch.setattr(pds.DataSet, "_convert_yaml_to_steps", lambda self, y: {})
+    # patch module-level helper functions to avoid file I/O and custom code
+    monkeypatch.setattr(pds, "_load_custom_steps", lambda custom_path: ([], []))
+    monkeypatch.setattr(pds, "_convert_yaml_to_steps", lambda y, cs=None: {})
+    monkeypatch.setattr(pds, "_load_deps_from_zarr", lambda root: {})
 
     # patch zarr.open_group loading
     fake_root = object()
@@ -21,16 +25,30 @@ def test_paths_are_normalized(monkeypatch):
         return fake_root
     monkeypatch.setattr("zarr.open_group", fake_open_group)
 
+    # avoid opening real files for cal yaml
+    def _safe_open(*args, **kwargs):
+        # mimic builtins.open signature: (file, mode='r', ...)
+        mode = 'r'
+        if len(args) >= 2:
+            mode = args[1]
+        elif 'mode' in kwargs:
+            mode = kwargs['mode']
+        if 'b' in mode:
+            return BytesIO(b"{}")
+        return StringIO("{}")
+    monkeypatch.setattr(builtins, 'open', _safe_open)
+    monkeypatch.setattr("yaml.safe_load", lambda f: {})
+
     # initialize with yaml file (new signature: zarr_path, cal_yaml_path, custom_path)
     DS.__init__("z//out.zarr", "x//y.yaml", "a//b/../c.py")
-    assert DS.custom_path == os.path.normpath("a//b/../c.py")
-    assert DS.cal_yaml_path == os.path.normpath("x//y.yaml")
-    assert DS.zarr_path == os.path.normpath("z//out.zarr")
+    assert DS.custom_path == os.path.abspath("a//b/../c.py")
+    assert DS.cal_yaml_path == os.path.abspath("x//y.yaml")
+    assert DS.zarr_path == os.path.abspath("z//out.zarr")
     assert DS.root == fake_root
 
     # initialize with yml file (order: zarr, cal_yaml, custom)
     DS.__init__("z//out.zarr", "x//y.yml", "a//b/../c.py")
-    assert DS.cal_yaml_path == os.path.normpath("x//y.yml")
+    assert DS.cal_yaml_path == os.path.abspath("x//y.yml")
 
     # initialize without custom path
     DS.__init__("z//out.zarr", "x//y.yml", None)
@@ -43,9 +61,9 @@ def test_paths_are_normalized(monkeypatch):
 ])
 def test_paths_validation(monkeypatch, custom_path, yaml_path, zarr_path):
     DS = pds.DataSet.__new__(pds.DataSet)
-    monkeypatch.setattr(pds.DataSet, "_load_custom_steps", lambda self: ([], []))
-    monkeypatch.setattr(pds.DataSet, "_load_yaml", lambda self, path: {})
-    monkeypatch.setattr(pds.DataSet, "_convert_yaml_to_steps", lambda self, y: {})
+    monkeypatch.setattr(pds, "_load_custom_steps", lambda custom_path: ([], []))
+    monkeypatch.setattr(pds, "_convert_yaml_to_steps", lambda y, cs=None: {})
+    monkeypatch.setattr("yaml.safe_load", lambda f: {})
 
     # patch zarr.open_group loading
     fake_root = object()
@@ -69,7 +87,7 @@ def test_load_custom_steps(tmp_path):
     DS = pds.DataSet.__new__(pds.DataSet)
     DS.custom_path = tmp_path / "custom_steps.py"
 
-    cal_steps, analysis_steps = DS._load_custom_steps()
+    cal_steps, analysis_steps = pds._load_custom_steps(str(DS.custom_path))
 
     assert len(cal_steps) == 1
     assert cal_steps[0].name == "custom1"
@@ -78,7 +96,7 @@ def test_load_custom_steps(tmp_path):
 def test_load_custom_steps_none():
     DS = pds.DataSet.__new__(pds.DataSet)
     DS.custom_path = None 
-    steps = DS._load_custom_steps()
+    steps = pds._load_custom_steps(None)
 
     assert steps == []
 
@@ -89,52 +107,43 @@ def test_default_steps_added(monkeypatch):
 
     default = [Step("a"), Step("b")]
 
-    monkeypatch.setattr(pds.pf, "default_cal_steps", default)
+    monkeypatch.setattr(pds.default_steps, "default_cal_steps", default)
 
     DS = pds.DataSet.__new__(pds.DataSet)
     DS.cal_steps = [Step("a")]  # simulate custom step list
     DS.analysis_steps = []
 
-    for step in pds.pf.default_cal_steps:
+    for step in pds.default_steps.default_cal_steps:
         if step.name not in [s.name for s in DS.cal_steps]:
             DS.cal_steps.append(step)
-    for step in pds.pf.default_analysis_steps:
+    for step in pds.default_steps.default_analysis_steps:
         if step.name not in [s.name for s in DS.analysis_steps]:
             DS.analysis_steps.append(step)
 
     cal_names = [s.name for s in DS.cal_steps]
     assert cal_names == ["a", "b"]
 
-
-def test_load_yaml(tmp_path):
-    p = tmp_path / "config.yaml"
-    p.write_text("x: 1\ny: 2")
-
-    DS = pds.DataSet.__new__(pds.DataSet)
-    DS.cal_yaml_path = p
-
-    data = DS._load_yaml(str(p))
-    assert data == {"x": 1, "y": 2}
-
-
 def test_init_calls_convert(monkeypatch):
     fake_yaml = {"pipeline": ["a", "b"]}
 
     monkeypatch.setattr(
-        pds.DataSet, "_load_custom_steps", lambda self: ([], [])
+        pds, "_load_custom_steps", lambda custom_path: ([], [])
     )
     monkeypatch.setattr(
-        pds.DataSet, "_load_yaml", lambda self, path: fake_yaml
+        pds, "_convert_yaml_to_steps",
+        lambda y, cs=None: {}
     )
     monkeypatch.setattr(
-        pds.DataSet, "_convert_yaml_to_steps",
-        lambda self, y: {}
+        "yaml.safe_load", lambda f: fake_yaml
     )
     monkeypatch.setattr(
-        pds.pf, "default_cal_steps", []
+        pds.default_steps, "default_cal_steps", []
     )
     monkeypatch.setattr(
-        pds.pf, "default_analysis_steps", []
+        pds.default_steps, "default_analysis_steps", []
+    )
+    monkeypatch.setattr(
+        pds, "_load_deps_from_zarr", lambda root: {}
     )
 
     # patch zarr.open_group loading
@@ -144,6 +153,19 @@ def test_init_calls_convert(monkeypatch):
         assert mode == "a"
         return fake_root
     monkeypatch.setattr("zarr.open_group", fake_open_group)
+
+    # avoid opening real files for cal yaml
+    def _safe_open2(*args, **kwargs):
+        mode = 'r'
+        if len(args) >= 2:
+            mode = args[1]
+        elif 'mode' in kwargs:
+            mode = kwargs['mode']
+        data = "pipeline:\n  - a\n  - b\n"
+        if 'b' in mode:
+            return BytesIO(data.encode())
+        return StringIO(data)
+    monkeypatch.setattr(builtins, 'open', _safe_open2)
 
     # new signature: zarr_path, cal_yaml_path, custom_path
     DS = pds.DataSet("out.zarr", "file.yaml", "custom_steps.py")

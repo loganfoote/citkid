@@ -1,113 +1,114 @@
 import numpy as np
-from ..xcal import gain, circle, xcal
-from .dependencies import get_deps, get_most_recent_run
-        
+ 
 ################################################################################
 ############################### Lazy Attribute #################################
 ################################################################################
 class LazyAttr:
-    def __init__(self, DS, name):
+    def __init__(self, DS, name, run_idx):
         """
         Class to represent a lazily-loaded attribute of a DataSet.
+        Provides lazy row-wise indexing that delegates to DataSet for data 
+        fetching.
 
         Parameters:
         DS (DataSet): The DataSet instance this attribute belongs to.
         name (str): The name of the attribute.
+        run_idx (int): The run index corresponding to the version of the 
+            attribute to load when fetching data.
         """
-        for a in ['cal_pl', 'execute_path', 'nres']:
-            if not (DS.has_attr(a) or DS.has_method(a)):
-                raise AttributeError(f"DS must have '{a}' attribute")
+        # Input validation 
         if not isinstance(name, str):
             raise ValueError("name must be a string")
+        run_idx = int(run_idx)
+
+        # store DS and name for later use, and initialize cache and shape
         self.DS = DS
         self.name = name
+        self.run_idx = run_idx
         self._cache = {}        # maps row -> np.ndarray
         self.shape = ()
 
-    def _ensure_loaded(self, rows):
+    def _normalize_key(self, key):
         """
-        Load all rows in 'rows' that are not cached.
-
+        Normalize various key types to a list of row indices.
+        
         Parameters:
-        rows (list of int): List of row indices to ensure are loaded.
+        key (int, slice, list, np.ndarray, tuple): Index or indices to 
+            normalize.
+        
+        Returns:
+        tuple: (rows, return_array, inner_key) where rows is list of ints,
+               return_array is bool, inner_key is None or the sub-indexing key.
         """
-        # Type checks
-        if isinstance(rows, np.ndarray):
-            rows = rows.tolist()
-        if isinstance(rows, list):
-            if not all(isinstance(r, (int, np.integer)) for r in rows):
-                raise ValueError("all rows must be integers") 
+        inner_key = None
+        return_array = True
+        
+        # Handle tuple for fancy indexing like lazy_attr[5, 10:20]
+        if isinstance(key, tuple):
+            row_key = key[0]
+            inner_key = key[1:] if len(key) > 2 else key[1]
+            key = row_key
+        
+        # Convert key to list of rows
+        if isinstance(key, slice):
+            rows = list(range(*key.indices(self.DS.nrows)))
+        elif isinstance(key, (list, np.ndarray)):
+            rows = [int(r) for r in key]
+        elif isinstance(key, (int, np.integer)):
+            rows = [int(key)]
+            return_array = False
         else:
-            if not isinstance(rows, (int, np.integer)):   
-                raise ValueError("row must be an integer")
-            rows = [rows] # wrap single int in list
-
+            raise TypeError(f"Invalid index type: {type(key)}")
+        
+        # Handle negative indices and validate bounds
+        normalized_rows = []
         for r in rows:
-            if not isinstance(r, (int, np.integer)):
-                raise ValueError("all rows must be integers")
-            if not 0 <= r < self.DS.nres:
-                raise ValueError("row index out of bounds")
-
-        # Determine which rows are missing
-        missing = [r for r in rows if r not in self._cache]
-        if not missing:
-            return
-
-        # Generate path and ensure it is valid
-        path = find_pl_path(self.DS.cal_pl, self.name)
-        if path is None:
-            raise AttributeError(f"No processing path for {self.name}")
-
-        # execute_path handles multiple indices at once
-        # return shape: (len(missing), ...)
-        self.DS.execute_path(path, missing)
+            if r < 0:
+                r = self.DS.nrows + r
+            if not 0 <= r < self.DS.nrows:
+                raise IndexError(
+                    f"Row index {r} out of bounds [0, {self.DS.nrows})"
+                    )
+            normalized_rows.append(r)
+        
+        return normalized_rows, return_array, inner_key
 
     def __getitem__(self, key):
         """
-        Get item(s) from the LazyAttr cache, loading from pipeline if needed.
+        Get item(s) from the LazyAttr, delegating to DataSet for fetching.
 
         Parameters:
         key (int, slice, list, tuple): Index or indices to retrieve.
 
         Returns:
-        np.ndarray (N) or (M, N)): Retrieved value(s), where N is the length of 
+        np.ndarray (N,) or (M, N): Retrieved value(s), where N is the length of 
         the data for a single row, and M is the number of rows requested.
         """
-        return_array = True
-        # Allow assignment to one row or multiple rows
-        if isinstance(key, slice):
-            rows = list(range(*key.indices(self.DS.nres)))
-        elif isinstance(key, (list, np.ndarray)):
-            rows = list(key)
-        elif isinstance(key, tuple):
-            row_key, inner_key = key[0], key[1:]
-            if len(inner_key) == 1:
-                inner_key = inner_key[0]
-            return self[row_key][inner_key]
-        else:
-            rows = [key]
-            return_array = False
-
-        # key type checks
-        if not all([isinstance(r, (int, np.integer)) \
-                    for r in rows]):
-            raise ValueError("all rows must be integers")
-        for idx, r in enumerate(rows):
-            if r < 0:
-                rows[idx] = self.DS.nres + r
-            if not 0 <= rows[idx] < self.DS.nres:
-                raise ValueError(f"row index {r} out of bounds")
-                
-        # else: # Otherwise, load data into the cache, and return it from the cache.
-        self._ensure_loaded(rows)
-
-        # Fetch data from cache
+        rows, return_array, inner_key = self._normalize_key(key)
+        
+        # Handle sub-indexing (e.g., lazy_attr[5, 10:20])
+        if inner_key is not None:
+            return self[rows[0]][inner_key]
+        
+        # Check cache first, fetch missing rows from DataSet
+        missing = [r for r in rows if r not in self._cache]
+        if missing:
+            # Delegate to DataSet to fetch the missing rows
+            fetched_data = self.DS._fetch_rows(self.name, self.run_idx, missing)
+            # Update cache with fetched data
+            for r, data in zip(missing, fetched_data):
+                self._cache[r] = data
+            # Update shape if first time loading
+            if self.shape == () and len(fetched_data) > 0:
+                self.shape = (self.DS.nrows, *fetched_data[0].shape)
+        
+        # Retrieve from cache
         out = [self._cache[r] for r in rows]
-
+        
         if not return_array:
             return out[0]  # single row, return 1D array
         else:
-            return np.stack(out, axis=0)  # preserve requested shape
+            return np.stack(out, axis=0)  # multiple rows, stack into 2D array
         
     def __setitem__(self, key, value):
         """
@@ -119,7 +120,7 @@ class LazyAttr:
         """
         # Allow assignment to one row or multiple rows
         if isinstance(key, slice):
-            rows = list(range(*key.indices(self.DS.nres)))
+            rows = list(range(*key.indices(self.DS.nrows)))
         elif isinstance(key, (list, np.ndarray)):
             rows = list(key)
         elif isinstance(key, tuple):
@@ -140,8 +141,8 @@ class LazyAttr:
             raise ValueError("all rows must be integers")
         for idx, r in enumerate(rows):
             if r < 0:
-                rows[idx] = self.DS.nres + r
-            if not 0 <= rows[idx] < self.DS.nres:
+                rows[idx] = self.DS.nrows + r
+            if not 0 <= rows[idx] < self.DS.nrows:
                 raise ValueError(f"row index {r} out of bounds")
 
         # Ensure value is iterable and matches length of rows
@@ -157,12 +158,31 @@ class LazyAttr:
             
         # Update the shape of the LazyAttr if needed.
         if self.shape == ():
-            self.shape = (self.DS.nres, *value[0].shape)
+            first_val = value[0]
+            if hasattr(first_val, 'shape'):
+                self.shape = (self.DS.nrows, *first_val.shape)
+            else:
+                # Scalar value, shape is just (nrows,)
+                self.shape = (self.DS.nrows,)
+
+    def __len__(self):
+        """
+        Return the number of rows (nrows) for this attribute.
+        """
+        return self.DS.nrows
 
     def __repr__(self):
+        """
+        Return a concise string representation of the LazyAttr, showing its name
+        and number of cached rows.
+        """
         return f"LazyAttr({self.name}, {len(self._cache.keys()):d} cached rows)"
     
     def __str__(self):
+        """
+        Return a detailed string representation of the LazyAttr, showing its 
+        name and the specific cached rows.
+        """
         s = f"Lazy Attribute: {self.name}\n"
         s += f"\tCached Rows: {sorted(self._cache.keys())}"
         return s
@@ -171,8 +191,9 @@ class LazyAttr:
 #################################### Steps #####################################
 ################################################################################
 class plStep:
-    def __init__(self, name, func, param_names, return_names,
-                 func_type = "per-row"):
+    def __init__(
+            self, name, func, param_names, return_names, func_type = "per-row"
+            ):
         """
         Class to represent a step in the analysis or calibration pipeline.
 
@@ -215,199 +236,134 @@ class plStep:
         self.return_names = return_names[:]
         self.func_type = func_type
         
-    def run(self, DS, data_idx = None):
+    def _run(self, params, param_is_global):
         """
-        Run the pipeline step on the given dataset.
+        Run the pipeline step with the given parameters, and return the output
+        as a dictionary mapping return_names to values.
 
-        Parameters:
-        DS (.dataset.DataSet): The dataset to operate on.
-        data_idx (int or list of int, optional): Data index or indices to
-            process. For func_type == "global" or "global-res", data_idx is
-            ignored. For func_type == "vectorized", the function is called on
-            data indexed by data_idx. For func_type == "per-row", the function
-            is called separately for each data index in data_idx if data_idx is
-            a list. If data_idx is None, all indices (0 to DS.nres - 1) are
-            processed.
+        Parameters: 
+        params (list): List of parameter values to pass to the function, in the
+            same order as self.param_names. For func_type == "per-row" or 
+            "vectorized", each parameter can be either a global value or an 
+            array of values corresponding to each value in data_idx, as 
+            indicated by param_is_global. 
+        param_is_global (list of bool): List of booleans indicating whether each
+            parameter is global (True) or per-row (False). 
 
         Returns:
-        None
-        """
-        if self.func_type in ["per-row", "vectorized"]:
-            if not DS.has_attr('nres'):
-                raise ValueError("DS must have 'nres' attribute")
-            if data_idx is None:
-                data_idx = list(range(DS.nres))
-            else:
-                data_idx = np.atleast_1d(data_idx)
-        elif self.func_type in ['global', 'global-res']:
-            data_idx = None
-            # if data_idx is not None:
-            #     m = "data_idx must be None for global or global-res functions."
-            #     raise ValueError(m)         
+        dict: Dictionary mapping return_names to their corresponding output 
+            values.
+        """ 
+        ### Input validation 
+        if not isinstance(params, list):
+            raise ValueError("params must be a list")
+        if not isinstance(param_is_global, list):
+            raise ValueError("param_is_global must be a list")
+        if len(params) != len(self.param_names):
+            raise ValueError("Length of params does not match number of "
+                             "parameter names.")
+        if len(param_is_global) != len(self.param_names):
+            raise ValueError("Length of param_is_global does not match number "
+                             "of parameter names.")
+        if not all(isinstance(pg, bool) for pg in param_is_global):
+            raise ValueError(
+                "All elements of param_is_global must be booleans."
+                )
         
-        # --- 1. Collect parameters ---
-        params = []
-        param_is_global = []
-        for p in self.param_names:
-            if p == 'data_idx':
-                params.append(data_idx)
-                param_is_global.append(False)
-                continue
+        # Determine number of rows for per-row/vectorized functions
+        if self.func_type in ['per-row', 'vectorized']:
+            non_global_lengths = []
+            for p, is_global in zip(params, param_is_global):
+                if not is_global:
+                    non_global_lengths.append(len(p))
             
-            val = getattr(DS, p)
-            param_is_global.append(DS.global_cache[p])
-            # Only slice input for per-row or vectorized functions
-            if self.func_type in ["per-row", "vectorized"]:
-                if not param_is_global[-1]:
-                    val = val[data_idx]
-            params.append(val)
-
-        # --- 2. Execute function based on func_type ---
-        if self.func_type == "global" or self.func_type == "global-res":
-            # No difference here, but kept for clarity
+            if not non_global_lengths:
+                raise ValueError(
+                    f"At least one parameter must be non-global for "
+                    f"func_type '{self.func_type}'."
+                )
+            
+            nrows = non_global_lengths[0]
+            if any(n != nrows for n in non_global_lengths[1:]):
+                raise ValueError("All non-global parameters must have the same "
+                                 "number of rows.")
+        
+        # For global/global-res functions, all params must be global
+        if self.func_type in ['global', 'global-res']:
+            if not all(param_is_global):
+                raise ValueError(f"All parameters must be global for func_type "
+                                 f"'{self.func_type}'.")
+            
+        ### Execute function according to func_type
+        if self.func_type in ["global", "global-res", "vectorized"]:
+            # Execute function once 
             results = self.func(*params)
             if not isinstance(results, tuple):
                 results = (results,)
-            if len(self.return_names) != len(results):
-                raise ValueError("Function return length does not match "
-                                 "number of return names.")
-                
-            for name, val in zip(self.return_names, results):
-                setattr(DS, name, val)  # store as normal attribute, no LazyAttr
-                DS.global_cache[name] = self.func_type == 'global'
-                
-        elif self.func_type == "vectorized":
-            results = self.func(*params)
-            if not isinstance(results, tuple):
-                results = (results,)
-            if len(self.return_names) != len(results):
-                raise ValueError("Function return length does not match "
-                                 "number of return names.")
-            for name, val in zip(self.return_names, results):
-                if not DS.has_attr(name):
-                    setattr(DS, name, LazyAttr(DS, name))
-                    DS.global_cache[name] = False
-                getattr(DS, name)[data_idx] = val
 
-        elif self.func_type == "per-row":
-            results_per_row = [[] for _ in self.return_names]
+            # For vectorized, confirm that output length matches expected length
+            if self.func_type == 'vectorized':
+                for res in results:
+                    if len(res) != nrows:
+                        raise ValueError("Vectorized function output length "
+                                         "does not match parameter length.")
 
-            # params are already sliced to match data_idx
-            for local_idx in range(len(data_idx)):
-                args_i = []
+        else: # per-row
+            results = [[] for _ in self.return_names]
+
+            # execute function separately for each data index
+            for local_idx in range(nrows):
+                # collect local parameters
+                params_i = []
                 for p, is_global in zip(params, param_is_global):
+                    # only index into p for non-global parameters
                     if not is_global:
                         p = p[local_idx]
-                    args_i.append(p)
-                out_i = self.func(*args_i)
-                if not isinstance(out_i, tuple):
-                    out_i = (out_i,)
-                for r, v in enumerate(out_i):
-                    results_per_row[r].append(v)
+                    params_i.append(p)
+                # execute function 
+                results_i = self.func(*params_i)
+                # collect results 
+                if not isinstance(results_i, tuple):
+                    results_i = (results_i,)
+                for r, v in enumerate(results_i):
+                    results[r].append(v)
+            results = tuple([np.array(r) for r in results])
 
-            # Assign to LazyAttr
-            if len(self.return_names) != len(results_per_row):
-                raise ValueError("Function return length does not match "
-                                 "number of return names.")
-            for name, val in zip(self.return_names, results_per_row):
-                if not DS.has_attr(name):
-                    setattr(DS, name, LazyAttr(DS, name))
-                    DS.global_cache[name] = False
-                getattr(DS, name)[data_idx] = val
-                
-        DS.update_deps_map_after_run(self.param_names, self.return_names, data_idx)
-
+        # Confirm that output length matches return_names length, and assign 
+        # to output dict
+        if len(self.return_names) != len(results):
+            raise ValueError("Function return length does not match "
+                             "number of return names.")
+        
+        out = {}
+        for name, val in zip(self.return_names, results):
+            out[name] = val
+        return out
+    
     def __repr__(self):
+        """
+        Return a concise string representation of the pipeline step.
+        
+        Returns:
+        str: A single-line string containing the step name and function info.
+        """
         s = f"Pipeline Step: {self.name}"
         s += f", Function: {self.func.__module__}.{self.func.__name__}"
         return s
     
     def __str__(self):
+        """
+        Return a detailed string representation of the pipeline step.
+        
+        Returns:
+        str: A multi-line string with step name, function, parameters, and type.
+        """
         s = f"Pipeline Step: {self.name}"
         s += f"\n\tFunction: {self.func.__module__}.{self.func.__name__}"
         s += f"\n\tInput Parameters: {self.param_names}"
         s += f"\n\tOutput Parameters: {self.return_names}"
         s += f"\n\tFunction Type: {self.func_type}"
         return s
-
-################################ Default steps #################################
-# name, function, input parameter names, output parameter names, 
-# save, func_vectorized
-default_cal_steps =\
-(# calibration steps
- ('rmv_gain_f', gain.remove_gain, 
-  ['ff', 'zf', 'p_amp', 'p_phase'], ['zf_rmv'], 'per-row'),
-
- ('rmv_gain_t', gain.remove_gain, 
-  ['ft', 'zt', 'p_amp', 'p_phase'], ['zt_rmv'], 'per-row'),
-
- ('center_f', circle.cent_rot_s21, 
-  ['zf_rmv', 'circ_origin', 'theta_phase_offset'], ['zf_cent'], 'per-row'),
-
- ('center_t', circle.cent_rot_s21, 
-  ['zt_rmv', 'circ_origin', 'theta_phase_offset'], ['zt_cent'], 'per-row'),
-
- ('get_thetaf', lambda z: circle.convert_to_theta(z, unwrap = True), 
-  ['zf_cent'], ['thetaf'], 'per-row'),
-
- ('get_thetat', lambda z: circle.convert_to_theta(z, unwrap = False), 
-  ['zt_cent'], ['thetat'], 'per-row'),
-
-  ('cut_xf', lambda x, t, mask: (x[mask], t[mask]), 
-  ['xf', 'thetaf', 'xcal_mask'], ['xf_cut', 'thetaf_cut'], 'per-row'),
-
- ('get_xf', lambda ff, ft: 1 - ff / ft, 
-  ['ff', 'ft'], ['xf'], 'per-row'),
-
- ('get_xt', np.polyval, 
-  [ 'poly_x', 'thetat'], ['xt'], 'per-row'),
- # extra steps
- ('get_At', circle.convert_to_A, 
-  ['zt_cent'], ['At'], 'per-row'),
- ('get_sparper', circle.get_spar_sper, 
-  ['thetat', 'At', 'circ_radius', 'dt', 'sparper_get_freqs'], 
-  ['spar', 'sper'], 'per-row'),
-  
-)
-default_analysis_steps =\
-(# analysis steps
- ('make_fr_spans', gain.make_fr_spans, 
-  ['fres_all', 'qres_all'], ['fr_spans'], 'global'),
-
- ('fit_gain', gain.fit_gain, 
-  ['fg', 'zg', 'fr_spans'], ['p_amp', 'p_phase', 'gain_mask'], 'per-row'),
-
- ('fit_iq_circle', circle.fit_iq_circle, 
-  ['zf_rmv', 'idx_circfit'], ['circ_origin', 'circ_radius'], 'per-row'),
-
- ('get_theta_phase_offset', circle.get_theta_phase_offset, 
-  ['zt_rmv', 'circ_origin'], ['theta_phase_offset'], 'per-row'),
-
- ('get_xcal_mask', xcal.get_xcal_mask,
-  ['ff', 'thetaf', 'thetat', 'xcal_idx0_offset', 'xcal_idx1_offset', 
-   'xcal_std_cutoff'], ['xcal_mask'], 'per-row'),
-
- ('fit_x_theta', np.polyfit, 
-  ['thetaf_cut', 'xf_cut', 'poly_x_deg'], ['poly_x'], 'per-row'),
-  # This will probably be concatenated with 'cut_xf' and take the mask as input
-)
-
-
-
-
-default_cal_steps = [plStep(*cs) for cs in default_cal_steps]
-default_analysis_steps = [plStep(*ans) for ans in default_analysis_steps]
-
-
-# ('rmv_cm_offres', corr.remove_cm_complex, 
-# ['zt_rmv', 'aI', 'aQ', 'AI', 'AQ', 'cm_offres_idx', 'theta_cm_offres'],
-# ['zt_cm_rmv']),
-
-# ('calc_cm_offres', corr.calc_cm_complex, 
-# ['zt_rmv', 'theta_cm_offres', 'N_comp_offres', 'N_iter_offres', 'dt', 
-# 'lowpass_params_offres', 'highpass_params_offres', 'verbose'],
-# ['aI', 'aQ', 'AI', 'AQ', 'sigI_iter', 'sigQ_iter', 'aI_full', 'aQ_full', 
-# 'theta_cm_offres']),
 
 ################################################################################
 #################################### Paths #####################################
@@ -533,12 +489,14 @@ def find_pl_path(tree, return_name):
                 return out
     return None
 
-def check_pl_tree_structure(tree):
+def check_pl_tree_structure(tree, cal = False):
     """
     Recursively check that pipeline tree structure is valid.
 
     Parameters:
     tree (dict): Pipeline tree node to check.
+    cal (bool): If True, 'params' key is not allowed. If False, 'params' 
+        key is allowed. Default is False.
 
     Raises:
     ValueError: If the tree structure is invalid.
@@ -564,7 +522,7 @@ def check_pl_tree_structure(tree):
             if type(val) != dict or 'task' not in val.keys():
                 m = 'Pipeline tree stepnode must have a "task" key.'
                 raise ValueError(m)
-            check_pl_tree_structure(val)
+            check_pl_tree_structure(val, cal=cal)
 
     # Otherwise keys must all be strings
     elif any([k == str for k in key_types]):
@@ -602,9 +560,36 @@ def check_pl_tree_structure(tree):
                 m = f"Pipeline tree <delete_input: {val}> is not a valid list"
                 m += " of input names or 'all'."
                 raise ValueError(m)
+        
+        # Check if params key is present, and corresponds to valid dict
+        if 'params' in keys:
+            if cal:
+                m = 'Pipeline tree "params" key is not allowed for '
+                m += 'calibration pipelines.'
+                raise ValueError(m)
+            if 'task' not in keys:
+                m = 'Pipeline tree "params" key requires '
+                m += 'a corresponding "task" key.'
+                raise ValueError(m)
+            val = tree['params']
+            if not isinstance(val, dict):
+                m = 'Pipeline tree "params" value must be a dict.'
+                raise ValueError(m)
+            for param_name, param_val in val.items():
+                if not isinstance(param_name, str):
+                    m = 'Pipeline tree "params" keys must be strings.'
+                    raise ValueError(m)
+                # Validate that param_val is a simple type 
+                # (str, bool, float, int, None)
+                allowed_types = (str, bool, float, int, type(None))
+                if not isinstance(param_val, allowed_types):
+                    m = f'Pipeline tree "params" value for "{param_name}" '
+                    m += f'must be a simple type (str, bool, float, int, None), '
+                    m += f'got {type(param_val).__name__}.'
+                    raise ValueError(m)
             
         # Otherwise, key should be <>_STEPS sequence 
-        checked_keys = ['task', 'delete_input']
+        checked_keys = ['task', 'delete_input', 'params']
         for k in checked_keys:
             if k in keys:
                 keys.remove(k)
@@ -614,8 +599,11 @@ def check_pl_tree_structure(tree):
                 m += f' or end with "_STEPS". '
                 m += f'Found invalid key: {key}'
                 raise ValueError(m)
-            check_pl_tree_structure(tree[key])
+            check_pl_tree_structure(tree[key], cal=cal)
 
+################################################################################ 
+###### Helper functions for printing paths and cal_pl in readable formats ######
+################################################################################
 def print_cal_pl(cal_pl, indent = 0):
     """
     Print calibration dictionary in a readable format.
