@@ -11,95 +11,6 @@ from . import framework as pf
 from . import util 
 from . import default_steps
 
-class Analyzer:
-    def __init__(self, DS, analysis_yaml_path = None):
-        raise NotImplementedError(
-        "This function is not fully implemented yet and may need to be "
-        "refactored."
-        )
-        if analysis_yaml_path is not None:
-            self.analysis_yaml_path = os.path.abspath(analysis_yaml_path)
-        else:
-            self.analysis_yaml_path = None
-            return 
-
-        # analysis_yaml_path (if provided) must be .yaml or .yml
-        if self.analysis_yaml_path is not None:
-            is_yaml = self.analysis_yaml_path.endswith('.yaml') \
-                or self.analysis_yaml_path.endswith('.yml')
-            if not is_yaml:
-                raise ValueError(
-                    "analysis_yaml_path must point to a .yaml or .yml file."
-                )
-            
-        # Load analysis YAML and user-specified analysis parameters
-        with open(self.analysis_yaml_path, 'r') as f:
-            yaml_dict = yaml.safe_load(f)
-        self.analysis_pl = _convert_yaml_to_steps(
-            yaml_dict, self.analysis_steps
-            )
-        pf.check_pl_tree_structure(self.analysis_pl, cal = False)
-
-        # Collect data from analysis YAML
-        self.analysis_user_params = _collect_user_params(yaml_dict)
-        self._add_user_params_to_cache_and_deps(self.analysis_user_params)
-
-    def run_analysis_step(self, name, data_idx=None, save_to_zarr=True):
-        """
-        Run an analysis step and save the output to zarr.
-        
-        Parameters:
-        name (str): The name of the analysis step.
-        data_idx (int or array-like): Data index (or indices) to
-            run the step on.
-        save_to_zarr (bool): If True, save the outputs to the
-            zarr store at Analyzer.dataset.root.
-
-        Returns:
-        None
-        """
-        raise NotImplementedError(
-        "This function is not fully implemented yet and may need to be "
-        "refactored."
-        )
-        x = [d for d in self.analysis_steps if d.name == name]
-        if not len(x):
-            m = f"Step '{name}' not found in available analysis steps."
-            raise ValueError(m)
-        
-        step = x[0]
-        step.run(self, data_idx)
-        
-        if save_to_zarr:
-                        
-            for return_name in step.return_names:
-                value = getattr(self, return_name)             
-                    
-                self.write_data(return_name, step,
-                                 value, data_idx) 
-
-    def _add_user_params_to_cache_and_deps(self, user_params):
-        """
-        Add user-specified parameters to the global dependencies map,
-        and to the global cache as 'global'-type attributes.
-        
-        Parameters:
-        user_params (dictionary): Keys are function names, and values are 
-            dictionaries of parameter names and their values.
-        
-        Returns:
-        None
-        """
-        raise NotImplementedError(
-        "This function is not fully implemented yet and may need to be "
-        "refactored."
-        )
-        if 1 not in self.deps_map['global']:
-            self.deps_map['global'][1] = {}
-        for d in user_params.values():
-            for param_name in d.keys():
-                self.global_cache[param_name] = True
-                self.deps_map['global'][1][param_name] = {}
 
 class DataSet:
     # Reserved attribute names - computed dynamically from class attributes
@@ -147,17 +58,13 @@ class DataSet:
             )
 
         ### Load steps from custom_steps.py
-        self.cal_steps, self.analysis_steps = _load_custom_steps(
+        self.cal_steps = _load_custom_steps(
             self.custom_path
             )
         # Add default calibration steps if not already present
         for step in default_steps.default_cal_steps:
             if step.name not in [s.name for s in self.cal_steps]:
                 self.cal_steps.append(step)
-        # Add default analysis steps if not already present
-        for step in default_steps.default_analysis_steps:
-            if step.name not in [s.name for s in self.analysis_steps]:
-                self.analysis_steps.append(step)
                 
         # Load calibration YAML file and convert it to calibration pipeline
         with open(self.cal_yaml_path, 'r') as f:
@@ -167,12 +74,9 @@ class DataSet:
         # confirm that the cal_pl structure is valid
         pf.check_pl_tree_structure(self.cal_pl, cal = True) 
 
-        # Load deps_map from zarr - also validates zarr structure
-        self.deps_maps = _load_deps_from_zarr(self.root)
-
-        # start is_global cache, which maps param names to boolean indicating 
-        # whether or not the parameter is global 
-        self._is_global_cache = {}
+        # Load deps_map and is_global_cache from zarr - also validates zarr 
+        # structure
+        self.deps_maps, self._is_global_cache = _load_deps_from_zarr(self.root)
 
         # start memory_cache, where data is stored referenced to run_idx 
         self._memory_cache = {}
@@ -180,246 +84,28 @@ class DataSet:
         # start lazy_collections, which tracks LazyAttrCollections for per-row 
         # params
         self._lazy_collections = {}
-
-    def _get_reserved_attrs(self):
-        """Get all non-private DataSet attributes as reserved names.
         
-        This dynamically computes the set of attribute names that cannot be used
-        as pipeline parameter names. The result is cached at the class level.
-        
-        Returns:
-            set: Set of reserved attribute names.
-        """
-        if DataSet._RESERVED_ATTRS is None:
-            # Get all non-private attributes from DataSet class
-            DataSet._RESERVED_ATTRS = {
-                name for name in dir(type(self)) 
-                if not name.startswith('_')
-            }
-        return DataSet._RESERVED_ATTRS
-
-    def _execute_step(self, step, data_idx=None, enforced_max_runs={}):
-        """
-        Execute a single pipeline step, storing results and dependencies in 
-        memory.
-        
-        All input parameters must already exist in memory or on disk - this 
-        method will NOT execute additional steps to generate missing inputs.
-        
-        Parameters:
-        step (plStep): The pipeline step to execute.
-        data_idx (int, array-like, or None): Data indices to process. Required
-            for 'per-row' and 'vectorized' steps, must be None for 'global' and 
-            'global-res' steps.
-        enforced_max_runs (dict): Optional dict mapping parameter names to 
-            maximum run indices for dependency resolution.
-        
-        Returns:
-        None (results are stored in self._memory_cache)
-        
-        Raises:
-        TypeError: If step is not a plStep instance.
-        ValueError: If required inputs don't exist or data_idx is invalid.
-        """
-        # Input validation
-        if not isinstance(step, pf.plStep):
-            raise TypeError("step must be a plStep instance")
-        if not isinstance(enforced_max_runs, dict):
-            raise TypeError("enforced_max_runs must be a dictionary")
-        
-        # Handle data_idx based on function type
-        if step.func_type in ['global', 'global-res']:
-            if data_idx is not None:
-                raise ValueError("data_idx must be None for global functions")
-            data_idx = None 
-        else:
-            if data_idx is None:
-                raise ValueError(
-                    f"data_idx required for {step.func_type} functions"
-                )
-            data_idx = np.atleast_1d(np.asarray(data_idx, dtype=np.int32))
-
-        # global and global-res have only global parameters
-        if step.func_type in ['global', 'global-res']:
-            # Determine run_idx deps for outputs
-            # all global inputs -> single deps_map and run_idx per return name
-            if 'global' not in self.deps_maps:
-                self.deps_maps['global'] = {}
-            deps_map = self.deps_maps['global']
-            run_idxs = [get_most_recent_run(name, deps_map) + 1 
-                        for name in step.return_names]
-            # run that doesn't exist yet should be 1 
-            run_idxs = [1 if r == 0 else r for r in run_idxs]
-            deps = get_deps(
-                [p for p in step.param_names if p != 'data_idx'], 
-                deps_map, 
-                enforced_max_runs=enforced_max_runs
+        # Validate that nrows can be produced and is a global parameter
+        nrows_path = pf.find_pl_path(self.cal_pl, 'nrows')
+        if nrows_path is None:
+            raise ValueError(
+                "Calibration pipeline must be able to produce 'nrows' "
+                "as a global parameter. No step found that produces 'nrows'."
             )
-
-            # Collect parameters 
-            params = []
-            param_is_global = []
-            for p in step.param_names:
-                # Special handling for 'data_idx' parameter
-                if p == 'data_idx':
-                    params.append(None)
-                    param_is_global.append(True)  # Treat as global-like
-                    continue
-                
-                val = self._get_existing(p, deps[p], data_idx=None)
-                param_is_global.append(self._is_global_cache[p])
-                params.append(val)
-
-            # Run step
-            out = step._run(params, param_is_global)
-
-            # Store outputs in memory cache, each with its own run_idx
-            for (name, val), run_idx in zip(out.items(), run_idxs):
-                # Check for reserved attribute name collision
-                reserved = self._get_reserved_attrs()
-                if name in reserved:
-                    raise ValueError(
-                        f"Cannot create parameter '{name}' - this is a reserved"
-                        f" DataSet attribute name. Reserved names: "
-                        f"{sorted(reserved)}"
-                    )
-                
-                # Ensure run_idx exists in memory cache
-                if run_idx not in self._memory_cache:
-                    self._memory_cache[run_idx] = {}
-                    
-                # For global-res, wrap outputs in LazyAttr
-                if step.func_type == 'global-res':
-                    # Create LazyAttr if needed, otherwise reuse existing
-                    if name not in self._memory_cache[run_idx]:
-                        self._memory_cache[run_idx][name] = pf.LazyAttr(
-                            self, name, run_idx
-                        )
-                        
-                        # Register with LazyAttrCollection 
-                        # (only on first creation)
-                        if name not in self._lazy_collections:
-                            self._lazy_collections[name] =pf.LazyAttrCollection(
-                                self, name
-                                )
-                        self._lazy_collections[name].add_run(
-                            run_idx, 
-                            self._memory_cache[run_idx][name]
-                        )
-                    
-                    # Store data in LazyAttr cache
-                    for i, v in enumerate(val):
-                        self._memory_cache[run_idx][name]._cache[i] = v
-                    
-                    # Store dependencies for all rows
-                    for i in range(self.nrows):
-                        if i not in self.deps_maps:
-                            self.deps_maps[i] = {}
-                        if run_idx not in self.deps_maps[i]:
-                            self.deps_maps[i][run_idx] = {}
-                        self.deps_maps[i][run_idx][name] = deps
-                    self._is_global_cache[name] = False
-                else:
-                    # For global, assign parameter directly
-                    # Check for overwrite (global params should only be 
-                    # created once)
-                    if name in self._memory_cache[run_idx]:
-                        raise ValueError(
-                            f"Attempting to overwrite '{name}' at run {run_idx}"
-                        )
-                    self._memory_cache[run_idx][name] = val
-                    if run_idx not in self.deps_maps['global']:
-                        self.deps_maps['global'][run_idx] = {}
-                    self.deps_maps['global'][run_idx][name] = deps
-                    self._is_global_cache[name] = True
-
-        else:  # vectorized or per-row 
-            # For vectorized/per-row, need to find run-idx for each data_idx 
-            run_deps = []  # (run_idxs_tuple, deps) for each data_idx
-            for di in data_idx:
-                deps_map = self.deps_maps[di]
-                run_idxs = [get_most_recent_run(name, deps_map) + 1 
-                                  for name in step.return_names]
-                # run that doesn't exist yet should be 1
-                run_idxs = tuple([1 if r == 0 else r for r in run_idxs])
-                deps = get_deps(
-                    [p for p in step.param_names if p != 'data_idx'], 
-                    deps_map, 
-                    enforced_max_runs=enforced_max_runs
-                )
-                run_deps.append((run_idxs, deps))
-            
-            # Group by unique run_idxs/deps combinations
-            unique_run_deps, indices_groups = util.group_unique_tuples(run_deps)
-            
-            for (run_idxs, deps), local_idx in zip(
-                unique_run_deps, indices_groups
-                ):
-                # Collect parameters 
-                params = []
-                param_is_global = []
-                for p in step.param_names:
-                    # Special handling for 'data_idx' parameter
-                    if p == 'data_idx':
-                        params.append(data_idx[local_idx])
-                        param_is_global.append(False)
-                        continue
-                    
-                    param_is_global.append(self._is_global_cache[p])
-                    if param_is_global[-1]:
-                        val = self._get_existing(p, deps[p], data_idx=None)
-                    else:
-                        val = self._get_existing(
-                            p, deps[p], data_idx=data_idx[local_idx]
-                        )
-                    params.append(val)
-                
-                # Run step 
-                out = step._run(params, param_is_global)
-
-                # Store outputs in memory cache, each with its own run_idx
-                for (name, val), run_idx in zip(out.items(), run_idxs):
-                    # Check for reserved attribute name collision
-                    reserved = self._get_reserved_attrs()
-                    if name in reserved:
-                        raise ValueError(
-                            f"Cannot create parameter '{name}' - this is a "
-                            f"reserved DataSet attribute name. Reserved names: "
-                            f"{sorted(reserved)}"
-                        )
-                    
-                    # Ensure run_idx exists in memory cache
-                    if run_idx not in self._memory_cache:
-                        self._memory_cache[run_idx] = {}
-                    
-                    # Create LazyAttr if needed
-                    if name not in self._memory_cache[run_idx]:
-                        self._memory_cache[run_idx][name] = pf.LazyAttr(
-                            self, name, run_idx
-                        )
-                        
-                        # Register with LazyAttrCollection
-                        if name not in self._lazy_collections:
-                            self._lazy_collections[name]= pf.LazyAttrCollection(
-                                self, name
-                                ) 
-                        if name not in self._lazy_collections:
-                            self._lazy_collections[name].add_run(
-                                run_idx, 
-                                self._memory_cache[run_idx][name]
-                            )
-                    
-                    # Store data in LazyAttr cache
-                    for idx, v in zip(data_idx[local_idx], val):
-                        self._memory_cache[run_idx][name]._cache[int(idx)] = v
-                    
-                    # Store dependencies for each data_idx
-                    for di in data_idx[local_idx]:
-                        if run_idx not in self.deps_maps[di]:
-                            self.deps_maps[di][run_idx] = {}
-                        self.deps_maps[di][run_idx][name] = deps
-                    
-                    self._is_global_cache[name] = False
+        # Check that the step producing nrows is global
+        nrows_step = nrows_path[-1]  # Last step in path produces nrows
+        if nrows_step.func_type not in ['global', 'global-res']:
+            raise ValueError(
+                f"Parameter 'nrows' must be produced by a global or global-res "
+                f"step, but is produced by step '{nrows_step.name}' with "
+                f"func_type '{nrows_step.func_type}'"
+            )
+        if nrows_step.func_type == 'global-res':
+            raise ValueError(
+                "Parameter 'nrows' must be produced by a 'global' step, not "
+                "'global-res'. nrows should be a single integer value, not a "
+                "per-row array."
+            )
 
     def __getattr__(self, name):
         """
@@ -547,582 +233,6 @@ class DataSet:
                 self._lazy_collections[name] = pf.LazyAttrCollection(self, name)
             return self._lazy_collections[name]
 
-    def _is_in_memory(self, name, run_idx, data_idx=None):
-        """
-        Check if data exists in memory cache.
-        
-        Parameters:
-        name (str): The parameter name to check.
-        run_idx (int): The run index to check.
-        data_idx (int, array-like, or None): The data index/indices to check 
-            for per-row data. None for global data.
-        
-        Returns:
-        bool: True if data exists in memory cache, False otherwise.
-        """
-        # Input validation
-        if not isinstance(name, str):
-            raise TypeError("name must be a string")
-        run_idx = int(run_idx)
-        if data_idx is not None:
-            data_idx = np.atleast_1d(np.asarray(data_idx, dtype = np.int32))
-
-        # Check if run exists in cache
-        if run_idx not in self._memory_cache:
-            return False
-        
-        # Check if name exists in this run
-        if name not in self._memory_cache[run_idx]:
-            return False
-        
-        # Check if name is known to be global
-        if name not in self._is_global_cache:
-            # If not yet tracked, cannot determine - assume not in memory
-            return False
-        
-        # For global data, just check existence
-        if self._is_global_cache[name]:
-            return True
-        
-        # For per-row data, check if requested rows are cached in LazyAttr
-        if data_idx is None:
-            # Requesting per-row data without specifying rows is ambiguous
-            raise ValueError(
-                f"data_idx required for per-row parameter '{name}'"
-            )
-        
-        lazy_attr = self._memory_cache[run_idx][name]
-        if not isinstance(lazy_attr, pf.LazyAttr):
-            raise TypeError(
-                f"Expected LazyAttr for per-row parameter '{name}', "
-                f"got {type(lazy_attr)}"
-            )
-        
-        return np.all(np.isin(data_idx, list(lazy_attr._cache.keys())))
-    
-    def _is_in_zarr(self, name, run_idx, data_idx=None):
-        """
-        Check if data exists in zarr file on disk.
-        
-        Parameters:
-        name (str): The parameter name to check.
-        run_idx (int): The run index to check.
-        data_idx (int, array-like, or None): The data index/indices to check 
-            for per-row data. None for global data.
-        
-        Returns:
-        bool: True if data exists in zarr file, False otherwise.
-        """
-        # Check if root exists (important for tests that create minimal 
-        # DS objects)
-        if 'root' not in self.__dict__:
-            return False
-        if self.root is None:
-            return False
-        
-        # Input validation
-        if not isinstance(name, str):
-            raise TypeError("name must be a string")
-        run_idx = int(run_idx)
-        if data_idx is not None:
-            data_idx = np.atleast_1d(np.asarray(data_idx, dtype = np.int32))
-        
-        # Check if run group exists
-        run_str = f'run{run_idx:d}'
-        if run_str not in self.root:
-            return False
-        
-        run_grp = self.root[run_str]
-        
-        # Check if parameter exists in this run
-        if name not in run_grp:
-            return False
-        
-        # Check if it's global data
-        if 'global' not in run_grp[name].attrs:
-            # Missing metadata, assume False
-            return False
-        
-        is_global = run_grp[name].attrs['global']
-        
-        if is_global:
-            return True
-        
-        # For per-row data, check if requested rows exist
-        if data_idx is None:
-            raise ValueError(
-                f"data_idx required for per-row parameter '{name}'"
-            )
-        
-        if 'row_exists' not in run_grp[name]:
-            # Missing row tracking, cannot verify
-            return False
-        
-        return np.all(np.isin(data_idx, run_grp[name]['row_exists'][...]))
-    
-    def _get_existing(self, name, run_idx, data_idx = None):
-        """
-        Get data that already exists in memory or on disk.
-        Does NOT execute pipeline steps - raises error if data requires 
-        computation.
-        
-        This is the "safe" access method that ensures no side effects from
-        pipeline execution during dependency resolution.
-        
-        Parameters:
-        name (str): The parameter name to retrieve.
-        run_idx (int): The run index to retrieve.
-        data_idx (int, array-like, or None): The data index/indices to retrieve
-            for per-row data. None for global data.
-        
-        Returns:
-        np.ndarray or scalar: The requested data from memory or disk.
-        
-        Raises:
-        ValueError: If data does not exist and cannot be retrieved without 
-            computation.
-        TypeError: If input types are invalid.
-        """
-        # Input validation
-        if not isinstance(name, str):
-            raise TypeError("name must be a string")
-        run_idx = int(run_idx)
-        if data_idx is not None:
-            data_idx = np.atleast_1d(np.asarray(data_idx, dtype = np.int32))
-        
-        # Try memory first
-        if self._is_in_memory(name, run_idx, data_idx):
-            if self._is_global_cache[name]:
-                return self._memory_cache[run_idx][name]
-            else:
-                # Return indexed data from LazyAttr
-                lazy_attr = self._memory_cache[run_idx][name]
-                return lazy_attr[data_idx]
-        
-        # Try disk second
-        if self._is_in_zarr(name, run_idx, data_idx):
-            run_str = f'run{run_idx:d}'
-            run_grp = self.root[run_str]
-            
-            if run_grp[name].attrs['global']:
-                # Load global data from zarr
-                data = run_grp[name]['data'][...]
-                
-                # Cache it in memory for future access
-                if run_idx not in self._memory_cache:
-                    self._memory_cache[run_idx] = {}
-                self._memory_cache[run_idx][name] = data
-                
-                return data
-            else:
-                # Load per-row data from zarr
-                data = run_grp[name]['data'][data_idx]
-                
-                # Cache it in LazyAttr for future access
-                if run_idx not in self._memory_cache:
-                    self._memory_cache[run_idx] = {}
-                if name not in self._memory_cache[run_idx]:
-                    self._memory_cache[run_idx][name] = pf.LazyAttr(
-                        self, name, run_idx
-                    )
-                    
-                    # Register with LazyAttrCollection when first creating
-                    if name not in self._lazy_collections:
-                        self._lazy_collections[name] = pf.LazyAttrCollection(
-                            self, name
-                            )
-                    self._lazy_collections[name].add_run(
-                        run_idx,
-                        self._memory_cache[run_idx][name]
-                    )
-                    
-                    # Update _is_global_cache
-                    self._is_global_cache[name] = False
-                
-                # Update LazyAttr cache with loaded data
-                lazy_attr = self._memory_cache[run_idx][name]
-                for idx, val in zip(np.atleast_1d(data_idx), data):
-                    lazy_attr._cache[int(idx)] = val
-                
-                return data
-        
-        # Data doesn't exist - raise error
-        raise ValueError(
-            f"Parameter '{name}' at run_idx={run_idx} "
-            f"{'with data_idx=' + str(data_idx) 
-               if data_idx is not None else ''}"
-            f" does not exist in memory or zarr and cannot be computed here. "
-            f"Use _execute_path to generate missing data."
-        )
-    
-    def _produce_data(self, name, data_idx = None, enforced_max_runs = {}):
-        """
-        Produce data for a parameter by executing its pipeline path.
-        
-        Finds the pipeline path needed to produce the named parameter and 
-        executes each step in sequence. Each step's output is stored in memory
-        with appropriate run indices and dependency tracking.
-        
-        Parameters:
-        name (str): Name of the parameter to produce.
-        data_idx (int, array-like, or None): Data indices to produce. Required
-            for per-row/vectorized parameters, must be None for global 
-            parameters.
-        enforced_max_runs (dict): Optional dict mapping parameter names to 
-            maximum run indices. Used to ensure specific input versions are used
-            when producing the output. Format: {param_name: max_run_idx}.
-        
-        Returns:
-        None (results are stored in self._memory_cache and registered with
-             LazyAttrCollections for per-row parameters)
-        
-        Raises:
-        ValueError: If no pipeline path exists for the parameter.
-        
-        Notes:
-        - Only executes steps needed for the specific parameter
-        - Filters enforced_max_runs per step to only relevant parameters
-        - Works with _execute_step which handles actual computation and storage
-        """
-        path = pf.find_pl_path(self.cal_pl, name) 
-        path = self._check_path_validity(path, data_idx, enforced_max_runs)
-        for step in path:
-            enforced_max_runs_i = {
-                k: v for k, v in enforced_max_runs.items() 
-                if k in step.param_names
-            }
-            if step.func_type in ['global', 'global-res']:
-                step_data_idx = None
-            else:
-                step_data_idx = data_idx
-            self._execute_step(
-                step, 
-                data_idx = step_data_idx, 
-                enforced_max_runs = enforced_max_runs_i)
-            
-    def _check_path_validity(self, path, data_idx, enforced_max_runs):
-        """
-        Validate pipeline path and optimize by removing steps with existing 
-        outputs.
-        
-        Checks that all required inputs are available (in memory, disk, or from
-        preceding steps) and removes leading steps whose outputs already exist.
-        
-        Parameters:
-        path (list of plStep): Pipeline steps to validate.
-        data_idx (int, array-like, or None): Data indices being processed.
-        enforced_max_runs (dict): Parameter name to max run_idx constraints.
-        
-        Returns:
-        list of plStep: Optimized path with unnecessary leading steps removed.
-        
-        Raises:
-        ValueError: If path is invalid or required inputs are unavailable.
-        """
-        if path is None:
-            raise ValueError("Cannot execute None path")
-        if len(path) == 0:
-            return path
-            
-        # Convert data_idx to array for per-row steps
-        if data_idx is not None:
-            data_idx = np.atleast_1d(np.asarray(data_idx, dtype=np.int32))
-        
-        # Find first step that needs execution (others have outputs already)
-        first_step_idx = 0
-        for step_idx, step in enumerate(path):
-            # Determine what data_idx this step operates on
-            if step.func_type in ['global', 'global-res']:
-                step_data_idx = None
-            else:
-                step_data_idx = data_idx
-            
-            # Check if all outputs already exist at expected run indices
-            all_outputs_exist = True
-            for return_name in step.return_names:
-                if step.func_type in ['global', 'global-res']:
-                    # Global output
-                    deps_map = self.deps_maps.get('global', {})
-                    expected_run = get_most_recent_run(
-                        return_name, deps_map
-                        ) + 1
-                    if expected_run == 0:
-                        expected_run = 1
-                    
-                    if not (self._is_in_memory(return_name, expected_run, None) 
-                         or self._is_in_zarr(return_name, expected_run, None)):
-                        all_outputs_exist = False
-                        break
-                else:
-                    # Per-row output - check all data_idx
-                    for di in step_data_idx:
-                        if di not in self.deps_maps:
-                            all_outputs_exist = False
-                            break
-                        deps_map = self.deps_maps[di]
-                        expected_run = get_most_recent_run(
-                            return_name, deps_map
-                            ) + 1
-                        if expected_run == 0:
-                            expected_run = 1
-                        
-                        if not (self._is_in_memory(
-                                     return_name, expected_run, np.array([di])
-                                ) or 
-                                self._is_in_zarr(
-                                    return_name, expected_run, np.array([di])
-                                )
-                            ):
-                            all_outputs_exist = False
-                            break
-                    if not all_outputs_exist:
-                        break
-            
-            if all_outputs_exist:
-                first_step_idx = step_idx + 1
-            else:
-                break
-        
-        # Trim path to start at first step needing execution
-        path = path[first_step_idx:]
-        
-        if len(path) == 0:
-            return path
-        
-        # Track what will be produced by preceding steps in the trimmed path
-        # Format: {param_name: run_idx} for global, {param_name: {di: run_idx}} 
-        # for per-row
-        produced_params = {}
-        
-        # Validate each remaining step
-        for step_idx, step in enumerate(path):
-            # Determine data_idx for this step
-            if step.func_type in ['global', 'global-res']:
-                step_data_idx = None
-            else:
-                step_data_idx = data_idx
-            
-            # Filter enforced_max_runs to this step's parameters
-            step_enforced = {k: v for k, v in enforced_max_runs.items() 
-                           if k in step.param_names}
-            
-            # Validate each input parameter
-            for param_name in step.param_names:
-                if param_name == 'data_idx':
-                    continue  # Special built-in parameter
-                
-                # Determine required run_idx for this input
-                if step.func_type in ['global', 'global-res']:
-                    # Global step accessing inputs
-                    deps_map = self.deps_maps.get('global', {})
-                    
-                    if param_name in step_enforced:
-                        required_run = step_enforced[param_name]
-                    else:
-                        required_run = get_most_recent_run(param_name, deps_map)
-                    
-                    # Check if input is available
-                    if param_name in produced_params:
-                        # Will be produced by preceding step - just verify type 
-                        # compatibility
-                        produced_run = produced_params[param_name]
-                        if isinstance(produced_run, dict):
-                            raise ValueError(
-                                f"Step '{step.name}' (global) requires global "
-                                f"parameter '{param_name}', "
-                                f"but preceding steps produce it as per-row"
-                            )
-                        # If enforced, verify the preceding step produces the 
-                        # enforced run
-                        if param_name in step_enforced and \
-                            produced_run != step_enforced[param_name]:
-                            raise ValueError(
-                                f"Step '{step.name}' requires '{param_name}' at"
-                                f" run {step_enforced[param_name]} "
-                                f"(enforced), but preceding steps will produce "
-                                f"run {produced_run}"
-                            )
-                    else:
-                        # Must exist in memory or disk
-                        if required_run < 0:
-                            raise ValueError(
-                                f"Step '{step.name}' requires '{param_name}', "
-                                f"which does not exist "
-                                f"and is not produced by preceding steps"
-                            )
-                        if not (self._is_in_memory(
-                                     param_name, required_run, None
-                                     ) or 
-                                self._is_in_zarr(
-                                    param_name, required_run, None
-                                    )
-                                ):
-                            raise ValueError(
-                                f"Step '{step.name}' requires '{param_name}' at"
-                                 f" run {required_run}, "
-                                f"which is not available in memory or disk"
-                            )
-                else:
-                    # Per-row step accessing inputs
-                    for di in step_data_idx:
-                        if di not in self.deps_maps:
-                            self.deps_maps[di] = {}
-                        deps_map = self.deps_maps[di]
-                        
-                        if param_name in step_enforced:
-                            required_run = step_enforced[param_name]
-                        else:
-                            required_run = get_most_recent_run(
-                                param_name, deps_map
-                                )
-                        
-                        # Check if input is available
-                        if param_name in produced_params:
-                            produced_run = produced_params[param_name]
-                            if isinstance(produced_run, dict):
-                                # Per-row parameter from preceding step
-                                if di not in produced_run:
-                                    raise ValueError(
-                                    f"Step '{step.name}' requires "
-                                    f"'{param_name}' at data_idx {di}, "
-                                    f"but it will not be produced for this "
-                                    "index"
-                                    )
-                                # If enforced, verify the preceding step 
-                                # produces the enforced run
-                                if param_name in step_enforced and \
-                                produced_run[di] != step_enforced[param_name]:
-                                    raise ValueError(
-                                    f"Step '{step.name}' requires "
-                                    f"'{param_name}' at run "
-                                    f"{step_enforced[param_name]} "
-                                    f"(enforced) for data_idx {di}, but "
-                                    f"preceding steps will produce run"
-                                    f" {produced_run[di]}"
-                                    )
-                            else:
-                                # Global parameter from preceding step - just 
-                                # verify enforced if needed
-                                if param_name in step_enforced and \
-                                    produced_run != step_enforced[param_name]:
-                                    raise ValueError(
-                                        f"Step '{step.name}' requires "
-                                        f"'{param_name}' at run "
-                                        f"{step_enforced[param_name]} "
-                                        f"(enforced), but preceding steps will "
-                                        f"produce run {produced_run}"
-                                    )
-                        else:
-                            # Must exist in memory or disk
-                            if required_run < 0:
-                                raise ValueError(
-                                    f"Step '{step.name}' requires "
-                                    f"'{param_name}' for data_idx {di}, "
-                                    f"which does not exist and is not produced "
-                                    "by preceding steps"
-                                )
-                            if not (self._is_in_memory(
-                                        param_name, required_run, np.array([di])
-                                        ) or 
-                                    self._is_in_zarr(
-                                        param_name, required_run, np.array([di])
-                                        )
-                                    ):
-                                raise ValueError(
-                                    f"Step '{step.name}' requires "
-                                    f"'{param_name}' at run {required_run} "
-                                    f"for data_idx {di}, which is not available"
-                                    f" in memory or disk"
-                                )
-            
-            # Record what this step will produce (for subsequent steps)
-            for return_name in step.return_names:
-                if step.func_type in ['global', 'global-res']:
-                    deps_map = self.deps_maps.get('global', {})
-                    expected_run = get_most_recent_run(
-                        return_name, deps_map
-                        ) + 1
-                    if expected_run == 0:
-                        expected_run = 1
-                    produced_params[return_name] = expected_run
-                else:
-                    # Per-row output
-                    produced_params[return_name] = {}
-                    for di in step_data_idx:
-                        if di not in self.deps_maps:
-                            self.deps_maps[di] = {}
-                        deps_map = self.deps_maps[di]
-                        expected_run = get_most_recent_run(
-                            return_name, deps_map
-                            ) + 1
-                        if expected_run == 0:
-                            expected_run = 1
-                        produced_params[return_name][di] = expected_run
-        
-        return path
-                
-    def _fetch_rows(
-            self, name, run_idx, data_idx = None, enforced_max_runs = {}
-            ):
-        """
-        Given a parameter name, run index, and data index (if not global), 
-        return the data location in order of loading priority: 
-        memory -> disk -> potential -> None, 
-        where memory means the data exists at an attribute of DataSet, 
-        disk means the data exists in the zarr file, and potential means the
-        data can be generated from the calibration pipeline. 
-
-        Parameters:
-        name (str): The name of the parameter to look for.
-        run_idx (int): The run index to look for in the zarr file.
-        data_idx (int or None): The data index to look for if the parameter is 
-            not global, or None if the parameter is global.
-
-        Returns:
-        data (misc): 
-        """
-        # if not in memory or zarr -> find and execute path
-        if not ( 
-            self._is_in_memory(name, run_idx, data_idx) or \
-            self._is_in_zarr(name, run_idx, data_idx)
-        ):
-            if self._is_global_cache[name]:
-                run_idx_potential = get_most_recent_run(
-                    name, self.deps_maps['global']) + 1
-                if run_idx_potential == 0:
-                    run_idx_potential = 1 
-            else:
-                runs = []
-                for di in data_idx:
-                    run = get_most_recent_run(name, self.deps_maps[di]) + 1 
-                    if run == 0:
-                        run = 1
-                    runs.append(run)
-                run_idx_potential = runs[0] 
-                if not all(r == run_idx_potential for r in runs):
-                    raise ValueError(
-                        f"Data indices {data_idx} for parameter '{name}' "
-                        f"have different potential run indices: {runs}"
-                    )
-            
-            if run_idx_potential != run_idx:
-                msg = {'with data_idx=' + '' if data_idx is None 
-                       else str(data_idx)}
-                raise ValueError(
-                    f"Cannot produce '{name}' at run_idx={run_idx} "
-                    f"{msg} "
-                    f"because it would require producing run_idx="
-                    f"{run_idx_potential}."
-                )
-            self._produce_data(
-                name, 
-                data_idx = data_idx, 
-                enforced_max_runs = enforced_max_runs
-                )
-                
-        # Return from memory or disk
-        return self._get_existing(name, run_idx, data_idx)
- 
     def write_data(self, name, run_idx, data_idx = None, dtype = None):
         """
         Write data from memory to zarr file on disk.
@@ -1292,7 +402,1134 @@ class DataSet:
             param_grp.attrs['deps'] = deps_dict
             param_grp.attrs['write_times'] = write_times_dict
 
- 
+    
+    ############################################################################
+    ###################### Store param in memory utility #######################
+    ############################################################################
+    def _store_param(self, name, value, run_idx, deps, is_global, 
+                     data_idx = None):
+        """
+        Store a parameter in memory cache with dependency tracking.
+        
+        Handles both global and per-row parameters, including LazyAttr creation
+        and collection registration for per-row data. This method centralizes
+        the storage logic used by _execute_step and can be reused by other
+        components (e.g., add_user_params).
+        
+        Parameters:
+        name (str): Parameter name to store.
+        value: The data to store. For global parameters, this is the direct 
+            value. For per-row parameters, this should be an array-like where 
+            each element corresponds to a data_idx.
+        run_idx (int): Run index for this parameter version.
+        deps (dict): Dependencies dict mapping parameter names to their run 
+            indices.
+        is_global (bool): True for global parameters, False for per-row 
+            parameters.
+        data_idx (array-like or None): Data indices for per-row parameters. 
+            Must be None for global parameters. Required for per-row parameters.
+        
+        Returns:
+        None (stores in self._memory_cache, self.deps_maps, 
+              self._is_global_cache, and self._lazy_collections)
+        
+        Raises:
+        ValueError: If name is reserved, if trying to overwrite global 
+            parameter, or if data_idx doesn't match is_global.
+        TypeError: If input types are invalid.
+        """
+        # Input validation
+        if not isinstance(name, str):
+            raise TypeError("name must be a string")
+        run_idx = int(run_idx)
+        if not isinstance(deps, dict):
+            raise TypeError("deps must be a dictionary")
+        if not isinstance(is_global, bool):
+            raise TypeError("is_global must be a boolean")
+        
+        # Check for reserved attribute name collision
+        reserved = self._get_reserved_attrs()
+        if name in reserved:
+            raise ValueError(
+                f"Cannot create parameter '{name}' - this is a reserved "
+                f"DataSet attribute name. Reserved names: {sorted(reserved)}"
+            )
+        
+        # Ensure run_idx exists in memory cache
+        if run_idx not in self._memory_cache:
+            self._memory_cache[run_idx] = {}
+        
+        # Store based on parameter type
+        if is_global:
+            # Global parameter
+            if data_idx is not None:
+                raise ValueError(
+                    f"data_idx must be None for global parameter '{name}'"
+                )
+            
+            # Check for overwrite (global params should only be created once)
+            if name in self._memory_cache[run_idx]:
+                raise ValueError(
+                    f"Attempting to overwrite global parameter '{name}' at run "
+                    f"{run_idx}"
+                )
+            
+            # Store value directly
+            self._memory_cache[run_idx][name] = value
+            
+            # Update deps_maps
+            if 'global' not in self.deps_maps:
+                self.deps_maps['global'] = {}
+            if run_idx not in self.deps_maps['global']:
+                self.deps_maps['global'][run_idx] = {}
+            self.deps_maps['global'][run_idx][name] = deps
+            
+            # Update is_global cache
+            self._is_global_cache[name] = True
+            
+        else:
+            # Per-row parameter
+            if data_idx is None:
+                raise ValueError(
+                    f"data_idx required for per-row parameter '{name}'"
+                )
+            data_idx = np.atleast_1d(np.asarray(data_idx, dtype=np.int32))
+            value = np.atleast_1d(np.asarray(value))
+            
+            # Validate value length matches data_idx
+            if len(value) != len(data_idx):
+                raise ValueError(
+                    f"Length mismatch: value has {len(value)} elements but "
+                    f"data_idx has {len(data_idx)} elements"
+                )
+            
+            # Create LazyAttr if needed
+            if name not in self._memory_cache[run_idx]:
+                self._memory_cache[run_idx][name] = pf.LazyAttr(
+                    self, name, run_idx
+                )
+                
+                # Register with LazyAttrCollection (only on first creation)
+                if name not in self._lazy_collections:
+                    self._lazy_collections[name] = pf.LazyAttrCollection(
+                        self, name
+                    )
+                if run_idx not in \
+                    self._lazy_collections[name]._lazy_attrs.keys():
+                    self._lazy_collections[name].add_run(
+                        run_idx, 
+                        self._memory_cache[run_idx][name]
+                    )
+            
+            # Store data in LazyAttr cache
+            for idx, v in zip(data_idx, value):
+                self._memory_cache[run_idx][name]._cache[int(idx)] = v
+            
+            # Store dependencies for each data_idx
+            for di in data_idx:
+                if di not in self.deps_maps:
+                    self.deps_maps[di] = {}
+                if run_idx not in self.deps_maps[di]:
+                    self.deps_maps[di][run_idx] = {}
+                self.deps_maps[di][run_idx][name] = deps
+            
+            # Update is_global cache
+            self._is_global_cache[name] = False
+
+    def _step_needs_execution_global(self, step, deps_map, input_params, deps):
+        """
+        Check if a global/global-res step needs execution.
+        
+        Returns True if the step should be executed, False if it can be skipped.
+        """
+        for return_name in step.return_names:
+            most_recent_run = get_most_recent_run(return_name, deps_map)
+            
+            # If no existing run, need to execute
+            if most_recent_run == -1:
+                return True
+            
+            # Check if data exists at most_recent_run
+            if not (self._is_in_memory(return_name, most_recent_run, None) or
+                    self._is_in_zarr(return_name, most_recent_run, None)):
+                return True
+            
+            # Check if stored dependencies match current dependencies
+            # (only if step has input parameters)
+            if input_params:
+                stored_deps = deps_map[most_recent_run][return_name]
+                if stored_deps != deps:
+                    # Dependencies changed, need new run
+                    return True
+        
+        return False
+    
+    def _get_data_idx_needing_execution(self, step, data_idx, enforced_max_runs):
+        """
+        For per-row/vectorized steps, determine which data_idx need execution.
+        
+        Returns array of data_idx that need execution.
+        """
+        input_params = [p for p in step.param_names if p != 'data_idx']
+        data_idx_to_execute = []
+        
+        for di in data_idx:
+            # Merge global and per-row deps_maps for this data_idx
+            merged_deps_map = {}
+            if 'global' in self.deps_maps:
+                for run_idx, params in self.deps_maps['global'].items():
+                    merged_deps_map[run_idx] = params.copy()
+            if di in self.deps_maps:
+                for run_idx, params in self.deps_maps[di].items():
+                    if run_idx not in merged_deps_map:
+                        merged_deps_map[run_idx] = {}
+                    merged_deps_map[run_idx].update(params)
+            
+            # Compute current dependencies
+            deps_current = get_deps(input_params, merged_deps_map, 
+                                   enforced_max_runs=enforced_max_runs)
+            
+            # Check if all outputs exist with matching deps for this data_idx
+            needs_execution = False
+            for return_name in step.return_names:
+                # Check in per-row deps_map
+                if di not in self.deps_maps:
+                    needs_execution = True
+                    break
+                
+                deps_map_di = self.deps_maps[di]
+                most_recent_run = get_most_recent_run(return_name, deps_map_di)
+                
+                # If no existing run, need to execute
+                if most_recent_run == -1:
+                    needs_execution = True
+                    break
+                
+                # Check if data exists at most_recent_run
+                if not (self._is_in_memory(return_name, most_recent_run, 
+                                           np.array([di])) or
+                        self._is_in_zarr(return_name, most_recent_run, 
+                                       np.array([di]))):
+                    needs_execution = True
+                    break
+                
+                # Check if stored dependencies match current dependencies
+                if input_params:
+                    stored_deps = deps_map_di[most_recent_run][return_name]
+                    if stored_deps != deps_current:
+                        # Dependencies changed, need new run
+                        needs_execution = True
+                        break
+            
+            if needs_execution:
+                data_idx_to_execute.append(di)
+        
+        return np.array(data_idx_to_execute, dtype=np.int32)
+    
+    def _collect_step_parameters_global(self, step, deps):
+        """
+        Collect parameters for global/global-res step execution.
+        
+        Returns (params, param_is_global) tuples.
+        """
+        params = []
+        param_is_global = []
+        for p in step.param_names:
+            # Special handling for 'data_idx' parameter
+            if p == 'data_idx':
+                params.append(None)
+                param_is_global.append(True)  # Treat as global-like
+                continue
+            
+            val = self._get_existing(p, deps[p], data_idx=None)
+            param_is_global.append(self._is_global_cache[p])
+            params.append(val)
+        
+        return params, param_is_global
+    
+    def _store_step_outputs_global(self, step, out, run_idxs, deps, save):
+        """
+        Store outputs from global/global-res step execution.
+        """
+        for (name, val), run_idx in zip(out.items(), run_idxs):
+            if step.func_type == 'global-res':
+                # Global-res: store for all rows
+                self._store_param(
+                    name, val, run_idx, deps, 
+                    is_global = False, 
+                    data_idx = range(self.nrows)
+                )
+            else:
+                # Global: store directly
+                self._store_param(
+                    name, val, run_idx, deps, 
+                    is_global = True
+                )
+        
+        # Write to disk if requested
+        if save:
+            for (name, _), run_idx in zip(out.items(), run_idxs):
+                if step.func_type == 'global-res':
+                    self.write_data(
+                        name, run_idx, data_idx=range(self.nrows)
+                        )
+                else:
+                    self.write_data(name, run_idx, data_idx=None)
+
+    ############################################################################
+    ############################## Step execution ##############################
+    ############################################################################
+    def _execute_step(self, step, data_idx = None, enforced_max_runs = {}, 
+                      save = False):
+        """
+        Execute a single pipeline step, storing results and dependencies in 
+        memory.
+        
+        All input parameters must already exist in memory or on disk - this 
+        method will NOT execute additional steps to generate missing inputs.
+        
+        Parameters:
+        step (plStep): The pipeline step to execute.
+        data_idx (int, array-like, or None): Data indices to process. Required
+            for 'per-row' and 'vectorized' steps, must be None for 'global' and 
+            'global-res' steps.
+        enforced_max_runs (dict): Optional dict mapping parameter names to 
+            maximum run indices for dependency resolution.
+        save (bool): If True, write outputs to zarr file on disk after 
+            execution. Default is False.
+        
+        Returns:
+        None (results are stored in self._memory_cache and optionally written
+             to zarr)
+        
+        Raises:
+        TypeError: If step is not a plStep instance.
+        ValueError: If required inputs don't exist or data_idx is invalid.
+        """
+        # Input validation
+        if not isinstance(step, pf.plStep):
+            raise TypeError("step must be a plStep instance")
+        if not isinstance(enforced_max_runs, dict):
+            raise TypeError("enforced_max_runs must be a dictionary")
+        
+        # Handle data_idx based on function type
+        if step.func_type in ['global', 'global-res']:
+            if data_idx is not None:
+                raise ValueError("data_idx must be None for global functions")
+            data_idx = None 
+        else:
+            if data_idx is None:
+                raise ValueError(
+                    f"data_idx required for {step.func_type} functions"
+                )
+            data_idx = np.atleast_1d(np.asarray(data_idx, dtype=np.int32))
+
+        # global and global-res have only global parameters
+        if step.func_type in ['global', 'global-res']:
+            # Determine run_idx deps for outputs
+            # all global inputs -> single deps_map and run_idx per return name
+            if 'global' not in self.deps_maps:
+                self.deps_maps['global'] = {}
+            deps_map = self.deps_maps['global']
+            
+            # Compute current dependencies for inputs
+            input_params = [p for p in step.param_names if p != 'data_idx']
+            deps = get_deps(
+                input_params, deps_map, enforced_max_runs=enforced_max_runs
+                )
+            
+            # Check if step needs to run
+            if not self._step_needs_execution_global(
+                step, deps_map, input_params, deps
+                ):
+                return
+            
+            # Need to execute - compute new run indices
+            run_idxs = [get_most_recent_run(name, deps_map) + 1 
+                        for name in step.return_names]
+            # run that doesn't exist yet should be 1 
+            run_idxs = [1 if r == 0 else r for r in run_idxs]
+
+            # Collect parameters 
+            params, param_is_global = self._collect_step_parameters_global(
+                step, deps
+                )
+
+            # Run step
+            out = step._run(params, param_is_global)
+
+            # Store outputs in memory cache
+            self._store_step_outputs_global(step, out, run_idxs, deps, save)
+
+        else:  # vectorized or per-row 
+            # First check which data_idx actually need execution
+            data_idx = self._get_data_idx_needing_execution(
+                step, data_idx, enforced_max_runs
+                )
+            
+            # If no data_idx need execution, skip entirely
+            if len(data_idx) == 0:
+                return
+            
+            # For vectorized/per-row, need to find run-idx for each data_idx 
+            run_deps = []  # (run_idxs_tuple, deps) for each data_idx
+            for di in data_idx:
+                # Merge global and per-row deps_maps for this data_idx
+                merged_deps_map = {}
+                if 'global' in self.deps_maps:
+                    for run_idx, params in self.deps_maps['global'].items():
+                        merged_deps_map[run_idx] = params.copy()
+                if di in self.deps_maps:
+                    for run_idx, params in self.deps_maps[di].items():
+                        if run_idx not in merged_deps_map:
+                            merged_deps_map[run_idx] = {}
+                        merged_deps_map[run_idx].update(params)
+                
+                run_idxs = [get_most_recent_run(name, merged_deps_map) + 1 
+                                  for name in step.return_names]
+                # run that doesn't exist yet should be 1
+                run_idxs = tuple([1 if r == 0 else r for r in run_idxs])
+                deps = get_deps(
+                    [p for p in step.param_names if p != 'data_idx'], 
+                    merged_deps_map, 
+                    enforced_max_runs=enforced_max_runs
+                )
+                run_deps.append((run_idxs, deps))
+            
+            # Group by unique run_idxs/deps combinations
+            unique_run_deps, indices_groups = util.group_unique_tuples(run_deps)
+            
+            for (run_idxs, deps), local_idx in zip(
+                unique_run_deps, indices_groups
+                ):
+                # Collect parameters 
+                params = []
+                param_is_global = []
+                for p in step.param_names:
+                    # Special handling for 'data_idx' parameter
+                    if p == 'data_idx':
+                        params.append(data_idx[local_idx])
+                        param_is_global.append(False)
+                        continue
+                    
+                    param_is_global.append(self._is_global_cache[p])
+                    if param_is_global[-1]:
+                        val = self._get_existing(p, deps[p], data_idx=None)
+                    else:
+                        val = self._get_existing(
+                            p, deps[p], data_idx=data_idx[local_idx]
+                        )
+                    params.append(val)
+                
+                # Run step 
+                out = step._run(params, param_is_global)
+
+                # Store outputs in memory cache, each with its own run_idx
+                for (name, val), run_idx in zip(out.items(), run_idxs):
+                    # Per-row: store for specific data indices
+                    self._store_param(
+                        name, val, run_idx, deps,
+                        is_global=False,
+                        data_idx=data_idx[local_idx]
+                    )
+                
+                # Write to disk if requested
+                if save:
+                    for (name, _), run_idx in zip(out.items(), run_idxs):
+                        self.write_data(
+                            name, run_idx, data_idx=data_idx[local_idx]
+                            )
+
+    ############################################################################
+    ########################## Data fetching methods ###########################
+    ############################################################################
+    def _get_existing(self, name, run_idx, data_idx = None):
+        """
+        Get data that already exists in memory or on disk.
+        Does NOT execute pipeline steps - raises error if data requires 
+        computation.
+        
+        This is the "safe" access method that ensures no side effects from
+        pipeline execution during dependency resolution.
+        
+        Parameters:
+        name (str): The parameter name to retrieve.
+        run_idx (int): The run index to retrieve.
+        data_idx (int, array-like, or None): The data index/indices to retrieve
+            for per-row data. None for global data.
+        
+        Returns:
+        np.ndarray or scalar: The requested data from memory or disk.
+        
+        Raises:
+        ValueError: If data does not exist and cannot be retrieved without 
+            computation.
+        TypeError: If input types are invalid.
+        """
+        # Input validation
+        if not isinstance(name, str):
+            raise TypeError("name must be a string")
+        run_idx = int(run_idx)
+        if data_idx is not None:
+            data_idx = np.atleast_1d(np.asarray(data_idx, dtype = np.int32))
+        
+        # Try memory first
+        if self._is_in_memory(name, run_idx, data_idx):
+            if self._is_global_cache[name]:
+                return self._memory_cache[run_idx][name]
+            else:
+                # Return indexed data from LazyAttr
+                lazy_attr = self._memory_cache[run_idx][name]
+                return lazy_attr[data_idx]
+        
+        # Try disk second
+        if self._is_in_zarr(name, run_idx, data_idx):
+            run_str = f'run{run_idx:d}'
+            run_grp = self.root[run_str]
+            
+            if run_grp[name].attrs['global']:
+                # Load global data from zarr
+                data = run_grp[name]['data'][...]
+                
+                # Cache it in memory for future access
+                if run_idx not in self._memory_cache:
+                    self._memory_cache[run_idx] = {}
+                self._memory_cache[run_idx][name] = data
+                
+                return data
+            else:
+                # Load per-row data from zarr
+                data = run_grp[name]['data'][data_idx]
+                
+                # Cache it in LazyAttr for future access
+                if run_idx not in self._memory_cache:
+                    self._memory_cache[run_idx] = {}
+                if name not in self._memory_cache[run_idx]:
+                    self._memory_cache[run_idx][name] = pf.LazyAttr(
+                        self, name, run_idx
+                    )
+                    
+                    # Register with LazyAttrCollection when first creating
+                    if name not in self._lazy_collections:
+                        self._lazy_collections[name] = pf.LazyAttrCollection(
+                            self, name
+                            )
+                    self._lazy_collections[name].add_run(
+                        run_idx,
+                        self._memory_cache[run_idx][name]
+                    )
+                    
+                    # Update _is_global_cache
+                    self._is_global_cache[name] = False
+                
+                # Update LazyAttr cache with loaded data
+                lazy_attr = self._memory_cache[run_idx][name]
+                for idx, val in zip(np.atleast_1d(data_idx), data):
+                    lazy_attr._cache[int(idx)] = val
+                
+                return data
+        
+        # Data doesn't exist - raise error
+        raise ValueError(
+            f"Parameter '{name}' at run_idx={run_idx} "
+            f"{'with data_idx=' + str(data_idx) 
+               if data_idx is not None else ''}"
+            f" does not exist in memory or zarr and cannot be computed here. "
+            f"Use _execute_path to generate missing data."
+        )
+    
+    def _produce_data(self, name, data_idx = None, enforced_max_runs = {}):
+        """
+        Produce data for a parameter by executing its pipeline path.
+        
+        Finds the pipeline path needed to produce the named parameter and 
+        executes each step in sequence. Each step's output is stored in memory
+        with appropriate run indices and dependency tracking.
+        
+        Parameters:
+        name (str): Name of the parameter to produce.
+        data_idx (int, array-like, or None): Data indices to produce. Required
+            for per-row/vectorized parameters, must be None for global 
+            parameters.
+        enforced_max_runs (dict): Optional dict mapping parameter names to 
+            maximum run indices. Used to ensure specific input versions are used
+            when producing the output. Format: {param_name: max_run_idx}.
+        
+        Returns:
+        None (results are stored in self._memory_cache and registered with
+             LazyAttrCollections for per-row parameters)
+        
+        Raises:
+        ValueError: If no pipeline path exists for the parameter.
+        
+        Notes:
+        - Only executes steps needed for the specific parameter
+        - Filters enforced_max_runs per step to only relevant parameters
+        - Works with _execute_step which handles actual computation and storage
+        """
+        path = pf.find_pl_path(self.cal_pl, name) 
+        path = self._check_path_validity(path, data_idx, enforced_max_runs)
+        for step in path:
+            enforced_max_runs_i = {
+                k: v for k, v in enforced_max_runs.items() 
+                if k in step.param_names
+            }
+            if step.func_type in ['global', 'global-res']:
+                step_data_idx = None
+            else:
+                step_data_idx = data_idx
+            self._execute_step(
+                step, 
+                data_idx = step_data_idx, 
+                enforced_max_runs = enforced_max_runs_i)
+            
+    def _fetch_rows(
+            self, name, run_idx, data_idx = None, enforced_max_runs = {}
+            ):
+        """
+        Given a parameter name, run index, and data index (if not global), 
+        return the data location in order of loading priority: 
+        memory -> disk -> potential -> None, 
+        where memory means the data exists at an attribute of DataSet, 
+        disk means the data exists in the zarr file, and potential means the
+        data can be generated from the calibration pipeline. 
+
+        Parameters:
+        name (str): The name of the parameter to look for.
+        run_idx (int): The run index to look for in the zarr file.
+        data_idx (int or None): The data index to look for if the parameter is 
+            not global, or None if the parameter is global.
+
+        Returns:
+        data (misc): 
+        """
+        # if not in memory or zarr -> find and execute path
+        if not ( 
+            self._is_in_memory(name, run_idx, data_idx) or \
+            self._is_in_zarr(name, run_idx, data_idx)
+        ):
+            if self._is_global_cache[name]:
+                run_idx_potential = get_most_recent_run(
+                    name, self.deps_maps['global']) + 1
+                if run_idx_potential == 0:
+                    run_idx_potential = 1 
+            else:
+                runs = []
+                for di in data_idx:
+                    # Merge global and per-row deps_maps for this data_idx
+                    merged_deps_map = {}
+                    if 'global' in self.deps_maps:
+                        for run_idx_i, params in \
+                            self.deps_maps['global'].items():
+                            merged_deps_map[run_idx_i] = params.copy()
+                    if di in self.deps_maps:
+                        for run_idx_i, params in self.deps_maps[di].items():
+                            if run_idx_i not in merged_deps_map:
+                                merged_deps_map[run_idx_i] = {}
+                            merged_deps_map[run_idx_i].update(params)
+                    run = get_most_recent_run(name, merged_deps_map) + 1 
+                    if run == 0:
+                        run = 1
+                    runs.append(run)
+                run_idx_potential = runs[0] 
+                if not all(r == run_idx_potential for r in runs):
+                    raise ValueError(
+                        f"Data indices {data_idx} for parameter '{name}' "
+                        f"have different potential run indices: {runs}"
+                    )
+            
+            if run_idx_potential != run_idx:
+                msg = {'with data_idx=' + '' if data_idx is None 
+                       else str(data_idx)}
+                raise ValueError(
+                    f"Cannot produce '{name}' at run_idx={run_idx} "
+                    f"{msg} "
+                    f"because it would require producing run_idx="
+                    f"{run_idx_potential}."
+                )
+            self._produce_data(
+                name, 
+                data_idx = data_idx, 
+                enforced_max_runs = enforced_max_runs
+                )
+                
+        # Return from memory or disk
+        return self._get_existing(name, run_idx, data_idx)
+    
+    def _is_in_memory(self, name, run_idx, data_idx = None):
+        """
+        Check if data exists in memory cache.
+        
+        Parameters:
+        name (str): The parameter name to check.
+        run_idx (int): The run index to check.
+        data_idx (int, array-like, or None): The data index/indices to check 
+            for per-row data. None for global data.
+        
+        Returns:
+        bool: True if data exists in memory cache, False otherwise.
+        """
+        # Input validation
+        if not isinstance(name, str):
+            raise TypeError("name must be a string")
+        run_idx = int(run_idx)
+        if data_idx is not None:
+            data_idx = np.atleast_1d(np.asarray(data_idx, dtype = np.int32))
+
+        # Check if run exists in cache
+        if run_idx not in self._memory_cache:
+            return False
+        
+        # Check if name exists in this run
+        if name not in self._memory_cache[run_idx]:
+            return False
+        
+        # Check if name is known to be global
+        if name not in self._is_global_cache:
+            # If not yet tracked, cannot determine - assume not in memory
+            return False
+        
+        # For global data, just check existence
+        if self._is_global_cache[name]:
+            return True
+        
+        # For per-row data, check if requested rows are cached in LazyAttr
+        if data_idx is None:
+            # Requesting per-row data without specifying rows is ambiguous
+            raise ValueError(
+                f"data_idx required for per-row parameter '{name}'"
+            )
+        
+        lazy_attr = self._memory_cache[run_idx][name]
+        if not isinstance(lazy_attr, pf.LazyAttr):
+            raise TypeError(
+                f"Expected LazyAttr for per-row parameter '{name}', "
+                f"got {type(lazy_attr)}"
+            )
+        
+        return np.all(np.isin(data_idx, list(lazy_attr._cache.keys())))
+    
+    def _is_in_zarr(self, name, run_idx, data_idx = None):
+        """
+        Check if data exists in zarr file on disk.
+        
+        Parameters:
+        name (str): The parameter name to check.
+        run_idx (int): The run index to check.
+        data_idx (int, array-like, or None): The data index/indices to check 
+            for per-row data. None for global data.
+        
+        Returns:
+        bool: True if data exists in zarr file, False otherwise.
+        """
+        # Check if root exists (important for tests that create minimal 
+        # DS objects)
+        if 'root' not in self.__dict__:
+            return False
+        if self.root is None:
+            return False
+        
+        # Input validation
+        if not isinstance(name, str):
+            raise TypeError("name must be a string")
+        run_idx = int(run_idx)
+        if data_idx is not None:
+            data_idx = np.atleast_1d(np.asarray(data_idx, dtype = np.int32))
+        
+        # Check if run group exists
+        run_str = f'run{run_idx:d}'
+        if run_str not in self.root:
+            return False
+        
+        run_grp = self.root[run_str]
+        
+        # Check if parameter exists in this run
+        if name not in run_grp:
+            return False
+        
+        # Check if it's global data
+        if 'global' not in run_grp[name].attrs:
+            # Missing metadata, assume False
+            return False
+        
+        is_global = run_grp[name].attrs['global']
+        
+        if is_global:
+            return True
+        
+        # For per-row data, check if requested rows exist
+        if data_idx is None:
+            raise ValueError(
+                f"data_idx required for per-row parameter '{name}'"
+            )
+        
+        if 'row_exists' not in run_grp[name]:
+            # Missing row tracking, cannot verify
+            return False
+        
+        return np.all(np.isin(data_idx, run_grp[name]['row_exists'][...]))
+    
+    ############################################################################
+    ####################### Path validity check utility ########################
+    ############################################################################
+    def _check_path_validity(self, path, data_idx, enforced_max_runs):
+        """
+        Validate pipeline path and optimize by removing steps with existing 
+        outputs.
+        
+        Checks that all required inputs are available (in memory, disk, or from
+        preceding steps) and removes leading steps whose outputs already exist.
+        
+        Parameters:
+        path (list of plStep): Pipeline steps to validate.
+        data_idx (int, array-like, or None): Data indices being processed.
+        enforced_max_runs (dict): Parameter name to max run_idx constraints.
+        
+        Returns:
+        list of plStep: Optimized path with unnecessary leading steps removed.
+        
+        Raises:
+        ValueError: If path is invalid or required inputs are unavailable.
+        """
+        if path is None:
+            raise ValueError("Cannot execute None path")
+        if len(path) == 0:
+            return path
+            
+        # Convert data_idx to array for per-row steps
+        if data_idx is not None:
+            data_idx = np.atleast_1d(np.asarray(data_idx, dtype=np.int32))
+        
+        # Find first step that needs execution (others have outputs already)
+        first_step_idx = 0
+        for step_idx, step in enumerate(path):
+            # Determine what data_idx this step operates on
+            if step.func_type in ['global', 'global-res']:
+                step_data_idx = None
+            else:
+                step_data_idx = data_idx
+            
+            # Check if all outputs already exist at their most recent run indices
+            # AND if dependencies match what would be computed now
+            all_outputs_exist = True
+            for return_name in step.return_names:
+                if step.func_type in ['global', 'global-res']:
+                    # Global output
+                    deps_map = self.deps_maps.get('global', {})
+                    most_recent_run = get_most_recent_run(return_name, deps_map)
+                    
+                    # If no run exists yet, data doesn't exist
+                    if most_recent_run == -1:
+                        all_outputs_exist = False
+                        break
+                    
+                    # Check if data exists at the most recent run
+                    if not (self._is_in_memory(
+                        return_name, most_recent_run, None
+                        ) 
+                        or self._is_in_zarr(
+                        return_name, most_recent_run, None
+                        )
+                    ):
+                        all_outputs_exist = False
+                        break
+                    
+                    # Check if dependencies match what would be computed now
+                    # (only if step has input parameters)
+                    input_params = [p for p in step.param_names 
+                                    if p != 'data_idx']
+                    if input_params:
+                        stored_deps = deps_map[most_recent_run][return_name]
+                        current_deps = get_deps(
+                            input_params, 
+                            deps_map, 
+                            enforced_max_runs=enforced_max_runs
+                        )
+                        if stored_deps != current_deps:
+                            # Dependencies changed, need new run
+                            all_outputs_exist = False
+                            break
+                else:
+                    # Per-row output - check all data_idx
+                    for di in step_data_idx:
+                        if di not in self.deps_maps:
+                            all_outputs_exist = False
+                            break
+                        
+                        # Merge global and per-row deps_maps for this data_idx
+                        merged_deps_map = {}
+                        if 'global' in self.deps_maps:
+                            for run_idx_i, params in \
+                                self.deps_maps['global'].items():
+                                merged_deps_map[run_idx_i] = params.copy()
+                        if di in self.deps_maps:
+                            for run_idx_i, params in self.deps_maps[di].items():
+                                if run_idx_i not in merged_deps_map:
+                                    merged_deps_map[run_idx_i] = {}
+                                merged_deps_map[run_idx_i].update(params)
+                        
+                        deps_map = self.deps_maps[di]
+                        most_recent_run = get_most_recent_run(
+                            return_name, deps_map
+                            )
+                        
+                        # If no run exists yet, data doesn't exist
+                        if most_recent_run == -1:
+                            all_outputs_exist = False
+                            break
+                        
+                        # Check if data exists at the most recent run
+                        if not (self._is_in_memory(
+                                     return_name, most_recent_run, 
+                                     np.array([di])
+                                ) or 
+                                self._is_in_zarr(
+                                    return_name, most_recent_run, np.array([di])
+                                )
+                            ):
+                            all_outputs_exist = False
+                            break
+                        
+                        # Check if dependencies match what would be computed now
+                        # (only if step has input parameters)
+                        input_params = [p for p in step.param_names 
+                                        if p != 'data_idx']
+                        if input_params:
+                            stored_deps = deps_map[most_recent_run][return_name]
+                            current_deps = get_deps(
+                                input_params, 
+                                merged_deps_map, 
+                                enforced_max_runs=enforced_max_runs
+                            )
+                            if stored_deps != current_deps:
+                                # Dependencies changed, need new run
+                                all_outputs_exist = False
+                                break
+                    if not all_outputs_exist:
+                        break
+            
+            if all_outputs_exist:
+                first_step_idx = step_idx + 1
+            else:
+                break
+        
+        # Trim path to start at first step needing execution
+        path = path[first_step_idx:]
+        
+        if len(path) == 0:
+            return path
+        
+        # Track what will be produced by preceding steps in the trimmed path
+        # Format: {param_name: run_idx} for global, {param_name: {di: run_idx}} 
+        # for per-row
+        produced_params = {}
+        
+        # Validate each remaining step
+        for step_idx, step in enumerate(path):
+            # Determine data_idx for this step
+            if step.func_type in ['global', 'global-res']:
+                step_data_idx = None
+            else:
+                step_data_idx = data_idx
+            
+            # Filter enforced_max_runs to this step's parameters
+            step_enforced = {k: v for k, v in enforced_max_runs.items() 
+                           if k in step.param_names}
+            
+            # Validate each input parameter
+            for param_name in step.param_names:
+                if param_name == 'data_idx':
+                    continue  # Special built-in parameter
+                
+                # Determine required run_idx for this input
+                if step.func_type in ['global', 'global-res']:
+                    # Global step accessing inputs
+                    deps_map = self.deps_maps.get('global', {})
+                    
+                    if param_name in step_enforced:
+                        required_run = step_enforced[param_name]
+                    else:
+                        required_run = get_most_recent_run(param_name, deps_map)
+                    
+                    # Check if input is available
+                    if param_name in produced_params:
+                        # Will be produced by preceding step - just verify type 
+                        # compatibility
+                        produced_run = produced_params[param_name]
+                        if isinstance(produced_run, dict):
+                            raise ValueError(
+                                f"Step '{step.name}' (global) requires global "
+                                f"parameter '{param_name}', "
+                                f"but preceding steps produce it as per-row"
+                            )
+                        # If enforced, verify the preceding step produces the 
+                        # enforced run
+                        if param_name in step_enforced and \
+                            produced_run != step_enforced[param_name]:
+                            raise ValueError(
+                                f"Step '{step.name}' requires '{param_name}' at"
+                                f" run {step_enforced[param_name]} "
+                                f"(enforced), but preceding steps will produce "
+                                f"run {produced_run}"
+                            )
+                    else:
+                        # Must exist in memory or disk
+                        if required_run < 0:
+                            raise ValueError(
+                                f"Step '{step.name}' requires '{param_name}', "
+                                f"which does not exist "
+                                f"and is not produced by preceding steps"
+                            )
+                        if not (self._is_in_memory(
+                                     param_name, required_run, None
+                                     ) or 
+                                self._is_in_zarr(
+                                    param_name, required_run, None
+                                    )
+                                ):
+                            raise ValueError(
+                                f"Step '{step.name}' requires '{param_name}' at"
+                                 f" run {required_run}, "
+                                f"which is not available in memory or disk"
+                            )
+                else:
+                    # Per-row step accessing inputs
+                    for di in step_data_idx:
+                        if di not in self.deps_maps:
+                            self.deps_maps[di] = {}
+                        
+                        # Merge global and per-row deps_maps for this data_idx
+                        merged_deps_map = {}
+                        if 'global' in self.deps_maps:
+                            for run_idx_i, params in \
+                                self.deps_maps['global'].items():
+                                merged_deps_map[run_idx_i] = params.copy()
+                        if di in self.deps_maps:
+                            for run_idx_i, params in self.deps_maps[di].items():
+                                if run_idx_i not in merged_deps_map:
+                                    merged_deps_map[run_idx_i] = {}
+                                merged_deps_map[run_idx_i].update(params)
+                        
+                        if param_name in step_enforced:
+                            required_run = step_enforced[param_name]
+                        else:
+                            required_run = get_most_recent_run(
+                                param_name, merged_deps_map
+                                )
+                        
+                        # Check if input is available
+                        if param_name in produced_params:
+                            produced_run = produced_params[param_name]
+                            if isinstance(produced_run, dict):
+                                # Per-row parameter from preceding step
+                                if di not in produced_run:
+                                    raise ValueError(
+                                    f"Step '{step.name}' requires "
+                                    f"'{param_name}' at data_idx {di}, "
+                                    f"but it will not be produced for this "
+                                    "index"
+                                    )
+                                # If enforced, verify the preceding step 
+                                # produces the enforced run
+                                if param_name in step_enforced and \
+                                produced_run[di] != step_enforced[param_name]:
+                                    raise ValueError(
+                                    f"Step '{step.name}' requires "
+                                    f"'{param_name}' at run "
+                                    f"{step_enforced[param_name]} "
+                                    f"(enforced) for data_idx {di}, but "
+                                    f"preceding steps will produce run"
+                                    f" {produced_run[di]}"
+                                    )
+                            else:
+                                # Global parameter from preceding step - just 
+                                # verify enforced if needed
+                                if param_name in step_enforced and \
+                                    produced_run != step_enforced[param_name]:
+                                    raise ValueError(
+                                        f"Step '{step.name}' requires "
+                                        f"'{param_name}' at run "
+                                        f"{step_enforced[param_name]} "
+                                        f"(enforced), but preceding steps will "
+                                        f"produce run {produced_run}"
+                                    )
+                        else:
+                            # Must exist in memory or disk
+                            if required_run < 0:
+                                raise ValueError(
+                                    f"Step '{step.name}' requires "
+                                    f"'{param_name}' for data_idx {di}, "
+                                    f"which does not exist and is not produced "
+                                    "by preceding steps"
+                                )
+                            if not (self._is_in_memory(
+                                        param_name, required_run, np.array([di])
+                                        ) or 
+                                    self._is_in_zarr(
+                                        param_name, required_run, np.array([di])
+                                        )
+                                    ):
+                                raise ValueError(
+                                    f"Step '{step.name}' requires "
+                                    f"'{param_name}' at run {required_run} "
+                                    f"for data_idx {di}, which is not available"
+                                    f" in memory or disk"
+                                )
+            
+            # Record what this step will produce (for subsequent steps)
+            for return_name in step.return_names:
+                if step.func_type == 'global':
+                    # Global: produces single value for all data
+                    deps_map = self.deps_maps.get('global', {})
+                    expected_run = get_most_recent_run(
+                        return_name, deps_map
+                        ) + 1
+                    if expected_run == 0:
+                        expected_run = 1
+                    produced_params[return_name] = expected_run
+                else:
+                    # Per-row, vectorized, and global-res: all produce 
+                    # per-row data
+                    produced_params[return_name] = {}
+                    if step.func_type == 'global-res':
+                        # Global-res runs once but produces for all rows
+                        if data_idx is None:
+                            step_data_idx = range(self.nrows)  
+                        else:
+                            step_data_idx = data_idx
+                    for di in step_data_idx:
+                        if di not in self.deps_maps:
+                            self.deps_maps[di] = {}
+                        deps_map = self.deps_maps[di]
+                        expected_run = get_most_recent_run(
+                            return_name, deps_map
+                            ) + 1
+                        if expected_run == 0:
+                            expected_run = 1
+                        produced_params[return_name][di] = expected_run
+        
+        return path
+    
+    ############################################################################
+    ########################## Other utility methods ###########################
+    ############################################################################
+    def _get_reserved_attrs(self):
+        """Get all non-private DataSet attributes as reserved names.
+        
+        This dynamically computes the set of attribute names that cannot be used
+        as pipeline parameter names. The result is cached at the class level.
+        
+        Returns:
+            set: Set of reserved attribute names.
+        """
+        if DataSet._RESERVED_ATTRS is None:
+            # Get all non-private attributes from DataSet class
+            DataSet._RESERVED_ATTRS = {
+                name for name in dir(type(self)) 
+                if not name.startswith('_')
+            }
+        return DataSet._RESERVED_ATTRS
+    
     def show_file(self, ftype):
         """
         Opens the file explorer to the location of a file associated with this 
@@ -1330,9 +1567,9 @@ class DataSet:
             util.open_in_file_explorer(
                 os.path.dirname(self.zarr_path)
                 )
-
+            
 ################################################################################ 
-# Custom steps 
+############################# Custom steps loader ##############################
 ################################################################################
 def _load_custom_steps(custom_path):
     """
@@ -1354,30 +1591,29 @@ def _load_custom_steps(custom_path):
     spec.loader.exec_module(cs)
     custom_cal_steps = cs.custom_cal_steps
     
-    spec = importlib.util.spec_from_file_location("custom_analysis_steps", 
-                                                    custom_path)
-    cs = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(cs)
-    custom_analysis_steps = cs.custom_analysis_steps
-    
-    return custom_cal_steps, custom_analysis_steps
+    return custom_cal_steps
 
+################################################################################ 
+########################### Zarr dependencies loader ###########################
+################################################################################
 def _load_deps_from_zarr(root):
     """
-    Given the root on an analysis output file, load the dependencies map for 
-    each data_idx while validating the file structure.
+    Given the root of an analysis output file, load the dependencies map for 
+    each data_idx and the is_global_cache while validating the file structure.
 
     Parameters:
     root (zarr group): The root of the zarr file to load from.
 
     Returns:
-    deps_maps (dictionary): A dictionary mapping data indices to their 
-        dependencies maps. The key-value map is: 
-        data_idx (int or 'global') -> run_idx (int) -> parameter name (str) 
-        -> dependencies (dict), 
-        where the dependencies dict represents parameter: run_idx pairs for 
-        each other parameter that the parameter depends on. Global parameters
-        use the key 'global' instead of a data_idx.
+    tuple: (deps_maps, is_global_cache) where:
+        - deps_maps (dict): Maps data indices to their dependencies maps. The 
+          key-value map is: data_idx (int or 'global') -> run_idx (int) -> 
+          parameter name (str) -> dependencies (dict), where the dependencies 
+          dict represents parameter: run_idx pairs for each other parameter 
+          that the parameter depends on. Global parameters use the key 'global' 
+          instead of a data_idx.
+        - is_global_cache (dict): Maps parameter names to boolean indicating 
+          whether the parameter is global (True) or per-row (False).
     """
     ### Input validation 
     if not isinstance(root, zarr.core.group.Group):
@@ -1385,9 +1621,12 @@ def _load_deps_from_zarr(root):
     if any(root.arrays()):
         raise ValueError("root cannot have arrays.")
     
-    ### Parse root to create deps_maps and validate file structure.
+    ### Parse root to create deps_maps, is_global_cache and validate file 
+    ### structure.
     # deps_maps: data_idx (or 'global') -> run_idx -> param name -> dependencies 
     deps_maps = {} 
+    # is_global_cache: param name -> bool (True if global, False if per-row)
+    is_global_cache = {}
     # Iterate through runs
     for run_str, grp in root.groups():
         # Input validation
@@ -1479,6 +1718,14 @@ def _load_deps_from_zarr(root):
                     )
                 deps_maps['global'][run_idx][name] = deps_attr
                 
+                # Update is_global_cache
+                if name in is_global_cache and not is_global_cache[name]:
+                    raise ValueError(
+                        f"Parameter {name} found as both global and per-row "
+                        f"in zarr file"
+                    )
+                is_global_cache[name] = True
+                
             else:
                 # For non-global parameters, deps should be 
                 # {data_idx_str: {str: int}}
@@ -1529,9 +1776,20 @@ def _load_deps_from_zarr(root):
                             f" data_idx {data_idx}"
                         )
                     deps_maps[data_idx][run_idx][name] = deps
+                    
+                    # Update is_global_cache
+                    if name in is_global_cache and is_global_cache[name]:
+                        raise ValueError(
+                            f"Parameter {name} found as both global and per-row"
+                            f" in zarr file"
+                        )
+                    is_global_cache[name] = False
     
-    return deps_maps
+    return deps_maps, is_global_cache
 
+################################################################################ 
+########################### YAML to dict conversion ############################
+################################################################################
 def _convert_yaml_to_steps(pl_dict, cal_steps, key = None):
     """
     Converts YAML-defined path dictionary leaves to plStep objects.
@@ -1558,7 +1816,7 @@ def _convert_yaml_to_steps(pl_dict, cal_steps, key = None):
     return pl_dict
 
 ################################################################################
-# Analysis helper
+# Analysis helpers -> in progress
 ################################################################################    
 def _collect_user_params(obj, result = None):
     """

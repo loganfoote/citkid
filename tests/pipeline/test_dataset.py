@@ -14,9 +14,17 @@ import builtins
 def test_paths_are_normalized(monkeypatch):
     DS = pds.DataSet.__new__(pds.DataSet)
     # patch module-level helper functions to avoid file I/O and custom code
-    monkeypatch.setattr(pds, "_load_custom_steps", lambda custom_path: ([], []))
+    monkeypatch.setattr(pds, "_load_custom_steps", lambda custom_path: [])
     monkeypatch.setattr(pds, "_convert_yaml_to_steps", lambda y, cs=None: {})
-    monkeypatch.setattr(pds, "_load_deps_from_zarr", lambda root: {})
+    monkeypatch.setattr(pds, "_load_deps_from_zarr", lambda root: ({}, {}))
+    monkeypatch.setattr(pds.pf, "check_pl_tree_structure", lambda pl, cal: None)
+    monkeypatch.setattr(pds.default_steps, "default_cal_steps", [])
+    monkeypatch.setattr(pds.default_steps, "default_analysis_steps", [])
+    
+    # Mock find_pl_path to return a valid nrows step
+    from citkid.pipeline.framework import plStep
+    fake_nrows_step = plStep('import_data', lambda: None, [], ['nrows'], 'global')
+    monkeypatch.setattr(pds.pf, "find_pl_path", lambda pl, param: [fake_nrows_step] if param == 'nrows' else None)
 
     # patch zarr.open_group loading
     fake_root = object()
@@ -62,7 +70,7 @@ def test_paths_are_normalized(monkeypatch):
 ])
 def test_paths_validation(monkeypatch, custom_path, yaml_path, zarr_path):
     DS = pds.DataSet.__new__(pds.DataSet)
-    monkeypatch.setattr(pds, "_load_custom_steps", lambda custom_path: ([], []))
+    monkeypatch.setattr(pds, "_load_custom_steps", lambda custom_path: [])
     monkeypatch.setattr(pds, "_convert_yaml_to_steps", lambda y, cs=None: {})
     monkeypatch.setattr("yaml.safe_load", lambda f: {})
 
@@ -88,11 +96,10 @@ def test_load_custom_steps(tmp_path):
     DS = pds.DataSet.__new__(pds.DataSet)
     DS.custom_path = tmp_path / "custom_steps.py"
 
-    cal_steps, analysis_steps = pds._load_custom_steps(str(DS.custom_path))
+    cal_steps = pds._load_custom_steps(str(DS.custom_path))
 
     assert len(cal_steps) == 1
     assert cal_steps[0].name == "custom1"
-    assert isinstance(analysis_steps, list)
 
 def test_load_custom_steps_none():
     DS = pds.DataSet.__new__(pds.DataSet)
@@ -144,8 +151,13 @@ def test_init_calls_convert(monkeypatch):
         pds.default_steps, "default_analysis_steps", []
     )
     monkeypatch.setattr(
-        pds, "_load_deps_from_zarr", lambda root: {}
+        pds, "_load_deps_from_zarr", lambda root: ({}, {})
     )
+
+    # Mock find_pl_path to return a valid nrows step
+    from citkid.pipeline.framework import plStep
+    fake_nrows_step = plStep('import_data', lambda: None, [], ['nrows'], 'global')
+    monkeypatch.setattr(pds.pf, "find_pl_path", lambda pl, param: [fake_nrows_step] if param == 'nrows' else None)
 
     # patch zarr.open_group loading
     fake_root = object()
@@ -206,10 +218,15 @@ def test_init_checks_pipeline_structure(monkeypatch):
     monkeypatch.setattr(pds.pf, "check_pl_tree_structure", fake_check)
     monkeypatch.setattr(pds, "_load_custom_steps", lambda custom_path: ([], []))
     monkeypatch.setattr(pds, "_convert_yaml_to_steps", lambda y, cs: {'step1': {}})
-    monkeypatch.setattr(pds, "_load_deps_from_zarr", lambda root: {})
+    monkeypatch.setattr(pds, "_load_deps_from_zarr", lambda root: ({}, {}))
     monkeypatch.setattr(pds.default_steps, "default_cal_steps", [])
     monkeypatch.setattr(pds.default_steps, "default_analysis_steps", [])
     
+    # Mock find_pl_path to return a valid nrows step
+    from citkid.pipeline.framework import plStep
+    fake_nrows_step = plStep('import_data', lambda: None, [], ['nrows'], 'global')
+    monkeypatch.setattr(pds.pf, "find_pl_path", lambda pl, param: [fake_nrows_step] if param == 'nrows' else None)
+
     fake_root = object()
     monkeypatch.setattr("zarr.open_group", lambda path, mode: fake_root)
     
@@ -229,10 +246,15 @@ def test_init_initializes_caches(monkeypatch):
     """Test that __init__ initializes _memory_cache and _is_global_cache."""
     monkeypatch.setattr(pds, "_load_custom_steps", lambda custom_path: ([], []))
     monkeypatch.setattr(pds, "_convert_yaml_to_steps", lambda y, cs: {})
-    monkeypatch.setattr(pds, "_load_deps_from_zarr", lambda root: {'test': 'data'})
+    monkeypatch.setattr(pds, "_load_deps_from_zarr", lambda root: ({'test': 'data'}, {}))
     monkeypatch.setattr(pds.pf, "check_pl_tree_structure", lambda pl, cal: None)
     monkeypatch.setattr(pds.default_steps, "default_cal_steps", [])
     monkeypatch.setattr(pds.default_steps, "default_analysis_steps", [])
+    
+    # Mock find_pl_path to return a valid nrows step
+    from citkid.pipeline.framework import plStep
+    fake_nrows_step = plStep('import_data', lambda: None, [], ['nrows'], 'global')
+    monkeypatch.setattr(pds.pf, "find_pl_path", lambda pl, param: [fake_nrows_step] if param == 'nrows' else None)
     
     fake_root = object()
     monkeypatch.setattr("zarr.open_group", lambda path, mode: fake_root)
@@ -1701,7 +1723,7 @@ def test_load_deps_from_zarr_valid_global_param():
     param.attrs['global'] = True
     param.create_array('data', shape=(10,), dtype='float64')
     
-    deps_maps = pds._load_deps_from_zarr(root)
+    deps_maps, is_global_cache = pds._load_deps_from_zarr(root)
     
     assert 'global' in deps_maps
     assert 1 in deps_maps['global']
@@ -1723,7 +1745,7 @@ def test_load_deps_from_zarr_valid_perrow_param():
     param.create_array('data', shape=(10,), dtype='float64')
     param.create_array('row_exists', shape=(10,), dtype=bool)
     
-    deps_maps = pds._load_deps_from_zarr(root)
+    deps_maps, is_global_cache = pds._load_deps_from_zarr(root)
     
     assert 0 in deps_maps
     assert 5 in deps_maps
@@ -1748,7 +1770,7 @@ def test_load_deps_from_zarr_multiple_runs():
     param2.attrs['global'] = True
     param2.create_array('data', shape=(10,), dtype='float64')
     
-    deps_maps = pds._load_deps_from_zarr(root)
+    deps_maps, is_global_cache = pds._load_deps_from_zarr(root)
     
     assert 1 in deps_maps['global']
     assert 2 in deps_maps['global']
@@ -1761,9 +1783,10 @@ def test_load_deps_from_zarr_empty_root():
     import zarr
     root = zarr.group()
     
-    deps_maps = pds._load_deps_from_zarr(root)
+    deps_maps, is_global_cache = pds._load_deps_from_zarr(root)
     
     assert deps_maps == {}
+    assert is_global_cache == {}
 
 
 def test_load_deps_from_zarr_integer_data_idx_key():
@@ -1778,7 +1801,7 @@ def test_load_deps_from_zarr_integer_data_idx_key():
     param.create_array('data', shape=(10,), dtype='float64')
     param.create_array('row_exists', shape=(10,), dtype=bool)
     
-    deps_maps = pds._load_deps_from_zarr(root)
+    deps_maps, is_global_cache = pds._load_deps_from_zarr(root)
     
     assert 0 in deps_maps
     assert 3 in deps_maps
@@ -1809,9 +1832,10 @@ def test_check_path_validity_trims_completed_global_steps():
     """Test _check_path_validity trims global steps with existing outputs."""
     import zarr
     DS = pds.DataSet.__new__(pds.DataSet)
-    DS.deps_maps = {'global': {}}  # No previous runs
+    DS.deps_maps = {'global': {1: {'output1': {}}}}  # output1 exists at run 1
     DS._memory_cache = {1: {'output1': 42}}
     DS._is_global_cache = {'output1': True}
+    DS._lazy_collections = {}
     DS.root = zarr.group()
     
     step1 = pds.pf.plStep(
@@ -1842,12 +1866,13 @@ def test_check_path_validity_trims_completed_perrow_steps():
     DS = pds.DataSet.__new__(pds.DataSet)
     DS.nrows = 3
     DS.deps_maps = {
-        0: {},  # No previous runs
-        1: {}   # No previous runs
+        0: {1: {'output1': {}}},  # output1 exists at run 1 for data_idx 0
+        1: {1: {'output1': {}}}   # output1 exists at run 1 for data_idx 1
     }
     DS._memory_cache = {1: {'output1': pds.pf.LazyAttr(DS, 'output1', 1)}}
     DS._memory_cache[1]['output1']._cache = {0: 10, 1: 20}
     DS._is_global_cache = {'output1': False}
+    DS._lazy_collections = {}
     DS.root = zarr.group()
     
     step1 = pds.pf.plStep(
@@ -1988,21 +2013,22 @@ def test_check_path_validity_type_mismatch_global_needs_perrow():
     import zarr
     DS = pds.DataSet.__new__(pds.DataSet)
     DS.nrows = 3
-    DS.deps_maps = {'global': {}}
+    DS.deps_maps = {'global': {}, 0: {}, 1: {}, 2: {}}
     DS._memory_cache = {}
     DS._is_global_cache = {}
+    DS._lazy_collections = {}
     DS.root = zarr.group()
     
     step1 = pds.pf.plStep(
         name='step1',
-        func=lambda: {'output1': [1, 2, 3]},
+        func=lambda: [1, 2, 3],  # Return list not dict - _run wraps it
         func_type='global-res',
         param_names=[],
         return_names=['output1']
     )
     step2 = pds.pf.plStep(
         name='step2',
-        func=lambda x: {'output2': x},
+        func=lambda x: x,  # Return value not dict - _run wraps it
         func_type='global',
         param_names=['output1'],
         return_names=['output2']

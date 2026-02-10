@@ -55,7 +55,7 @@ default_analysis_steps =\
   ['fg', 'zg', 'fr_spans'], ['p_amp', 'p_phase', 'gain_mask'], 'per-row'),
 
  ('fit_iq_circle', circle.fit_iq_circle, 
-  ['zf_rmv', 'idx_circfit'], ['circ_origin', 'circ_radius'], 'per-row'),
+  ['zf_rmv', 'circ_mask'], ['circ_origin', 'circ_radius'], 'per-row'),
 
  ('get_theta_phase_offset', circle.get_theta_phase_offset, 
   ['zt_rmv', 'circ_origin'], ['theta_phase_offset'], 'per-row'),

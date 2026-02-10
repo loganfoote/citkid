@@ -35,11 +35,12 @@ def create_nonglobal_param(run_grp, param_name, deps, nrows=5, data_shape=()):
 ################################################################################
 
 def test_empty_root():
-    """Test with empty root - should return empty deps_maps."""
+    """Test with empty root - should return empty deps_maps and is_global_cache."""
     with tempfile.TemporaryDirectory() as tmpdir:
         root = zarr.open_group(os.path.join(tmpdir, 'test.zarr'), mode='w')
-        result = _load_deps_from_zarr(root)
-        assert result == {}
+        deps_maps, is_global_cache = _load_deps_from_zarr(root)
+        assert deps_maps == {}
+        assert is_global_cache == {}
 
 
 def test_single_run_single_global_param():
@@ -50,11 +51,12 @@ def test_single_run_single_global_param():
         deps = {'param1': 0, 'param2': 1}
         create_global_param(run0, 'output1', deps)
         
-        result = _load_deps_from_zarr(root)
-        assert 'global' in result
-        assert 0 in result['global']
-        assert 'output1' in result['global'][0]
-        assert result['global'][0]['output1'] == deps
+        deps_maps, is_global_cache = _load_deps_from_zarr(root)
+        assert 'global' in deps_maps
+        assert 0 in deps_maps['global']
+        assert 'output1' in deps_maps['global'][0]
+        assert deps_maps['global'][0]['output1'] == deps
+        assert is_global_cache == {'output1': True}
 
 
 def test_single_run_single_nonglobal_param():
@@ -68,13 +70,14 @@ def test_single_run_single_nonglobal_param():
         }
         create_nonglobal_param(run0, 'output1', deps, nrows=5)
         
-        result = _load_deps_from_zarr(root)
-        assert 0 in result
-        assert 1 in result
-        assert 0 in result[0]
-        assert 'output1' in result[0][0]
-        assert result[0][0]['output1'] == deps['idx0']
-        assert result[1][0]['output1'] == deps['idx1']
+        deps_maps, is_global_cache = _load_deps_from_zarr(root)
+        assert 0 in deps_maps
+        assert 1 in deps_maps
+        assert 0 in deps_maps[0]
+        assert 'output1' in deps_maps[0][0]
+        assert deps_maps[0][0]['output1'] == deps['idx0']
+        assert deps_maps[1][0]['output1'] == deps['idx1']
+        assert is_global_cache == {'output1': False}
 
 
 def test_mixed_global_and_nonglobal_params():
@@ -94,11 +97,12 @@ def test_mixed_global_and_nonglobal_params():
         }
         create_nonglobal_param(run1, 'nonglobal_output', nonglobal_deps, nrows=5)
         
-        result = _load_deps_from_zarr(root)
-        assert 'global' in result
-        assert result['global'][1]['global_output'] == global_deps
-        assert result[0][1]['nonglobal_output'] == nonglobal_deps['idx0']
-        assert result[2][1]['nonglobal_output'] == nonglobal_deps['idx2']
+        deps_maps, is_global_cache = _load_deps_from_zarr(root)
+        assert 'global' in deps_maps
+        assert deps_maps['global'][1]['global_output'] == global_deps
+        assert deps_maps[0][1]['nonglobal_output'] == nonglobal_deps['idx0']
+        assert deps_maps[2][1]['nonglobal_output'] == nonglobal_deps['idx2']
+        assert is_global_cache == {'global_output': True, 'nonglobal_output': False}
 
 
 def test_multiple_runs():
@@ -118,12 +122,13 @@ def test_multiple_runs():
         run2 = root.create_group('run2')
         create_global_param(run2, 'param_c', {'param_a': 0, 'param_b': 1})
         
-        result = _load_deps_from_zarr(root)
-        assert 'global' in result
-        assert len(result['global']) == 3
-        assert result['global'][0]['param_a'] == {}
-        assert result['global'][1]['param_b'] == {'param_a': 0}
-        assert result['global'][2]['param_c'] == {'param_a': 0, 'param_b': 1}
+        deps_maps, is_global_cache = _load_deps_from_zarr(root)
+        assert 'global' in deps_maps
+        assert len(deps_maps['global']) == 3
+        assert deps_maps['global'][0]['param_a'] == {}
+        assert deps_maps['global'][1]['param_b'] == {'param_a': 0}
+        assert deps_maps['global'][2]['param_c'] == {'param_a': 0, 'param_b': 1}
+        assert is_global_cache == {'param_a': True, 'param_b': True, 'param_c': True}
 
 
 def test_multiple_params_in_same_run():
@@ -136,12 +141,13 @@ def test_multiple_params_in_same_run():
         create_global_param(run0, 'param_b', {})
         create_global_param(run0, 'param_c', {})
         
-        result = _load_deps_from_zarr(root)
-        assert 'global' in result
-        assert len(result['global'][0]) == 3
-        assert 'param_a' in result['global'][0]
-        assert 'param_b' in result['global'][0]
-        assert 'param_c' in result['global'][0]
+        deps_maps, is_global_cache = _load_deps_from_zarr(root)
+        assert 'global' in deps_maps
+        assert len(deps_maps['global'][0]) == 3
+        assert 'param_a' in deps_maps['global'][0]
+        assert 'param_b' in deps_maps['global'][0]
+        assert 'param_c' in deps_maps['global'][0]
+        assert is_global_cache == {'param_a': True, 'param_b': True, 'param_c': True}
 
 
 def test_run_numbers_with_gaps():
@@ -155,9 +161,10 @@ def test_run_numbers_with_gaps():
         run100 = root.create_group('run100')
         create_global_param(run100, 'param2', {'param1': 5})
         
-        result = _load_deps_from_zarr(root)
-        assert 5 in result['global']
-        assert 100 in result['global']
+        deps_maps, is_global_cache = _load_deps_from_zarr(root)
+        assert 5 in deps_maps['global']
+        assert 100 in deps_maps['global']
+        assert is_global_cache == {'param1': True, 'param2': True}
 
 
 def test_empty_deps_dict():
@@ -168,8 +175,9 @@ def test_empty_deps_dict():
         
         create_global_param(run0, 'base_param', {})
         
-        result = _load_deps_from_zarr(root)
-        assert result['global'][0]['base_param'] == {}
+        deps_maps, is_global_cache = _load_deps_from_zarr(root)
+        assert deps_maps['global'][0]['base_param'] == {}
+        assert is_global_cache == {'base_param': True}
 
 
 def test_nonglobal_with_different_data_indices():
@@ -186,13 +194,14 @@ def test_nonglobal_with_different_data_indices():
         }
         create_nonglobal_param(run0, 'varied_param', deps, nrows=101)
         
-        result = _load_deps_from_zarr(root)
-        assert 0 in result
-        assert 5 in result
-        assert 10 in result
-        assert 100 in result
-        assert all(result[i][0]['varied_param'] == {'base': 0} 
+        deps_maps, is_global_cache = _load_deps_from_zarr(root)
+        assert 0 in deps_maps
+        assert 5 in deps_maps
+        assert 10 in deps_maps
+        assert 100 in deps_maps
+        assert all(deps_maps[i][0]['varied_param'] == {'base': 0}
                    for i in [0, 5, 10, 100])
+        assert is_global_cache == {'varied_param': False}
 
 
 ################################################################################
@@ -499,8 +508,9 @@ def test_large_run_number():
         run_large = root.create_group('run999999')
         create_global_param(run_large, 'param1', {})
         
-        result = _load_deps_from_zarr(root)
-        assert 999999 in result['global']
+        deps_maps, is_global_cache = _load_deps_from_zarr(root)
+        assert 999999 in deps_maps['global']
+        assert is_global_cache == {'param1': True}
 
 
 def test_large_data_idx():
@@ -512,8 +522,9 @@ def test_large_data_idx():
         deps = {'idx999999': {'base': 0}}
         create_nonglobal_param(run0, 'param1', deps, nrows=1000000)
         
-        result = _load_deps_from_zarr(root)
-        assert 999999 in result
+        deps_maps, is_global_cache = _load_deps_from_zarr(root)
+        assert 999999 in deps_maps
+        assert is_global_cache == {'param1': False}
 
 
 def test_data_idx_formats():
@@ -529,9 +540,10 @@ def test_data_idx_formats():
         }
         create_nonglobal_param(run0, 'param1', deps, nrows=5)
         
-        result = _load_deps_from_zarr(root)
-        assert 0 in result
-        assert 1 in result
+        deps_maps, is_global_cache = _load_deps_from_zarr(root)
+        assert 0 in deps_maps
+        assert 1 in deps_maps
+        assert is_global_cache == {'param1': False}
 
 
 def test_complex_deps_structure():
@@ -552,8 +564,9 @@ def test_complex_deps_structure():
         run2 = root.create_group('run2')
         create_global_param(run2, 'final', {'base1': 0, 'inter1': 1})
         
-        result = _load_deps_from_zarr(root)
-        assert result['global'][2]['final'] == {'base1': 0, 'inter1': 1}
+        deps_maps, is_global_cache = _load_deps_from_zarr(root)
+        assert deps_maps['global'][2]['final'] == {'base1': 0, 'inter1': 1}
+        assert is_global_cache == {'base1': True, 'base2': True, 'inter1': True, 'final': True}
 
 
 def test_numpy_integer_in_deps():
@@ -571,8 +584,9 @@ def test_numpy_integer_in_deps():
         deps = {'param1': int(np.int64(0)), 'param2': int(np.int32(1))}
         create_global_param(run0, 'output', deps)
         
-        result = _load_deps_from_zarr(root)
-        assert result['global'][0]['output'] == deps
+        deps_maps, is_global_cache = _load_deps_from_zarr(root)
+        assert deps_maps['global'][0]['output'] == deps
+        assert is_global_cache == {'output': True}
 
 
 def test_mixed_runs_and_params():
@@ -599,14 +613,23 @@ def test_mixed_runs_and_params():
                                 'idx1': {'resonator_params': 1, 'processed_config': 1}},
                                nrows=10)
         
-        result = _load_deps_from_zarr(root)
+        deps_maps, is_global_cache = _load_deps_from_zarr(root)
         
         # Verify global params
-        assert 'global' in result
-        assert result['global'][0]['config'] == {}
-        assert result['global'][1]['processed_config'] == {'config': 0}
+        assert 'global' in deps_maps
+        assert deps_maps['global'][0]['config'] == {}
+        assert deps_maps['global'][1]['processed_config'] == {'config': 0}
         
         # Verify non-global params
-        assert 0 in result and 1 in result
-        assert result[0][1]['resonator_params'] == {'config': 0}
-        assert result[0][2]['results'] == {'resonator_params': 1, 'processed_config': 1}
+        assert deps_maps[0][1]['resonator_params'] == {'config': 0}
+        assert deps_maps[0][2]['results'] == {'resonator_params': 1, 'processed_config': 1}
+        
+        # Verify is_global_cache
+        assert is_global_cache == {
+            'config': True,
+            'metadata': True,
+            'processed_config': True,
+            'resonator_params': False,
+            'results': False
+        }
+

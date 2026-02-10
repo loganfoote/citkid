@@ -22,12 +22,12 @@ class LazyAttr:
             raise ValueError("name must be a string")
         run_idx = int(run_idx)
 
-        # store DS and name for later use, and initialize cache and shape
+        # store DS and name for later use, and initialize cache
         self.DS = DS
         self.name = name
         self.run_idx = run_idx
         self._cache = {}        # maps row -> np.ndarray
-        self.shape = ()
+        self._shape = ()        # computed shape cache
 
     def _normalize_key(self, key):
         """
@@ -102,8 +102,8 @@ class LazyAttr:
             for r, data in zip(missing, fetched_data):
                 self._cache[r] = data
             # Update shape if first time loading
-            if self.shape == () and len(fetched_data) > 0:
-                self.shape = (self.DS.nrows, *fetched_data[0].shape)
+            if self._shape == () and len(fetched_data) > 0:
+                self._shape = (self.DS.nrows, *fetched_data[0].shape)
         
         # Retrieve from cache
         out = [self._cache[r] for r in rows]
@@ -160,14 +160,27 @@ class LazyAttr:
             self._cache[r] = v
             
         # Update the shape of the LazyAttr if needed.
-        if self.shape == ():
+        if self._shape == ():
             first_val = value[0]
             if hasattr(first_val, 'shape'):
-                self.shape = (self.DS.nrows, *first_val.shape)
+                self._shape = (self.DS.nrows, *first_val.shape)
             else:
                 # Scalar value, shape is just (nrows,)
-                self.shape = (self.DS.nrows,)
+                self._shape = (self.DS.nrows,)
 
+    @property
+    def shape(self):
+        """
+        Return the shape of the data array, like numpy arrays.
+        
+        Shape is (nrows, ...) where ... represents the shape of individual
+        row data. Returns () if no data has been loaded yet.
+        
+        Returns:
+            tuple: Shape of the data array.
+        """
+        return self._shape
+    
     def __len__(self):
         """
         Return the number of rows (nrows) for this attribute.
@@ -399,6 +412,24 @@ class LazyAttrCollection:
                 f"Run {run_idx} already exists for parameter '{self.name}'"
             )
         self._lazy_attrs[run_idx] = lazy_attr
+    
+    @property
+    def shape(self):
+        """
+        Return the shape of the data array from the most recent run.
+        
+        Uses the LazyAttr with the highest run_idx to determine shape.
+        Returns () if no runs exist yet.
+        
+        Returns:
+            tuple: Shape of the data array from most recent run.
+        """
+        if not self._lazy_attrs:
+            return ()
+        
+        # Get the most recent run (max run_idx)
+        most_recent_run = max(self._lazy_attrs.keys())
+        return self._lazy_attrs[most_recent_run].shape
     
     def __len__(self):
         """
