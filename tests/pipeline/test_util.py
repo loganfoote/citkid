@@ -220,3 +220,249 @@ def _always_exists(monkeypatch):
         """Test that PermissionError from subprocess is propagated."""
         with pytest.raises(PermissionError, match="Permission denied"):
             util.open_in_file_explorer(temp_dir)
+
+
+################################################################################
+############################ group_unique_tuples ###############################
+################################################################################
+
+def test_group_unique_tuples_empty_list():
+    """Test with empty input list."""
+    unique, indices = util.group_unique_tuples([])
+    assert unique == []
+    assert indices == []
+
+
+def test_group_unique_tuples_single_element():
+    """Test with single tuple."""
+    tuples = [(1, {'a': 1})]
+    unique, indices = util.group_unique_tuples(tuples)
+    assert unique == [(1, {'a': 1})]
+    assert indices == [[0]]
+
+
+def test_group_unique_tuples_all_identical():
+    """Test with all identical tuples."""
+    tuples = [(1, {'a': 1}), (1, {'a': 1}), (1, {'a': 1})]
+    unique, indices = util.group_unique_tuples(tuples)
+    assert len(unique) == 1
+    assert unique[0] == (1, {'a': 1})
+    assert indices == [[0, 1, 2]]
+
+
+def test_group_unique_tuples_all_unique():
+    """Test with all unique tuples."""
+    tuples = [(1, {'a': 1}), (2, {'b': 2}), (3, {'c': 3})]
+    unique, indices = util.group_unique_tuples(tuples)
+    assert len(unique) == 3
+    assert len(indices) == 3
+    # Each should appear once
+    for idx_list in indices:
+        assert len(idx_list) == 1
+
+
+def test_group_unique_tuples_basic_grouping():
+    """Test basic grouping as shown in docstring."""
+    tuples = [(1, {'a': 1}), (2, {'b': 2}), (1, {'a': 1})]
+    unique, indices = util.group_unique_tuples(tuples)
+    
+    assert len(unique) == 2
+    assert len(indices) == 2
+    
+    # Find which index corresponds to each unique tuple
+    for i, tup in enumerate(unique):
+        if tup == (1, {'a': 1}):
+            assert set(indices[i]) == {0, 2}
+        elif tup == (2, {'b': 2}):
+            assert indices[i] == [1]
+
+
+def test_group_unique_tuples_different_int_keys():
+    """Test with different integer keys but same dict."""
+    tuples = [(1, {'x': 10}), (2, {'x': 10}), (1, {'x': 10})]
+    unique, indices = util.group_unique_tuples(tuples)
+    
+    assert len(unique) == 2
+    # (1, {'x': 10}) should have indices 0 and 2
+    # (2, {'x': 10}) should have index 1
+
+
+def test_group_unique_tuples_same_key_different_dicts():
+    """Test with same key but different dict values."""
+    tuples = [(1, {'a': 1}), (1, {'a': 2}), (1, {'a': 1})]
+    unique, indices = util.group_unique_tuples(tuples)
+    
+    assert len(unique) == 2
+    # Should group by dict content, not just key
+
+
+def test_group_unique_tuples_tuple_as_key():
+    """Test with tuples as the first element."""
+    tuples = [((1, 2), {'a': 1}), ((3, 4), {'b': 2}), ((1, 2), {'a': 1})]
+    unique, indices = util.group_unique_tuples(tuples)
+    
+    assert len(unique) == 2
+    for i, tup in enumerate(unique):
+        if tup == ((1, 2), {'a': 1}):
+            assert set(indices[i]) == {0, 2}
+        elif tup == ((3, 4), {'b': 2}):
+            assert indices[i] == [1]
+
+
+def test_group_unique_tuples_string_as_key():
+    """Test with strings as the first element."""
+    tuples = [('key1', {'a': 1}), ('key2', {'b': 2}), ('key1', {'a': 1})]
+    unique, indices = util.group_unique_tuples(tuples)
+    
+    assert len(unique) == 2
+
+
+def test_group_unique_tuples_empty_dicts():
+    """Test with empty dictionaries."""
+    tuples = [(1, {}), (2, {}), (1, {})]
+    unique, indices = util.group_unique_tuples(tuples)
+    
+    assert len(unique) == 2
+    # (1, {}) and (2, {}) are different due to different keys
+
+
+def test_group_unique_tuples_complex_dicts():
+    """Test with complex dictionary values."""
+    tuples = [
+        (1, {'a': 1, 'b': 2, 'c': 3}),
+        (2, {'x': 10}),
+        (1, {'a': 1, 'b': 2, 'c': 3}),
+        (3, {'a': 1, 'b': 2, 'c': 3})
+    ]
+    unique, indices = util.group_unique_tuples(tuples)
+    
+    assert len(unique) == 3
+    # (1, {'a': 1, 'b': 2, 'c': 3}) appears at indices 0 and 2
+
+
+def test_group_unique_tuples_dict_order_irrelevant():
+    """Test that dict key order doesn't affect grouping."""
+    # Python dicts maintain insertion order, but comparison should be 
+    # content-based
+    tuples = [
+        (1, {'a': 1, 'b': 2}),
+        (1, {'b': 2, 'a': 1}),  # Same content, different order
+    ]
+    unique, indices = util.group_unique_tuples(tuples)
+    
+    # Should be grouped together since dict content is the same
+    assert len(unique) == 1
+    assert indices == [[0, 1]]
+
+
+def test_group_unique_tuples_nested_values():
+    """Test with nested hashable structures in dict values."""
+    tuples = [
+        (1, {'a': (1, 2, 3)}),
+        (2, {'a': (4, 5, 6)}),
+        (1, {'a': (1, 2, 3)})
+    ]
+    unique, indices = util.group_unique_tuples(tuples)
+    
+    assert len(unique) == 2
+    # Tuple (1, {'a': (1, 2, 3)}) should appear at indices 0 and 2
+
+
+def test_group_unique_tuples_unhashable_values_raises():
+    """Test that unhashable values in dict raise TypeError."""
+    tuples = [
+        (1, {'a': [1, 2, 3]}),  # List is unhashable
+    ]
+    with pytest.raises(TypeError, match="unhashable type"):
+        util.group_unique_tuples(tuples)
+
+
+def test_group_unique_tuples_multiple_groups():
+    """Test with multiple groups of duplicates."""
+    tuples = [
+        (1, {'a': 1}),  # 0
+        (2, {'b': 2}),  # 1
+        (1, {'a': 1}),  # 2
+        (3, {'c': 3}),  # 3
+        (2, {'b': 2}),  # 4
+        (1, {'a': 1}),  # 5
+    ]
+    unique, indices = util.group_unique_tuples(tuples)
+    
+    assert len(unique) == 3
+    # Verify all original indices are accounted for
+    all_indices = set()
+    for idx_list in indices:
+        all_indices.update(idx_list)
+    assert all_indices == {0, 1, 2, 3, 4, 5}
+
+
+def test_group_unique_tuples_preserves_first_occurrence():
+    """Test that unique list uses first occurrence of each unique tuple."""
+    tuples = [
+        (1, {'a': 1}),  # First occurrence of this combo
+        (2, {'b': 2}),
+        (1, {'a': 1}),  # Duplicate
+    ]
+    unique, indices = util.group_unique_tuples(tuples)
+    
+    # The unique tuple should be from index 0
+    for i, tup in enumerate(unique):
+        if tup == (1, {'a': 1}):
+            # First index in the group should be 0
+            assert 0 in indices[i]
+
+
+def test_group_unique_tuples_indices_maintain_order():
+    """Test that indices within each group maintain original order."""
+    tuples = [
+        (1, {'a': 1}),  # 0
+        (2, {'b': 2}),  # 1
+        (1, {'a': 1}),  # 2
+        (2, {'b': 2}),  # 3
+        (1, {'a': 1}),  # 4
+    ]
+    unique, indices = util.group_unique_tuples(tuples)
+    
+    for idx_list in indices:
+        # Check that indices are in ascending order
+        assert idx_list == sorted(idx_list)
+
+
+def test_group_unique_tuples_large_groups():
+    """Test with many duplicates in a group."""
+    base_tuple = (1, {'x': 100})
+    tuples = [base_tuple] * 50 + [(2, {'y': 200})]
+    
+    unique, indices = util.group_unique_tuples(tuples)
+    
+    assert len(unique) == 2
+    # One group should have 50 elements
+    assert any(len(idx_list) == 50 for idx_list in indices)
+    assert any(len(idx_list) == 1 for idx_list in indices)
+
+
+def test_group_unique_tuples_numeric_dict_values():
+    """Test with various numeric types in dict values."""
+    tuples = [
+        (1, {'val': 1}),
+        (1, {'val': 1.0}),  # Different type but equal value
+        (1, {'val': 1})
+    ]
+    unique, indices = util.group_unique_tuples(tuples)
+    
+    # 1 and 1.0 compare equal, so might be grouped together
+    # This tests the actual behavior of frozenset(dict.items())
+    assert len(unique) <= 2
+
+
+def test_group_unique_tuples_none_values():
+    """Test with None in dict values."""
+    tuples = [
+        (1, {'a': None}),
+        (2, {'a': None}),
+        (1, {'a': None})
+    ]
+    unique, indices = util.group_unique_tuples(tuples)
+    
+    assert len(unique) == 2

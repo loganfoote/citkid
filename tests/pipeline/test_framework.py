@@ -1102,6 +1102,49 @@ def test_lazyattr_different_run_indices():
     assert np.array_equal(val2, [35])
 
 
+def test_lazyattr_repr():
+    """Test __repr__ method shows name and cached row count."""
+    DS = MockDataSetForLazyAttr(nrows=20)
+    LA = pf.LazyAttr(DS, 'test_param', run_idx=3)
+    
+    # Initially no cached rows
+    result = repr(LA)
+    assert "LazyAttr" in result
+    assert "test_param" in result
+    assert "0 cached rows" in result
+    
+    # Add some cached rows
+    LA[5] = np.array([100])
+    LA[10] = np.array([200])
+    LA[15] = np.array([300])
+    
+    result = repr(LA)
+    assert "LazyAttr" in result
+    assert "test_param" in result
+    assert "3 cached rows" in result
+
+
+def test_lazyattr_str():
+    """Test __str__ method shows detailed info with cached row indices."""
+    DS = MockDataSetForLazyAttr(nrows=15)
+    LA = pf.LazyAttr(DS, 'my_data', run_idx=1)
+    
+    # Initially no cached rows
+    result = str(LA)
+    assert "Lazy Attribute: my_data" in result
+    assert "Cached Rows: []" in result
+    
+    # Add cached rows in non-sequential order
+    LA[7] = np.array([70])
+    LA[2] = np.array([20])
+    LA[12] = np.array([120])
+    
+    result = str(LA)
+    assert "Lazy Attribute: my_data" in result
+    # Should be sorted in the output
+    assert "Cached Rows: [2, 7, 12]" in result
+
+
 ################################################################################
 ########################### LazyAttrCollection #################################
 ################################################################################
@@ -1543,6 +1586,25 @@ def test_lazyattrcollection_str():
     assert "Lazy Attribute Collection: param_x" in result
     assert "Available runs: [2, 7]" in result
     assert "Number of data indices: 15" in result
+
+
+def test_lazyattrcollection_len():
+    """Test __len__ method returns nrows from DataSet."""
+    DS = MockDataSetForCollection(nrows=25)
+    collection = pf.LazyAttrCollection(DS, 'param')
+    
+    assert len(collection) == 25
+    
+    # Test with different nrows
+    DS2 = MockDataSetForCollection(nrows=100)
+    collection2 = pf.LazyAttrCollection(DS2, 'other_param')
+    
+    assert len(collection2) == 100
+    
+    # Adding runs shouldn't change length (length is nrows, not number of runs)
+    collection2.add_run(1, pf.LazyAttr(DS2, 'other_param', 1))
+    collection2.add_run(5, pf.LazyAttr(DS2, 'other_param', 5))
+    assert len(collection2) == 100
 
 
 ################################################################################

@@ -326,6 +326,8 @@ class LazyAttrCollection:
         run_idx_to_data_idx = {}
         di_to_position = {}  # Track original position
         for pos, di in enumerate(data_idx_arr):
+            if di not in self.DS.deps_maps:
+                self.DS.deps_maps[di] = {}
             run_idx = get_most_recent_run(self.name, self.DS.deps_maps[di])
             # If parameter doesn't exist yet for this data_idx, default to run 1
             # (run 0 is reserved as a special case)

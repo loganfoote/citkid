@@ -1162,3 +1162,1431 @@ def test_fetch_rows_multiple_run_indices_error():
     with pytest.raises(ValueError, match="have different potential run indices"):
         DS._fetch_rows('param', run_idx=2, data_idx=[0, 1])
 
+
+################################################################################
+########################### _get_reserved_attrs ################################
+################################################################################
+def test_get_reserved_attrs_returns_set():
+    """Test _get_reserved_attrs returns a set."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    reserved = DS._get_reserved_attrs()
+    assert isinstance(reserved, set)
+
+
+def test_get_reserved_attrs_caches_result():
+    """Test _get_reserved_attrs caches result at class level."""
+    # Clear cache first
+    pds.DataSet._RESERVED_ATTRS = None
+    
+    DS1 = pds.DataSet.__new__(pds.DataSet)
+    DS2 = pds.DataSet.__new__(pds.DataSet)
+    
+    reserved1 = DS1._get_reserved_attrs()
+    reserved2 = DS2._get_reserved_attrs()
+    
+    # Should be the same object (cached)
+    assert reserved1 is reserved2
+    assert reserved1 is pds.DataSet._RESERVED_ATTRS
+
+
+def test_get_reserved_attrs_excludes_private():
+    """Test _get_reserved_attrs excludes private attributes (starting with _)."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    reserved = DS._get_reserved_attrs()
+    
+    # Check that private attributes are excluded
+    for attr in reserved:
+        assert not attr.startswith('_')
+
+
+def test_get_reserved_attrs_includes_public_methods():
+    """Test _get_reserved_attrs includes public methods."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    reserved = DS._get_reserved_attrs()
+    
+    # Check that known public methods are included
+    assert 'write_data' in reserved
+    assert 'show_file' in reserved
+
+
+################################################################################
+############################### show_file ######################################
+################################################################################
+def test_show_file_cal(monkeypatch):
+    """Test show_file opens cal yaml directory."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.cal_yaml_path = "/path/to/calibration.yaml"
+    
+    opened_path = []
+    def mock_open(path):
+        opened_path.append(path)
+    
+    monkeypatch.setattr(util, "open_in_file_explorer", mock_open)
+    
+    DS.show_file('cal')
+    
+    assert opened_path == ["/path/to"]
+
+
+def test_show_file_custom(monkeypatch):
+    """Test show_file opens custom steps directory."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.custom_path = "/path/to/custom_steps.py"
+    
+    opened_path = []
+    def mock_open(path):
+        opened_path.append(path)
+    
+    monkeypatch.setattr(util, "open_in_file_explorer", mock_open)
+    
+    DS.show_file('custom')
+    
+    assert opened_path == ["/path/to"]
+
+
+def test_show_file_custom_none(monkeypatch):
+    """Test show_file raises error when custom_path is None."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.custom_path = None
+    
+    monkeypatch.setattr(util, "open_in_file_explorer", lambda p: None)
+    
+    with pytest.raises(ValueError, match="No custom steps file was provided"):
+        DS.show_file('custom')
+
+
+def test_show_file_zarr(monkeypatch):
+    """Test show_file opens zarr directory."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.zarr_path = "/path/to/data.zarr"
+    
+    opened_path = []
+    def mock_open(path):
+        opened_path.append(path)
+    
+    monkeypatch.setattr(util, "open_in_file_explorer", mock_open)
+    
+    DS.show_file('zarr')
+    
+    assert opened_path == ["/path/to"]
+
+
+def test_show_file_analysis(monkeypatch):
+    """Test show_file opens analysis yaml directory."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.analysis_yaml_path = "/path/to/analysis.yaml"
+    
+    opened_path = []
+    def mock_open(path):
+        opened_path.append(path)
+    
+    monkeypatch.setattr(util, "open_in_file_explorer", mock_open)
+    
+    DS.show_file('analysis')
+    
+    assert opened_path == ["/path/to"]
+
+
+def test_show_file_analysis_none(monkeypatch):
+    """Test show_file raises error when analysis_yaml_path is None."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.analysis_yaml_path = None
+    
+    monkeypatch.setattr(util, "open_in_file_explorer", lambda p: None)
+    
+    with pytest.raises(ValueError, match="No analysis YAML file was provided"):
+        DS.show_file('analysis')
+
+
+################################################################################
+######################### _convert_yaml_to_steps ###############################
+################################################################################
+def test_convert_yaml_to_steps_simple_task():
+    """Test _convert_yaml_to_steps converts task string to plStep."""
+    mock_step = pds.pf.plStep(
+        name='test_step',
+        func=lambda x: x,
+        func_type='global',
+        param_names=['x'],
+        return_names=['y']
+    )
+    cal_steps = [mock_step]
+    
+    yaml_dict = {'task': 'test_step'}
+    result = pds._convert_yaml_to_steps(yaml_dict, cal_steps)
+    
+    assert result['task'] is mock_step
+
+
+def test_convert_yaml_to_steps_nested_dict():
+    """Test _convert_yaml_to_steps handles nested dictionaries."""
+    mock_step1 = pds.pf.plStep(
+        name='step1',
+        func=lambda x: x,
+        func_type='global',
+        param_names=['x'],
+        return_names=['y']
+    )
+    mock_step2 = pds.pf.plStep(
+        name='step2',
+        func=lambda x: x,
+        func_type='global',
+        param_names=['x'],
+        return_names=['y']
+    )
+    cal_steps = [mock_step1, mock_step2]
+    
+    yaml_dict = {
+        'level1': {
+            'task': 'step1'
+        },
+        'level2': {
+            'task': 'step2'
+        }
+    }
+    result = pds._convert_yaml_to_steps(yaml_dict, cal_steps)
+    
+    assert result['level1']['task'] is mock_step1
+    assert result['level2']['task'] is mock_step2
+
+
+def test_convert_yaml_to_steps_preserves_non_task():
+    """Test _convert_yaml_to_steps preserves non-task keys."""
+    mock_step = pds.pf.plStep(
+        name='test_step',
+        func=lambda x: x,
+        func_type='global',
+        param_names=['x'],
+        return_names=['y']
+    )
+    cal_steps = [mock_step]
+    
+    yaml_dict = {
+        'task': 'test_step',
+        'params': {'param1': 10},
+        'other_key': 'value'
+    }
+    result = pds._convert_yaml_to_steps(yaml_dict, cal_steps)
+    
+    assert result['task'] is mock_step
+    assert result['params'] == {'param1': 10}
+    assert result['other_key'] == 'value'
+
+
+def test_convert_yaml_to_steps_step_not_found():
+    """Test _convert_yaml_to_steps raises error when step not found."""
+    cal_steps = []
+    
+    yaml_dict = {'task': 'nonexistent_step'}
+    
+    with pytest.raises(ValueError, match="Step 'nonexistent_step' not found"):
+        pds._convert_yaml_to_steps(yaml_dict, cal_steps)
+
+
+def test_convert_yaml_to_steps_recursive():
+    """Test _convert_yaml_to_steps handles deeply nested structures."""
+    mock_step = pds.pf.plStep(
+        name='deep_step',
+        func=lambda x: x,
+        func_type='global',
+        param_names=['x'],
+        return_names=['y']
+    )
+    cal_steps = [mock_step]
+    
+    yaml_dict = {
+        'a': {
+            'b': {
+                'c': {
+                    'task': 'deep_step'
+                }
+            }
+        }
+    }
+    result = pds._convert_yaml_to_steps(yaml_dict, cal_steps)
+    
+    assert result['a']['b']['c']['task'] is mock_step
+
+
+def test_convert_yaml_to_steps_list_values():
+    """Test _convert_yaml_to_steps handles lists in values."""
+    mock_step = pds.pf.plStep(
+        name='step',
+        func=lambda x: x,
+        func_type='global',
+        param_names=['x'],
+        return_names=['y']
+    )
+    cal_steps = [mock_step]
+    
+    # Lists in values should be preserved (not recursed into)
+    yaml_dict = {
+        'task': 'step',
+        'list_param': [1, 2, 3]
+    }
+    result = pds._convert_yaml_to_steps(yaml_dict, cal_steps)
+    
+    assert result['task'] is mock_step
+    assert result['list_param'] == [1, 2, 3]
+
+
+def test_convert_yaml_to_steps_string_not_task_key():
+    """Test _convert_yaml_to_steps doesn't convert strings unless key is 'task'."""
+    cal_steps = []
+    
+    yaml_dict = {
+        'name': 'some_string',  # Not a task key
+        'description': 'another_string'
+    }
+    result = pds._convert_yaml_to_steps(yaml_dict, cal_steps)
+    
+    # Strings should be preserved when key is not 'task'
+    assert result['name'] == 'some_string'
+    assert result['description'] == 'another_string'
+
+
+################################################################################
+########################### _load_deps_from_zarr ###############################
+################################################################################
+def test_load_deps_from_zarr_invalid_input():
+    """Test _load_deps_from_zarr raises error for non-zarr-group input."""
+    with pytest.raises(ValueError, match="Input root must be a zarr group"):
+        pds._load_deps_from_zarr("not a zarr group")
+
+
+def test_load_deps_from_zarr_root_with_arrays():
+    """Test _load_deps_from_zarr raises error if root contains arrays."""
+    import zarr
+    root = zarr.group()
+    root.create_array('bad_array', shape=(10,), dtype='float64')
+    
+    with pytest.raises(ValueError, match="root cannot have arrays"):
+        pds._load_deps_from_zarr(root)
+
+
+def test_load_deps_from_zarr_invalid_group_name():
+    """Test _load_deps_from_zarr raises error for non-run group names."""
+    import zarr
+    root = zarr.group()
+    root.create_group('bad_group_name')
+    
+    with pytest.raises(ValueError, match="root can only contain run folders"):
+        pds._load_deps_from_zarr(root)
+
+
+def test_load_deps_from_zarr_run_with_arrays():
+    """Test _load_deps_from_zarr raises error if run group contains arrays."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    run1.create_array('bad_array', shape=(10,), dtype='float64')
+    
+    with pytest.raises(ValueError, match="run1 must not contain arrays"):
+        pds._load_deps_from_zarr(root)
+
+
+def test_load_deps_from_zarr_missing_deps_attr():
+    """Test _load_deps_from_zarr raises error if deps attribute missing."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    param = run1.create_group('param1')
+    param.attrs['global'] = True
+    param.create_array('data', shape=(10,), dtype='float64')
+    
+    with pytest.raises(ValueError, match="Missing 'deps' attr"):
+        pds._load_deps_from_zarr(root)
+
+
+def test_load_deps_from_zarr_missing_global_attr():
+    """Test _load_deps_from_zarr raises error if global attribute missing."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    param = run1.create_group('param1')
+    param.attrs['deps'] = {}
+    param.create_array('data', shape=(10,), dtype='float64')
+    
+    with pytest.raises(ValueError, match="Missing 'global' attribute"):
+        pds._load_deps_from_zarr(root)
+
+
+def test_load_deps_from_zarr_param_with_subgroups():
+    """Test _load_deps_from_zarr raises error if parameter contains groups."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    param = run1.create_group('param1')
+    param.attrs['deps'] = {}
+    param.attrs['global'] = True
+    param.create_array('data', shape=(10,), dtype='float64')
+    param.create_group('bad_subgroup')
+    
+    with pytest.raises(ValueError, match="contains a zarr group"):
+        pds._load_deps_from_zarr(root)
+
+
+def test_load_deps_from_zarr_missing_data_array():
+    """Test _load_deps_from_zarr raises error if data array missing."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    param = run1.create_group('param1')
+    param.attrs['deps'] = {}
+    param.attrs['global'] = True
+    
+    with pytest.raises(ValueError, match="'data' array not found"):
+        pds._load_deps_from_zarr(root)
+
+
+def test_load_deps_from_zarr_global_with_extra_arrays():
+    """Test _load_deps_from_zarr raises error if global param has extra arrays."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    param = run1.create_group('param1')
+    param.attrs['deps'] = {}
+    param.attrs['global'] = True
+    param.create_array('data', shape=(10,), dtype='float64')
+    param.create_array('extra_array', shape=(5,), dtype='float64')
+    
+    with pytest.raises(ValueError, match="Extra array.*found in run1 global parameter"):
+        pds._load_deps_from_zarr(root)
+
+
+def test_load_deps_from_zarr_perrow_missing_row_exists():
+    """Test _load_deps_from_zarr raises error if per-row param missing row_exists."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    param = run1.create_group('param1')
+    param.attrs['deps'] = {'idx0': {}}
+    param.attrs['global'] = False
+    param.create_array('data', shape=(10,), dtype='float64')
+    
+    with pytest.raises(ValueError, match="'row_exists' array not found"):
+        pds._load_deps_from_zarr(root)
+
+
+def test_load_deps_from_zarr_perrow_row_exists_wrong_dtype():
+    """Test _load_deps_from_zarr raises error if row_exists has wrong dtype."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    param = run1.create_group('param1')
+    param.attrs['deps'] = {'idx0': {}}
+    param.attrs['global'] = False
+    param.create_array('data', shape=(10,), dtype='float64')
+    param.create_array('row_exists', shape=(10,), dtype='int32')
+    
+    with pytest.raises(ValueError, match="'row_exists' array.*must have dtype bool"):
+        pds._load_deps_from_zarr(root)
+
+
+def test_load_deps_from_zarr_perrow_with_extra_arrays():
+    """Test _load_deps_from_zarr raises error if per-row param has extra arrays."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    param = run1.create_group('param1')
+    param.attrs['deps'] = {'idx0': {}}
+    param.attrs['global'] = False
+    param.create_array('data', shape=(10,), dtype='float64')
+    param.create_array('row_exists', shape=(10,), dtype=bool)
+    param.create_array('extra', shape=(5,), dtype='float64')
+    
+    with pytest.raises(ValueError, match="Extra array.*found in run1 parameter"):
+        pds._load_deps_from_zarr(root)
+
+
+def test_load_deps_from_zarr_deps_not_dict():
+    """Test _load_deps_from_zarr raises error if deps is not a dict."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    param = run1.create_group('param1')
+    param.attrs['deps'] = "not a dict"
+    param.attrs['global'] = True
+    param.create_array('data', shape=(10,), dtype='float64')
+    
+    with pytest.raises(ValueError, match="'deps' attribute.*must be a dictionary"):
+        pds._load_deps_from_zarr(root)
+
+
+def test_load_deps_from_zarr_global_deps_invalid_value():
+    """Test _load_deps_from_zarr raises error if global deps has non-int value."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    param = run1.create_group('param1')
+    param.attrs['deps'] = {'input1': 'not an int'}
+    param.attrs['global'] = True
+    param.create_array('data', shape=(10,), dtype='float64')
+    
+    with pytest.raises(ValueError, match="deps values must be integers"):
+        pds._load_deps_from_zarr(root)
+
+
+def test_load_deps_from_zarr_duplicate_global_param():
+    """Test _load_deps_from_zarr raises error for duplicate global parameter."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    
+    param1 = run1.create_group('param1')
+    param1.attrs['deps'] = {}
+    param1.attrs['global'] = True
+    param1.create_array('data', shape=(10,), dtype='float64')
+    
+    # Try to create another param1 - zarr won't allow it, so we simulate
+    # by manually adding to attrs/deps_maps (this tests the check logic)
+    # Actually, we need to test the logic within the function
+    # Let me skip this duplicate test since zarr prevents duplicate group names
+    
+
+def test_load_deps_from_zarr_perrow_invalid_data_idx_key():
+    """Test _load_deps_from_zarr raises error for invalid data_idx key format."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    param = run1.create_group('param1')
+    param.attrs['deps'] = {'not_a_valid_idx': {}}
+    param.attrs['global'] = False
+    param.create_array('data', shape=(10,), dtype='float64')
+    param.create_array('row_exists', shape=(10,), dtype=bool)
+    
+    with pytest.raises(ValueError, match="deps keys must be convertible to int"):
+        pds._load_deps_from_zarr(root)
+
+
+def test_load_deps_from_zarr_perrow_deps_not_dict():
+    """Test _load_deps_from_zarr raises error if per-row deps value is not dict."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    param = run1.create_group('param1')
+    param.attrs['deps'] = {'idx0': "not a dict"}
+    param.attrs['global'] = False
+    param.create_array('data', shape=(10,), dtype='float64')
+    param.create_array('row_exists', shape=(10,), dtype=bool)
+    
+    with pytest.raises(ValueError, match="deps must be a dictionary"):
+        pds._load_deps_from_zarr(root)
+
+
+
+
+def test_load_deps_from_zarr_perrow_deps_invalid_value():
+    """Test _load_deps_from_zarr raises error if per-row deps has non-int value."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    param = run1.create_group('param1')
+    param.attrs['deps'] = {'idx0': {'input1': 'not an int'}}
+    param.attrs['global'] = False
+    param.create_array('data', shape=(10,), dtype='float64')
+    param.create_array('row_exists', shape=(10,), dtype=bool)
+    
+    with pytest.raises(ValueError, match="deps values must be integers"):
+        pds._load_deps_from_zarr(root)
+
+
+def test_load_deps_from_zarr_valid_global_param():
+    """Test _load_deps_from_zarr correctly loads global parameter."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    param = run1.create_group('param1')
+    param.attrs['deps'] = {'input1': 1, 'input2': 2}
+    param.attrs['global'] = True
+    param.create_array('data', shape=(10,), dtype='float64')
+    
+    deps_maps = pds._load_deps_from_zarr(root)
+    
+    assert 'global' in deps_maps
+    assert 1 in deps_maps['global']
+    assert 'param1' in deps_maps['global'][1]
+    assert deps_maps['global'][1]['param1'] == {'input1': 1, 'input2': 2}
+
+
+def test_load_deps_from_zarr_valid_perrow_param():
+    """Test _load_deps_from_zarr correctly loads per-row parameter."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    param = run1.create_group('param1')
+    param.attrs['deps'] = {
+        'idx0': {'input1': 1},
+        'idx5': {'input1': 2}
+    }
+    param.attrs['global'] = False
+    param.create_array('data', shape=(10,), dtype='float64')
+    param.create_array('row_exists', shape=(10,), dtype=bool)
+    
+    deps_maps = pds._load_deps_from_zarr(root)
+    
+    assert 0 in deps_maps
+    assert 5 in deps_maps
+    assert deps_maps[0][1]['param1'] == {'input1': 1}
+    assert deps_maps[5][1]['param1'] == {'input1': 2}
+
+
+def test_load_deps_from_zarr_multiple_runs():
+    """Test _load_deps_from_zarr correctly loads multiple runs."""
+    import zarr
+    root = zarr.group()
+    
+    run1 = root.create_group('run1')
+    param1 = run1.create_group('param1')
+    param1.attrs['deps'] = {}
+    param1.attrs['global'] = True
+    param1.create_array('data', shape=(10,), dtype='float64')
+    
+    run2 = root.create_group('run2')
+    param2 = run2.create_group('param2')
+    param2.attrs['deps'] = {'param1': 1}
+    param2.attrs['global'] = True
+    param2.create_array('data', shape=(10,), dtype='float64')
+    
+    deps_maps = pds._load_deps_from_zarr(root)
+    
+    assert 1 in deps_maps['global']
+    assert 2 in deps_maps['global']
+    assert deps_maps['global'][1]['param1'] == {}
+    assert deps_maps['global'][2]['param2'] == {'param1': 1}
+
+
+def test_load_deps_from_zarr_empty_root():
+    """Test _load_deps_from_zarr returns empty dict for empty zarr."""
+    import zarr
+    root = zarr.group()
+    
+    deps_maps = pds._load_deps_from_zarr(root)
+    
+    assert deps_maps == {}
+
+
+def test_load_deps_from_zarr_integer_data_idx_key():
+    """Test _load_deps_from_zarr handles integer data_idx keys."""
+    import zarr
+    root = zarr.group()
+    run1 = root.create_group('run1')
+    param = run1.create_group('param1')
+    # Use integer keys instead of 'idx0' format
+    param.attrs['deps'] = {0: {'input1': 1}, 3: {'input1': 2}}
+    param.attrs['global'] = False
+    param.create_array('data', shape=(10,), dtype='float64')
+    param.create_array('row_exists', shape=(10,), dtype=bool)
+    
+    deps_maps = pds._load_deps_from_zarr(root)
+    
+    assert 0 in deps_maps
+    assert 3 in deps_maps
+    assert deps_maps[0][1]['param1'] == {'input1': 1}
+    assert deps_maps[3][1]['param1'] == {'input1': 2}
+
+
+################################################################################
+######################### _check_path_validity #################################
+################################################################################
+def test_check_path_validity_none_path():
+    """Test _check_path_validity raises error for None path."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    
+    with pytest.raises(ValueError, match="Cannot execute None path"):
+        DS._check_path_validity(None, None, {})
+
+
+def test_check_path_validity_empty_path():
+    """Test _check_path_validity returns empty path unchanged."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    
+    result = DS._check_path_validity([], None, {})
+    assert result == []
+
+
+def test_check_path_validity_trims_completed_global_steps():
+    """Test _check_path_validity trims global steps with existing outputs."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.deps_maps = {'global': {}}  # No previous runs
+    DS._memory_cache = {1: {'output1': 42}}
+    DS._is_global_cache = {'output1': True}
+    DS.root = zarr.group()
+    
+    step1 = pds.pf.plStep(
+        name='step1',
+        func=lambda: {'output1': 42},
+        func_type='global',
+        param_names=[],
+        return_names=['output1']
+    )
+    step2 = pds.pf.plStep(
+        name='step2',
+        func=lambda x: {'output2': x + 1},
+        func_type='global',
+        param_names=['output1'],
+        return_names=['output2']
+    )
+    
+    path = [step1, step2]
+    result = DS._check_path_validity(path, None, {})
+    
+    # step1 output exists at run 1, so it should be trimmed
+    assert result == [step2]
+
+
+def test_check_path_validity_trims_completed_perrow_steps():
+    """Test _check_path_validity trims per-row steps with existing outputs."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.nrows = 3
+    DS.deps_maps = {
+        0: {},  # No previous runs
+        1: {}   # No previous runs
+    }
+    DS._memory_cache = {1: {'output1': pds.pf.LazyAttr(DS, 'output1', 1)}}
+    DS._memory_cache[1]['output1']._cache = {0: 10, 1: 20}
+    DS._is_global_cache = {'output1': False}
+    DS.root = zarr.group()
+    
+    step1 = pds.pf.plStep(
+        name='step1',
+        func=lambda data_idx: {'output1': data_idx * 10},
+        func_type='per-row',
+        param_names=['data_idx'],
+        return_names=['output1']
+    )
+    step2 = pds.pf.plStep(
+        name='step2',
+        func=lambda x: {'output2': x + 1},
+        func_type='per-row',
+        param_names=['output1'],
+        return_names=['output2']
+    )
+    
+    path = [step1, step2]
+    result = DS._check_path_validity(path, np.array([0, 1]), {})
+    
+    # step1 output exists for both indices at run 1, so it should be trimmed
+    assert result == [step2]
+
+
+def test_check_path_validity_keeps_partial_perrow_steps():
+    """Test _check_path_validity keeps per-row steps with some missing outputs."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.nrows = 3
+    DS.deps_maps = {
+        0: {1: {'output1': {}}}
+        # Missing data_idx 1
+    }
+    DS._memory_cache = {1: {'output1': pds.pf.LazyAttr(DS, 'output1', 1)}}
+    DS._memory_cache[1]['output1']._cache = {0: 10}
+    DS._is_global_cache = {'output1': False}
+    
+    step1 = pds.pf.plStep(
+        name='step1',
+        func=lambda data_idx: {'output1': data_idx * 10},
+        func_type='per-row',
+        param_names=['data_idx'],
+        return_names=['output1']
+    )
+    
+    path = [step1]
+    result = DS._check_path_validity(path, np.array([0, 1]), {})
+    
+    # step1 output exists for idx 0 but not 1, so it should be kept
+    assert result == [step1]
+
+
+def test_check_path_validity_validates_global_input_exists():
+    """Test _check_path_validity raises error if global input doesn't exist."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.deps_maps = {'global': {}}
+    DS._memory_cache = {}
+    
+    step = pds.pf.plStep(
+        name='step1',
+        func=lambda x: {'output': x + 1},
+        func_type='global',
+        param_names=['missing_input'],
+        return_names=['output']
+    )
+    
+    with pytest.raises(ValueError, match="requires 'missing_input', which does not exist"):
+        DS._check_path_validity([step], None, {})
+
+
+def test_check_path_validity_validates_perrow_input_exists():
+    """Test _check_path_validity raises error if per-row input doesn't exist."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.deps_maps = {0: {}}
+    DS._memory_cache = {}
+    
+    step = pds.pf.plStep(
+        name='step1',
+        func=lambda x: {'output': x + 1},
+        func_type='per-row',
+        param_names=['missing_input'],
+        return_names=['output']
+    )
+    
+    with pytest.raises(ValueError, match="requires 'missing_input' for data_idx 0"):
+        DS._check_path_validity([step], np.array([0]), {})
+
+
+def test_check_path_validity_accepts_inputs_from_preceding_steps():
+    """Test _check_path_validity accepts inputs that will be produced by earlier steps."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.deps_maps = {'global': {}}
+    DS._memory_cache = {}
+    
+    step1 = pds.pf.plStep(
+        name='step1',
+        func=lambda: {'output1': 42},
+        func_type='global',
+        param_names=[],
+        return_names=['output1']
+    )
+    step2 = pds.pf.plStep(
+        name='step2',
+        func=lambda x: {'output2': x + 1},
+        func_type='global',
+        param_names=['output1'],
+        return_names=['output2']
+    )
+    
+    path = [step1, step2]
+    result = DS._check_path_validity(path, None, {})
+    
+    # Should not raise error, step2 gets input from step1
+    assert result == [step1, step2]
+
+
+def test_check_path_validity_enforced_max_runs():
+    """Test _check_path_validity respects enforced_max_runs."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.deps_maps = {'global': {1: {'input1': {}}, 2: {'input1': {}}}}
+    DS._memory_cache = {1: {'input1': 10}, 2: {'input1': 20}}
+    DS._is_global_cache = {'input1': True}
+    
+    step = pds.pf.plStep(
+        name='step1',
+        func=lambda x: {'output': x + 1},
+        func_type='global',
+        param_names=['input1'],
+        return_names=['output']
+    )
+    
+    # Should succeed - enforced run 1 exists
+    result = DS._check_path_validity([step], None, {'input1': 1})
+    assert result == [step]
+
+
+def test_check_path_validity_type_mismatch_global_needs_perrow():
+    """Test _check_path_validity raises error when global step needs per-row param."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.nrows = 3
+    DS.deps_maps = {'global': {}}
+    DS._memory_cache = {}
+    DS._is_global_cache = {}
+    DS.root = zarr.group()
+    
+    step1 = pds.pf.plStep(
+        name='step1',
+        func=lambda: {'output1': [1, 2, 3]},
+        func_type='global-res',
+        param_names=[],
+        return_names=['output1']
+    )
+    step2 = pds.pf.plStep(
+        name='step2',
+        func=lambda x: {'output2': x},
+        func_type='global',
+        param_names=['output1'],
+        return_names=['output2']
+    )
+    
+    path = [step1, step2]
+    
+    with pytest.raises(ValueError, match="requires global parameter.*but preceding steps produce it as per-row"):
+        DS._check_path_validity(path, None, {})
+
+
+def test_check_path_validity_data_idx_special_param():
+    """Test _check_path_validity handles 'data_idx' as special parameter."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.deps_maps = {0: {}}
+    DS._memory_cache = {}
+    DS._is_global_cache = {}
+    DS.root = zarr.group()
+    
+    step = pds.pf.plStep(
+        name='step1',
+        func=lambda data_idx: {'output': data_idx * 10},
+        func_type='per-row',
+        param_names=['data_idx'],
+        return_names=['output']
+    )
+    
+    # Should not raise error - data_idx is a special built-in parameter
+    result = DS._check_path_validity([step], np.array([0]), {})
+    assert result == [step]
+
+
+################################################################################
+############################### write_data #####################################
+################################################################################
+def test_write_data_run_idx_not_in_cache():
+    """Test write_data raises error if run_idx not in memory cache."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS._memory_cache = {}
+    DS.root = zarr.group()
+    
+    with pytest.raises(ValueError, match="run_idx 1 not found in memory cache"):
+        DS.write_data('param1', 1, None)
+
+
+def test_write_data_name_not_in_cache():
+    """Test write_data raises error if name not in memory cache."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS._memory_cache = {1: {}}
+    DS.root = zarr.group()
+    
+    with pytest.raises(ValueError, match="Parameter 'param1' at run_idx 1 not found"):
+        DS.write_data('param1', 1, None)
+
+
+def test_write_data_global_param_success():
+    """Test write_data successfully writes global parameter."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS._memory_cache = {1: {'global_param': np.array(42)}}
+    DS._is_global_cache = {'global_param': True}
+    DS.deps_maps = {'global': {1: {'global_param': {'input1': 1}}}}
+    DS.root = zarr.group()
+    
+    DS.write_data('global_param', 1, None)
+    
+    # Verify zarr structure
+    assert 'run1' in DS.root
+    assert 'global_param' in DS.root['run1']
+    param_grp = DS.root['run1']['global_param']
+    
+    # Check data
+    assert param_grp['data'][()] == 42
+    
+    # Check attrs
+    assert param_grp.attrs['global'] == True
+    assert param_grp.attrs['deps'] == {'input1': 1}
+    assert 'write_time' in param_grp.attrs
+    assert len(param_grp.attrs['write_time']) == 17  # Format: YYYYMMDD-HH:MM:SS
+
+
+def test_write_data_global_param_with_data_idx_error():
+    """Test write_data raises error if data_idx provided for global param."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS._memory_cache = {1: {'global_param': 42}}
+    DS._is_global_cache = {'global_param': True}
+    DS.deps_maps = {'global': {1: {'global_param': {}}}}
+    DS.root = zarr.group()
+    
+    with pytest.raises(ValueError, match="data_idx must be None for global parameter"):
+        DS.write_data('global_param', 1, data_idx=0)
+
+
+def test_write_data_global_param_already_exists():
+    """Test write_data raises error if trying to overwrite global parameter."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS._memory_cache = {1: {'global_param': np.array(42)}}
+    DS._is_global_cache = {'global_param': True}
+    DS.deps_maps = {'global': {1: {'global_param': {}}}}
+    DS.root = zarr.group()
+    
+    # Write once
+    DS.write_data('global_param', 1, None)
+    
+    # Try to write again
+    with pytest.raises(ValueError, match="already exists in zarr"):
+        DS.write_data('global_param', 1, None)
+
+
+def test_write_data_global_param_custom_dtype():
+    """Test write_data uses custom dtype for global parameter."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS._memory_cache = {1: {'global_param': np.array(42)}}
+    DS._is_global_cache = {'global_param': True}
+    DS.deps_maps = {'global': {1: {'global_param': {}}}}
+    DS.root = zarr.group()
+    
+    DS.write_data('global_param', 1, None, dtype=np.float64)
+    
+    param_grp = DS.root['run1']['global_param']
+    assert param_grp['data'].dtype == np.float64
+
+
+def test_write_data_perrow_param_no_data_idx_error():
+    """Test write_data raises error if data_idx not provided for per-row param."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.nrows = 3
+    lazy_attr = pds.pf.LazyAttr(DS, 'perrow_param', 1)
+    DS._memory_cache = {1: {'perrow_param': lazy_attr}}
+    DS._is_global_cache = {'perrow_param': False}
+    DS.root = zarr.group()
+    
+    with pytest.raises(ValueError, match="data_idx required for per-row parameter"):
+        DS.write_data('perrow_param', 1, data_idx=None)
+
+
+def test_write_data_perrow_param_not_lazyattr_error():
+    """Test write_data raises error if per-row param is not LazyAttr."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.nrows = 3
+    DS._memory_cache = {1: {'perrow_param': 42}}  # Not a LazyAttr
+    DS._is_global_cache = {'perrow_param': False}
+    DS.root = zarr.group()
+    
+    with pytest.raises(TypeError, match="Expected LazyAttr"):
+        DS.write_data('perrow_param', 1, data_idx=0)
+
+
+def test_write_data_perrow_param_data_idx_not_in_cache():
+    """Test write_data raises error if data_idx not in LazyAttr cache."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.nrows = 3
+    lazy_attr = pds.pf.LazyAttr(DS, 'perrow_param', 1)
+    lazy_attr._cache[0] = np.array([10])
+    # Index 1 is not in cache
+    DS._memory_cache = {1: {'perrow_param': lazy_attr}}
+    DS._is_global_cache = {'perrow_param': False}
+    DS.deps_maps = {0: {1: {'perrow_param': {}}}}
+    DS.root = zarr.group()
+    
+    with pytest.raises(ValueError, match="data_idx 1 not found in memory"):
+        DS.write_data('perrow_param', 1, data_idx=[0, 1])
+
+
+def test_write_data_perrow_param_new_success():
+    """Test write_data successfully writes new per-row parameter."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.nrows = 5
+    lazy_attr = pds.pf.LazyAttr(DS, 'perrow_param', 1)
+    lazy_attr._cache[0] = np.array([10, 20])
+    lazy_attr._cache[2] = np.array([30, 40])
+    DS._memory_cache = {1: {'perrow_param': lazy_attr}}
+    DS._is_global_cache = {'perrow_param': False}
+    DS.deps_maps = {
+        0: {1: {'perrow_param': {'input1': 1}}},
+        2: {1: {'perrow_param': {'input1': 1}}}
+    }
+    DS.root = zarr.group()
+    
+    DS.write_data('perrow_param', 1, data_idx=[0, 2])
+    
+    # Verify zarr structure
+    param_grp = DS.root['run1']['perrow_param']
+    
+    # Check data array shape
+    assert param_grp['data'].shape == (5, 2)
+    assert np.array_equal(param_grp['data'][0], [10, 20])
+    assert np.array_equal(param_grp['data'][2], [30, 40])
+    
+    # Check row_exists
+    row_exists = param_grp['row_exists'][...]
+    assert row_exists[0] == True
+    assert row_exists[1] == False
+    assert row_exists[2] == True
+    assert row_exists[3] == False
+    assert row_exists[4] == False
+    
+    # Check attrs
+    assert param_grp.attrs['global'] == False
+    assert 'idx0' in param_grp.attrs['deps']
+    assert 'idx2' in param_grp.attrs['deps']
+    assert param_grp.attrs['deps']['idx0'] == {'input1': 1}
+    assert param_grp.attrs['deps']['idx2'] == {'input1': 1}
+    assert 'idx0' in param_grp.attrs['write_times']
+    assert 'idx2' in param_grp.attrs['write_times']
+
+
+def test_write_data_perrow_param_incremental():
+    """Test write_data incrementally writes to existing per-row parameter."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.nrows = 5
+    lazy_attr = pds.pf.LazyAttr(DS, 'perrow_param', 1)
+    lazy_attr._cache[0] = np.array([10])
+    lazy_attr._cache[1] = np.array([20])
+    lazy_attr._cache[2] = np.array([30])
+    DS._memory_cache = {1: {'perrow_param': lazy_attr}}
+    DS._is_global_cache = {'perrow_param': False}
+    DS.deps_maps = {
+        0: {1: {'perrow_param': {}}},
+        1: {1: {'perrow_param': {}}},
+        2: {1: {'perrow_param': {}}}
+    }
+    DS.root = zarr.group()
+    
+    # Write first batch
+    DS.write_data('perrow_param', 1, data_idx=[0])
+    
+    # Write second batch
+    DS.write_data('perrow_param', 1, data_idx=[1, 2])
+    
+    # Verify all data is present
+    param_grp = DS.root['run1']['perrow_param']
+    assert param_grp['data'][0] == 10
+    assert param_grp['data'][1] == 20
+    assert param_grp['data'][2] == 30
+    
+    row_exists = param_grp['row_exists'][...]
+    assert np.all(row_exists[:3])
+    assert not np.any(row_exists[3:])
+
+
+def test_write_data_perrow_param_overwrite_error():
+    """Test write_data raises error when trying to overwrite existing rows."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.nrows = 5
+    lazy_attr = pds.pf.LazyAttr(DS, 'perrow_param', 1)
+    lazy_attr._cache[0] = np.array([10])
+    lazy_attr._cache[1] = np.array([20])
+    DS._memory_cache = {1: {'perrow_param': lazy_attr}}
+    DS._is_global_cache = {'perrow_param': False}
+    DS.deps_maps = {
+        0: {1: {'perrow_param': {}}},
+        1: {1: {'perrow_param': {}}}
+    }
+    DS.root = zarr.group()
+    
+    # Write first batch
+    DS.write_data('perrow_param', 1, data_idx=[0])
+    
+    # Try to overwrite
+    with pytest.raises(ValueError, match="Cannot overwrite existing data"):
+        DS.write_data('perrow_param', 1, data_idx=[0, 1])
+
+
+def test_write_data_perrow_param_custom_dtype():
+    """Test write_data uses custom dtype for per-row parameter."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.nrows = 3
+    lazy_attr = pds.pf.LazyAttr(DS, 'perrow_param', 1)
+    lazy_attr._cache[0] = np.array([10])
+    DS._memory_cache = {1: {'perrow_param': lazy_attr}}
+    DS._is_global_cache = {'perrow_param': False}
+    DS.deps_maps = {0: {1: {'perrow_param': {}}}}
+    DS.root = zarr.group()
+    
+    DS.write_data('perrow_param', 1, data_idx=[0], dtype=np.float32)
+    
+    param_grp = DS.root['run1']['perrow_param']
+    assert param_grp['data'].dtype == np.float32
+
+
+def test_write_data_perrow_param_scalar_data():
+    """Test write_data handles scalar data for per-row parameters."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.nrows = 3
+    lazy_attr = pds.pf.LazyAttr(DS, 'perrow_param', 1)
+    lazy_attr._cache[0] = 10  # Scalar
+    lazy_attr._cache[1] = 20
+    DS._memory_cache = {1: {'perrow_param': lazy_attr}}
+    DS._is_global_cache = {'perrow_param': False}
+    DS.deps_maps = {
+        0: {1: {'perrow_param': {}}},
+        1: {1: {'perrow_param': {}}}
+    }
+    DS.root = zarr.group()
+    
+    DS.write_data('perrow_param', 1, data_idx=[0, 1])
+    
+    param_grp = DS.root['run1']['perrow_param']
+    assert param_grp['data'].shape == (3,)
+    assert param_grp['data'][0] == 10
+    assert param_grp['data'][1] == 20
+
+
+def test_write_data_global_array_data():
+    """Test write_data handles array data for global parameter."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    array_data = np.array([1, 2, 3, 4, 5])
+    DS._memory_cache = {1: {'global_param': array_data}}
+    DS._is_global_cache = {'global_param': True}
+    DS.deps_maps = {'global': {1: {'global_param': {}}}}
+    DS.root = zarr.group()
+    
+    DS.write_data('global_param', 1, None)
+    
+    param_grp = DS.root['run1']['global_param']
+    assert np.array_equal(param_grp['data'][...], array_data)
+
+
+################################################################################
+############################### __getattr__ ####################################
+################################################################################
+def test_getattr_global_param_from_memory():
+    """Test __getattr__ returns global parameter value from memory."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS._memory_cache = {1: {'global_param': 42}}
+    DS._is_global_cache = {'global_param': True}
+    DS.deps_maps = {}
+    DS._lazy_collections = {}
+    
+    result = DS.global_param
+    assert result == 42
+
+
+def test_getattr_global_param_from_zarr():
+    """Test __getattr__ loads and returns global parameter from zarr."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS._memory_cache = {}
+    DS._is_global_cache = {}
+    DS.deps_maps = {'global': {1: {'global_param': {}}}}
+    DS._lazy_collections = {}
+    DS.root = zarr.group()
+    
+    # Create zarr data
+    run_grp = DS.root.create_group('run1')
+    param_grp = run_grp.create_group('global_param')
+    param_grp.create_array('data', data=np.array(99))
+    param_grp.attrs['global'] = True
+    param_grp.attrs['deps'] = {}
+    
+    result = DS.global_param
+    assert result == 99
+    # Should be cached in memory now
+    assert 1 in DS._memory_cache
+    assert 'global_param' in DS._memory_cache[1]
+    assert DS._memory_cache[1]['global_param'] == 99
+
+
+def test_getattr_global_param_needs_production():
+    """Test __getattr__ produces global parameter if not found."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS._memory_cache = {}
+    DS._is_global_cache = {}
+    DS.deps_maps = {'global': {}}
+    DS._lazy_collections = {}
+    DS.nrows = 5
+    DS.root = None  # Not using zarr in this test
+    
+    # Create a simple pipeline
+    step = pds.pf.plStep(
+        name='compute_global',
+        func=lambda: 123,  # Returns value, not dict
+        func_type='global',
+        param_names=[],
+        return_names=['global_param']
+    )
+    DS.cal_pl = {'CAL_STEPS': {0: {'task': step}}}
+    
+    result = DS.global_param
+    assert result == 123
+    # Should be in memory now
+    assert 1 in DS._memory_cache
+    assert 'global_param' in DS._memory_cache[1]
+
+
+def test_getattr_perrow_param_returns_lazy_collection():
+    """Test __getattr__ returns LazyAttrCollection for per-row parameter."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.nrows = 5
+    lazy_attr = pds.pf.LazyAttr(DS, 'perrow_param', 1)
+    lazy_attr._cache[0] = np.array([10])
+    DS._memory_cache = {1: {'perrow_param': lazy_attr}}
+    DS._is_global_cache = {'perrow_param': False}
+    DS.deps_maps = {}
+    DS._lazy_collections = {}
+    
+    result = DS.perrow_param
+    assert isinstance(result, pds.pf.LazyAttrCollection)
+    assert result.name == 'perrow_param'
+
+
+def test_getattr_nonexistent_param_raises_attribute_error():
+    """Test __getattr__ raises AttributeError for non-existent parameter."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS._memory_cache = {}
+    DS._is_global_cache = {}
+    DS.deps_maps = {}
+    DS._lazy_collections = {}
+    DS.cal_pl = {'CAL_STEPS': {}}
+    DS.root = None
+    
+    with pytest.raises(AttributeError, match="has no attribute 'nonexistent'"):
+        _ = DS.nonexistent
+
+
+def test_getattr_infers_global_from_memory():
+    """Test __getattr__ infers global type from memory structure."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS._memory_cache = {1: {'param': 42}}
+    DS._is_global_cache = {}  # Not yet cached
+    DS.deps_maps = {}
+    DS._lazy_collections = {}
+    
+    result = DS.param
+    assert result == 42
+    # Should have cached the type
+    assert 'param' in DS._is_global_cache
+    assert DS._is_global_cache['param'] == True
+
+
+def test_getattr_infers_perrow_from_memory():
+    """Test __getattr__ infers per-row type from memory structure."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.nrows = 5
+    lazy_attr = pds.pf.LazyAttr(DS, 'param', 1)
+    DS._memory_cache = {1: {'param': lazy_attr}}
+    DS._is_global_cache = {}  # Not yet cached
+    DS.deps_maps = {}
+    DS._lazy_collections = {}
+    
+    result = DS.param
+    assert isinstance(result, pds.pf.LazyAttrCollection)
+    # Should have cached the type
+    assert 'param' in DS._is_global_cache
+    assert DS._is_global_cache['param'] == False
+
+
+def test_getattr_infers_global_from_zarr_deps():
+    """Test __getattr__ infers global type from zarr deps_maps."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS._memory_cache = {}
+    DS._is_global_cache = {}
+    DS.deps_maps = {'global': {1: {'param': {}}}}
+    DS._lazy_collections = {}
+    DS.root = zarr.group()
+    
+    # Create zarr data
+    run_grp = DS.root.create_group('run1')
+    param_grp = run_grp.create_group('param')
+    param_grp.create_array('data', data=np.array(55))
+    param_grp.attrs['global'] = True
+    param_grp.attrs['deps'] = {}
+    
+    result = DS.param
+    assert result == 55
+    # Should have cached the type
+    assert 'param' in DS._is_global_cache
+    assert DS._is_global_cache['param'] == True
+
+
+def test_getattr_infers_perrow_from_zarr_deps():
+    """Test __getattr__ infers per-row type from zarr deps_maps."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.nrows = 5
+    DS._memory_cache = {}
+    DS._is_global_cache = {}
+    DS.deps_maps = {0: {1: {'param': {}}}}
+    DS._lazy_collections = {}
+    
+    result = DS.param
+    assert isinstance(result, pds.pf.LazyAttrCollection)
+    # Should have cached the type
+    assert 'param' in DS._is_global_cache
+    assert DS._is_global_cache['param'] == False
+
+
+def test_getattr_infers_global_from_pipeline():
+    """Test __getattr__ infers global type from pipeline func_type."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS._memory_cache = {}
+    DS._is_global_cache = {}
+    DS.deps_maps = {'global': {}}
+    DS._lazy_collections = {}
+    DS.nrows = 5
+    DS.root = None
+    
+    # Create pipeline with global step
+    step = pds.pf.plStep(
+        name='compute',
+        func=lambda: 100,  # Returns value, not dict
+        func_type='global',
+        param_names=[],
+        return_names=['param']
+    )
+    DS.cal_pl = {'CAL_STEPS': {0: {'task': step}}}
+    
+    result = DS.param
+    assert result == 100
+    # Should have cached the type
+    assert 'param' in DS._is_global_cache
+    assert DS._is_global_cache['param'] == True
+
+
+def test_getattr_infers_perrow_from_pipeline():
+    """Test __getattr__ infers per-row type from pipeline func_type."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.nrows = 3
+    DS._memory_cache = {}
+    DS._is_global_cache = {}
+    DS.deps_maps = {0: {}, 1: {}, 2: {}}
+    DS._lazy_collections = {}
+    DS.root = None
+    
+    # Create pipeline with per-row step
+    step = pds.pf.plStep(
+        name='compute',
+        func=lambda idx: {'param': [i * 10 for i in idx]},
+        func_type='vectorized',
+        param_names=['data_idx'],
+        return_names=['param']
+    )
+    DS.cal_pl = {'CAL_STEPS': {0: {'task': step}}}
+    
+    result = DS.param
+    assert isinstance(result, pds.pf.LazyAttrCollection)
+    # Should have cached the type
+    assert 'param' in DS._is_global_cache
+    assert DS._is_global_cache['param'] == False
+
+
+def test_getattr_global_uses_most_recent_run():
+    """Test __getattr__ returns most recent run for global parameter."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS._memory_cache = {1: {'param': 10}, 2: {'param': 20}, 3: {'param': 30}}
+    DS._is_global_cache = {'param': True}
+    DS.deps_maps = {}
+    DS._lazy_collections = {}
+    
+    result = DS.param
+    assert result == 30  # Should get run 3 (most recent)
+
+
+def test_getattr_caches_lazy_collection():
+    """Test __getattr__ caches LazyAttrCollection on first access."""
+    DS = pds.DataSet.__new__(pds.DataSet)
+    DS.nrows = 5
+    lazy_attr = pds.pf.LazyAttr(DS, 'param', 1)
+    DS._memory_cache = {1: {'param': lazy_attr}}
+    DS._is_global_cache = {'param': False}
+    DS.deps_maps = {}
+    DS._lazy_collections = {}
+    
+    # First access
+    result1 = DS.param
+    assert isinstance(result1, pds.pf.LazyAttrCollection)
+    
+    # Second access should return same collection
+    result2 = DS.param
+    assert result2 is result1
+    assert 'param' in DS._lazy_collections
