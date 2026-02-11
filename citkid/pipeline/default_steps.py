@@ -20,8 +20,12 @@ default_cal_steps =\
  ('center_t', circle.cent_rot_s21, 
   ['zt_rmv', 'circ_origin', 'theta_phase_offset'], ['zt_cent'], 'per-row'),
 
- ('get_thetaf', lambda z: circle.convert_to_theta(z, unwrap = True), 
-  ['zf_cent'], ['thetaf'], 'per-row'),
+ ('get_idx_t', lambda ff, ft: np.argmin(np.abs(ff - ft)), 
+  ['ff', 'ft'], ['idx_t'], 'per-row'),
+
+ ('get_thetaf', lambda z, idx_t: circle.convert_to_theta(
+     z, unwrap = True, idx_t = idx_t), 
+  ['zf_cent', 'idx_t'], ['thetaf'], 'per-row'),
 
  ('get_thetat', lambda z: circle.convert_to_theta(z, unwrap = False), 
   ['zt_cent'], ['thetat'], 'per-row'),
@@ -40,7 +44,7 @@ default_cal_steps =\
   ['zt_cent'], ['At'], 'per-row'),
 
  ('get_sparper', circle.get_spar_sper, 
-  ['thetat', 'At', 'circ_radius', 'dt', 'sparper_get_freqs'], 
+  ['thetat', 'At', 'circ_radius', 'dt'], 
   ['spar', 'sper'], 'per-row'),
   
 )

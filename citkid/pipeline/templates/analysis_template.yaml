@@ -23,17 +23,12 @@ ANALYSIS_STEPS:
     # is this really analysis if it doesn't take user-defined parameters? But 
     # there is a good chance we might add user-defined parameters later.
   5 :
-    task: get_spar_sper # Optional, but useful for flagging. Not written yet.
-    params: 
-      fmin: 30 
-      fmax: 300 
-  6 :
     task: get_xcal_mask 
     params:
       xcal_idx0_offset: 3 
       xcal_idx1_offset: 9
       xcal_std_cutoff: 12.0 
-  7 : 
+  6 : 
     task: fit_x_theta 
     params:
       poly_x_deg: 3

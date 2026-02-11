@@ -2,11 +2,13 @@
 import os 
 import yaml 
 import numpy as np 
+from tqdm.auto import tqdm
 import importlib.util
 
 from .dependencies import get_most_recent_run
 from . import default_steps
 from . import framework as pf
+from .dataset import _convert_yaml_to_steps
 
 class AnalysisRunner:
     """
@@ -64,19 +66,68 @@ class AnalysisRunner:
             
             # Load YAML file
             with open(self.analysis_yaml_path, 'r') as f:
-                self.analysis_yaml_dict = yaml.safe_load(f)
-            
-            # TODO: Convert YAML to analysis_pl list of steps
-            # self.analysis_pl = _convert_yaml_to_steps(
-            #     self.analysis_yaml_dict, self.DS.analysis_steps
-            # )
-            
-            # TODO: Extract user parameters from YAML
-            # self.user_params = _extract_user_params(self.analysis_yaml_dict)
+                yaml_dict = yaml.safe_load(f)
+            self.analysis_pl = _convert_yaml_to_steps(
+                yaml_dict, self.analysis_steps
+                )
+            if list(self.analysis_pl.keys()) != ['ANALYSIS_STEPS']:
+                raise ValueError(
+                    "analysis YAML must contain only 'ANALYSIS_STEPS' key"
+                    )
+            path_dict = self.analysis_pl['ANALYSIS_STEPS']
+            task_idxs = path_dict.keys()
+            max_task = _validate_task_idxs(task_idxs)
+            self.path = [path_dict[i] for i in range(1, max_task + 1)]
+            for step_dict in self.path:
+                if 'task' not in step_dict:
+                    raise ValueError("Each analysis step must include 'task'")
+                for k in step_dict.keys():
+                    if k not in ['task', 'params', 'save']:
+                        raise ValueError(
+                            f"Invalid key '{k}' found in analysis YAML"
+                        ) 
         else:
             self.analysis_yaml_path = None
             self.analysis_yaml_dict = None
     
+    def execute_path(self, data_idx = None, enforced_max_runs = None,
+                     verbose = True):
+        """
+        Execute each step in the path specified by the anlysis YAML file. 
+
+        Parameters:
+        data_idx (int, array-like, or None): Data indices to process for per-row
+            steps. If None, for per-row and vectorized functions, runs the path 
+            on all rows. Must be None for global steps.
+        enforced_max_runs (dict or None): Optional dict mapping parameter names 
+            to maximum run indices for dependency resolution. If provided, these 
+            constraints will be applied when producing any missing parameters
+            required by the steps in the path. 
+            Format: {param_name: max_run_idx}.
+        verbose (bool): If True, displays a progress bar while executing the 
+        path.
+        """
+        pbar = self.path 
+        if verbose:
+            pbar = tqdm(pbar, leave = False, 
+                        bar_format = "{desc}: {n_fmt}/{total_fmt}  |{bar}|")
+        for step_dict in pbar:
+            pbar.set_description(f"Executing step: {step_dict['task'].name}")
+            # Collect info from YAML step dict
+            step = step_dict['task'] 
+            params = step_dict.get('params', {})
+            # save defaults to True if not specified
+            save = step_dict.get('save', True) 
+            # Execute step 
+            if step.func_type in ['global', 'global-res']:
+                step_data_idx = None  
+            else:
+                step_data_idx = data_idx
+            self.execute_step(
+                step, data_idx = step_data_idx, user_params = params, 
+                enforced_max_runs = enforced_max_runs, save = save
+            )
+
     def execute_step(self, step, data_idx = None, user_params = None, 
                      enforced_max_runs = None, save = False):
         """
@@ -178,17 +229,24 @@ class AnalysisRunner:
         
         # Store user parameters in DataSet before executing step
         if user_params:
-            self._add_user_params(user_params, step.func_type, data_idx)
+            self._add_user_params(user_params, step.func_type, data_idx, save=save)
         
         # Ensure all required input parameters exist by producing them if needed
         self._ensure_inputs_exist(step, data_idx, enforced_max_runs)
         
         # Execute the step using DataSet's _execute_step method
-        self.DS._execute_step(step, data_idx=data_idx, 
-                             enforced_max_runs=enforced_max_runs,
-                             save=save)
+        try:
+            self.DS._execute_step(step, data_idx = data_idx, 
+                                enforced_max_runs = enforced_max_runs,
+                                save = save)
+        except Exception as e:
+            raise RuntimeError(
+                f"Error executing step '{step.name}': {str(e)}"
+            ) from e
     
-    def _add_user_params(self, user_params, func_type, data_idx = None):
+    def _add_user_params(
+            self, user_params, func_type, data_idx = None, save = False
+            ):
         """
         Add user-provided parameters to the DataSet cache.
         
@@ -202,6 +260,8 @@ class AnalysisRunner:
                 (e.g., 'global', 'global-res', 'per-row', 'vectorized').
             data_idx (int, array-like, or None): Data indices for per-row 
                 parameters. Required for per-row steps, must be None for global.
+            save (bool): Whether to save user parameters to zarr. Only user
+                parameters are saved during analysis runs.
         
         Raises:
             TypeError: If user_params is not a dict or func_type is not a 
@@ -266,6 +326,10 @@ class AnalysisRunner:
                 self.DS._store_param(
                     name, val, run_idx, deps={}, is_global=True, data_idx=None
                 )
+
+                # Save user parameter to zarr if requested
+                if save:
+                    self.DS.write_data(name, run_idx, data_idx=None)
         else:
             # Per-row parameters: store array of values
             for name, val in user_params.items():
@@ -273,6 +337,9 @@ class AnalysisRunner:
                 # as a single value (which could be an array)
                 if data_idx_was_scalar:
                     val = [val]
+                elif not isinstance(val, (list, np.ndarray)):
+                    # Broadcast scalar to all data_idx
+                    val = [val] * len(data_idx)  
                 
                 # Convert value to array and validate length
                 val_array = np.atleast_1d(np.asarray(val))
@@ -309,6 +376,10 @@ class AnalysisRunner:
                         name, group_val, run_idx, deps={}, is_global=False, 
                         data_idx=group_data_idx
                     )
+                    
+                    # Save user parameter to zarr if requested
+                    if save:
+                        self.DS.write_data(name, run_idx, data_idx=group_data_idx)
     
     def _ensure_inputs_exist(self, step, data_idx, enforced_max_runs):
         """
@@ -393,3 +464,23 @@ def _load_custom_steps(custom_path):
     custom_analysis_steps = cs.custom_analysis_steps
     
     return custom_analysis_steps
+
+def _validate_task_idxs(task_idxs):
+    if not task_idxs:
+        raise ValueError("task_idxs is empty")
+
+    # must all be integers ≥1
+    if not all(isinstance(i, int) and i >= 1 for i in task_idxs):
+        raise ValueError("task_idxs must contain only integers ≥ 1")
+
+    # must be exactly [1, 2, ..., max]
+    max_idx = max(task_idxs)
+    expected = set(range(1, max_idx + 1))
+
+    if set(task_idxs) != expected or len(task_idxs) != max_idx:
+        raise ValueError(
+            "task_idxs must be consecutive integers starting at 1 with "
+            "no gaps or duplicates"
+            )
+
+    return max_idx

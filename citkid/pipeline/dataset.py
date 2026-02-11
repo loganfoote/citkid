@@ -78,7 +78,10 @@ class DataSet:
         # structure
         self.deps_maps, self._is_global_cache = _load_deps_from_zarr(self.root)
 
-        # start memory_cache, where data is stored referenced to run_idx 
+        # Load existing data from zarr into memory cache
+        # self._memory_cache = _load_existing_data_from_zarr(
+        #     self.root, self.deps_maps, self._is_global_cache
+        # )
         self._memory_cache = {}
         
         # start lazy_collections, which tracks LazyAttrCollections for per-row 
@@ -914,10 +917,10 @@ class DataSet:
                         self._lazy_collections[name] = pf.LazyAttrCollection(
                             self, name
                             )
-                    self._lazy_collections[name].add_run(
-                        run_idx,
-                        self._memory_cache[run_idx][name]
-                    )
+                        self._lazy_collections[name].add_run(
+                            run_idx,
+                            self._memory_cache[run_idx][name]
+                        )
                     
                     # Update _is_global_cache
                     self._is_global_cache[name] = False
@@ -1167,7 +1170,7 @@ class DataSet:
             # Missing row tracking, cannot verify
             return False
         
-        return np.all(np.isin(data_idx, run_grp[name]['row_exists'][...]))
+        return np.all(run_grp[name]['row_exists'][data_idx])
     
     ############################################################################
     ####################### Path validity check utility ########################
@@ -1191,6 +1194,7 @@ class DataSet:
         Raises:
         ValueError: If path is invalid or required inputs are unavailable.
         """
+        # return path  # Placeholder - implement validation and optimization logic here
         if path is None:
             raise ValueError("Cannot execute None path")
         if len(path) == 0:
@@ -1596,6 +1600,51 @@ def _load_custom_steps(custom_path):
 ################################################################################ 
 ########################### Zarr dependencies loader ###########################
 ################################################################################
+def _load_existing_data_from_zarr(root, deps_maps, is_global_cache):
+    """
+    Load existing data from zarr into memory cache.
+    
+    Parameters:
+    root (zarr.Group): Root zarr group
+    deps_maps (dict): Dependencies maps loaded from zarr
+    is_global_cache (dict): Global parameter cache
+    
+    Returns:
+    dict: Memory cache with loaded data
+    """
+    memory_cache = {}
+    
+    # Iterate through all runs in zarr
+    for run_str, run_grp in root.groups():
+        run_idx = int(run_str.replace('run', ''))
+        memory_cache[run_idx] = {}
+        
+        # Load each parameter in this run
+        for param_name, param_grp in run_grp.groups():
+            is_global = param_grp.attrs['global']
+            data_array = param_grp['data']
+            
+            if is_global:
+                # Global parameter - load directly
+                memory_cache[run_idx][param_name] = data_array[()]
+            else:
+                # Per-row parameter - create LazyAttr with existing data
+                row_exists = param_grp['row_exists'][:]
+                data_shape = data_array.shape
+                
+                # Create LazyAttr and populate with existing data
+                lazy_attr = pf.LazyAttr(data_shape[0], data_array.dtype)
+                lazy_attr._shape = data_shape[1:] if len(data_shape) > 1 else ()
+                
+                # Load data for rows that exist
+                for idx in range(len(row_exists)):
+                    if row_exists[idx]:
+                        lazy_attr._cache[idx] = data_array[idx]
+                
+                memory_cache[run_idx][param_name] = lazy_attr
+    
+    return memory_cache
+
 def _load_deps_from_zarr(root):
     """
     Given the root of an analysis output file, load the dependencies map for 

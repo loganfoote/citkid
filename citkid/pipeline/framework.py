@@ -359,6 +359,10 @@ class LazyAttrCollection:
         # Fetch data in groups
         results = [None] * len(data_idx_arr)  # Pre-allocate in correct order
         for run_idx, data_idxs in run_idx_to_data_idx.items():
+            if run_idx not in self._lazy_attrs:
+                self._lazy_attrs[run_idx] = LazyAttr(
+                    self.DS, self.name, run_idx
+                    )
             lazy_attr = self._lazy_attrs[run_idx]
             fetched = lazy_attr[data_idxs]  # Batch call - returns 2D array
             # fetched is always 2D: (n_rows, ...), iterate through rows
