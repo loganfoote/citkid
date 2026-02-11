@@ -20,18 +20,12 @@ default_cal_steps =\
  ('center_t', circle.cent_rot_s21, 
   ['zt_rmv', 'circ_origin', 'theta_phase_offset'], ['zt_cent'], 'per-row'),
 
- ('get_idx_t', lambda ff, ft: np.argmin(np.abs(ff - ft)), 
-  ['ff', 'ft'], ['idx_t'], 'per-row'),
-
  ('get_thetaf', lambda z, idx_t: circle.convert_to_theta(
      z, unwrap = True, idx_t = idx_t), 
   ['zf_cent', 'idx_t'], ['thetaf'], 'per-row'),
 
  ('get_thetat', lambda z: circle.convert_to_theta(z, unwrap = False), 
   ['zt_cent'], ['thetat'], 'per-row'),
-
-  ('cut_xf', lambda x, t, mask: (x[mask], t[mask]), 
-  ['xf', 'thetaf', 'xcal_mask'], ['xf_cut', 'thetaf_cut'], 'per-row'),
 
  ('get_xf', lambda ff, ft: 1 - ff / ft, 
   ['ff', 'ft'], ['xf'], 'per-row'),
@@ -45,7 +39,7 @@ default_cal_steps =\
 
  ('get_sparper', circle.get_spar_sper, 
   ['thetat', 'At', 'circ_radius', 'dt'], 
-  ['spar', 'sper'], 'per-row'),
+  ['sparper_freq', 'spar', 'sper'], 'per-row'),
   
 )
 
@@ -60,7 +54,8 @@ default_analysis_steps =\
 
  ('fit_iq_circle', circle.fit_iq_circle, 
   ['zf_rmv', 'circ_mask'], ['circ_origin', 'circ_radius'], 'per-row'),
-
+  ('get_idx_t', lambda ff, ft: np.argmin(np.abs(ff - ft)), 
+  ['ff', 'ft'], ['idx_t'], 'per-row'),
  ('get_theta_phase_offset', circle.get_theta_phase_offset, 
   ['zt_rmv', 'circ_origin'], ['theta_phase_offset'], 'per-row'),
 
@@ -68,9 +63,8 @@ default_analysis_steps =\
   ['ff', 'thetaf', 'thetat', 'xcal_idx0_offset', 'xcal_idx1_offset', 
    'xcal_std_cutoff'], ['xcal_mask'], 'per-row'),
 
- ('fit_x_theta', np.polyfit, 
-  ['thetaf_cut', 'xf_cut', 'poly_x_deg'], ['poly_x'], 'per-row'),
-  # This will probably be concatenated with 'cut_xf' and take the mask as input
+ ('fit_x_theta', xcal.fit_x_theta, 
+  ['thetaf', 'xf', 'xcal_mask', 'poly_x_deg'], ['poly_x'], 'per-row'),
 )
 
 ############################## Convert to plSteps ##############################

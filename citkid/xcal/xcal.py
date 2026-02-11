@@ -70,3 +70,7 @@ def get_xcal_mask(ff, theta_f, theta_t, idx0_offset = 3, idx1_offset = 7,
     mask = np.ones(len(ff), dtype = bool) * False 
     mask[idx0:idx1 + 1] = True
     return mask
+
+def fit_x_theta(thetat, xf, mask, poly_x_deg):
+    poly = np.polyfit(thetat[mask], xf[mask], poly_x_deg) 
+    return poly

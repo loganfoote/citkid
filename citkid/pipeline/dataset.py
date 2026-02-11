@@ -971,7 +971,7 @@ class DataSet:
         - Works with _execute_step which handles actual computation and storage
         """
         path = pf.find_pl_path(self.cal_pl, name) 
-        path = self._check_path_validity(path, data_idx, enforced_max_runs)
+        # path = self._check_path_validity(path, data_idx, enforced_max_runs)
         for step in path:
             enforced_max_runs_i = {
                 k: v for k, v in enforced_max_runs.items() 

@@ -237,8 +237,8 @@ class AnalysisRunner:
         # Execute the step using DataSet's _execute_step method
         try:
             self.DS._execute_step(step, data_idx = data_idx, 
-                                enforced_max_runs = enforced_max_runs,
-                                save = save)
+                                  enforced_max_runs = enforced_max_runs,
+                                  save = save)
         except Exception as e:
             raise RuntimeError(
                 f"Error executing step '{step.name}': {str(e)}"

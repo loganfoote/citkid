@@ -598,7 +598,7 @@ class plStep:
                 if not isinstance(results_i, tuple):
                     results_i = (results_i,)
                 for r, v in enumerate(results_i):
-                    results[r].append(v)
+                    results[r].append(v) 
             results = tuple([np.array(r) for r in results])
 
         # Confirm that output length matches return_names length, and assign 
