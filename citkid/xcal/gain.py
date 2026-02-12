@@ -81,7 +81,7 @@ def get_res_mask(fg, fr_spans):
     mask = ~mask
     return mask
 
-def fit_gain(f, z, fr_spans):
+def fit_gain(f, z, fr_spans, span_mult = 1):
     """
     Fits the amplitude and phase of gain data. Amplitude is fit to a 2nd order.
     polynomial and phase is fit to a 1st order polynomial.
@@ -91,6 +91,8 @@ def fit_gain(f, z, fr_spans):
     z (np.array, complex128, (N,)): Gain complex S21 array.
     fr_spans (list): Tuples (float, float) of (resonant frequency, span) in Hz.
         These frequency ranges are removed from the gain data.
+    span_mult (float): Multiplier for fr_spans to increase or decrease the span
+        around each resonance. Default is 1 (no change).
 
     Returns:
     p_amp (np.array, float64): 2nd-order polynomial fit parameters to gain
@@ -117,7 +119,7 @@ def fit_gain(f, z, fr_spans):
             raise ValueError('Span must be positive')
 
     # Cut out resonances
-    mask = get_res_mask(f, fr_spans)
+    mask = get_res_mask(f, [(fs[0], fs[1] * span_mult) for fs in fr_spans])
     f, z = f[mask], z[mask]
     # Find indices in the center of False regions of the mask for phase fitting
     false_groups = np.flatnonzero(np.diff(np.r_[True, ~mask, True]))

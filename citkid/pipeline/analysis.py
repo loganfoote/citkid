@@ -91,7 +91,7 @@ class AnalysisRunner:
             self.analysis_yaml_dict = None
     
     def execute_path(self, data_idx = None, enforced_max_runs = None,
-                     verbose = True):
+                     start_from_idx = 0, verbose = True):
         """
         Execute each step in the path specified by the anlysis YAML file. 
 
@@ -104,10 +104,12 @@ class AnalysisRunner:
             constraints will be applied when producing any missing parameters
             required by the steps in the path. 
             Format: {param_name: max_run_idx}.
+        start_from_idx (int): Optional index into the path to start from.
+            Default is 0 (start from the beginning). 
         verbose (bool): If True, displays a progress bar while executing the 
         path.
         """
-        pbar = self.path 
+        pbar = self.path[start_from_idx:]
         if verbose:
             pbar = tqdm(pbar, leave = False, 
                         bar_format = "{desc}: {n_fmt}/{total_fmt}  |{bar}|")

@@ -50,7 +50,8 @@ default_analysis_steps =\
   ['fres_all', 'qres_all'], ['fr_spans'], 'global'),
 
  ('fit_gain', gain.fit_gain, 
-  ['fg', 'zg', 'fr_spans'], ['p_amp', 'p_phase', 'gain_mask'], 'per-row'),
+  ['fg', 'zg', 'fr_spans', 'span_mult'], ['p_amp', 'p_phase', 'gain_mask'], 
+  'per-row'),
 
  ('fit_iq_circle', circle.fit_iq_circle, 
   ['zf_rmv', 'circ_mask'], ['circ_origin', 'circ_radius'], 'per-row'),
