@@ -9,13 +9,15 @@ CAL_STEPS:
     task: load_global_res_data
     T_STEPS:
       1:
-        task: load_cal_data_t
+        task: load_ft
       2:
-        task: rmv_gain_t 
-        # delete_input: [zt]
+        task: load_zt
       3:
-        task: center_t 
+        task: rmv_gain_t 
+        delete_input: [zt]
       4:
+        task: center_t 
+      5:
         task: get_thetat
         A_STEPS: 
           1:
@@ -24,7 +26,7 @@ CAL_STEPS:
             task: get_sparper 
             # Small issue: need to define this such that get_freqs is 
             # always True, rather than a user-defined parameter.
-      5:
+      6:
         task: get_xt
     F_STEPS:
       1:
@@ -39,8 +41,6 @@ CAL_STEPS:
         task: get_thetaf
       5:
         task: get_xf
-      6:
-        task: cut_xf
     G_STEPS:
       1: 
         task: load_data_g

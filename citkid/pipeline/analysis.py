@@ -436,7 +436,7 @@ class AnalysisRunner:
                     produce_data_idx = data_idx
                 
                 # Attempt to produce the parameter
-                self.DS._produce_data(
+                self.DS._ensure_loaded(
                     param_name, 
                     data_idx=produce_data_idx,
                     enforced_max_runs=enforced_max_runs

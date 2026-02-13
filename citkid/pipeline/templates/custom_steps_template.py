@@ -1,61 +1,93 @@
 import numpy as np
 import os
+import zarr
 from citkid.pipeline.framework import plStep
 
-def load_global_data(directory):
-    d = os.path.join(directory, 'raw/')
-    def get_path(name):
-        return os.path.join(d, f'{name}_3K.npy')
-    fres_all = np.load(get_path('fres_all'))
-    qres_all = np.load(get_path('qres_all'))
-    dt = np.load(os.path.join(d, 'noise_3K_batch_tsample.npy'))
-    nrows = np.load(get_path('fres')).shape[0]
-    return fres_all, qres_all, dt, nrows 
+def load_global_data():
+    d = ''
+    root = zarr.open(d, mode = 'r')
+    dt = root['ts_01/dt'][...]
+    nrows = root['fres'].shape[0]
+    
+    d = ''
+    
+    fres_all = np.load(os.path.join(d, 'fres_init/fres.npy'))
+    fres_all = np.sort(fres_all)
+    qres_all = np.ones_like(fres_all) * 8000
 
-def load_global_res_data(directory):
-    d = os.path.join(directory, 'raw/')
-    def get_path(name):
-        return os.path.join(d, f'{name}_3K.npy')
-    ares = np.load(get_path('ares'))
-    fres = np.load(get_path('fres'))
-    qres = np.load(get_path('qres'))
-    res_idxs = np.load(get_path('res_indices')).astype(int)
-    return fres, qres, ares, res_idxs
+    
+    return fres_all, qres_all, dt, nrows
 
-def load_data_t(directory, data_idx, batches):
-    """
-    data_idx can be single or list of res indices
-    """
-    d = os.path.join(directory, 'raw/')
-    zt = None
-    for batch in batches:
-        zi = np.load(os.path.join(d, f'noise_3K_batch{batch:02d}.npy'),
-                    mmap_mode = 'r')
-        if zt is None:
-            zt = zi[data_idx]
-        else:
-            zt = np.concatenate((zt, zi[data_idx]))
+def load_global_res_data():
+    d = ''
+    root = zarr.open(d, mode = 'r')
+
+    fres = np.array(root['fres'])
+    ares = np.array(root['ares'])
+    qres = np.array(root['qres']) 
+    res_idxs = np.array(root['res_idxs']) 
+    return fres, qres, ares, res_idxs 
+
+def load_ft(data_idx):
+    d = ''
+    root = zarr.open(os.path.join(d, 'ts_01'), mode = 'r')
+    ft = root['ft'][data_idx] 
+    return ft
+
+def load_zt(data_idx):
+    d = ''
+    root = zarr.open(os.path.join(d, 'ts_01'), mode = 'r')
+
+    zt = root['z'][:, data_idx, :10_000] 
+    zt = zt[0] + 1j * zt[1] 
+    zt *= np.array(root['counts_to_s21'][data_idx])[:, np.newaxis]
     return zt
 
-def load_data_f(directory, data_idx):
-    """
-    data_idx can be single or list of res indices
-    """
-    d = os.path.join(directory, 'raw/')
-    ff, i, q = np.load(os.path.join(d, 's21_fine_3K.npy'), mmap_mode = 'r')
-    zf = i[data_idx] + 1j * q[data_idx]
-    return ff[data_idx], zf
+def load_data_f(data_idx):
+    d = ''
+    root = zarr.open(os.path.join(d, 'fine_sweep'), mode = 'r')
+
+    ff = np.array(root['f'][data_idx, :])
+    zf = np.array(root['z'][data_idx, :])
+    idx = np.argsort(ff)
+    return ff[idx], zf[idx]
+
+def load_data_g(data_idx):
+    d = ''
+    root = zarr.open(os.path.join(d, 'gain_sweep'), mode = 'r')
+
+    fg = np.array(root['f'][data_idx, :])
+    zg = np.array(root['z'][data_idx, :])
+    idx = np.argsort(fg)
+    return fg[idx], zg[idx]
+
+def get_circle_mask(ff): 
+    return np.ones_like(ff, dtype = bool) 
 
 custom_steps =\
-[('load_global_data', load_global_data, ['directory'],
-  ['fres_all', 'qres_all', 'dt', 'nrows'],
-   'global'),
+[('load_global_data', load_global_data, 
+  [], ['fres_all', 'qres_all', 'dt', 'nrows'], 
+  'global'),
  ('load_global_res_data', load_global_res_data,
-  ['directory'], ['fres', 'qres', 'ares', 'res_idxs'], 'global-res'),
- ('load_data_t', load_data_t,
-  ['directory', 'data_idx', 'batches'], ['zt'], 'vectorized'),
+  [], ['fres', 'qres', 'ares', 'res_idxs'], 
+  'global-res'),
+ ('load_ft', load_ft,
+  ['data_idx'], ['ft'], 
+  'vectorized'),
+  ('load_zt', load_zt,
+  ['data_idx'], ['zt'], 
+  'vectorized'),
  ('load_data_f', load_data_f,
-  ['directory', 'data_idx'], ['ff', 'zf'], 'vectorized')
+  ['data_idx'], ['ff', 'zf'], 
+  'per-row'),
+ ('load_data_g', load_data_g,
+  ['data_idx'], ['fg', 'zg'], 
+  'per-row')
 ]
 
-custom_steps = [plStep(*cs) for cs in custom_steps]
+custom_cal_steps = [plStep(*cs) for cs in custom_steps]
+custom_analysis_steps = [
+    plStep('get_circle_mask', get_circle_mask, 
+           ['ff'], ['circ_mask'], 'per-row'
+           )
+    ]

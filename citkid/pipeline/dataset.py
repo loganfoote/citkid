@@ -223,7 +223,7 @@ class DataSet:
                     return self._get_existing(name, run_idx, data_idx = None)
             
             # Not found - produce it
-            self._produce_data(name, data_idx = None)
+            self._ensure_loaded(name, data_idx = None)
             
             # Retrieve from memory (should exist now)
             run_idx = get_most_recent_run(name, self.deps_maps['global'])
@@ -662,7 +662,6 @@ class DataSet:
                         for name in step.return_names]
             # run that doesn't exist yet should be 1 
             run_idxs = [1 if r == 0 else r for r in run_idxs]
-            print(f"Executing step '{step.name}' with run_idxs {run_idxs}")
             # Collect parameters 
             params, param_is_global = self._collect_step_parameters_global(
                 step, deps
@@ -847,97 +846,89 @@ class DataSet:
             f"Use _execute_path to generate missing data."
         )
     
-    def _step_needs_execution_global(self, step, deps_map, input_params, deps):
-        """
-        Check if a global/global-res step needs execution.
-        
-        Returns True if the step should be executed, False if it can be skipped.
-        """
-        for return_name in step.return_names:
-            most_recent_run = get_most_recent_run(return_name, deps_map)
-            
-            # If no existing run, need to execute
-            if most_recent_run == -1:
-                return True
-            
-            # Check if data exists at most_recent_run
-            if not (self._is_in_memory(return_name, most_recent_run, None) or
-                    self._is_in_zarr(return_name, most_recent_run, None)):
-                return True
-            
-            # Check if stored dependencies match current dependencies
-            # (only if step has input parameters)
-            if input_params:
-                stored_deps = deps_map[most_recent_run][return_name]
-                if stored_deps != deps:
-                    # Dependencies changed, need new run
-                    return True
-        
-        return False
+    def _get_needs_execution_global(self, step, enforced_max_runs):
+        # First, return True if any return doesn't exist yet=
+        step_data_idx = None 
+        curr_deps_map = self.deps_maps['global']
+        if any(get_most_recent_run(name, curr_deps_map) < 0
+               for name in step.return_names):
+            return True
+
+        # If return_names do exist, check if their deps match the 
+        # deps they would have if the step is executed again now
+        new_deps = {}
+        for name in step.param_names: 
+            if name == 'data_idx':
+                continue 
+            if name in enforced_max_runs:
+                new_deps[name] = enforced_max_runs[name]
+            else:
+                ri_curr = get_most_recent_run(name, curr_deps_map)
+                ri_curr = 1 if ri_curr == -1 else ri_curr
+                new_deps[name] = ri_curr
+
+        needs_execution = True
+        # Do any run indices have deps that are equal to new_deps?
+        for run_idx, curr_deps in curr_deps_map.items():
+            deps_match = [] 
+            for key, dep in new_deps.items():
+                    if key in curr_deps and curr_deps[key] == dep:
+                        deps_match.append(True)
+                    else:
+                        deps_match.append(False)
+            if all(deps_match):
+                needs_execution = False
+                break
+        return needs_execution
     
-    def _get_data_idx_needing_execution(self, step, data_idx, enforced_max_runs):
-        """
-        For per-row/vectorized steps, determine which data_idx need execution.
+    def _get_needs_execution_nonglobal(self, step, data_idx, enforced_max_runs):
+        step_data_idx = np.atleast_1d(np.asarray(data_idx, dtype = np.int32))
         
-        Returns array of data_idx that need execution.
-        """
-        input_params = [p for p in step.param_names if p != 'data_idx']
-        data_idx_to_execute = []
-        
-        for di in data_idx:
-            # Merge global and per-row deps_maps for this data_idx
-            merged_deps_map = {}
-            if 'global' in self.deps_maps:
-                for run_idx, params in self.deps_maps['global'].items():
-                    merged_deps_map[run_idx] = params.copy()
-            if di in self.deps_maps:
-                for run_idx, params in self.deps_maps[di].items():
-                    if run_idx not in merged_deps_map:
-                        merged_deps_map[run_idx] = {}
-                    merged_deps_map[run_idx].update(params)
-            
-            # Compute current dependencies
-            deps_current = get_deps(input_params, merged_deps_map, 
-                                   enforced_max_runs=enforced_max_runs)
-            
-            # Check if all outputs exist with matching deps for this data_idx
-            needs_execution = False
-            for return_name in step.return_names:
-                # Check in per-row deps_map
-                if di not in self.deps_maps:
-                    needs_execution = True
+        row_needs_execution = [False for _ in range(step_data_idx.shape[0])]
+        for local_idx, di in enumerate(step_data_idx): 
+            curr_deps_map = self.merge_deps_maps(di)
+            # First, assign True if any return doesn't exist yet
+            if any(get_most_recent_run(name, curr_deps_map) < 0
+                for name in step.return_names):
+                row_needs_execution[local_idx] = True
+                continue 
+
+            # If return_names do exist, check if their deps match the 
+            # deps they would have if the step is executed again now
+            new_deps = {}
+            for name in step.param_names:
+                if name == 'data_idx':
+                    continue
+                if name in enforced_max_runs:
+                    new_deps[name] = enforced_max_runs[name]
+                else:
+                    new_deps[name] = get_most_recent_run(name, curr_deps_map)
+
+            needs_execution = True
+            # Do any run indices have deps that are equal to new_deps?
+            for run_idx, curr_deps in curr_deps_map.items():
+                curr_deps = curr_deps_map[1]
+                deps_match = [] 
+                for name in step.return_names:
+                    runs_match = [] 
+                    if name not in curr_deps:
+                        deps_match.append(False)
+                        continue
+                    for param, ri in new_deps.items():
+                        ri_curr = curr_deps[name][param]
+                        runs_match.append(ri == ri_curr)
+                    deps_match.append(all(runs_match))
+                if all(deps_match):
+                    needs_execution = False
                     break
-                
-                deps_map_di = self.deps_maps[di]
-                most_recent_run = get_most_recent_run(return_name, deps_map_di)
-                
-                # If no existing run, need to execute
-                if most_recent_run == -1:
-                    needs_execution = True
-                    break
-                
-                # Check if data exists at most_recent_run
-                if not (self._is_in_memory(return_name, most_recent_run, 
-                                           np.array([di])) or
-                        self._is_in_zarr(return_name, most_recent_run, 
-                                       np.array([di]))):
-                    needs_execution = True
-                    break
-                
-                # Check if stored dependencies match current dependencies
-                if input_params:
-                    stored_deps = deps_map_di[most_recent_run][return_name]
-                    if stored_deps != deps_current:
-                        # Dependencies changed, need new run
-                        needs_execution = True
-                        break
-            
-            if needs_execution:
-                data_idx_to_execute.append(di)
-        
-        return np.array(data_idx_to_execute, dtype=np.int32)
+            row_needs_execution[local_idx] = needs_execution 
+
+        # Filter step_data_idx by needs_execution 
+        step_data_idx = step_data_idx[row_needs_execution] 
+        needs_execution = bool(len(step_data_idx))
+        return step_data_idx, needs_execution
     
-    def _produce_data(self, name, data_idx = None, enforced_max_runs = {}):
+    def _ensure_loaded(self, name, data_idx = None, enforced_max_runs = {}):
         """
         Produce data for a parameter by executing its pipeline path.
         
@@ -967,7 +958,8 @@ class DataSet:
         - Works with _execute_step which handles actual computation and storage
         """
         path = pf.find_pl_path(self.cal_pl, name) 
-        # path = self._check_path_validity(path, data_idx, enforced_max_runs)
+        if path is None:
+            return
         for step in path:
             enforced_max_runs_i = {
                 k: v for k, v in enforced_max_runs.items() 
@@ -976,86 +968,29 @@ class DataSet:
 
             # Check if step inputs most recent run idxs match dependencies of 
             # already existing data. If so, skip execution. 
-            if step.func_type in ['global', 'global-res']:
-                step_data_idx = None 
-                curr_deps_map = self.deps_maps['global']
-                for name in step.return_names: 
-                    # If return_names don't exist yet, needs_execution 
-                    needs_execution = False
-                    if get_most_recent_run(name, self.deps_maps['global']) < 0:
-                        needs_execution = True
-                if not needs_execution:
-                    # If return_names do exist, check if their deps match the 
-                    # deps they would have if we executed this step now
-                    new_deps = {}
-                    for name in step.param_names:
-                        if name in enforced_max_runs_i:
-                            new_deps[name] = enforced_max_runs_i[name]
-                        else:
-                            new_deps[name] = get_most_recent_run(name, self.deps_maps['global'])
-
-                    needs_execution = True
-                    # Do any run indices have deps that are equal to new_deps?
-                    for run_idx, curr_deps in curr_deps_map.items():
-                        deps_match = [] 
-                        for key, dep in new_deps.items():
-                                if key in curr_deps and curr_deps[key] == dep:
-                                    deps_match.append(True)
-                                else:
-                                    deps_match.append(False)
-                        if all(deps_match):
-                            needs_execution = False
-                            break
-
+            if step.func_type == 'global':
+                needs_execution = \
+                    self._get_needs_execution_global(
+                        step, enforced_max_runs_i
+                        )
+                step_data_idx = None
+            elif step.func_type == 'global-res':
+                # Sufficient to check index 0, since global-res will create 
+                # data for all data_idx and they will all share the same deps
+                _, needs_execution = \
+                    self._get_needs_execution_nonglobal(
+                        step, 0, enforced_max_runs_i
+                        ) 
+                step_data_idx = None
             else: # vectorized or per-row
-                step_data_idx = np.atleast_1d(np.asarray(data_idx, dtype = np.int32))
-                for name in step.return_names: 
-                    # If return_names don't exist yet, needs_execution 
-                    needs_execution = [False for _ in range(step_data_idx.shape[0])]
-                    for local_idx, data_idx in enumerate(step_data_idx):
-                        curr_deps_map = self.merge_deps_maps(data_idx)
-                        if get_most_recent_run(name, self.deps_maps['global']) < 0:
-                            needs_execution[local_idx] = True
-                for local_idx, data_idx in enumerate(step_data_idx):
-                    if needs_execution[local_idx]:
-                        continue
-                    # If return_names do exist, check if their deps match the 
-                    # deps they would have if we executed this step now
-                    curr_deps_map = self.merge_deps_maps(data_idx)
-                    new_deps = {}
-                    for name in step.param_names:
-                        if name in enforced_max_runs_i:
-                            new_deps[name] = enforced_max_runs_i[name]
-                        else:
-                            new_deps_i = curr_deps_map
-                            new_deps[name] = get_most_recent_run(name, new_deps_i)
-
-                    needs_execution[local_idx] = True
-                    # Do any run indices have deps that are equal to new_deps?
-                    for run_idx, curr_deps in curr_deps_map.items():
-                        deps_match = [] 
-                        for key, dep in new_deps.items():
-                                if key in curr_deps and curr_deps[key] == dep:
-                                    deps_match.append(True)
-                                else:
-                                    deps_match.append(False)
-                        if all(deps_match):
-                            needs_execution[local_idx] = False
-                            break
-            # For vectorized or per-row, cut step_data_idx to only row that 
-            # need execution
-            if isinstance(needs_execution, list):
-                step_data_idx = step_data_idx[needs_execution]
-                if len(step_data_idx):
-                    needs_execution = True
-                else:
-                    needs_execution = False # bypass if no rows need execution
+                step_data_idx, needs_execution = \
+                    self._get_needs_execution_nonglobal(
+                        step, data_idx, enforced_max_runs_i
+                        )
 
             # Execute step 
             if not needs_execution:
-                print(f"Skipping execution of step '{step.name}' for parameter '{name}' ")
                 continue
-            print(f"Executing step '{step.name}' to produce parameter '{name}' ")
             self._execute_step(
                 step, 
                 data_idx = step_data_idx, 
@@ -1126,7 +1061,7 @@ class DataSet:
                     f"because it would require producing run_idx="
                     f"{run_idx_potential}."
                 )
-            self._produce_data(
+            self._ensure_loaded(
                 name, 
                 data_idx = data_idx, 
                 enforced_max_runs = enforced_max_runs

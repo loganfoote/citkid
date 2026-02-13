@@ -335,6 +335,9 @@ class LazyAttrCollection:
         # Normalize input to array of indices
         data_idx_arr, is_scalar = self._normalize_index(data_idx)
 
+        # Ensure loaded 
+        self.DS._ensure_loaded(self.name, data_idx_arr)
+
         # Map each data_idx to its run_idx and preserve order
         run_idx_to_data_idx = {}
         di_to_position = {}  # Track original position

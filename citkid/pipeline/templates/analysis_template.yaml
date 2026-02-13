@@ -11,24 +11,26 @@ ANALYSIS_STEPS:
     task: fit_gain
     params:
       span_mult: 2 # I will implement this soon, multiplies all spans by this factor
-  3 :
+  3 : 
+    task: get_circle_mask
+  4 :
     task: fit_iq_circle 
-    params:
-      idx_circfit: None
     # unique case: res_mask is user defined, but would only be specified if 
     # calling from interactive mode. Defaults to None in the function, so you 
     # don't have to specify a parameter here.
-  4 : 
+  5 : 
+    task: get_idx_t
+  6 : 
     task: get_theta_phase_offset 
     # is this really analysis if it doesn't take user-defined parameters? But 
     # there is a good chance we might add user-defined parameters later.
-  5 :
+  7 :
     task: get_xcal_mask 
     params:
       xcal_idx0_offset: 3 
       xcal_idx1_offset: 9
       xcal_std_cutoff: 12.0 
-  6 : 
+  8 : 
     task: fit_x_theta 
     params:
       poly_x_deg: 3
