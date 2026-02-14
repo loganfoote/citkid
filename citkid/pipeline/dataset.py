@@ -109,6 +109,13 @@ class DataSet:
                 "'global-res'. nrows should be a single integer value, not a "
                 "per-row array."
             )
+        
+        # Initialize deps_maps 
+        if 'global' not in self.deps_maps:
+            self.deps_maps['global'] = {} 
+        for data_idx in range(self.nrows):
+            if data_idx not in self.deps_maps:
+                self.deps_maps[data_idx] = {}
 
     def __getattr__(self, name):
         """
