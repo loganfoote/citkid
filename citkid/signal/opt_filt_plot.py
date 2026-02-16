@@ -225,8 +225,9 @@ def plot_a(sigmas, h_minmax, y, L):
     fig, ax = plt.subplots(figsize = [5, 3], layout = 'tight', dpi = 100)
     ax.set(ylabel = 'Density', xlabel = 'x (kHz / GHz)')
 
-    b0 = min([min(a) for a in amps[1:]]) 
-    b1 = max([max(a) for a in amps[1:]])
+    b0s = [min(a) for a in amps[1:] if len(a)]
+    b0 = min(b0s) if len(b0s) else 1
+    b1 = max([max(a) for a in amps[1:] if len(a)])
     if b0 >= 0:
         b0 = -b1 / 8
     bins = np.linspace(b0, b1, 50)
