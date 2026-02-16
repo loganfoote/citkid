@@ -32,12 +32,27 @@ def create_opt_filt(a, SJ, nfft):
     # pad a
     a = np.pad(a, (0, nfft - len(a)))
     
-    # compute FFT of a, scaling ensures amplitude consistency
-    A = pyfftw.interfaces.numpy_fft.rfft(a, n = nfft)  * nfft / 2
-    
-    # compute H and h
-    H = A.conj() / SJ / np.sum(A * np.conj(A) / SJ)
-    h = pyfftw.interfaces.numpy_fft.irfft(H, n = nfft) 
+    # compute FFT of a (no extra scaling)
+    A = pyfftw.interfaces.numpy_fft.rfft(a, n = nfft)
+
+    # compute H and h. Multiply by `nfft` to account for the
+    # `irfft` normalization so the matched-filter response has unit
+    # amplitude for a unit-height template.
+    # account for one-sided PSD: interior rfft bins represent two
+    # symmetric bins in the full FFT. Weight accordingly when forming
+    # the normalization denominator so the matched-filter peak is 1
+    # for a unit-height template.
+    if nfft % 2 == 0:
+        # bins: 0 and nfft/2 are unique, others are doubled
+        denom = (np.abs(A[0])**2 / SJ[0]
+                 + np.abs(A[-1])**2 / SJ[-1]
+                 + 2.0 * np.sum(np.abs(A[1:-1])**2 / SJ[1:-1]))
+    else:
+        # only bin 0 is unique
+        denom = (np.abs(A[0])**2 / SJ[0]
+                 + 2.0 * np.sum(np.abs(A[1:])**2 / SJ[1:]))
+    H = nfft * A.conj() / SJ / denom
+    h = pyfftw.interfaces.numpy_fft.irfft(H, n = nfft)
     h = pyfftw.interfaces.numpy_fft.ifftshift(h)
     return h
 
