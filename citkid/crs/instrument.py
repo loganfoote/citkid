@@ -32,8 +32,8 @@ class CRS:
         None
         """
         # Input validation 
-        if rfmux.__version__ != '1.3.2':
-            raise RuntimeError('rfmux version 1.3.2 is required') 
+        if rfmux.__version__ != '1.4.1':
+            raise RuntimeError('rfmux version 1.4.1 is required') 
         if not isinstance(serial_number, int):
             raise TypeError('serial_number must be an integer') 
         if not util.interface_exists(interface):
@@ -42,7 +42,7 @@ class CRS:
         # Store inputs
         self.serial_number = serial_number
         self.interface = interface
-        self.rfmux_version = '1.3.2'
+        self.rfmux_version = '1.4.1'
         self.citkid_version = citkid_version
         self.nco_freqs = {}
 
