@@ -1,56 +1,16 @@
 from numba import jit
 import numpy as np
 from citkid.res.funcs import get_y
-'''Code to generate random resonances for simulations'''
+'''Code to generate KID data for simulations'''
 
-@jit(nopython=True)
-def make_random_resonance_data(get_noise = False, nnoise_points = 1000,
-                                npoints_fine = 500, npoints_gain = 50):
-    """
-    Make a dataset of a random resonator and return data and parameters.
-
-    Parameters:
-    get_noise (bool): If True, also return a noise timestream.
-    nnoise_points (int): Number of points in the noise timestream.
-    npoints_fine (int): Number of points in the fine sweep.
-    npoints_gain (int): Number of points in the gain sweep.
-
-    Returns:
-    ffine (np.array): Fine sweep frequency data in Hz.
-    zfine (np.array): Fine sweep complex S21 data.
-    fgain (np.array): Gain sweep frequency data in Hz.
-    zgain (np.array): Gain sweep complex S21 data.
-    p (np.array): Resonator parameters [fr, Qr, amp, phi, a].
-    f0 (float): Frequency at which noise was taken.
-    znoise (np.array): Complex S21 noise timestream.
-    """
-    p = get_random_resonance_parameters()
-
-    fr, Qr = p[2], p[3]
-    span = np.random.uniform(2, 100) * fr / Qr
-    # Rough sweep
-    frough = np.linspace(fr - span / 2, fr + span / 2, npoints_fine)
-    zrough = get_resonance_s21(frough, *p)
-    f0 = update_fr_distance(frough, zrough)
-    # Fine sweep
-    ffine = np.linspace(f0 - span / 2, f0 + span / 2, npoints_fine)
-    zfine = get_resonance_s21(ffine, *p)
-    fgain = np.linspace(f0 - 10 * span / 2, f0 + 10 * span / 2, npoints_gain)
-    zgain = get_resonance_s21(fgain, *p)
-    f0 = update_fr_distance(fgain, zgain)
-    znoise = np.zeros(nnoise_points, dtype = np.complex64)
-    if get_noise:
-        f = np.asarray([f0])
-        for i in range(nnoise_points):
-            znoise[i] = get_resonance_s21(f, *p)[0]
-    p = np.asarray(p[2:7])
-    return ffine, zfine, fgain, zgain, p, f0, znoise
-
-@jit(nopython=True)
 def get_resonance_s21(
     f,
-    fr_nstd,
-    amp_nstd,
+    alpha,
+    f_knee,
+    tau_qp,
+    sxx_white,
+    sAA_white,
+    dt,
     fr,
     Qr,
     amp,
@@ -60,7 +20,7 @@ def get_resonance_s21(
     p_amp1,
     p_amp2,
     p_phase0,
-    p_phase1,
+    p_phase1
 ):
     """
     Get S21 of a resonance without added gain or phase terms.
@@ -77,8 +37,22 @@ def get_resonance_s21(
     Returns:
     z (np.array): Complex S21 data.
     """
-    fr_with_noise = np.random.normal(fr, fr_nstd * fr, size = len(f))
-    amp_noise = np.random.normal(0, amp_nstd, size = len(f))
+    fr_with_noise = noise_1f_white_rolloff(
+        n = len(f),
+        fs = 1 / dt,
+        alpha = alpha,
+        f_knee = f_knee,
+        fc = 1 / tau_qp,
+        white_level = np.sqrt(sxx_white)
+    ) * fr + fr
+    amp_noise = noise_1f_white_rolloff(
+        n = len(f),
+        fs = 1 / (dt),
+        alpha = 0.,
+        f_knee = 1., # no 1/f in amp noise
+        fc = 1 / tau_qp,
+        white_level = np.sqrt(sAA_white)
+    )
 
     fr = fr_with_noise
     deltaf = f - fr
@@ -98,38 +72,6 @@ def get_resonance_s21(
     return z
 
 @jit(nopython=True)
-def get_random_resonance_parameters():
-    """
-    Create random resonance and noise parameters.
-
-    Returns:
-    fr_noise_nstd (float): Frequency noise standard deviation factor.
-    amp_noise_nstd (float): Amplitude noise standard deviation factor.
-    p (list): Nonlinear IQ model parameters.
-    """
-    random = lambda low, high: np.random.uniform(low, high)
-    random_log = lambda low, high: np.exp(np.random.uniform(np.log(low),
-                                                            np.log(high)))
-
-    fr_noise_nstd  = random(-10, -7.3979400086720375)
-    fr_noise_nstd  = 10 ** fr_noise_nstd
-    amp_noise_nstd = random(-4.5, -2.3)
-    amp_noise_nstd = 10 ** amp_noise_nstd
-    fr = random_log(10e6, 10e9)
-    Qr = random_log(1e3, 1e6)
-    amp = random(1e-3, 1 - 1e-5)
-    phi = random(-np.pi / 2, np.pi / 2)
-    a = random(0, 1)
-
-    p_amp0 = random(-5e-21, 5e-21)
-    p_amp1 = random(-8e-8, 8e-8)
-    p_amp2 = random(-120, 20)
-    p_phase0 = -random_log(1e-9, 1e-8)
-    p_phase1 = random(-1, 1)
-    return fr_noise_nstd, amp_noise_nstd, fr, Qr, amp, phi, a,\
-           p_amp0, p_amp1, p_amp2, p_phase0, p_phase1
-
-@jit(nopython=True)
 def polyval(p, x):
     """
     Perform the same function as np.polyval, but numba compatible.
@@ -139,25 +81,55 @@ def polyval(p, x):
         y = x * y + p[i]
     return y
 
-@jit(nopython=True)
-def update_fr_distance(f, z):
+def noise_1f_white_rolloff(
+    n,
+    fs,
+    alpha = 1.0,
+    f_knee = 1.0,
+    fc = None,
+    white_level = 1.0,
+):
     """
-    Give a single resonator rough sweep dataset, return the updated resonance
-    frequency by finding the furthest point from the off-resonance data. This
-    function will perform better if the cable delay is first removed.
+    Generate Gaussian noise with:
+        - white floor.
+        - 1/f^alpha component.
+        - optional single-pole rolloff.
 
     Parameters:
-    f (np.array): Single resonator frequency data
-    z (np.array): Single resonator complex S21 data
+    n (int) : number of samples.
+    fs (float) : sample rate.
+    alpha (float) : exponent in 1/f^alpha.
+    f_knee (float) : frequency where 1/f^alpha equals white level.
+    fc (float or None) : single-pole rolloff frequency (Hz).
+    white_level (float) : white noise PSD level (linear units).
 
     Returns:
-    fr (float): Updated frequency
+    x (ndarray) : real-valued noise time series.
     """
-    offres = np.mean(np.roll(z, 10)[:20])
-    diff = np.abs(z - offres)
-    ix = np.argmax(diff)
-    if len(f) > ix + 1:
-        fr = (f[ix] + f[ix + 1]) / 2
-    else:
-        fr = f[ix]
-    return fr
+
+    freqs = np.fft.rfftfreq(n, d=1/fs)
+
+    # Random complex Gaussian spectrum
+    spec = np.random.normal(size = freqs.size) + 1j*np.random.normal(
+                                                            size = freqs.size)
+
+    # Avoid f=0 divergence
+    f = freqs.copy()
+    f[0] = f[1] if len(f) > 1 else 1.0
+
+    # PSD model
+    psd = white_level * (1 + (f_knee / f)**alpha)
+
+    if fc is not None:
+        psd /= (1 + (f / fc)**2)  # single-pole low-pass
+
+    # Shape spectrum (amplitude ∝ sqrt(PSD))
+    spec *= np.sqrt(psd)
+
+    # Remove DC
+    spec[0] = 0
+
+    # Back to time domain
+    x = np.fft.irfft(spec, n)
+
+    return x
