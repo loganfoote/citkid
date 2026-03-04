@@ -5,6 +5,7 @@ from citkid.res.funcs import get_y
 
 def get_resonance_s21(
     f,
+    x_signal,
     alpha,
     f_knee,
     tau_qp,
@@ -27,6 +28,9 @@ def get_resonance_s21(
 
     Parameters:
     f (np.array): Array of frequencies in Hz.
+    x_signal (np.array): Array of fractional frequency signal in Hz,
+        corresponding to f.
+    alpha (float): Exponent of 1/f noise in frequency noise.
     fr (float): Resonant frequency in Hz.
     Qr (float): Total quality factor.
     amp (float): Qr / Qc, where Qc is the coupling quality factor.
@@ -37,14 +41,17 @@ def get_resonance_s21(
     Returns:
     z (np.array): Complex S21 data.
     """
-    fr_with_noise = noise_1f_white_rolloff(
+    x_with_noise = noise_1f_white_rolloff(
         n = len(f),
         fs = 1 / dt,
         alpha = alpha,
         f_knee = f_knee,
         fc = 1 / tau_qp,
         white_level = np.sqrt(sxx_white)
-    ) * fr + fr
+    ) 
+    if x_signal is not None:
+        x_with_noise += x_signal
+    fr_with_noise = x_with_noise * fr + fr
     amp_noise = noise_1f_white_rolloff(
         n = len(f),
         fs = 1 / (dt),
@@ -69,7 +76,8 @@ def get_resonance_s21(
     z_system = 10 ** (polyval([p_amp0, p_amp1, p_amp2], f - fr) / 20) + 0j
     z_system *= np.exp(1j * polyval([p_phase0, p_phase1], f - fr))
     z *= z_system
-    return z
+    xt_real = x_with_noise #+ 1 - f / fr
+    return z, xt_real
 
 @jit(nopython=True)
 def polyval(p, x):
