@@ -39,4 +39,4 @@ dependencies:
   - pip:
       - -e .
       - redis==3.5.3
-      - rfmux==1.3.2
+      - rfmux==1.4.1
