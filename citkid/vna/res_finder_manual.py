@@ -1,5 +1,5 @@
 """
-Interactive manual peak finder for VNA sweep data.
+Interactive manual resonance finder for VNA sweep data.
 
 This module provides a fast, responsive interface for manually identifying
 resonances in VNA sweep data with automatic y-axis scaling, phase
@@ -13,10 +13,10 @@ from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 import os
 
 
-def run_peak_finder(f, z, fres_initial, outpath, margin_factor = 0.15,
+def run_res_finder_manual(f, z, fres_initial, outpath, margin_factor = 0.15,
                     overwrite = False):
     """
-    Run the interactive manual peak finder.
+    Run the interactive manual resonance finder.
     
     Parameters:
     f (np.ndarray): Frequency data in Hz.
@@ -37,18 +37,18 @@ def run_peak_finder(f, z, fres_initial, outpath, margin_factor = 0.15,
         with h5py.File(fres_initial, 'r') as hf:
             fres_initial = hf['fres'][:]
     
-    finder = PeakFinder(
+    finder = ResFinder(
         f, z, fres_initial, outpath, margin_factor, overwrite
     )
     finder.run()
     return np.array(finder.fres)
 
 
-class PeakFinder:
+class ResFinder:
     def __init__(self, f, z, fres_initial, outpath, margin_factor = 0.15,
                  overwrite = False):
         """
-        Interactive peak finder for VNA sweep data.
+        Interactive resonance finder for VNA sweep data.
         
         Parameters:
         f (np.ndarray): Frequency data in Hz (1D array).
@@ -69,6 +69,19 @@ class PeakFinder:
         self.fres = list(np.asarray(fres_initial, dtype = np.float64))
         self.outpath = os.path.normpath(os.path.expanduser(outpath))
         self.margin_factor = margin_factor
+
+        # Check file extension
+        if not self.outpath.lower().endswith('.h5'):
+            raise ValueError(
+                f'Output path must have a .h5 extension, got: {self.outpath}'
+            )
+
+        # Check output directory exists
+        outdir = os.path.dirname(self.outpath)
+        if outdir and not os.path.isdir(outdir):
+            raise FileNotFoundError(
+                f'Output directory does not exist: {outdir}'
+            )
 
         # Check if file exists
         if os.path.exists(self.outpath):
@@ -94,9 +107,14 @@ class PeakFinder:
         
         # Undo history
         self.undo_stack = []
-        
+
+        # IQ plot state (initialise before setup_ui so signal handlers are safe)
+        self.iq_visible = False
+        self._iq_f_sel = np.array([])
+        self._iq_z_sel = np.array([], dtype = np.complex128)
+
         # Setup the application
-        self.app = pg.mkQApp("Peak Finder")
+        self.app = pg.mkQApp("Resonance Finder")
         self.setup_ui()
         
     def setup_ui(self):
@@ -111,10 +129,10 @@ class PeakFinder:
         """
         self.win = pg.GraphicsLayoutWidget(
             show = True,
-            title = "Interactive Peak Finder"
+            title = "Interactive Resonance Finder"
         )
         self.win.resize(1400, 800)
-        self.win.setWindowTitle('Peak Finder - Press H for help')
+        self.win.setWindowTitle('Resonance Finder - Press H for help')
         
         # Add title with instructions
         title_text = (
@@ -124,7 +142,8 @@ class PeakFinder:
             'Shift+Click: Remove nearest | '
             'Ctrl+Z: Undo | '
             'Z/X: Pan left/right | '
-            'S: Save'
+            'S: Save | '
+            'I: Toggle IQ plot'
             '</span>'
         )
         self.win.addLabel(title_text, col = 0)
@@ -195,10 +214,15 @@ class PeakFinder:
         # Plot magnitude data with downsampling for performance
         self.mag_curve = self.plot_mag.plot(
             self.f, self.mag_db,
-            pen = pg.mkPen(color = (100, 200, 255), width = 1.5),
+            pen = pg.mkPen(color = (100, 200, 255, 90), width = 1.5),
             autoDownsample = True,
             downsample = 10,
             downsampleMethod = 'subsample'
+        )
+        # Highlighted overlay (IQ window) — drawn on top, hidden by default
+        self.mag_highlight = self.plot_mag.plot(
+            [], [],
+            pen = pg.mkPen(color = (255, 230, 0), width = 2.5)
         )
         
         # Move to next row for phase plot
@@ -213,15 +237,41 @@ class PeakFinder:
         # Plot phase data
         self.phase_curve = self.plot_phase.plot(
             self.f, self.phase,
-            pen = pg.mkPen(color = (255, 150, 100), width = 1.5),
+            pen = pg.mkPen(color = (255, 150, 100, 90), width = 1.5),
             autoDownsample = True,
             downsample = 10,
             downsampleMethod = 'subsample'
         )
+        # Highlighted overlay (IQ window) — drawn on top, hidden by default
+        self.phase_highlight = self.plot_phase.plot(
+            [], [],
+            pen = pg.mkPen(color = (255, 230, 0), width = 2.5)
+        )
         
         # Link x-axes so they pan together
         self.plot_phase.setXLink(self.plot_mag)
-        
+
+        # IQ (I vs Q) plot — right column, spans both mag and phase rows
+        self.plot_iq = self.win.addPlot(row = 1, col = 1, rowspan = 2)
+        self.plot_iq.setLabel('left', 'Q (Im)')
+        self.plot_iq.setLabel('bottom', 'I (Re)')
+        self.plot_iq.showGrid(x = True, y = True, alpha = 0.3)
+        self.plot_iq.setAspectLocked(True)
+        self.iq_curve = self.plot_iq.plot(
+            [], [],
+            pen = pg.mkPen(color = (255, 230, 0), width = 1.5)
+        )
+        # Fres markers on IQ plot
+        self.iq_fres_scatter = pg.ScatterPlotItem(
+            size = 14, pen = pg.mkPen('w', width = 1)
+        )
+        self.plot_iq.addItem(self.iq_fres_scatter)
+        # Hidden until toggled on (iq_visible already set in __init__)
+        self.plot_iq.hide()
+        # Give col 0 most width; col 1 is square so needs less
+        self.win.ci.layout.setColumnStretchFactor(0, 3)
+        self.win.ci.layout.setColumnStretchFactor(1, 1)
+
         # Store resonance markers
         self.mag_markers = []
         self.phase_markers = []
@@ -229,6 +279,7 @@ class PeakFinder:
         # Connect signals for both plots
         self.plot_mag.scene().sigMouseClicked.connect(self.on_click)
         self.plot_phase.scene().sigMouseClicked.connect(self.on_click)
+        self.plot_iq.scene().sigMouseClicked.connect(self.on_iq_click)
         self.plot_mag.sigRangeChanged.connect(self.on_range_changed)
         
         # Setup keyboard shortcuts
@@ -262,6 +313,10 @@ class PeakFinder:
         self.pan_right_action = QtGui.QShortcut(QtCore.Qt.Key_X, self.win)
         self.pan_right_action.activated.connect(self.pan_right)
         
+        # IQ plot toggle shortcut
+        self.iq_action = QtGui.QShortcut(QtCore.Qt.Key_I, self.win)
+        self.iq_action.activated.connect(self.toggle_iq)
+
         # Help shortcut
         self.help_action = QtGui.QShortcut(QtCore.Qt.Key_H, self.win)
         self.help_action.activated.connect(self.show_help)
@@ -298,10 +353,83 @@ class PeakFinder:
                 else:
                     # Regular Click: Add resonance
                     self.add_resonance(freq)
-                
+
+    def on_iq_click(self, event):
+        """
+        Handle mouse clicks on the IQ plot.
+
+        Left click: add a resonance at the data frequency nearest to the
+        clicked IQ point. Shift+Click: remove the nearest resonance.
+
+        Parameters:
+        event (MouseEvent): Mouse click event.
+
+        Returns:
+        None
+        """
+        if not self.iq_visible:
+            return
+        pos = event.scenePos()
+        if not self.plot_iq.sceneBoundingRect().contains(pos):
+            return
+        if len(self._iq_f_sel) == 0:
+            self.log("No data in IQ window.")
+            return
+        mouse_point = self.plot_iq.vb.mapSceneToView(pos)
+        click_z = complex(mouse_point.x(), mouse_point.y())
+        # Find the data point in the IQ window closest to where was clicked
+        distances = np.abs(self._iq_z_sel - click_z)
+        nearest_idx = int(np.argmin(distances))
+        nearest_freq = float(self._iq_f_sel[nearest_idx])
+        modifiers = event.modifiers()
+        if event.button() == QtCore.Qt.LeftButton:
+            if modifiers == QtCore.Qt.ShiftModifier:
+                self.remove_nearest_resonance(nearest_freq)
+            else:
+                self.add_resonance(nearest_freq)
+
+    def _local_df(self, freq):
+        """
+        Return the local data-point spacing in self.f nearest to freq.
+
+        Parameters:
+        freq (float): Frequency in Hz.
+
+        Returns:
+        df (float): Minimum spacing between adjacent samples near freq.
+        """
+        idx = int(np.searchsorted(self.f, freq))
+        idx = int(np.clip(idx, 0, len(self.f) - 1))
+        left = self.f[idx] - self.f[idx - 1] if idx > 0 else np.inf
+        right = self.f[idx + 1] - self.f[idx] if idx < len(self.f) - 1 else np.inf
+        return min(left, right)
+
+    def _interpolate_z(self, freq):
+        """
+        Linearly interpolate self.z at freq between bracketing samples.
+
+        Parameters:
+        freq (float): Frequency in Hz.
+
+        Returns:
+        z_interp (complex): Interpolated complex S21 value.
+        """
+        idx = int(np.searchsorted(self.f, freq))
+        if idx == 0:
+            return self.z[0]
+        if idx >= len(self.f):
+            return self.z[-1]
+        f0, f1 = self.f[idx - 1], self.f[idx]
+        z0, z1 = self.z[idx - 1], self.z[idx]
+        t = (freq - f0) / (f1 - f0)
+        return z0 + t * (z1 - z0)
+
     def add_resonance(self, freq):
         """
         Add a resonance at the specified frequency.
+
+        Refuses to add if a resonance already exists within one local
+        data-point spacing of freq.
 
         Parameters:
         freq (float): Frequency in Hz to add as a resonance.
@@ -309,6 +437,17 @@ class PeakFinder:
         Returns:
         None
         """
+        if self.fres:
+            distances = [abs(freq - f) for f in self.fres]
+            min_dist = min(distances)
+            if min_dist < self._local_df(freq):
+                nearest = self.fres[int(np.argmin(distances))]
+                msg = (f"Too close to existing resonance at "
+                       f"{nearest / 1e6:.3f} MHz "
+                       f"(within one sample spacing). Not added.")
+                self.log(msg)
+                return
+
         # Save state for undo
         self.undo_stack.append(('add', freq))
         
@@ -423,13 +562,20 @@ class PeakFinder:
         self.mag_markers = []
         self.phase_markers = []
         
+        # Cycle through 6 distinct (color, line-style) combinations so
+        # adjacent markers are always visually distinct.
+        _styles = [
+            ((255, 255,   0, 180), QtCore.Qt.SolidLine),  # yellow solid
+            ((  0, 255, 255, 180), QtCore.Qt.DashLine),   # cyan   dash
+            ((255, 100, 255, 180), QtCore.Qt.DotLine),    # magenta dot
+            ((255, 255,   0, 180), QtCore.Qt.DashLine),   # yellow dash
+            ((  0, 255, 255, 180), QtCore.Qt.DotLine),    # cyan   dot
+            ((255, 100, 255, 180), QtCore.Qt.SolidLine),  # magenta solid
+        ]
+
         # Add new markers
         for i, freq in enumerate(self.fres):
-            # Alternate colors for visibility
-            if i % 2 == 0:
-                color = (255, 255, 0, 150)
-            else:
-                color = (0, 255, 255, 150)
+            color, line_style = _styles[i % len(_styles)]
             
             # Magnitude plot marker
             line_mag = pg.InfiniteLine(
@@ -438,7 +584,7 @@ class PeakFinder:
                 pen = pg.mkPen(
                     color = color,
                     width = 2,
-                    style = QtCore.Qt.DashLine
+                    style = line_style
                 )
             )
             self.plot_mag.addItem(line_mag)
@@ -451,12 +597,15 @@ class PeakFinder:
                 pen = pg.mkPen(
                     color = color,
                     width = 2,
-                    style = QtCore.Qt.DashLine
+                    style = line_style
                 )
             )
             self.plot_phase.addItem(line_phase)
             self.phase_markers.append(line_phase)
-            
+
+        if getattr(self, 'iq_visible', False):
+            self.update_iq_plot()
+
     def on_range_changed(self):
         """
         Called when the view range changes (pan/zoom).
@@ -467,8 +616,89 @@ class PeakFinder:
         Returns:
         None
         """
-        # Auto-scale y-axis based on visible data
         self.auto_scale_y()
+        if self.iq_visible:
+            self.update_iq_plot()
+
+    def toggle_iq(self):
+        """
+        Toggle the IQ plot visibility.
+
+        Parameters:
+        None
+
+        Returns:
+        None
+        """
+        self.iq_visible = not self.iq_visible
+        if self.iq_visible:
+            self.plot_iq.show()
+            self.update_iq_plot()
+            self.log('IQ plot shown.')
+        else:
+            self.plot_iq.hide()
+            self.mag_highlight.setData([], [])
+            self.phase_highlight.setData([], [])
+            self.iq_fres_scatter.setData([])
+            self.log('IQ plot hidden.')
+
+    def update_iq_plot(self):
+        """
+        Refresh the IQ plot using the center quarter of the current view span.
+
+        Also highlights the corresponding data segment on the mag and phase
+        plots in a contrasting colour, and shows interpolated fres positions
+        as markers on the IQ plot.
+
+        Parameters:
+        None
+
+        Returns:
+        None
+        """
+        if not hasattr(self, 'plot_iq'):
+            return
+        x_min, x_max = self.plot_mag.viewRange()[0]
+        span = x_max - x_min
+        center = 0.5 * (x_min + x_max)
+        iq_min = center - span / 8
+        iq_max = center + span / 8
+        mask = (self.f >= iq_min) & (self.f <= iq_max)
+        if not np.any(mask):
+            self.iq_curve.setData([], [])
+            self.mag_highlight.setData([], [])
+            self.phase_highlight.setData([], [])
+            self.iq_fres_scatter.setData([])
+            self._iq_f_sel = np.array([])
+            self._iq_z_sel = np.array([], dtype = np.complex128)
+            return
+        f_sel = self.f[mask]
+        z_sel = self.z[mask]
+        self._iq_f_sel = f_sel
+        self._iq_z_sel = z_sel
+        self.iq_curve.setData(z_sel.real, z_sel.imag)
+        self.mag_highlight.setData(f_sel, self.mag_db[mask])
+        self.phase_highlight.setData(f_sel, self.phase[mask])
+        # Fres markers: interpolate z at each fres within the IQ window
+        _marker_colors = [
+            (255, 255,   0, 230),
+            (  0, 255, 255, 230),
+            (255, 100, 255, 230),
+            (255, 255,   0, 230),
+            (  0, 255, 255, 230),
+            (255, 100, 255, 230),
+        ]
+        spots = []
+        for i, freq in enumerate(self.fres):
+            if iq_min <= freq <= iq_max:
+                z_interp = self._interpolate_z(freq)
+                color = _marker_colors[i % len(_marker_colors)]
+                spots.append({
+                    'pos': (z_interp.real, z_interp.imag),
+                    'brush': pg.mkBrush(color),
+                    'size': 14,
+                })
+        self.iq_fres_scatter.setData(spots)
         
     def auto_scale_y(self):
         """
@@ -594,7 +824,7 @@ class PeakFinder:
         None
         """
         help_text = """
-        <h3>Peak Finder Controls</h3>
+        <h3>Resonance Finder Controls</h3>
         <p><b>Mouse:</b></p>
         <ul>
         <li><b>Left Click:</b> Add resonance at clicked frequency</li>
@@ -608,6 +838,7 @@ class PeakFinder:
         <li><b>X:</b> Pan right by 20%</li>
         <li><b>S:</b> Save resonances to file</li>
         <li><b>Ctrl+Z:</b> Undo last add/remove</li>
+        <li><b>I:</b> Toggle IQ (I vs Q) plot</li>
         <li><b>H:</b> Show this help</li>
         </ul>
         <p><b>Button:</b></p>
@@ -622,7 +853,7 @@ class PeakFinder:
         """
         
         msg = QtWidgets.QMessageBox()
-        msg.setWindowTitle("Peak Finder Help")
+        msg.setWindowTitle("Resonance Finder Help")
         msg.setTextFormat(QtCore.Qt.RichText)
         msg.setText(help_text)
         msg.exec_()
@@ -637,7 +868,7 @@ class PeakFinder:
         Returns:
         None
         """
-        self.log("Starting Peak Finder...")
+        self.log("Starting Resonance Finder...")
         self.log(f"Initial resonances: {len(self.fres)}")
         self.log(f"Output file: {self.outpath}")
         self.log("Press 'H' for help")

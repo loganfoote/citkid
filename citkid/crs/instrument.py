@@ -863,8 +863,12 @@ class CRS:
             )
         
         # Write configuration to zarr
-        util.write_system_cfg_to_zarr(self, cfg_grp)
-
+        util.write_system_cfg_to_zarr(self, cfg_grp) 
+        
+        # Save tones 
+        grp.create_array(name = 'fres', data = fres)
+        grp.create_array(name = 'ares', data = ares)
+        
         # Sleep briefly to ensure tones are settled
         time.sleep(0.5) 
         

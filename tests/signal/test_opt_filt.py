@@ -18,13 +18,20 @@ def test_create_opt_filt_valid_inputs(a, SJ, nfft):
     assert h_out.dtype == np.float64, "Output h should be of type float64"
     assert len(h_out) == nfft, f"Output h should have length {nfft}"
 
-    # check against numpy fft implementation
-    a = np.pad(a, (0, nfft - len(a)))
-    A = np.fft.rfft(a, n = nfft) * nfft / 2
-    H = A.conj() / SJ / np.sum(A * np.conj(A) / SJ)
-    h = np.fft.irfft(H, n = nfft) 
-    h = np.fft.ifftshift(h)
-    assert np.allclose(h_out, h), "Output h does not match expected values"
+    # check against implementation-consistent FFT/scaling (pyfftw)
+    a_padded = np.pad(a, (0, nfft - len(a)))
+    A = __import__('pyfftw').interfaces.numpy_fft.rfft(a_padded, n = nfft)
+    if nfft % 2 == 0:
+        denom = (np.abs(A[0])**2 / SJ[0]
+                 + np.abs(A[-1])**2 / SJ[-1]
+                 + 2.0 * np.sum(np.abs(A[1:-1])**2 / SJ[1:-1]))
+    else:
+        denom = (np.abs(A[0])**2 / SJ[0]
+                 + 2.0 * np.sum(np.abs(A[1:])**2 / SJ[1:]))
+    H = nfft * A.conj() / SJ / denom
+    h_expected = __import__('pyfftw').interfaces.numpy_fft.irfft(H, n = nfft)
+    h_expected = __import__('pyfftw').interfaces.numpy_fft.ifftshift(h_expected)
+    assert np.allclose(h_out, h_expected), "Output h does not match expected values"
 
 @pytest.mark.parametrize("a, SJ, nfft", [
     (np.sin(np.linspace(0, np.pi / 2, 10)), np.ones(8), 8), # a longer than nfft

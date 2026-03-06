@@ -1,4 +1,4 @@
-"""Shared fixtures for VNA peak finding tests."""
+"""Shared fixtures for VNA resonance finding tests."""
 
 import numpy as np
 import pytest
@@ -21,11 +21,11 @@ def mock_qt_ui():
     # Create a mock that does nothing for update_peaks by default
     mock_update = Mock(return_value=None)
     
-    with patch('citkid.vna.find_peaks_auto.AutoPeakFinder.setup_ui'), \
-         patch('citkid.vna.find_peaks_auto.AutoPeakFinder.setup_plot'), \
-         patch('citkid.vna.find_peaks_auto.AutoPeakFinder.update_peaks', mock_update), \
-         patch('citkid.vna.find_peaks_manual.PeakFinder.setup_ui'), \
-         patch('citkid.vna.find_peaks_manual.PeakFinder.run'):
+    with patch('citkid.vna.res_finder_auto.AutoResFinder.setup_ui'), \
+         patch('citkid.vna.res_finder_auto.AutoResFinder.setup_plot'), \
+         patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks', mock_update), \
+         patch('citkid.vna.res_finder_manual.ResFinder.setup_ui'), \
+         patch('citkid.vna.res_finder_manual.ResFinder.run'):
         yield
 
 

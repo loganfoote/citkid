@@ -1,5 +1,5 @@
 """
-Comprehensive tests for automatic peak finder (find_peaks_auto.py).
+Comprehensive tests for automatic resonance finder (res_finder_auto.py).
 
 Tests cover:
 - Basic functionality with synthetic data
@@ -7,7 +7,7 @@ Tests cover:
 - Parameter variations (height, width, distance)
 - Frequency range limiting
 - File I/O (save/load, overwrite behavior)
-- Edge cases (empty data, no peaks, etc.)
+- Edge cases (empty data, no resonances, etc.)
 """
 
 import pytest
@@ -18,10 +18,10 @@ import tempfile
 from unittest.mock import Mock, patch, MagicMock
 from PyQt5 import QtWidgets
 
-from citkid.vna.find_peaks_auto import (
-    AutoPeakFinder,
+from citkid.vna.res_finder_auto import (
+    AutoResFinder,
     SpinBoxEventFilter,
-    run_auto_peak_finder
+    run_res_finder_auto
 )
 
 
@@ -34,14 +34,14 @@ class TestSpinBoxEventFilter:
         assert event_filter is not None
 
 
-class TestAutoPeakFinderInit:
-    """Test AutoPeakFinder initialization."""
+class TestAutoResFinderInit:
+    """Test AutoResFinder initialization."""
     
     def test_init_basic(self, synthetic_vna_data, tmp_path):
         """Test basic initialization."""
         outpath = tmp_path / "test_output.h5"
         
-        finder = AutoPeakFinder(
+        finder = AutoResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             str(outpath),
@@ -71,11 +71,33 @@ class TestAutoPeakFinderInit:
         outpath.touch()
         
         with pytest.raises(FileExistsError, match='already exists'):
-            AutoPeakFinder(
+            AutoResFinder(
                 synthetic_vna_data['f'],
                 synthetic_vna_data['z'],
                 str(outpath),
                 overwrite=False
+            )
+
+    def test_init_missing_directory(self, synthetic_vna_data, tmp_path):
+        """Test that FileNotFoundError is raised when output directory does not exist."""
+        outpath = tmp_path / "nonexistent_dir" / "output.h5"
+
+        with pytest.raises(FileNotFoundError, match='Output directory does not exist'):
+            AutoResFinder(
+                synthetic_vna_data['f'],
+                synthetic_vna_data['z'],
+                str(outpath),
+            )
+
+    def test_init_invalid_extension(self, synthetic_vna_data, tmp_path):
+        """Test that ValueError is raised when output path does not have a .h5 extension."""
+        outpath = tmp_path / "output.txt"
+
+        with pytest.raises(ValueError, match=r'\.h5 extension'):
+            AutoResFinder(
+                synthetic_vna_data['f'],
+                synthetic_vna_data['z'],
+                str(outpath),
             )
     
     def test_init_file_exists_overwrite_true(self, synthetic_vna_data, tmp_path, capsys):
@@ -83,7 +105,7 @@ class TestAutoPeakFinderInit:
         outpath = tmp_path / "existing.h5"
         outpath.touch()
         
-        finder = AutoPeakFinder(
+        finder = AutoResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             str(outpath),
@@ -96,14 +118,14 @@ class TestAutoPeakFinderInit:
         assert 'overwritten' in captured.out
 
 
-class TestAutoPeakFinderSmoothing:
+class TestAutoResFinderSmoothing:
     """Test different smoothing methods."""
     
     def test_highpass_smoothing(self, synthetic_vna_data, tmp_path):
         """Test highpass filter smoothing."""
         outpath = tmp_path / "test.h5"
         
-        finder = AutoPeakFinder(
+        finder = AutoResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             str(outpath)
@@ -126,7 +148,7 @@ class TestAutoPeakFinderSmoothing:
         """Test polynomial baseline subtraction."""
         outpath = tmp_path / "test.h5"
         
-        finder = AutoPeakFinder(
+        finder = AutoResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             str(outpath)
@@ -149,7 +171,7 @@ class TestAutoPeakFinderSmoothing:
         """Test no smoothing (identity operation)."""
         outpath = tmp_path / "test.h5"
         
-        finder = AutoPeakFinder(
+        finder = AutoResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             str(outpath)
@@ -165,16 +187,16 @@ class TestAutoPeakFinderSmoothing:
         np.testing.assert_array_equal(finder.filtered_mag, finder.mag_db)
 
 
-class TestAutoPeakFinderPeakDetection:
-    """Test peak detection functionality."""
+class TestAutoResFinderResDetection:
+    """Test res detection functionality."""
     
-    @patch('citkid.vna.find_peaks_auto.AutoPeakFinder.update_peaks')
-    def test_peak_detection_finds_resonances(self, mock_update,
-                                              synthetic_vna_data, tmp_path):
-        """Test that peak detection machinery works."""
+    @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
+    def test_res_detection_finds_resonances(self, mock_update,
+                                             synthetic_vna_data, tmp_path):
+        """Test that resonance detection machinery works."""
         outpath = tmp_path / "test.h5"
         
-        finder = AutoPeakFinder(
+        finder = AutoResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             str(outpath)
@@ -191,13 +213,13 @@ class TestAutoPeakFinderPeakDetection:
         # Verify it contains valid data
         assert np.all(np.isfinite(finder.filtered_mag))
     
-    @patch('citkid.vna.find_peaks_auto.AutoPeakFinder.update_peaks')
+    @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
     def test_frequency_range_limiting(self, mock_update, 
                                        synthetic_vna_data, tmp_path):
         """Test that frequency range limits are respected."""
         outpath = tmp_path / "test.h5"
         
-        finder = AutoPeakFinder(
+        finder = AutoResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             str(outpath)
@@ -218,13 +240,13 @@ class TestAutoPeakFinderPeakDetection:
             assert np.all(fres_found >= 5e9)
             assert np.all(fres_found <= 6.5e9)
     
-    @patch('citkid.vna.find_peaks_auto.AutoPeakFinder.update_peaks')
+    @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
     def test_height_parameter(self, mock_update, 
                                synthetic_vna_data, tmp_path):
         """Test that height parameter affects number of peaks found."""
         outpath = tmp_path / "test.h5"
         
-        finder = AutoPeakFinder(
+        finder = AutoResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             str(outpath)
@@ -245,13 +267,13 @@ class TestAutoPeakFinderPeakDetection:
         # Stricter threshold should find fewer or equal peaks
         assert n_peaks_strict <= n_peaks_loose
     
-    @patch('citkid.vna.find_peaks_auto.AutoPeakFinder.update_peaks')
+    @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
     def test_distance_parameter(self, mock_update, 
                                  dense_resonances_vna_data, tmp_path):
         """Test that distance parameter prevents closely spaced peaks."""
         outpath = tmp_path / "test.h5"
         
-        finder = AutoPeakFinder(
+        finder = AutoResFinder(
             dense_resonances_vna_data['f'],
             dense_resonances_vna_data['z'],
             str(outpath)
@@ -274,16 +296,16 @@ class TestAutoPeakFinderPeakDetection:
         assert n_peaks_large <= n_peaks_small
 
 
-class TestAutoPeakFinderFileIO:
+class TestAutoResFinderFileIO:
     """Test file save/load functionality."""
     
-    @patch('citkid.vna.find_peaks_auto.AutoPeakFinder.update_peaks')
+    @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
     def test_save_results(self, mock_update, 
                           synthetic_vna_data, tmp_path):
         """Test saving results to HDF5 file."""
         outpath = tmp_path / "results.h5"
         
-        finder = AutoPeakFinder(
+        finder = AutoResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             str(outpath)
@@ -311,13 +333,13 @@ class TestAutoPeakFinderFileIO:
             assert 'smoothing' in hf.attrs
             assert 'height' in hf.attrs
     
-    @patch('citkid.vna.find_peaks_auto.AutoPeakFinder.update_peaks')
+    @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
     def test_save_empty_results(self, mock_update, 
                                  no_resonance_vna_data, tmp_path):
         """Test saving when no peaks are found."""
         outpath = tmp_path / "empty_results.h5"
         
-        finder = AutoPeakFinder(
+        finder = AutoResFinder(
             no_resonance_vna_data['f'],
             no_resonance_vna_data['z'],
             str(outpath)
@@ -332,7 +354,7 @@ class TestAutoPeakFinderFileIO:
             assert len(hf['fres']) == 0
 
 
-class TestAutoPeakFinderEdgeCases:
+class TestAutoResFinderEdgeCases:
     """Test edge cases and error handling."""
     
     def test_empty_frequency_array(self, tmp_path):
@@ -344,7 +366,7 @@ class TestAutoPeakFinderEdgeCases:
         
         # Should handle gracefully or raise appropriate error
         with pytest.raises((ValueError, IndexError)):
-            finder = AutoPeakFinder(f, z, str(outpath))
+            finder = AutoResFinder(f, z, str(outpath))
     
     def test_single_point(self, tmp_path):
         """Test with single data point.
@@ -358,17 +380,17 @@ class TestAutoPeakFinderEdgeCases:
         z = np.array([0.9 + 0.1j])
         
         # With mocked update_peaks, object creation succeeds
-        finder = AutoPeakFinder(f, z, str(outpath))
+        finder = AutoResFinder(f, z, str(outpath))
         assert len(finder.f) == 1
         assert len(finder.z) == 1
     
-    @patch('citkid.vna.find_peaks_auto.AutoPeakFinder.update_peaks')
+    @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
     def test_no_peaks_in_data(self, mock_update, 
                                no_resonance_vna_data, tmp_path):
         """Test with data containing no resonances."""
         outpath = tmp_path / "test.h5"
         
-        finder = AutoPeakFinder(
+        finder = AutoResFinder(
             no_resonance_vna_data['f'],
             no_resonance_vna_data['z'],
             str(outpath)
@@ -385,7 +407,7 @@ class TestAutoPeakFinderEdgeCases:
         """Test with invalid frequency range (f_min > f_max)."""
         outpath = tmp_path / "test.h5"
         
-        finder = AutoPeakFinder(
+        finder = AutoResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             str(outpath)
@@ -400,20 +422,20 @@ class TestAutoPeakFinderEdgeCases:
         finder.update_peaks()
 
 
-class TestRunAutoPeakFinder:
-    """Test the run_auto_peak_finder wrapper function."""
+class TestRunAutoResFinder:
+    """Test the run_res_finder_auto wrapper function."""
     
-    @patch('citkid.vna.find_peaks_auto.AutoPeakFinder.run')
+    @patch('citkid.vna.res_finder_auto.AutoResFinder.run')
     def test_run_returns_fres(self, mock_run, synthetic_vna_data, tmp_path):
-        """Test that run_auto_peak_finder returns resonance frequencies."""
+        """Test that run_res_finder_auto returns resonance frequencies."""
         outpath = tmp_path / "test.h5"
         
         # Mock the finder instance
-        with patch('citkid.vna.find_peaks_auto.AutoPeakFinder') as MockFinder:
+        with patch('citkid.vna.res_finder_auto.AutoResFinder') as MockFinder:
             mock_instance = MockFinder.return_value
             mock_instance.fres = [4.5e9, 5.2e9, 6.1e9]
             
-            fres = run_auto_peak_finder(
+            fres = run_res_finder_auto(
                 synthetic_vna_data['f'],
                 synthetic_vna_data['z'],
                 str(outpath)
@@ -423,24 +445,24 @@ class TestRunAutoPeakFinder:
             assert isinstance(fres, np.ndarray)
             np.testing.assert_array_almost_equal(fres, mock_instance.fres)
     
-    @patch('citkid.vna.find_peaks_auto.AutoPeakFinder.run')
+    @patch('citkid.vna.res_finder_auto.AutoResFinder.run')
     def test_run_with_overwrite(self, mock_run, synthetic_vna_data, tmp_path):
         """Test overwrite parameter is passed through."""
         outpath = tmp_path / "test.h5"
         
-        with patch('citkid.vna.find_peaks_auto.AutoPeakFinder') as MockFinder:
+        with patch('citkid.vna.res_finder_auto.AutoResFinder') as MockFinder:
             mock_instance = MockFinder.return_value
             mock_instance.fres = []
             
             # Test with overwrite=False
-            run_auto_peak_finder(
+            run_res_finder_auto(
                 synthetic_vna_data['f'],
                 synthetic_vna_data['z'],
                 str(outpath),
                 overwrite=False
             )
             
-            # Check that AutoPeakFinder was called with overwrite=False
+            # Check that AutoResFinder was called with overwrite=False
             MockFinder.assert_called_once()
             call_args = MockFinder.call_args
             assert call_args[0][3] == False  # 4th positional arg

@@ -1,23 +1,24 @@
 """
-Automatic peak finder with adjustable parameters for VNA sweep data.
+Automatic resonance finder with adjustable parameters for VNA sweep data.
 
 This module provides an interactive interface for automatically finding
 resonances in VNA data using adjustable filtering and peak detection
 parameters. The output can be used as initial guesses for the manual
-peak finder.
+resonance finder.
 """
 
 import numpy as np
 import h5py
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
-from scipy.signal import butter, filtfilt, find_peaks
+from scipy.signal import find_peaks
 import os
+from .s21_filt import highpass_filter, polynomial_baseline
 
 
-def run_auto_peak_finder(f, z, outpath, overwrite = False):
+def run_res_finder_auto(f, z, outpath, overwrite = False):
     """
-    Run the automatic peak finder.
+    Run the automatic res finder.
     
     Parameters:
     f (np.ndarray): Frequency data in Hz.
@@ -29,7 +30,7 @@ def run_auto_peak_finder(f, z, outpath, overwrite = False):
     Returns:
     fres (np.ndarray): Found resonant frequencies.
     """
-    finder = AutoPeakFinder(f, z, outpath, overwrite)
+    finder = AutoResFinder(f, z, outpath, overwrite)
     finder.run()
     return np.array(finder.fres)
 
@@ -45,10 +46,10 @@ class SpinBoxEventFilter(QtCore.QObject):
         return False
 
 
-class AutoPeakFinder:
+class AutoResFinder:
     def __init__(self, f, z, outpath, overwrite = True):
         """
-        Automatic peak finder for VNA sweep data.
+        Automatic res finder for VNA sweep data.
         
         Parameters:
         f (np.ndarray): Frequency data in Hz (1D array).
@@ -64,6 +65,19 @@ class AutoPeakFinder:
         self.z = np.asarray(z, dtype = np.complex128)
         self.outpath = os.path.normpath(os.path.expanduser(outpath))
         
+        # Check file extension
+        if not self.outpath.lower().endswith('.h5'):
+            raise ValueError(
+                f'Output path must have a .h5 extension, got: {self.outpath}'
+            )
+
+        # Check output directory exists
+        outdir = os.path.dirname(self.outpath)
+        if outdir and not os.path.isdir(outdir):
+            raise FileNotFoundError(
+                f'Output directory does not exist: {outdir}'
+            )
+
         # Check if file exists
         if os.path.exists(self.outpath):
             if not overwrite:
@@ -99,7 +113,7 @@ class AutoPeakFinder:
         self.event_filter = SpinBoxEventFilter()
         
         # Setup the application
-        self.app = pg.mkQApp("Auto Peak Finder")
+        self.app = pg.mkQApp("Auto Res Finder")
         self.setup_ui()
         self.setup_plot()
         
@@ -120,7 +134,7 @@ class AutoPeakFinder:
         None
         """
         self.win = QtWidgets.QMainWindow()
-        self.win.setWindowTitle('Auto Peak Finder - Press H for help')
+        self.win.setWindowTitle('Auto Resonance Finder - Press H for help')
         self.win.resize(1400, 800)
         
         # Central widget with splitter
@@ -494,36 +508,13 @@ class AutoPeakFinder:
         None
         """
         if self.params['smoothing'] == 'highpass':
-            # High-pass filter with cutoff in MHz
-            # Removes variations slower than cutoff across frequency sweep
-            cutoff_hz = self.params['highpass_mhz'] * 1e6
-            
-            # Frequency spacing between samples
-            df = np.median(np.diff(self.f))
-            
-            # Convert cutoff to normalized frequency
-            # A feature of scale cutoff_hz spans (cutoff_hz/df) samples
-            # Its frequency is 1/(cutoff_hz/df) = df/cutoff_hz cycles/sample
-            # Nyquist is 0.5 cycles/sample, so normalized cutoff is:
-            cutoff_norm = (df / cutoff_hz) / 0.5
-            
-            # Clamp to valid range
-            cutoff_norm = np.clip(cutoff_norm, 0.0001, 0.99)
-            
-            b, a = butter(3, cutoff_norm, btype = 'high')
-            self.filtered_mag = filtfilt(b, a, self.mag_db)
-            
+            self.filtered_mag = highpass_filter(
+                self.f, self.mag_db, self.params['highpass_mhz']
+            )
         elif self.params['smoothing'] == 'polynomial':
-            # Polynomial baseline subtraction
-            order = self.params['poly_order']
-            
-            # Fit polynomial to data
-            coeffs = np.polyfit(self.f, self.mag_db, order)
-            baseline = np.polyval(coeffs, self.f)
-            
-            # Subtract baseline
-            self.filtered_mag = self.mag_db - baseline
-            
+            self.filtered_mag = polynomial_baseline(
+                self.f, self.mag_db, self.params['poly_order']
+            )
         else:  # 'none'
             self.filtered_mag = self.mag_db.copy()
             
@@ -594,7 +585,7 @@ class AutoPeakFinder:
         
     def update_markers(self):
         """
-        Update peak markers on plots.
+        Update res markers on plots.
 
         Parameters:
         None
@@ -612,13 +603,21 @@ class AutoPeakFinder:
             self.plot_original.removeItem(marker)
         self.peak_markers_original = []
         
+        # Cycle through 6 distinct (color, line-style) combinations so
+        # adjacent markers are always visually distinct.
+        _styles = [
+            ((255, 255,   0, 180), QtCore.Qt.SolidLine),  # yellow solid
+            ((  0, 255, 255, 180), QtCore.Qt.DashLine),   # cyan   dash
+            ((255, 100, 255, 180), QtCore.Qt.DotLine),    # magenta dot
+            ((255, 255,   0, 180), QtCore.Qt.DashLine),   # yellow dash
+            ((  0, 255, 255, 180), QtCore.Qt.DotLine),    # cyan   dot
+            ((255, 100, 255, 180), QtCore.Qt.SolidLine),  # magenta solid
+        ]
+
         # Add new markers to both plots
         for i, freq in enumerate(self.fres):
-            if i % 2 == 0:
-                color = (255, 0, 0, 200)
-            else:
-                color = (255, 255, 0, 200)
-            
+            color, line_style = _styles[i % len(_styles)]
+
             # Marker for filtered plot
             marker_filtered = pg.InfiniteLine(
                 pos = freq,
@@ -626,7 +625,7 @@ class AutoPeakFinder:
                 pen = pg.mkPen(
                     color = color,
                     width = 2,
-                    style = QtCore.Qt.DashLine
+                    style = line_style
                 )
             )
             self.plot_filtered.addItem(marker_filtered)
@@ -639,7 +638,7 @@ class AutoPeakFinder:
                 pen = pg.mkPen(
                     color = color,
                     width = 2,
-                    style = QtCore.Qt.DashLine
+                    style = line_style
                 )
             )
             self.plot_original.addItem(marker_original)
@@ -728,10 +727,10 @@ class AutoPeakFinder:
         None
         """
         help_text = """
-        <h3>Auto Peak Finder Help</h3>
+        <h3>Auto Resonance Finder Help</h3>
         <p><b>Controls:</b></p>
         <ul>
-        <li>Adjust parameters in right panel to tune peak detection</li>
+        <li>Adjust parameters in right panel to tune resonance detection</li>
         <li><b>Z/X:</b> Pan left/right</li>
         <li><b>Mouse Wheel:</b> Zoom</li>
         <li><b>S:</b> Save results</li>
@@ -755,7 +754,7 @@ class AutoPeakFinder:
         """.format(len(self.fres), self.outpath)
         
         msg = QtWidgets.QMessageBox()
-        msg.setWindowTitle("Auto Peak Finder Help")
+        msg.setWindowTitle("Auto Resonance Finder Help")
         msg.setTextFormat(QtCore.Qt.RichText)
         msg.setText(help_text)
         msg.exec_()
@@ -770,7 +769,7 @@ class AutoPeakFinder:
         Returns:
         None
         """
-        print("Starting Auto Peak Finder...")
+        print("Starting Auto Resonance Finder...")
         print(f"Output file: {self.outpath}")
         print("Press 'H' for help")
         

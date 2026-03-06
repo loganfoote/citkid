@@ -9,6 +9,9 @@ import pytest
 from unittest.mock import Mock, MagicMock, patch, AsyncMock
 from citkid.crs.instrument import CRS
 
+# Centralized rfmux version used by tests
+RFMUX_VERSION = '1.4.1'
+
 
 @pytest.fixture
 def mock_rfmux_base():
@@ -25,7 +28,7 @@ def mock_rfmux_base():
          patch('citkid.crs.instrument.util.interface_exists',
                return_value = True):
         
-        mock_rfmux.__version__ = '1.3.2'
+        mock_rfmux.__version__ = RFMUX_VERSION
         mock_rfmux.CRS = Mock()
         
         # Session setup

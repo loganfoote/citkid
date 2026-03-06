@@ -8,6 +8,7 @@ import pytest
 from unittest.mock import Mock, patch
 
 from citkid.crs.instrument import CRS
+from .conftest import RFMUX_VERSION
 
 
 def test_crs_init_default_parameters(mock_rfmux_session):
@@ -16,7 +17,7 @@ def test_crs_init_default_parameters(mock_rfmux_session):
          patch('citkid.crs.instrument.util.interface_exists',
                return_value = True):
         
-        mock_rfmux.__version__ = '1.3.2'
+        mock_rfmux.__version__ = RFMUX_VERSION
         mock_rfmux.load_session.return_value = mock_rfmux_session
         mock_rfmux.CRS = Mock()
         
@@ -52,7 +53,7 @@ def test_crs_init_sets_versions(mock_rfmux_session):
          patch('citkid.crs.instrument.util.interface_exists',
                return_value = True):
 
-        mock_rfmux.__version__ = '1.3.2'
+        mock_rfmux.__version__ = RFMUX_VERSION
         mock_rfmux.load_session.return_value = mock_rfmux_session
         mock_rfmux.CRS = Mock()
 
@@ -68,7 +69,7 @@ def test_crs_init_custom_parameters(mock_rfmux_session):
          patch('citkid.crs.instrument.util.interface_exists',
                return_value = True):
         
-        mock_rfmux.__version__ = '1.3.2'
+        mock_rfmux.__version__ = RFMUX_VERSION
         mock_rfmux.load_session.return_value = mock_rfmux_session
         mock_rfmux.CRS = Mock()
         
@@ -98,7 +99,7 @@ def test_crs_init_session_string_formatting(mock_rfmux_session):
          patch('citkid.crs.instrument.util.interface_exists',
                return_value = True):
         
-        mock_rfmux.__version__ = '1.3.2'
+        mock_rfmux.__version__ = RFMUX_VERSION
         mock_rfmux.load_session.return_value = mock_rfmux_session
         mock_rfmux.CRS = Mock()
         
@@ -114,11 +115,11 @@ def test_crs_init_wrong_rfmux_version():
          patch('citkid.crs.instrument.util.interface_exists',
                return_value = True):
         
-        mock_rfmux.__version__ = '1.3.1'  # Wrong version
+        mock_rfmux.__version__ = '0.0.0' # Wrong version
         
         with pytest.raises(
             RuntimeError,
-            match = 'rfmux version 1.3.2 is required'
+            match = f'rfmux version {RFMUX_VERSION} is required'
         ):
             CRS()
 
@@ -129,7 +130,7 @@ def test_crs_init_serial_number_not_int():
          patch('citkid.crs.instrument.util.interface_exists',
                return_value = True):
         
-        mock_rfmux.__version__ = '1.3.2'
+        mock_rfmux.__version__ = RFMUX_VERSION
         
         with pytest.raises(
             TypeError,
@@ -144,7 +145,7 @@ def test_crs_init_serial_number_float():
          patch('citkid.crs.instrument.util.interface_exists',
                return_value = True):
         
-        mock_rfmux.__version__ = '1.3.2'
+        mock_rfmux.__version__ = RFMUX_VERSION
         
         with pytest.raises(
             TypeError,
@@ -159,7 +160,7 @@ def test_crs_init_serial_number_none():
          patch('citkid.crs.instrument.util.interface_exists',
                return_value = True):
         
-        mock_rfmux.__version__ = '1.3.2'
+        mock_rfmux.__version__ = RFMUX_VERSION
         
         with pytest.raises(
             TypeError,
@@ -174,7 +175,7 @@ def test_crs_init_interface_does_not_exist():
          patch('citkid.crs.instrument.util.interface_exists',
                return_value = False):
         
-        mock_rfmux.__version__ = '1.3.2'
+        mock_rfmux.__version__ = RFMUX_VERSION
         
         with pytest.raises(
             ValueError,
@@ -190,7 +191,7 @@ def test_crs_init_device_query_chain(mock_rfmux_session,
          patch('citkid.crs.instrument.util.interface_exists',
                return_value = True):
         
-        mock_rfmux.__version__ = '1.3.2'
+        mock_rfmux.__version__ = RFMUX_VERSION
         mock_rfmux.load_session.return_value = mock_rfmux_session
         mock_rfmux.CRS = Mock()
         
