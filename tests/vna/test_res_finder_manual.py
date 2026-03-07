@@ -870,6 +870,117 @@ class TestRunResFinder:
             assert call_args[0][5] is True  # overwrite is 6th arg
 
 
+class TestOnClick:
+    """Tests for ResFinder.on_click() — including regression for double-fire bug."""
+
+    def _make_finder(self, synthetic_vna_data, tmp_path):
+        outpath = str(tmp_path / "out.h5")
+        finder = ResFinder(
+            synthetic_vna_data['f'],
+            synthetic_vna_data['z'],
+            [],
+            outpath,
+        )
+        return finder
+
+    def _make_click_event(self, freq, shift=False):
+        """Return a mock click event whose scene position maps to freq."""
+        from pyqtgraph.Qt import QtCore
+        event = Mock()
+        event.scenePos.return_value = Mock()
+        event.button.return_value = QtCore.Qt.LeftButton
+        event.modifiers.return_value = (
+            QtCore.Qt.ShiftModifier if shift else QtCore.Qt.NoModifier
+        )
+        mouse_point = Mock()
+        mouse_point.x.return_value = freq
+        mouse_point.y.return_value = 0.0
+        return event, mouse_point
+
+    def _setup_plot_mocks(self, finder, freq, mag_hit=True, phase_hit=False):
+        """Attach plot mocks to a finder whose setup_ui was patched out."""
+        finder.plot_mag = Mock()
+        finder.plot_phase = Mock()
+        # .sceneBoundingRect() always returns the same mock object; set
+        # .contains.return_value on that object so repeated calls agree.
+        finder.plot_mag.sceneBoundingRect.return_value.contains.return_value = mag_hit
+        finder.plot_phase.sceneBoundingRect.return_value.contains.return_value = phase_hit
+        mouse_point = Mock()
+        mouse_point.x.return_value = freq
+        mouse_point.y.return_value = 0.0
+        finder.plot_mag.vb.mapSceneToView.return_value = mouse_point
+        finder.plot_phase.vb.mapSceneToView.return_value = mouse_point
+        return mouse_point
+
+    def test_single_on_click_call_adds_exactly_one_resonance(
+        self, synthetic_vna_data, tmp_path
+    ):
+        """Regression: one call to on_click must add exactly one resonance.
+
+        Before the fix, sigMouseClicked was connected to on_click twice
+        (once via plot_mag.scene() and once via plot_phase.scene(), which
+        are the same object). That caused every click to call on_click twice:
+        the first call added the resonance and the second call hit the
+        duplicate-proximity guard. This test ensures a single invocation
+        of on_click results in len(fres) == 1.
+        """
+        finder = self._make_finder(synthetic_vna_data, tmp_path)
+        freq = 5.5e9
+        event, _ = self._make_click_event(freq)
+        self._setup_plot_mocks(finder, freq, mag_hit=True, phase_hit=False)
+
+        finder.on_click(event)
+
+        assert len(finder.fres) == 1
+        assert finder.fres[0] == freq
+
+    def test_two_on_click_calls_same_freq_add_one_resonance(
+        self, synthetic_vna_data, tmp_path
+    ):
+        """Two on_click calls at the same scene position yield only one fres.
+
+        This reproduces exactly what the old double-connection bug caused:
+        the handler was called twice for a single user click. The second
+        call must be blocked by the proximity guard, leaving exactly one
+        resonance.
+        """
+        finder = self._make_finder(synthetic_vna_data, tmp_path)
+        freq = 5.5e9
+        event, _ = self._make_click_event(freq)
+        self._setup_plot_mocks(finder, freq, mag_hit=True, phase_hit=False)
+
+        finder.on_click(event)
+        finder.on_click(event)  # simulates the old double-fire
+
+        assert len(finder.fres) == 1
+
+    def test_on_click_outside_both_plots_adds_nothing(
+        self, synthetic_vna_data, tmp_path
+    ):
+        """A click outside both plot bounding rects does not add a resonance."""
+        finder = self._make_finder(synthetic_vna_data, tmp_path)
+        event, _ = self._make_click_event(5.5e9)
+        self._setup_plot_mocks(finder, 5.5e9, mag_hit=False, phase_hit=False)
+
+        finder.on_click(event)
+
+        assert len(finder.fres) == 0
+
+    def test_on_click_phase_plot_adds_resonance(
+        self, synthetic_vna_data, tmp_path
+    ):
+        """A click inside the phase plot also adds a resonance correctly."""
+        finder = self._make_finder(synthetic_vna_data, tmp_path)
+        freq = 6.0e9
+        event, _ = self._make_click_event(freq)
+        self._setup_plot_mocks(finder, freq, mag_hit=False, phase_hit=True)
+
+        finder.on_click(event)
+
+        assert len(finder.fres) == 1
+        assert finder.fres[0] == freq
+
+
 class TestIntegration:
     """Integration tests for auto -> manual workflow."""
     

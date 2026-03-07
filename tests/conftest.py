@@ -1,6 +1,8 @@
 import os
 
 os.environ["CRS_EMBEDDED"] = "1"
+os.environ["MPLBACKEND"] = "Agg"
+os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 def pytest_addoption(parser):
     parser.addoption(

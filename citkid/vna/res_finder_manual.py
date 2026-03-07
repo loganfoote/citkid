@@ -113,6 +113,9 @@ class ResFinder:
         self._iq_f_sel = np.array([])
         self._iq_z_sel = np.array([], dtype = np.complex128)
 
+        # Debounce timer for range-change events (pan/zoom)
+        self._range_timer = None
+
         # Setup the application
         self.app = pg.mkQApp("Resonance Finder")
         self.setup_ui()
@@ -141,7 +144,8 @@ class ResFinder:
             'Click: Add resonance | '
             'Shift+Click: Remove nearest | '
             'Ctrl+Z: Undo | '
-            'Z/X: Pan left/right | '
+            'Z/X: Pan 20% | '
+            'A/D: Pan 80% | '
             'S: Save | '
             'I: Toggle IQ plot'
             '</span>'
@@ -175,6 +179,7 @@ class ResFinder:
         
         # Initialize markers and auto-scale
         self.update_resonance_markers()
+        self._update_curves()
         self.auto_scale_y()
         
     def log(self, message):
@@ -211,13 +216,14 @@ class ResFinder:
         self.plot_mag.showGrid(x = True, y = True, alpha = 0.3)
         self.plot_mag.getAxis('bottom').setStyle(showValues = False)
         
-        # Plot magnitude data with downsampling for performance
+        # Plot magnitude data — only the visible slice is pushed to the curve
+        # on each range change (see _update_curves), so pyqtgraph never sees
+        # more than a few thousand points at once.
         self.mag_curve = self.plot_mag.plot(
             self.f, self.mag_db,
             pen = pg.mkPen(color = (100, 200, 255, 90), width = 1.5),
             autoDownsample = True,
-            downsample = 10,
-            downsampleMethod = 'subsample'
+            downsampleMethod = 'peak'
         )
         # Highlighted overlay (IQ window) — drawn on top, hidden by default
         self.mag_highlight = self.plot_mag.plot(
@@ -239,8 +245,7 @@ class ResFinder:
             self.f, self.phase,
             pen = pg.mkPen(color = (255, 150, 100, 90), width = 1.5),
             autoDownsample = True,
-            downsample = 10,
-            downsampleMethod = 'subsample'
+            downsampleMethod = 'peak'
         )
         # Highlighted overlay (IQ window) — drawn on top, hidden by default
         self.phase_highlight = self.plot_phase.plot(
@@ -276,9 +281,8 @@ class ResFinder:
         self.mag_markers = []
         self.phase_markers = []
         
-        # Connect signals for both plots
+        # Connect signals — all plots share the same scene so connect once
         self.plot_mag.scene().sigMouseClicked.connect(self.on_click)
-        self.plot_phase.scene().sigMouseClicked.connect(self.on_click)
         self.plot_iq.scene().sigMouseClicked.connect(self.on_iq_click)
         self.plot_mag.sigRangeChanged.connect(self.on_range_changed)
         
@@ -316,6 +320,12 @@ class ResFinder:
         # IQ plot toggle shortcut
         self.iq_action = QtGui.QShortcut(QtCore.Qt.Key_I, self.win)
         self.iq_action.activated.connect(self.toggle_iq)
+
+        # Fast pan shortcuts (A/D = 80% jump, one resonance width)
+        self.fast_pan_left_action = QtGui.QShortcut(QtCore.Qt.Key_A, self.win)
+        self.fast_pan_left_action.activated.connect(self.fast_pan_left)
+        self.fast_pan_right_action = QtGui.QShortcut(QtCore.Qt.Key_D, self.win)
+        self.fast_pan_right_action.activated.connect(self.fast_pan_right)
 
         # Help shortcut
         self.help_action = QtGui.QShortcut(QtCore.Qt.Key_H, self.win)
@@ -610,15 +620,51 @@ class ResFinder:
         """
         Called when the view range changes (pan/zoom).
 
+        Debounced: coalesces rapid-fire events (e.g. continuous mouse drag)
+        into a single update every 50 ms so the UI stays responsive.
+
         Parameters:
         None
 
         Returns:
         None
         """
+        if self._range_timer is None:
+            self._range_timer = QtCore.QTimer()
+            self._range_timer.setSingleShot(True)
+            self._range_timer.timeout.connect(self._do_range_update)
+        self._range_timer.start(50)  # ms
+
+    def _do_range_update(self):
+        """Actual work triggered by the debounce timer."""
+        self._update_curves()
         self.auto_scale_y()
         if self.iq_visible:
             self.update_iq_plot()
+
+    def _update_curves(self):
+        """
+        Push only the visible data slice to the mag and phase curves.
+
+        Using a 50% pad on each side prevents blank edges during fast panning.
+        pyqtgraph then only has to render the visible ~1,000 points instead
+        of the full 300,000-point dataset.
+
+        Parameters:
+        None
+
+        Returns:
+        None
+        """
+        if not hasattr(self, 'plot_mag'):
+            return
+        x_min, x_max = self.plot_mag.viewRange()[0]
+        span = x_max - x_min
+        sl = self._visible_slice(x_min - 0.5 * span, x_max + 0.5 * span)
+        if sl.start >= sl.stop:
+            return
+        self.mag_curve.setData(self.f[sl], self.mag_db[sl])
+        self.phase_curve.setData(self.f[sl], self.phase[sl])
 
     def toggle_iq(self):
         """
@@ -663,8 +709,8 @@ class ResFinder:
         center = 0.5 * (x_min + x_max)
         iq_min = center - span / 8
         iq_max = center + span / 8
-        mask = (self.f >= iq_min) & (self.f <= iq_max)
-        if not np.any(mask):
+        sl = self._visible_slice(iq_min, iq_max)
+        if sl.start >= sl.stop:
             self.iq_curve.setData([], [])
             self.mag_highlight.setData([], [])
             self.phase_highlight.setData([], [])
@@ -672,13 +718,13 @@ class ResFinder:
             self._iq_f_sel = np.array([])
             self._iq_z_sel = np.array([], dtype = np.complex128)
             return
-        f_sel = self.f[mask]
-        z_sel = self.z[mask]
+        f_sel = self.f[sl]
+        z_sel = self.z[sl]
         self._iq_f_sel = f_sel
         self._iq_z_sel = z_sel
         self.iq_curve.setData(z_sel.real, z_sel.imag)
-        self.mag_highlight.setData(f_sel, self.mag_db[mask])
-        self.phase_highlight.setData(f_sel, self.phase[mask])
+        self.mag_highlight.setData(f_sel, self.mag_db[sl])
+        self.phase_highlight.setData(f_sel, self.phase[sl])
         # Fres markers: interpolate z at each fres within the IQ window
         _marker_colors = [
             (255, 255,   0, 230),
@@ -700,6 +746,23 @@ class ResFinder:
                 })
         self.iq_fres_scatter.setData(spots)
         
+    def _visible_slice(self, x_min, x_max):
+        """
+        Return a slice of the (sorted) frequency array covering [x_min, x_max].
+
+        Uses binary search — O(log n) regardless of array length.
+
+        Parameters:
+        x_min (float): Left edge of visible range in Hz.
+        x_max (float): Right edge of visible range in Hz.
+
+        Returns:
+        sl (slice): Slice into self.f / self.mag_db / self.phase.
+        """
+        lo = int(np.searchsorted(self.f, x_min, side='left'))
+        hi = int(np.searchsorted(self.f, x_max, side='right'))
+        return slice(lo, hi)
+
     def auto_scale_y(self):
         """
         Auto-scale y-axis based on the visible x-range.
@@ -712,27 +775,23 @@ class ResFinder:
         """
         if not hasattr(self, 'plot_mag'):
             return  # UI not initialized
-        x_range = self.plot_mag.viewRange()[0]
-        
-        # Find indices within the visible range
-        mask = (self.f >= x_range[0]) & (self.f <= x_range[1])
-        
-        if not np.any(mask):
+        x_min, x_max = self.plot_mag.viewRange()[0]
+        sl = self._visible_slice(x_min, x_max)
+
+        if sl.start >= sl.stop:
             return
-            
+
         # Get visible data
-        visible_mag = self.mag_db[mask]
-        visible_phase = self.phase[mask]
+        visible_mag = self.mag_db[sl]
+        visible_phase = self.phase[sl]
         
         # Calculate ranges with margin
-        mag_min, mag_max = visible_mag.min(), visible_mag.max()
-        mag_range = mag_max - mag_min
-        mag_margin = mag_range * self.margin_factor
-        
-        phase_min, phase_max = visible_phase.min(), visible_phase.max()
-        phase_range = phase_max - phase_min
-        phase_margin = phase_range * self.margin_factor
-        
+        mag_min, mag_max = float(visible_mag.min()), float(visible_mag.max())
+        mag_margin = (mag_max - mag_min) * self.margin_factor
+
+        phase_min, phase_max = float(visible_phase.min()), float(visible_phase.max())
+        phase_margin = (phase_max - phase_min) * self.margin_factor
+
         # Set y-ranges
         self.plot_mag.setYRange(
             mag_min - mag_margin,
@@ -745,9 +804,15 @@ class ResFinder:
             padding = 0
         )
         
+    def _pan(self, fraction):
+        """Shift the x-axis by *fraction* of the current view width."""
+        x0, x1 = self.plot_mag.viewRange()[0]
+        shift = fraction * (x1 - x0)
+        self.plot_mag.setXRange(x0 + shift, x1 + shift, padding=0)
+
     def pan_left(self):
         """
-        Pan the view to the left by 20% of current width.
+        Pan the view to the left by 20% of current width (Z key).
 
         Parameters:
         None
@@ -755,18 +820,11 @@ class ResFinder:
         Returns:
         None
         """
-        x_range = self.plot_mag.viewRange()[0]
-        width = x_range[1] - x_range[0]
-        shift = -0.2 * width
-        self.plot_mag.setXRange(
-            x_range[0] + shift,
-            x_range[1] + shift,
-            padding = 0
-        )
-        
+        self._pan(-0.2)
+
     def pan_right(self):
         """
-        Pan the view to the right by 20% of current width.
+        Pan the view to the right by 20% of current width (X key).
 
         Parameters:
         None
@@ -774,14 +832,31 @@ class ResFinder:
         Returns:
         None
         """
-        x_range = self.plot_mag.viewRange()[0]
-        width = x_range[1] - x_range[0]
-        shift = 0.2 * width
-        self.plot_mag.setXRange(
-            x_range[0] + shift,
-            x_range[1] + shift,
-            padding = 0
-        )
+        self._pan(0.2)
+
+    def fast_pan_left(self):
+        """
+        Pan the view to the left by 80% of current width (A key).
+
+        Parameters:
+        None
+
+        Returns:
+        None
+        """
+        self._pan(-0.8)
+
+    def fast_pan_right(self):
+        """
+        Pan the view to the right by 80% of current width (D key).
+
+        Parameters:
+        None
+
+        Returns:
+        None
+        """
+        self._pan(0.8)
         
     def save_data(self):
         """
@@ -836,6 +911,8 @@ class ResFinder:
         <ul>
         <li><b>Z:</b> Pan left by 20%</li>
         <li><b>X:</b> Pan right by 20%</li>
+        <li><b>A:</b> Pan left by 80%</li>
+        <li><b>D:</b> Pan right by 80%</li>
         <li><b>S:</b> Save resonances to file</li>
         <li><b>Ctrl+Z:</b> Undo last add/remove</li>
         <li><b>I:</b> Toggle IQ (I vs Q) plot</li>
