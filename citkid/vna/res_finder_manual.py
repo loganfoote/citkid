@@ -147,7 +147,7 @@ class ResFinder:
             'Z/X: Pan 20% | '
             'A/D: Pan 80% | '
             'S: Save | '
-            'I: Toggle IQ plot'
+            'Q: Toggle IQ plot'
             '</span>'
         )
         self.win.addLabel(title_text, col = 0)
@@ -318,7 +318,7 @@ class ResFinder:
         self.pan_right_action.activated.connect(self.pan_right)
         
         # IQ plot toggle shortcut
-        self.iq_action = QtGui.QShortcut(QtCore.Qt.Key_I, self.win)
+        self.iq_action = QtGui.QShortcut(QtCore.Qt.Key_Q, self.win)
         self.iq_action.activated.connect(self.toggle_iq)
 
         # Fast pan shortcuts (A/D = 80% jump, one resonance width)
@@ -915,7 +915,7 @@ class ResFinder:
         <li><b>D:</b> Pan right by 80%</li>
         <li><b>S:</b> Save resonances to file</li>
         <li><b>Ctrl+Z:</b> Undo last add/remove</li>
-        <li><b>I:</b> Toggle IQ (I vs Q) plot</li>
+        <li><b>Q:</b> Toggle IQ (I vs Q) plot</li>
         <li><b>H:</b> Show this help</li>
         </ul>
         <p><b>Button:</b></p>
