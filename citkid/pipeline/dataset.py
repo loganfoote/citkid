@@ -552,14 +552,16 @@ class DataSet:
                 data_arr = param_grp.create_array(
                     name='data',
                     shape=shape,
-                    dtype=dtype,
-                    chunks=chunks
+                    chunks=chunks,
+                    shards=shape,
+                    dtype=dtype
                 )
                 
                 # Create row_exists array
                 exists_arr = param_grp.create_array(
                     name='row_exists',
                     shape=(self.nrows,),
+                    shards=(self.nrows,),
                     dtype=np.bool_
                 )
                 

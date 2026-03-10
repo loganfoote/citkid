@@ -186,11 +186,13 @@ def _save_sweep_data(grp, prefix, f, z):
         prefix += '_'
     grp.create_array(name = f'{prefix}f', 
                      data = f, 
-                     chunks = (1, f.shape[1])
+                     chunks = (1, f.shape[1]),
+                     shards = f.shape
                     )
     grp.create_array(name = f'{prefix}z', 
                      data = z, 
-                     chunks = (1, z.shape[1])
+                     chunks = (1, z.shape[1]),
+                     shards = z.shape
                      )
     
 ################################################################################

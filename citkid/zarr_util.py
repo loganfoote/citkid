@@ -29,7 +29,13 @@ def create_zarr_param(root, name, value, nres, dtype = None):
     shape = (nres, *value.shape)
     chunks = (1, *value.shape)
  
-    root.create_array(name, shape = shape, chunks = chunks, dtype = dtype)
+    root.create_array(
+        name, 
+        shape = shape, 
+        chunks = chunks, 
+        dtype = dtype, 
+        shards = shape
+    )
  
  
 def write_zarr_row(root, name, idx, value):

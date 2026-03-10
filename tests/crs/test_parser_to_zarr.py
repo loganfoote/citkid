@@ -606,10 +606,21 @@ def test_parser_to_zarr_basic_functionality(tmp_path):
     z = grp['z']
     assert z.shape == (2, ntones, n_samples)
     
-    # Verify chunking (2, ntones, chunk_N)
-    assert z.chunks[0] == 2
-    assert z.chunks[1] == ntones
+    # Verify inner chunks: (1, 1, chunk_N) where chunk_N <= n_samples
+    assert z.chunks[0] == 1
+    assert z.chunks[1] == 1
+    chunk_N = z.chunks[2]
+    assert chunk_N <= n_samples
     
+    # Verify shards: single shard covering the whole array so all data is one
+    # file. shards[2] must be a multiple of chunk_N and >= n_samples.
+    assert z.shards is not None
+    assert z.shards[0] == 2
+    assert z.shards[1] == ntones
+    shard_N = z.shards[2]
+    assert shard_N % chunk_N == 0
+    assert shard_N >= n_samples
+
     # Verify data mapping is correct
     for module_idx in module_idxs:
         ch_idxs = ch_map[module_idx]
@@ -924,10 +935,18 @@ def test_parser_to_zarr_chunk_size_accuracy(tmp_path):
     expected_chunk_N = chunk_size_bytes // (2 * ntones * 4)  # 4 bytes per int32
     expected_chunk_N = min(expected_chunk_N, n_samples)
     
-    # Verify chunk dimensions
-    assert z.chunks[0] == 2
-    assert z.chunks[1] == ntones
+    # Verify inner chunk dimensions: (1, 1, chunk_N) per-IQ/per-channel slicing
+    assert z.chunks[0] == 1
+    assert z.chunks[1] == 1
     assert z.chunks[2] == expected_chunk_N
+
+    # Verify shards: entire time series in one shard (single file)
+    assert z.shards is not None
+    assert z.shards[0] == 2
+    assert z.shards[1] == ntones
+    shard_N = z.shards[2]
+    assert shard_N % expected_chunk_N == 0
+    assert shard_N >= n_samples
 
 
 def test_parser_to_zarr_small_dataset_chunking(tmp_path):
@@ -1033,12 +1052,21 @@ def test_parser_to_zarr_ntones_not_equal_max_ntones(tmp_path):
     # Verify shape uses ntones
     assert z.shape[1] == ntones
     
-    # Verify chunk calculation used ntones
+    # Verify inner chunk calculation: (1, 1, chunk_N) where chunk_N uses ntones
     chunk_size_bytes = chunk_size_mb * (1024 ** 2)
     expected_chunk_N = chunk_size_bytes // (2 * ntones * 4)
     expected_chunk_N = min(expected_chunk_N, n_samples)
-    assert z.chunks[1] == ntones
+    assert z.chunks[0] == 1
+    assert z.chunks[1] == 1
     assert z.chunks[2] == expected_chunk_N
+
+    # Verify shards: single file for all time data
+    assert z.shards is not None
+    assert z.shards[0] == 2
+    assert z.shards[1] == ntones
+    shard_N = z.shards[2]
+    assert shard_N % expected_chunk_N == 0
+    assert shard_N >= n_samples
 
 
 def test_parser_to_zarr_single_module(tmp_path):
@@ -1144,3 +1172,76 @@ def test_parser_to_zarr_data_continuity(tmp_path):
             # Verify no gaps - all data matches
             np.testing.assert_array_equal(z[0, ch_idx, :], exp_real_ch)
             np.testing.assert_array_equal(z[1, ch_idx, :], exp_imag_ch)
+
+
+################################################################################
+########################### Shard / single-file tests ##########################
+################################################################################
+
+def test_parser_to_zarr_z_shard_is_single_file(tmp_path):
+    """
+    Verify the 'z' array uses a single shard so all time data lands in one
+    file, even when chunk_N does not evenly divide total_samples.
+    
+    Uses a total_samples value that is deliberately NOT a multiple of chunk_N
+    to ensure shard_N is rounded up correctly.
+    """
+    import math
+    crs_sn = 1
+    ntones = 4
+    max_ntones = 4
+    # Choose n_samples so it's NOT a multiple of the natural chunk_N
+    # chunk_N = chunk_size_bytes // (2 * ntones * 4)
+    # With chunk_size_mb=0.0001: chunk_N = max(1, 104 // 32) = max(1, 3) = 3
+    # n_samples=10 → 10 % 3 != 0, so shard_N must be rounded up
+    chunk_size_mb = 0.0001
+    n_samples = 10
+    dt = 0.001
+
+    ch_map = {1: np.array([0, 1], dtype=np.int32),
+              2: np.array([2, 3], dtype=np.int32)}
+    ares_map = {1: np.array([-50.0, -55.0]),
+                2: np.array([-52.0, -53.0])}
+
+    dtype = np.dtype([('i', np.int32), ('q', np.int32)])
+    parser_path = str(tmp_path / 'parser')
+    os.makedirs(parser_path, exist_ok=True)
+    _create_mock_parser_files(
+        parser_path, crs_sn, [1, 2], max_ntones,
+        {1: n_samples, 2: n_samples}, dtype
+    )
+
+    zarr_path = str(tmp_path / 'test.zarr')
+    root = zarr.open(zarr_path, mode='a')
+    grp = root.require_group('test_group')
+
+    util.parser_to_zarr(
+        path=parser_path,
+        grp=grp,
+        crs_sn=crs_sn,
+        ntones=ntones,
+        max_ntones=max_ntones,
+        ch_map=ch_map,
+        ares_map=ares_map,
+        dt=dt,
+        batch_size_mb=1,
+        chunk_size_mb=chunk_size_mb,
+    )
+
+    z = grp['z']
+    assert z.shape == (2, ntones, n_samples)
+
+    chunk_N = z.chunks[2]
+    shard_N = z.shards[2]
+
+    # shard_N must be a multiple of chunk_N (zarr v3 requirement)
+    assert shard_N % chunk_N == 0, (
+        f"shard_N={shard_N} is not a multiple of chunk_N={chunk_N}"
+    )
+    # shard_N must cover all samples (single-file goal)
+    assert shard_N >= n_samples, (
+        f"shard_N={shard_N} < n_samples={n_samples}: data spans multiple shards"
+    )
+    # First two shard dims must match array dims (not inner-chunk dims)
+    assert z.shards[0] == 2
+    assert z.shards[1] == ntones

@@ -2368,6 +2368,100 @@ def test_write_data_global_array_data():
     assert np.array_equal(param_grp['data'][...], array_data)
 
 
+def test_write_data_perrow_chunks_and_shards_1d():
+    """Per-row 1D data: data_arr has chunks (1,nrows) and shards (nrows,)."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    nrows = 5
+    DS.nrows = nrows
+    lazy_attr = pds.pf.LazyAttr(DS, 'param', 1)
+    # Scalar row values → data shape becomes (nrows,)
+    lazy_attr._cache[0] = np.int32(10)
+    lazy_attr._cache[1] = np.int32(20)
+    DS._memory_cache = {1: {'param': lazy_attr}}
+    DS._is_global_cache = {'param': False}
+    DS.deps_maps = {
+        0: {1: {'param': {}}},
+        1: {1: {'param': {}}},
+    }
+    DS.root = zarr.group()
+
+    DS.write_data('param', 1, data_idx=[0, 1])
+
+    data_arr = DS.root['run1']['param']['data']
+    row_arr  = DS.root['run1']['param']['row_exists']
+
+    # shape
+    assert data_arr.shape == (nrows,)
+    assert row_arr.shape  == (nrows,)
+
+    # chunks: (1,) for data (one row per chunk), (nrows,) for row_exists
+    assert data_arr.chunks == (1,)
+    assert row_arr.chunks  == (nrows,)
+
+    # shards must equal shape so each array is a single file
+    assert data_arr.shards == (nrows,)
+    assert row_arr.shards  == (nrows,)
+
+
+def test_write_data_perrow_chunks_and_shards_2d():
+    """Per-row 2D data: data_arr has chunks (1,n) and shards (nrows,n)."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    nrows = 4
+    DS.nrows = nrows
+    lazy_attr = pds.pf.LazyAttr(DS, 'param', 1)
+    lazy_attr._cache[0] = np.array([1.0, 2.0, 3.0])
+    lazy_attr._cache[2] = np.array([4.0, 5.0, 6.0])
+    DS._memory_cache = {1: {'param': lazy_attr}}
+    DS._is_global_cache = {'param': False}
+    DS.deps_maps = {
+        0: {1: {'param': {}}},
+        2: {1: {'param': {}}},
+    }
+    DS.root = zarr.group()
+
+    DS.write_data('param', 1, data_idx=[0, 2])
+
+    data_arr = DS.root['run1']['param']['data']
+    row_arr  = DS.root['run1']['param']['row_exists']
+
+    # shape
+    assert data_arr.shape == (nrows, 3)
+    assert row_arr.shape  == (nrows,)
+
+    # inner chunks: one row per chunk
+    assert data_arr.chunks == (1, 3)
+    # row_exists chunk = full array
+    assert row_arr.chunks  == (nrows,)
+
+    # shards = full shape (single file per array)
+    assert data_arr.shards == (nrows, 3)
+    assert row_arr.shards  == (nrows,)
+
+
+def test_write_data_perrow_chunks_and_shards_3d():
+    """Per-row 3D data: data_arr has chunks (1,a,b) and shards (nrows,a,b)."""
+    import zarr
+    DS = pds.DataSet.__new__(pds.DataSet)
+    nrows = 3
+    DS.nrows = nrows
+    lazy_attr = pds.pf.LazyAttr(DS, 'param', 1)
+    lazy_attr._cache[0] = np.zeros((2, 5))
+    DS._memory_cache = {1: {'param': lazy_attr}}
+    DS._is_global_cache = {'param': False}
+    DS.deps_maps = {0: {1: {'param': {}}}}
+    DS.root = zarr.group()
+
+    DS.write_data('param', 1, data_idx=[0])
+
+    data_arr = DS.root['run1']['param']['data']
+
+    assert data_arr.shape  == (nrows, 2, 5)
+    assert data_arr.chunks == (1, 2, 5)
+    assert data_arr.shards == (nrows, 2, 5)
+
+
 ################################################################################
 ############################### __getattr__ ####################################
 ################################################################################

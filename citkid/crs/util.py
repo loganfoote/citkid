@@ -232,11 +232,20 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
     if total_samples > 0:
         chunk_N = min(chunk_N, total_samples)
 
+    # Compute shard: smallest multiple of chunk_N that covers all samples,
+    # so all time data lands in one shard (one file).
+    if total_samples > 0:
+        shard_N = int(np.ceil(total_samples / chunk_N)) * chunk_N
+        z_shards = (2, ntones, shard_N)
+    else:
+        z_shards = None
+
     # Initialize output Zarr array
     z_out = grp.create_array(
         name = 'z', 
         shape = (2, ntones, 0), 
         chunks = (1, 1, chunk_N), 
+        shards = z_shards, 
         dtype = np.int32
     )
 

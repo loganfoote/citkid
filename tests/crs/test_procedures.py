@@ -1292,3 +1292,46 @@ class TestSaveSweepData:
         # Should be converted to complex128
         assert grp['z'][:].dtype == np.complex128
 
+    def test_shards_cover_full_shape(self):
+        """
+        Test that both f and z use shards equal to the full array shape so
+        each array is stored in a single file.
+        """
+        from citkid.crs.procedures import _save_sweep_data
+
+        grp = zarr.group()
+        nres, npts = 5, 50
+        rng = np.random.default_rng(0)
+        f = rng.random((nres, npts))
+        z = rng.random((nres, npts)) + 1j * rng.random((nres, npts))
+
+        _save_sweep_data(grp, '', f, z)
+
+        # shards must equal the full array shape (one shard = one file)
+        assert grp['f'].shards == (nres, npts), (
+            f"f shards {grp['f'].shards} != expected ({nres}, {npts})"
+        )
+        assert grp['z'].shards == (nres, npts), (
+            f"z shards {grp['z'].shards} != expected ({nres}, {npts})"
+        )
+
+        # chunks must be row-wise: (1, npts)
+        assert grp['f'].chunks == (1, npts)
+        assert grp['z'].chunks == (1, npts)
+
+    def test_shards_with_prefix(self):
+        """Test that shards are correct when a prefix is used."""
+        from citkid.crs.procedures import _save_sweep_data
+
+        grp = zarr.group()
+        nres, npts = 3, 20
+        f = np.ones((nres, npts))
+        z = np.ones((nres, npts), dtype=np.complex128)
+
+        _save_sweep_data(grp, 'fine', f, z)
+
+        assert grp['fine_f'].shards == (nres, npts)
+        assert grp['fine_z'].shards == (nres, npts)
+        assert grp['fine_f'].chunks == (1, npts)
+        assert grp['fine_z'].chunks == (1, npts)
+
