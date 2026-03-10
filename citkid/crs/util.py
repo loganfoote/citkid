@@ -236,7 +236,7 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
     z_out = grp.create_array(
         name = 'z', 
         shape = (2, ntones, 0), 
-        chunks = (2, ntones, chunk_N), 
+        chunks = (1, 1, chunk_N), 
         dtype = np.int32
     )
 
