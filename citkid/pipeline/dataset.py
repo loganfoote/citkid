@@ -1,15 +1,19 @@
 import os
+from sqlalchemy import func
 import yaml
 import importlib.util 
 import numpy as np
 import zarr
 import re
 from datetime import datetime 
+import matplotlib.pyplot as plt
 
 from .dependencies import get_most_recent_run, get_deps
 from . import framework as pf
 from . import util 
 from . import default_steps
+from ..xcal.plot import default_plot_funcs
+from ..util import combine_figs_horz, combine_figs_vert
 
 
 class DataSet:
@@ -110,12 +114,13 @@ class DataSet:
                 "per-row array."
             )
         
-        # Initialize deps_maps 
+        # Initialize global entry in deps_maps
         if 'global' not in self.deps_maps:
-            self.deps_maps['global'] = {} 
-        for data_idx in range(self.nrows):
-            if data_idx not in self.deps_maps:
-                self.deps_maps[data_idx] = {}
+            self.deps_maps['global'] = {}
+        # Per-data_idx entries are initialised lazily (in _store_param and
+        # LazyAttrCollection.__getitem__) so we do NOT call self.nrows here.
+        # Eagerly computing nrows would execute the pipeline, which may require
+        # user-provided parameters that are not yet available.
 
     def __getattr__(self, name):
         """
@@ -147,6 +152,17 @@ class DataSet:
         >>> DS.some_per_row_param[[0, 1, 2]]  # Access multiple rows
         array([[...], [...], [...]])
         """
+        # Guard: prevent infinite recursion when the instance is partially
+        # initialised (e.g. created via __new__ in tests, or during early
+        # __init__ before all essential attrs exist).  None of these attrs
+        # should ever be pipeline parameters, so raising AttributeError
+        # here is always correct.
+        if not all(a in self.__dict__
+                   for a in ('_is_global_cache', '_memory_cache', 'deps_maps')):
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no attribute '{name}'"
+            )
+
         # First check if we already know about this parameter
         if name in self._is_global_cache:
             is_global = self._is_global_cache[name]
@@ -195,6 +211,11 @@ class DataSet:
                     self._is_global_cache[name] = is_global
                 else:
                     # Not in memory or zarr - check if it can be produced
+                    if 'cal_pl' not in self.__dict__:
+                        raise AttributeError(
+                            f"'{type(self).__name__}' object has no attribute "
+                            f"'{name}'"
+                        )
                     path = pf.find_pl_path(self.cal_pl, name)
                     if path is None:
                         raise AttributeError((
@@ -203,8 +224,10 @@ class DataSet:
                         ))
                     
                     # Determine type from pipeline
+                    # global-res stores data per-row (not in deps_maps['global']),
+                    # so it must be treated as per-row here.
                     final_step = path[-1]
-                    is_global = final_step.func_type in ['global', 'global-res']
+                    is_global = final_step.func_type == 'global'
                     self._is_global_cache[name] = is_global
         
         # Now handle based on whether it's global or per-row
@@ -243,6 +266,157 @@ class DataSet:
                 self._lazy_collections[name] = pf.LazyAttrCollection(self, name)
             return self._lazy_collections[name]
 
+    def _sync_to_zarr(self):
+        """
+        Renumber in-memory run indices so they are consistent with zarr.
+
+        For every parameter that exists in memory, this method ensures that the
+        highest in-memory run index is exactly one greater than the highest
+        zarr run index (or 1 if the parameter is not yet saved).  All
+        intermediate in-memory runs that sit above the zarr ceiling are
+        purged, leaving only the single most-recent in-memory run, renamed to
+        the correct next index.  Parameters whose highest in-memory run index
+        is already at or below the zarr ceiling are left completely untouched
+        (they represent zarr-backed data loaded into the cache and have no
+        stale indices).
+
+        This must be called before write_data so that the deps stored on disk
+        reference run indices that will be reproducible on the next session
+        load.
+
+        After this call the complete in-memory/deps state is coherent with the
+        zarr file: every dep entry pointing at an ephemeral parameter will use
+        run index 1 (or zarr_max+1 if some runs were previously saved).
+
+        Returns:
+        None  (mutates self._memory_cache, self.deps_maps,
+               self._lazy_collections in-place)
+        """
+        # Guard: skip if the instance is not fully initialised.  This can
+        # happen when tests create DS via __new__ without running __init__.
+        required = ('_memory_cache', 'deps_maps', '_lazy_collections', 'root')
+        if not all(a in self.__dict__ for a in required):
+            return
+
+        # ------------------------------------------------------------------
+        # Phase 1: compute rename targets (read-only pass)
+        # ------------------------------------------------------------------
+        # rename_map : param -> (old_mem_max, target)
+        # purge_map  : param -> set of run indices to delete from memory
+        rename_map = {}  # {param: (old_mem_max, target)}
+        purge_map  = {}  # {param: set of run_idxs to purge}
+
+        # Collect every param present in memory
+        all_mem_params = set()
+        for run_cache in self._memory_cache.values():
+            all_mem_params.update(run_cache.keys())
+
+        # Build zarr_max_per_param once (O(n_runs) zarr I/O)
+        zarr_max_per_param = {}
+        for run_str, run_grp in self.root.groups():
+            r = int(run_str.replace('run', ''))
+            for pname, _ in run_grp.groups():
+                prev = zarr_max_per_param.get(pname, -1)
+                zarr_max_per_param[pname] = max(prev, r)
+
+        for param in all_mem_params:
+            # All run indices for this param that are in memory
+            mem_runs = sorted(
+                r for r in self._memory_cache if param in self._memory_cache[r]
+            )
+            if not mem_runs:
+                continue
+            mem_max = mem_runs[-1]
+
+            # Highest run index for this param that is saved in zarr
+            zarr_max = zarr_max_per_param.get(param, -1)
+
+            # If mem_max is at or below the zarr ceiling the data came from
+            # zarr itself — don't touch it.
+            if mem_max <= zarr_max:
+                continue
+
+            # max(1, ...) because the pipeline always starts at run 1;
+            # zarr_max + 1 would be 0 when nothing has been saved yet.
+            target = max(1, zarr_max + 1)
+
+            # Runs above the zarr ceiling that are NOT the one we keep
+            above_zarr = [r for r in mem_runs if r > zarr_max]
+            purge_runs = set(above_zarr[:-1])  # everything except mem_max
+
+            rename_map[param] = (mem_max, target)
+            purge_map[param]  = purge_runs
+
+        # ------------------------------------------------------------------
+        # Phase 2: apply purges and renames
+        # ------------------------------------------------------------------
+        for param, purge_runs in purge_map.items():
+            old_max, target = rename_map[param]
+
+            # 2a. Delete purged runs from _memory_cache
+            for r in purge_runs:
+                del self._memory_cache[r][param]
+
+            # 2b. Rename old_max -> target in _memory_cache (no-op if equal)
+            if old_max != target:
+                val = self._memory_cache[old_max].pop(param)
+                if target not in self._memory_cache:
+                    self._memory_cache[target] = {}
+                self._memory_cache[target][param] = val
+
+                # Update LazyAttr.run_idx on the stored value if needed
+                if isinstance(self._memory_cache[target][param], pf.LazyAttr):
+                    self._memory_cache[target][param].run_idx = target
+
+            # 2c. Mirror in _lazy_collections
+            if param in self._lazy_collections:
+                lac = self._lazy_collections[param]
+                for r in purge_runs:
+                    lac._lazy_attrs.pop(r, None)
+                if old_max != target and old_max in lac._lazy_attrs:
+                    la = lac._lazy_attrs.pop(old_max)
+                    la.run_idx = target
+                    lac._lazy_attrs[target] = la
+
+            # 2d. Mirror in deps_maps (outer keys = run indices where param
+            #     was produced).  deps_maps is keyed by scope (either
+            #     'global' or an integer data_idx).
+            for scope in list(self.deps_maps.keys()):
+                scope_map = self.deps_maps[scope]
+                for r in purge_runs:
+                    if r in scope_map and param in scope_map[r]:
+                        del scope_map[r][param]
+                if old_max != target:
+                    if old_max in scope_map and param in scope_map[old_max]:
+                        deps_entry = scope_map[old_max].pop(param)
+                        if target not in scope_map:
+                            scope_map[target] = {}
+                        scope_map[target][param] = deps_entry
+
+        # Remove now-empty run dicts from _memory_cache and deps_maps
+        for r in list(self._memory_cache.keys()):
+            if not self._memory_cache[r]:
+                del self._memory_cache[r]
+        for scope in list(self.deps_maps.keys()):
+            for r in list(self.deps_maps[scope].keys()):
+                if not self.deps_maps[scope][r]:
+                    del self.deps_maps[scope][r]
+
+        # ------------------------------------------------------------------
+        # Phase 3: update inner dep entries
+        # ------------------------------------------------------------------
+        # Any dep dict that references an old membrane run index (e.g.
+        # {zf_rmv: 16}) must be updated to the new target (e.g. {zf_rmv: 1}).
+        for scope in self.deps_maps:
+            for run_idx in self.deps_maps[scope]:
+                for prod_param, inner_deps in \
+                        self.deps_maps[scope][run_idx].items():
+                    for dep_param, dep_run in list(inner_deps.items()):
+                        if dep_param in rename_map:
+                            old_max, target = rename_map[dep_param]
+                            if dep_run == old_max:
+                                inner_deps[dep_param] = target
+
     def write_data(self, name, run_idx, data_idx = None, dtype = None):
         """
         Write data from memory to zarr file on disk.
@@ -266,6 +440,23 @@ class DataSet:
         ValueError: If parameter doesn't exist in memory or if trying to 
             overwrite existing rows.
         """
+        # Renumber in-memory run indices to be consistent with zarr before
+        # writing, so that persisted dependency entries are session-independent.
+        self._sync_to_zarr()
+
+        # After sync, run_idx may have changed — resolve the correct run_idx
+        # for this parameter (the most recent one now in memory).
+        if run_idx not in self._memory_cache or \
+                name not in self._memory_cache[run_idx]:
+            matching = [
+                r for r in self._memory_cache
+                if name in self._memory_cache[r]
+            ]
+            if matching:
+                run_idx = max(matching)
+            # If no matching run found, leave run_idx unchanged so the
+            # validation block below raises the correct descriptive error.
+
         # Validate run_idx exists
         if run_idx not in self._memory_cache:
             raise ValueError(f"run_idx {run_idx} not found in memory cache")
@@ -964,7 +1155,10 @@ class DataSet:
         - Filters enforced_max_runs per step to only relevant parameters
         - Works with _execute_step which handles actual computation and storage
         """
-        path = pf.find_pl_path(self.cal_pl, name) 
+        cal_pl = self.__dict__.get('cal_pl')
+        if cal_pl is None:
+            return
+        path = pf.find_pl_path(cal_pl, name)
         if path is None:
             return
         for step in path:
@@ -1023,7 +1217,10 @@ class DataSet:
         Returns:
         data (misc): 
         """
-        data_idx = np.atleast_1d(np.asarray(data_idx, dtype=np.int32))
+        # Only convert data_idx to an array when it is not None; converting
+        # None with dtype=int32 raises TypeError in modern NumPy versions.
+        if data_idx is not None:
+            data_idx = np.atleast_1d(np.asarray(data_idx, dtype=np.int32))
         # if not in memory or zarr -> find and execute path
         if not ( 
             self._is_in_memory(name, run_idx, data_idx) or \
@@ -1532,6 +1729,71 @@ class DataSet:
         
         return path
     
+    def plot(self, data_idx, plot_type, title = None, **kwargs):
+        """
+        Generate a plot for the specified data index and plot type.
+        
+        Parameters:
+            data_idx (int): The index of the data to plot.
+            plot_type (str): The type of plot to generate.
+            title (str, optional): The title of the plot. Defaults to None.
+            **kwargs: Additional keyword arguments for the plot function.
+        
+        Returns:
+        fig, axs: The figure and axes objects from the plot function.
+        """
+        ### Input validation
+        if plot_type not in default_plot_funcs:
+            raise ValueError(
+                f"plot_type '{plot_type}' not recognized. Available types: "
+                f"{list(default_plot_funcs.keys())}"
+            )
+        title, func, param_names, user_params = default_plot_funcs[plot_type]
+        for kwarg in kwargs:
+            if kwarg in user_params:
+                user_params[kwarg] = kwargs[kwarg]
+            
+        ### Collect parameters
+        params = [getattr(self, name)[data_idx] for name in param_names]
+        fig, axs = func(*params, **user_params)
+        if title is not None:
+            fig.suptitle(title)
+
+        return fig, axs
+    
+    def plot_full_cal(self, data_idx, **kwargs):
+        """
+        Generate a comprehensive set of plots for the specified data index,
+        including raw data, gain fit, S21 removal, circle fit, sparper, and xcal
+        plots. The resulting plots are combined into a single image for easy
+        viewing.
+        
+        Parameters:
+        data_idx (int): The index of the data to plot.
+        **kwargs: Additional keyword arguments for the individual plot 
+            functions.
+
+        Returns:
+        bytes: A PNG image in bytes format containing the combined plots.
+        """
+        plot_types = [
+            'raw_data', 'gain_fit', 's21_rmv', 'circfit', 'sparper', 'xcal'
+            ] 
+        figs = []
+        for plot_type in plot_types:
+            try:
+                fig, axs = self.plot(data_idx, plot_type, **kwargs)
+                figs.append(fig)
+            except Exception as e:
+                msg = f"Error generating plot '{plot_type}' for data_idx "
+                msg += f"{data_idx}: {e}"
+                raise RuntimeError(msg) from e
+        png_bytes = combine_figs_vert([
+            combine_figs_horz(figs[:3]), 
+            combine_figs_horz(figs[3:])
+        ])
+        return png_bytes
+
     ############################################################################
     ########################## Other utility methods ###########################
     ############################################################################
@@ -1881,6 +2143,101 @@ def _convert_yaml_to_steps(pl_dict, cal_steps, key = None):
             raise ValueError(m)
         return x[0]
     return pl_dict
+
+################################################################################
+##################### Legacy zarr dep-index migration #########################
+################################################################################
+def fix_legacy_deps(DS):
+    """
+    Fix dep run indices stored in a zarr file that was created before
+    _sync_to_zarr was introduced.
+
+    Before _sync_to_zarr, write_data could persist dep entries that reference
+    ephemeral, session-specific run indices (e.g. {zf_rmv: 16}) that can never
+    be satisfied on a fresh load.  This function scans every dep entry stored
+    in the zarr file and replaces any run index that does not exist in zarr
+    with the canonical value that a fresh run would produce:
+
+        max(1, zarr_max_for_dep_param + 1)
+
+    Both the zarr attrs and the in-memory DS.deps_maps are updated so the
+    DataSet instance stays coherent.
+
+    Parameters:
+    DS (DataSet): An open DataSet instance connected to the zarr file to fix.
+
+    Returns:
+    None  (mutates zarr attrs and DS.deps_maps in-place)
+    """
+    # ------------------------------------------------------------------
+    # Build a lookup of the highest run index per param that is in zarr
+    # ------------------------------------------------------------------
+    zarr_max_per_param = {}
+    for run_str, run_grp in DS.root.groups():
+        r = int(run_str.replace('run', ''))
+        for param_name, _ in run_grp.groups():
+            prev = zarr_max_per_param.get(param_name, -1)
+            zarr_max_per_param[param_name] = max(prev, r)
+
+    # Precompute set of (run_str, param_name) pairs present in zarr so
+    # _corrected never needs a zarr lookup in the hot path.
+    zarr_present = set()
+    for run_str, run_grp in DS.root.groups():
+        for pname, _ in run_grp.groups():
+            zarr_present.add((run_str, pname))
+
+    def _corrected(dep_name, dep_run_idx):
+        """Return the fixed run index, or dep_run_idx unchanged if valid."""
+        if (f'run{dep_run_idx}', dep_name) in zarr_present:
+            return dep_run_idx  # exists in zarr — valid reference
+        # Stale: compute canonical next run (mirrors _sync_to_zarr logic)
+        zarr_max = zarr_max_per_param.get(dep_name, -1)
+        return max(1, zarr_max + 1)
+
+    # ------------------------------------------------------------------
+    # Walk every param in every run in zarr and patch stale dep entries
+    # ------------------------------------------------------------------
+    for run_str, run_grp in DS.root.groups():
+        run_idx = int(run_str.replace('run', ''))
+        # Note: zarr_present already populated above; no extra I/O needed here
+        for param_name, param_grp in run_grp.groups():
+            is_global_param = param_grp.attrs.get('global', False)
+            deps_attr = dict(param_grp.attrs.get('deps', {}))
+            changed = False
+
+            if is_global_param:
+                # Global deps format: {dep_name: dep_run_idx}
+                for dep_name, dep_run_idx in list(deps_attr.items()):
+                    fixed = _corrected(dep_name, dep_run_idx)
+                    if fixed != dep_run_idx:
+                        deps_attr[dep_name] = fixed
+                        changed = True
+                        # Mirror in memory
+                        if ('global' in DS.deps_maps
+                                and run_idx in DS.deps_maps['global']
+                                and param_name in
+                                    DS.deps_maps['global'][run_idx]):
+                            DS.deps_maps['global'][run_idx][
+                                param_name][dep_name] = fixed
+            else:
+                # Per-row deps format: {f'idx{di}': {dep_name: dep_run_idx}}
+                for idx_str, row_deps in list(deps_attr.items()):
+                    di = int(idx_str.replace('idx', ''))
+                    for dep_name, dep_run_idx in list(row_deps.items()):
+                        fixed = _corrected(dep_name, dep_run_idx)
+                        if fixed != dep_run_idx:
+                            deps_attr[idx_str][dep_name] = fixed
+                            changed = True
+                            # Mirror in memory
+                            if (di in DS.deps_maps
+                                    and run_idx in DS.deps_maps[di]
+                                    and param_name in
+                                        DS.deps_maps[di][run_idx]):
+                                DS.deps_maps[di][run_idx][
+                                    param_name][dep_name] = fixed
+
+            if changed:
+                param_grp.attrs['deps'] = deps_attr
 
 ################################################################################
 # Analysis helpers -> in progress

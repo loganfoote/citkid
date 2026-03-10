@@ -1159,6 +1159,10 @@ class MockDataSetForCollection:
             i: {} for i in range(nrows)
         }
         self.deps_maps['global'] = {}
+
+    def _ensure_loaded(self, name, data_idx=None, enforced_max_runs={}):
+        """No-op stub: tests pre-populate LazyAttr._cache directly."""
+        pass
         
 
 def test_lazyattrcollection_init():

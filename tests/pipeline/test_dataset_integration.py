@@ -432,7 +432,7 @@ class TestDependencyValidation:
         ds.cal_pl = {'CAL_STEPS': {0: {'task': step1}, 1: {'task': step2}, 2: {'task': step3}}}
         
         # Try to run calculate_noise without running prerequisites
-        with pytest.raises(ValueError, match="does not exist and is not produced"):
+        with pytest.raises(ValueError, match="Missing dependencies for parameters"):
             ar.execute_step(step3, data_idx=0)
 
 
@@ -526,24 +526,11 @@ class TestZarrPersistence:
                       ['nrows', 'sampling_rate', 'base_value_stored'], 'global')
         ds2.cal_pl = {'CAL_STEPS': {0: {'task': step}}}
         
-        # Debug: Check what was loaded
-        print(f"ds2._memory_cache keys: {list(ds2._memory_cache.keys())}")
-        for run in ds2._memory_cache:
-            print(f"Run {run}: {list(ds2._memory_cache[run].keys())}")
-        print(f"ds2.deps_maps: {ds2.deps_maps}")
-
-        # Find any run that contains the expected global 'nrows' value
-        data_found = False
-        stored_value = None
-        for run_idx in ds2._memory_cache:
-            if 'nrows' in ds2._memory_cache[run_idx]:
-                data_found = True
-                if 'base_value_stored' in ds2._memory_cache[run_idx]:
-                    stored_value = ds2._memory_cache[run_idx]['base_value_stored']
-                    break
-        
-        assert data_found, "nrows not found in any run"
-        assert stored_value == 123.0, f"Expected 123.0, got {stored_value}"
+        # Verify data persists after reload by accessing via the property API
+        # (data is loaded lazily from zarr, not eagerly into _memory_cache)
+        assert ds2.nrows is not None, "nrows not found after reload"
+        assert ds2.base_value_stored == 123.0, \
+            f"Expected 123.0, got {ds2.base_value_stored}"
         
         # Function was called once by ds1. Since analysis user-params are
         # always stored in a new run, executing the same step again will

@@ -269,8 +269,9 @@ def test_init_initializes_caches(monkeypatch):
     # Verify caches are initialized as empty dicts
     assert DS._memory_cache == {}
     assert DS._is_global_cache == {}
-    # Verify deps_maps is set from _load_deps_from_zarr
-    assert DS.deps_maps == {'test': 'data'}
+    # Verify deps_maps is set from _load_deps_from_zarr; __init__ also adds
+    # the 'global' key unconditionally.
+    assert DS.deps_maps == {'test': 'data', 'global': {}}
 
 ################################################################################
 ############################# _is_in_memory ####################################
@@ -444,9 +445,11 @@ def test_is_in_zarr_per_row_all_exist():
     run_grp = DS.root.create_group('run1')
     param_grp = run_grp.create_group('param1')
     param_grp.attrs['global'] = False
-    row_data = np.array([0, 1, 2, 5])
+    # row_exists is a boolean mask: True at each index that has been written.
+    # Rows 0, 1, 2, 5 exist, so the array must cover at least index 5.
+    row_data = np.array([True, True, True, False, False, True])
     param_grp.create_array('row_exists', data=row_data)
-    
+
     assert DS._is_in_zarr('param1', 1, data_idx=[0, 1]) == True
     assert DS._is_in_zarr('param1', 1, data_idx=[2, 5]) == True
 
@@ -459,9 +462,10 @@ def test_is_in_zarr_per_row_partial_exist():
     run_grp = DS.root.create_group('run1')
     param_grp = run_grp.create_group('param1')
     param_grp.attrs['global'] = False
-    row_data = np.array([0, 1, 2])
+    # Rows 0, 1, 2 exist; rows 3, 4, 5 do not.
+    row_data = np.array([True, True, True, False, False, False])
     param_grp.create_array('row_exists', data=row_data)
-    
+
     assert DS._is_in_zarr('param1', 1, data_idx=[0, 1, 5]) == False
     assert DS._is_in_zarr('param1', 1, data_idx=[3, 4]) == False
 
@@ -983,7 +987,7 @@ def test_produce_data_executes_path(monkeypatch):
     monkeypatch.setattr(pds.pf, 'find_pl_path', lambda tree, name: [step1, step2])
     
     # Execute
-    DS._produce_data('derived', data_idx=None)
+    DS._ensure_loaded('derived', data_idx=None)
     
     # Check both steps executed
     assert 'base' in DS._memory_cache[1]
@@ -1015,7 +1019,7 @@ def test_produce_data_filters_enforced_max_runs(monkeypatch):
     
     # Call with enforced_max_runs containing both 'a' and 'b'
     # Should filter to only pass 'a' to the step
-    DS._produce_data('result', data_idx=None, enforced_max_runs={'a': 1, 'b': 1})
+    DS._ensure_loaded('result', data_idx=None, enforced_max_runs={'a': 1, 'b': 1})
     
     # Verify it executed without error (filtering worked)
     assert 'result' in DS._memory_cache[1]
@@ -1045,7 +1049,7 @@ def test_produce_data_per_row(monkeypatch):
     monkeypatch.setattr(pds.pf, 'find_pl_path', lambda tree, name: [step])
     
     # Produce data for specific indices
-    DS._produce_data('y', data_idx=[0, 1])
+    DS._ensure_loaded('y', data_idx=[0, 1])
     
     # Check output
     assert 'y' in DS._memory_cache[1]
@@ -1090,7 +1094,8 @@ def test_fetch_rows_from_zarr(monkeypatch):
     param_grp.attrs['global'] = False
     param_grp.attrs['deps'] = {'idx0': {}, 'idx1': {}}
     param_grp.create_array('data', data=np.array([[10], [20], [30], [40], [50]]))
-    param_grp.create_array('row_exists', data=np.array([0, 1]))
+    # row_exists is a boolean mask of length nrows (5).
+    param_grp.create_array('row_exists', data=np.array([True, True, False, False, False]))
     
     # Fetch from zarr
     result = DS._fetch_rows('param', run_idx=2, data_idx=[0, 1])
@@ -1123,7 +1128,7 @@ def test_fetch_rows_produces_data_when_missing(monkeypatch):
         for idx in data_idx:
             DS._memory_cache[1][name]._cache[idx] = np.array([idx * 10])
     
-    monkeypatch.setattr(DS, '_produce_data', mock_produce)
+    monkeypatch.setattr(DS, '_ensure_loaded', mock_produce)
     
     # Fetch - should trigger production
     result = DS._fetch_rows('output', run_idx=1, data_idx=[0, 1])

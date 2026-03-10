@@ -154,7 +154,7 @@ def test_save_figure_to_memory_returns_bytesio():
     fig, ax = plt.subplots()
     ax.plot([1, 2, 3], [1, 2, 3])
     
-    buf = util.save_figure_to_memory(fig)
+    buf = util.save_fig_to_memory(fig)
     
     assert isinstance(buf, BytesIO)
     assert buf.tell() == 0  # Buffer should be at start
@@ -165,7 +165,7 @@ def test_save_figure_to_memory_buffer_contains_png_data():
     fig, ax = plt.subplots()
     ax.plot([1, 2, 3], [1, 2, 3])
     
-    buf = util.save_figure_to_memory(fig)
+    buf = util.save_fig_to_memory(fig)
     
     # PNG files start with signature bytes
     png_signature = b'\x89PNG\r\n\x1a\n'
@@ -178,7 +178,7 @@ def test_save_figure_to_memory_buffer_is_readable():
     fig, ax = plt.subplots()
     ax.plot([1, 2, 3], [1, 2, 3])
     
-    buf = util.save_figure_to_memory(fig)
+    buf = util.save_fig_to_memory(fig)
     
     # Should be able to read image from buffer
     img = plt.imread(buf)
@@ -189,125 +189,80 @@ def test_save_figure_to_memory_buffer_is_readable():
 
 def test_save_figure_to_memory_invalid_fig_none():
     with pytest.raises(ValueError):
-        util.save_figure_to_memory(None)
+        util.save_fig_to_memory(None)
 
 
 def test_save_figure_to_memory_invalid_fig_type():
     with pytest.raises(TypeError):
-        util.save_figure_to_memory("not a figure")
+        util.save_fig_to_memory("not a figure")
 
 
 def test_save_figure_to_memory_invalid_fig_type_int():
     with pytest.raises(TypeError):
-        util.save_figure_to_memory(123)
+        util.save_fig_to_memory(123)
 
 
 ################################################################################
-######################## combine_figures_vertically ############################
+######################## combine_figures_vertically (new) ######################
 ################################################################################
-def test_combine_figures_vertically_returns_figure():
+def test_combine_figs_vert_returns_bytesio_and_png():
     fig1, ax1 = plt.subplots()
     ax1.plot([1, 2, 3], [1, 2, 3])
     fig2, ax2 = plt.subplots()
     ax2.plot([1, 2, 3], [3, 2, 1])
-    
-    combined = util.combine_figures_vertically(fig1, fig2)
-    
-    assert isinstance(combined, plt.Figure)
-    plt.close(combined)
+
+    buf = util.combine_figs_vert([fig1, fig2])
+    assert isinstance(buf, BytesIO)
+    # PNG signature
+    sig = buf.read(8)
+    assert sig == b'\x89PNG\r\n\x1a\n'
+    buf.seek(0)
 
 
-def test_combine_figures_vertically_has_two_rows():
+def test_combine_figs_vert_accepts_mixed_inputs_and_preserves_buffers():
     fig1, ax1 = plt.subplots()
     ax1.plot([1, 2, 3], [1, 2, 3])
     fig2, ax2 = plt.subplots()
     ax2.plot([1, 2, 3], [3, 2, 1])
-    
-    combined = util.combine_figures_vertically(fig1, fig2)
-    
-    # Should have 2 subplots arranged vertically
-    assert len(combined.axes) == 2
-    plt.close(combined)
 
-
-def test_combine_figures_vertically_creates_new_figure():
-    fig1, ax1 = plt.subplots()
-    ax1.plot([1, 2, 3], [1, 2, 3])
-    fig2, ax2 = plt.subplots()
-    ax2.plot([1, 2, 3], [3, 2, 1])
-    
-    combined = util.combine_figures_vertically(fig1, fig2)
-    
-    # Combined figure should exist
-    assert combined.number in plt.get_fignums()
-    plt.close(combined)
-    plt.close('all')  # Clean up any remaining figures
-
-
-def test_combine_figures_vertically_with_custom_dpi():
-    fig1, ax1 = plt.subplots()
-    ax1.plot([1, 2, 3], [1, 2, 3])
-    fig2, ax2 = plt.subplots()
-    ax2.plot([1, 2, 3], [3, 2, 1])
-    
-    combined = util.combine_figures_vertically(fig1, fig2, dpi = 300)
-    
-    assert combined.dpi == 300
-    plt.close(combined)
+    buf1 = util.save_fig_to_memory(fig1)
+    # pass a BytesIO and a Figure
+    out = util.combine_figs_vert([buf1, fig2])
+    assert isinstance(out, BytesIO)
+    # original buffer should still be readable by caller
+    buf1.seek(0)
+    assert buf1.read(8) == b'\x89PNG\r\n\x1a\n'
+    buf1.seek(0)
 
 
 ################################################################################
-####################### combine_figures_horizontally ###########################
+####################### combine_figures_horizontally (new) ######################
 ################################################################################
-def test_combine_figures_horizontally_returns_figure():
+def test_combine_figs_horz_returns_bytesio_and_png():
     fig1, ax1 = plt.subplots()
     ax1.plot([1, 2, 3], [1, 2, 3])
     fig2, ax2 = plt.subplots()
     ax2.plot([1, 2, 3], [3, 2, 1])
-    
-    combined = util.combine_figures_horizontally(fig1, fig2)
-    
-    assert isinstance(combined, plt.Figure)
-    plt.close(combined)
+
+    buf = util.combine_figs_horz([fig1, fig2])
+    assert isinstance(buf, BytesIO)
+    sig = buf.read(8)
+    assert sig == b'\x89PNG\r\n\x1a\n'
+    buf.seek(0)
 
 
-def test_combine_figures_horizontally_has_two_columns():
+def test_combine_figs_horz_accepts_mixed_inputs():
     fig1, ax1 = plt.subplots()
     ax1.plot([1, 2, 3], [1, 2, 3])
     fig2, ax2 = plt.subplots()
     ax2.plot([1, 2, 3], [3, 2, 1])
-    
-    combined = util.combine_figures_horizontally(fig1, fig2)
-    
-    # Should have 2 subplots arranged horizontally
-    assert len(combined.axes) == 2
-    plt.close(combined)
 
-
-def test_combine_figures_horizontally_creates_new_figure():
-    fig1, ax1 = plt.subplots()
-    ax1.plot([1, 2, 3], [1, 2, 3])
-    fig2, ax2 = plt.subplots()
-    ax2.plot([1, 2, 3], [3, 2, 1])
-    
-    combined = util.combine_figures_horizontally(fig1, fig2)
-    
-    # Combined figure should exist
-    assert combined.number in plt.get_fignums()
-    plt.close(combined)
-    plt.close('all')  # Clean up any remaining figures
-
-
-def test_combine_figures_horizontally_with_custom_dpi():
-    fig1, ax1 = plt.subplots()
-    ax1.plot([1, 2, 3], [1, 2, 3])
-    fig2, ax2 = plt.subplots()
-    ax2.plot([1, 2, 3], [3, 2, 1])
-    
-    combined = util.combine_figures_horizontally(fig1, fig2, dpi = 150)
-    
-    assert combined.dpi == 150
-    plt.close(combined)
+    buf2 = util.save_fig_to_memory(fig2)
+    out = util.combine_figs_horz([fig1, buf2])
+    assert isinstance(out, BytesIO)
+    buf2.seek(0)
+    assert buf2.read(8) == b'\x89PNG\r\n\x1a\n'
+    buf2.seek(0)
 
 
 def test_combine_figures_vertically_invalid_dpi_type():
@@ -315,7 +270,7 @@ def test_combine_figures_vertically_invalid_dpi_type():
     fig2, ax2 = plt.subplots()
     
     with pytest.raises(TypeError):
-        util.combine_figures_vertically(fig1, fig2, dpi = "not an int")
+        util.combine_figs_vert([fig1, fig2], dpi = "not an int")
     
     plt.close('all')
 
@@ -325,7 +280,7 @@ def test_combine_figures_vertically_invalid_dpi_negative():
     fig2, ax2 = plt.subplots()
     
     with pytest.raises(ValueError):
-        util.combine_figures_vertically(fig1, fig2, dpi = 0)
+        util.combine_figs_vert([fig1, fig2], dpi = 0)
     
     plt.close('all')
 
@@ -335,7 +290,7 @@ def test_combine_figures_horizontally_invalid_dpi_type():
     fig2, ax2 = plt.subplots()
     
     with pytest.raises(TypeError):
-        util.combine_figures_horizontally(fig1, fig2, dpi = 3.14)
+        util.combine_figs_horz([fig1, fig2], dpi = 3.14)
     
     plt.close('all')
 
@@ -345,7 +300,7 @@ def test_combine_figures_horizontally_invalid_dpi_negative():
     fig2, ax2 = plt.subplots()
     
     with pytest.raises(ValueError):
-        util.combine_figures_horizontally(fig1, fig2, dpi = -100)
+        util.combine_figs_horz([fig1, fig2], dpi = -100)
     
     plt.close('all')
 

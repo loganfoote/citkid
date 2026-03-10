@@ -39,7 +39,7 @@ def plot_gain_fit(f, z, mask, p_amp, p_phase):
     fmean = np.mean(f)
 
     # Setup plot
-    fig, axs = plt.subplots(1, 2, figsize = [6, 3], dpi = 72, layout = 'tight')
+    fig, axs = plt.subplots(1, 2, figsize = [8, 3], dpi = 72, layout = 'tight')
     xlbl = f'(f - {fmean / 1e6:.04f} MHz) (kHz)'
     axs[1].set(ylabel = 'Phase', xlabel = xlbl)
     axs[0].set(ylabel = '|S21| (dB)', xlabel = xlbl)
@@ -64,7 +64,10 @@ def plot_gain_fit(f, z, mask, p_amp, p_phase):
                     label = 'Fit', aa = False)
 
     # Add legend and return figure and axes
-    axs[1].legend(framealpha = 1, loc = 'lower left')
+    axs[1].legend(
+        framealpha = 1, 
+        loc = [1.01, 0.]
+        )
     return fig, axs
 
 def plot_s21(f, z, zt = None, fg = None, zg = None):
@@ -95,7 +98,7 @@ def plot_s21(f, z, zt = None, fg = None, zg = None):
     fmean = np.mean(f) 
 
     # Set up plots
-    fig, axs = plt.subplots(1, 2, figsize = [6, 3], layout = 'tight', dpi = 72)
+    fig, axs = plt.subplots(1, 2, figsize = [8, 3], layout = 'tight', dpi = 72)
     xlbl = f'(f - {fmean / 1e6:.02f} MHz) (kHz)'
     axs[0].set(xlabel = xlbl, ylabel = r'$S_{21}$ (dB)')
     axs[1].set(xlabel = 'I', ylabel = 'Q', aspect = 'equal', 
@@ -123,7 +126,10 @@ def plot_s21(f, z, zt = None, fg = None, zg = None):
         zt = np.asarray(zt, dtype = np.complex128) 
         axs[1].plot(zt.real, zt.imag, '.', color = plt.cm.viridis(0.67), 
                     aa = False, rasterized = True, label = 'Noise')
-    axs[1].legend(loc = 'center', framealpha = 1)
+    axs[1].legend(
+        framealpha = 1, 
+        loc = [1.01, 0.]
+        )
     return fig, axs
 
 def plot_circfit(z, origin, radius, zt = None, mask = None):
@@ -156,7 +162,7 @@ def plot_circfit(z, origin, radius, zt = None, mask = None):
         z_cut = None
     
     # Setup plot
-    fig, ax = plt.subplots(figsize = (3, 3), layout = 'tight', dpi = 72)
+    fig, ax = plt.subplots(figsize = (5, 3), layout = 'tight', dpi = 72)
     ax.set(xlabel = 'I', ylabel = 'Q')
     ax.set(aspect = 'equal', adjustable = 'datalim')
     # Plot data
@@ -179,7 +185,10 @@ def plot_circfit(z, origin, radius, zt = None, mask = None):
                 aa = False, rasterized = True, label = 'Noise')
         
     # Add legend and return figure and axis
-    ax.legend(loc = 'center', framealpha = 1)
+    ax.legend(
+        framealpha = 1, 
+        loc = [1.01, 0.]
+        )
     return fig, ax
 
 def plot_sparper(f, spar, sper, nbins, fmin):
@@ -210,7 +219,7 @@ def plot_sparper(f, spar, sper, nbins, fmin):
     f, spar, sper = bin_psd(f, [f, spar, sper], nbins = nbins, fmin = fmin)
 
     # Setup plot
-    fig, ax = plt.subplots(figsize = [5, 3], layout = 'tight', dpi = 72) 
+    fig, ax = plt.subplots(figsize = [7, 3], layout = 'tight', dpi = 72) 
     ax.set(ylabel = 'S (dBc/Hz)', xlabel = 'Frequency (Hz)')
     ax.set(xscale = 'log')
 
@@ -219,7 +228,10 @@ def plot_sparper(f, spar, sper, nbins, fmin):
     ax.plot(f, sper, color = plt.cm.viridis(0.67), aa = False, label = 'PER')
 
     # Add legend and return figure and axis
-    ax.legend(framealpha = 1)
+    ax.legend(
+        framealpha = 1, 
+        loc = [1.01, 0.]
+        )
     return fig, ax
 
 def plot_xcal(thetaf, xf, zf_cent, xcal_mask, poly_x, thetat = None, 
@@ -277,7 +289,7 @@ def plot_xcal(thetaf, xf, zf_cent, xcal_mask, poly_x, thetat = None,
         std_mask = np.ones_like(thetat, dtype = bool)
 
     # Setup plot
-    fig, axs = plt.subplots(1, 2, figsize = [6, 3], layout = 'tight', dpi = 72)
+    fig, axs = plt.subplots(1, 2, figsize = [8, 3], layout = 'tight', dpi = 72)
     axs[0].set(xlabel = 'theta', ylabel = 'x (kHz / GHz)')
     axs[1].set(xlabel = 'I', ylabel = 'Q', 
                aspect = 'equal', adjustable = 'datalim')
@@ -319,7 +331,10 @@ def plot_xcal(thetaf, xf, zf_cent, xcal_mask, poly_x, thetat = None,
     axs[1].plot([], [], '--k', label = 'fit')
 
     # Add legend and return figure and axis
-    axs[1].legend(framealpha = 1)
+    axs[1].legend(
+        framealpha = 1,
+        loc = [1.01, 0.]
+        )
     return fig, axs
 
 def plot_nonlinear_iq_fit(ff, zf_rmv, popt, mask):
@@ -339,7 +354,7 @@ def plot_nonlinear_iq_fit(ff, zf_rmv, popt, mask):
         plots.
     """
     # Setup plot
-    fig, axs = plt.subplots(1, 2, figsize = [7, 3], layout = 'tight', dpi = 72)
+    fig, axs = plt.subplots(1, 2, figsize = [9, 3], layout = 'tight', dpi = 72)
     axs[0].set(aspect = 'equal', adjustable = 'datalim')
     axs[0].set(ylabel = 'Q', xlabel = 'I') 
     axs[1].set(xlabel = f'(f - {round(popt[0] / 1e9, 4)} GHz) (kHz)', 
@@ -360,5 +375,38 @@ def plot_nonlinear_iq_fit(ff, zf_rmv, popt, mask):
                 color = plt.cm.viridis(0.5), aa = False)
 
     # Add legend and return figure and axes
-    axs[0].legend(loc = 'center', framealpha = 1)
+    axs[0].legend(
+        framealpha = 1, 
+        loc = [1.01, 0.]
+        )
     return fig, axs
+
+################################################################################
+########################## Default Plotting Functions ##########################
+################################################################################
+default_plot_funcs = {
+    'raw_data': (
+        'Raw Data', plot_s21, ['ff', 'zf', 'zt', 'fg', 'zg'], {}
+        ),
+    'gain_fit': (
+        'Gain Fit', plot_gain_fit, 
+        ['fg', 'zg', 'gain_mask', 'p_amp', 'p_phase'], {}
+        ),
+    's21_rmv': (
+        'Gain Removed Fine Sweep', plot_s21, 
+        ['ff', 'zf_rmv', 'zt_rmv'], {}
+        ),
+    'circfit': (
+        'Circle Fit', plot_circfit, 
+        ['zf_rmv', 'circ_origin', 'circ_radius', 'zt_rmv', 'circ_mask'], {}
+        ),
+    'sparper': (
+        'Par/Per Noise PSDs', plot_sparper, 
+        ['sparper_freq', 'spar', 'sper'], {'nbins': 100, 'fmin': 0.1}
+        ),
+    'xcal': (
+        r'$x$ Calibration', plot_xcal, 
+        ['thetaf', 'xf', 'zf_cent', 'xcal_mask', 'poly_x', 
+         'thetat', 'zt_cent', 'xcal_std_cutoff'], {}
+        )
+}
