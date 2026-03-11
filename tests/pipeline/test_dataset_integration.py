@@ -538,3 +538,315 @@ class TestZarrPersistence:
         prior_calls = CALL_COUNTS.get('import_raw_data', 0)
         ar2.execute_step(step, user_params={'base_value': 123.0})
         assert CALL_COUNTS.get('import_raw_data', 0) == prior_calls + 1  # Re-run expected
+
+
+# ============================================================================
+#  New tests: vectorized vs per-row dispatch, failure handling
+# ============================================================================
+
+# --------------- helpers used only by the new tests -------------------------
+
+PERROW_CALL_LOG = []  # records which data_idx values were executed
+
+def reset_perrow_call_log():
+    global PERROW_CALL_LOG
+    PERROW_CALL_LOG = []
+
+
+def perrow_step_func(data_idx):
+    """Per-row step that records which index it was called with (single value)."""
+    idx = int(np.atleast_1d(data_idx)[0])
+    PERROW_CALL_LOG.append(idx)
+    return np.array([float(idx) * 2])
+
+
+def vectorized_step_func(data_idx):
+    """Vectorized step that records which indices it was called with (array)."""
+    idxs = list(np.atleast_1d(data_idx))
+    for i in idxs:
+        PERROW_CALL_LOG.append(int(i))
+    return [float(i) * 2 for i in idxs]
+
+
+def failing_perrow_func(data_idx):
+    """Per-row step that raises for data_idx == 2."""
+    idx = int(np.atleast_1d(data_idx)[0])
+    if idx == 2:
+        raise ValueError(f"Intentional failure at idx={idx}")
+    return np.array([float(idx)])
+
+
+# --------------- fixtures ----------------------------------------------------
+
+@pytest.fixture
+def dispatch_ds(temp_dataset_dir):
+    """DataSet initialised with nrows=5 ready for dispatch tests."""
+    zarr_path = str(Path(temp_dataset_dir) / 'dispatch.zarr')
+    cal_yaml_path = str(Path(temp_dataset_dir) / 'cal.yaml')
+    ds = DataSet(zarr_path=zarr_path, cal_yaml_path=cal_yaml_path,
+                 custom_path=str(Path(temp_dataset_dir) / 'custom_steps.py'))
+
+    # Bootstrap nrows via the existing import step in custom_steps.py
+    import_step = plStep(
+        'import_raw_data', import_raw_data,
+        ['base_value'], ['nrows', 'sampling_rate', 'base_value_stored'], 'global'
+    )
+    ds.cal_pl = {'CAL_STEPS': {0: {'task': import_step}}}
+    ar = AnalysisRunner(ds)
+    ar.execute_step(import_step, user_params={'base_value': 0.0})
+    return ds
+
+
+# ============================================================================
+class TestVectorizedVsPerRowDispatch:
+    """
+    Verify that _execute_step calls the underlying function once per group for
+    vectorized steps, and once per data_idx for per-row steps.
+    """
+
+    def test_vectorized_calls_func_once_for_identical_deps(self, dispatch_ds):
+        """All rows share the same deps → vectorized step called exactly once."""
+        reset_perrow_call_log()
+        step = plStep(
+            'vec_step', vectorized_step_func,
+            ['data_idx'], ['vec_out'], 'vectorized'
+        )
+        dispatch_ds._execute_step(step, data_idx=np.arange(5))
+
+        # The function was called once with all 5 indices stacked
+        assert PERROW_CALL_LOG == [0, 1, 2, 3, 4]
+
+    def test_perrow_calls_func_once_per_index(self, dispatch_ds):
+        """Per-row step must call the function individually for each data_idx."""
+        reset_perrow_call_log()
+        step = plStep(
+            'pr_step', perrow_step_func,
+            ['data_idx'], ['pr_out'], 'per-row'
+        )
+        dispatch_ds._execute_step(step, data_idx=np.arange(5))
+
+        # Function called once per row, in order
+        assert PERROW_CALL_LOG == [0, 1, 2, 3, 4]
+
+    def test_perrow_stores_each_row_independently(self, dispatch_ds):
+        """Per-row outputs must be stored separately per data_idx."""
+        step = plStep(
+            'pr_step2', perrow_step_func,
+            ['data_idx'], ['pr_out2'], 'per-row'
+        )
+        dispatch_ds._execute_step(step, data_idx=[1, 3])
+
+        run_idx = max(dispatch_ds._memory_cache.keys())
+        la = dispatch_ds._memory_cache[run_idx]['pr_out2']
+        assert 1 in la._cache
+        assert 3 in la._cache
+        assert 0 not in la._cache
+        assert 2 not in la._cache
+
+    def test_vectorized_stores_all_rows(self, dispatch_ds):
+        """Vectorized outputs must cover all requested data_idx."""
+        reset_perrow_call_log()
+        step = plStep(
+            'vec_step2', vectorized_step_func,
+            ['data_idx'], ['vec_out2'], 'vectorized'
+        )
+        dispatch_ds._execute_step(step, data_idx=[0, 2, 4])
+
+        run_idx = max(dispatch_ds._memory_cache.keys())
+        la = dispatch_ds._memory_cache[run_idx]['vec_out2']
+        for di in [0, 2, 4]:
+            assert di in la._cache
+        assert 1 not in la._cache
+
+
+# ============================================================================
+class TestPerRowFailureHandling:
+    """
+    Verify that per-row failures are isolated, partial successes are stored,
+    and failure reports are persisted to zarr.
+    """
+
+    def test_failure_returns_failures_dict(self, dispatch_ds):
+        """_execute_step must return a dict with the failing data_idx."""
+        step = plStep(
+            'fail_step', failing_perrow_func,
+            ['data_idx'], ['fail_out'], 'per-row'
+        )
+        failures = dispatch_ds._execute_step(step, data_idx=[0, 1, 2, 3])
+
+        assert isinstance(failures, dict)
+        assert 2 in failures
+        assert len(failures) == 1
+
+    def test_failure_traceback_is_string(self, dispatch_ds):
+        """Failure values must be non-empty traceback strings."""
+        step = plStep(
+            'fail_step2', failing_perrow_func,
+            ['data_idx'], ['fail_out2'], 'per-row'
+        )
+        failures = dispatch_ds._execute_step(step, data_idx=[0, 2])
+
+        assert isinstance(failures[2], str)
+        assert 'Intentional failure' in failures[2]
+
+    def test_successful_rows_are_stored(self, dispatch_ds):
+        """Rows that succeed must be stored even when other rows fail."""
+        step = plStep(
+            'fail_step3', failing_perrow_func,
+            ['data_idx'], ['fail_out3'], 'per-row'
+        )
+        dispatch_ds._execute_step(step, data_idx=[0, 1, 2, 3])
+
+        run_idx = max(dispatch_ds._memory_cache.keys())
+        la = dispatch_ds._memory_cache[run_idx]['fail_out3']
+        assert 0 in la._cache
+        assert 1 in la._cache
+        assert 3 in la._cache
+        assert 2 not in la._cache  # Failed row must not be stored
+
+    def test_empty_failures_when_all_succeed(self, dispatch_ds):
+        """No failures → return empty dict (not None)."""
+        step = plStep(
+            'pr_step_ok', perrow_step_func,
+            ['data_idx'], ['pr_ok_out'], 'per-row'
+        )
+        failures = dispatch_ds._execute_step(step, data_idx=[0, 1, 3])
+        assert failures == {}
+
+    def test_failures_persisted_to_zarr(self, dispatch_ds):
+        """Failures must be written to the _failures/{step.name} zarr group."""
+        step = plStep(
+            'fail_zarr', failing_perrow_func,
+            ['data_idx'], ['fail_zarr_out'], 'per-row'
+        )
+        dispatch_ds._execute_step(step, data_idx=[0, 2, 4])
+
+        fail_grp = dispatch_ds.root['_failures/fail_zarr']
+        stored = dict(fail_grp.attrs['failures'])
+        assert 'idx2' in stored
+        assert 'traceback' in stored['idx2']
+        assert 'time' in stored['idx2']
+
+    def test_no_zarr_failure_group_on_full_success(self, dispatch_ds):
+        """When all rows succeed no _failures group should be created."""
+        step = plStep(
+            'ok_step', perrow_step_func,
+            ['data_idx'], ['ok_out'], 'per-row'
+        )
+        dispatch_ds._execute_step(step, data_idx=[0, 1])
+
+        assert '_failures' not in dispatch_ds.root or \
+               'ok_step' not in dispatch_ds.root.get('_failures', {})
+
+    def test_failures_accumulate_across_calls(self, dispatch_ds):
+        """Re-running the same step should merge new failures with old ones."""
+        step = plStep(
+            'accum_fail', failing_perrow_func,
+            ['data_idx'], ['accum_out'], 'per-row'
+        )
+        # First call: idx 2 fails
+        dispatch_ds._execute_step(step, data_idx=[0, 2])
+        # Second call: idx 2 fails again (new timestamp)
+        dispatch_ds._execute_step(step, data_idx=[2])
+
+        stored = dict(dispatch_ds.root['_failures/accum_fail'].attrs['failures'])
+        # idx2 should be present (updated by the second call)
+        assert 'idx2' in stored
+
+    def test_vectorized_returns_none(self, dispatch_ds):
+        """_execute_step must return None for vectorized steps."""
+        reset_perrow_call_log()
+        step = plStep(
+            'vec_none', vectorized_step_func,
+            ['data_idx'], ['vec_none_out'], 'vectorized'
+        )
+        result = dispatch_ds._execute_step(step, data_idx=[0, 1])
+        assert result is None
+
+    def test_global_returns_none(self, dispatch_ds):
+        """_execute_step must return None for global steps."""
+        def global_func(nrows):
+            return np.float64(nrows * 2.0)
+        step = plStep('global_none', global_func, ['nrows'], ['global_none_out'], 'global')
+        dispatch_ds._ensure_loaded('nrows')
+        result = dispatch_ds._execute_step(step, data_idx=None)
+        assert result is None
+
+
+# ============================================================================
+class TestAnalysisRunnerFailureSurfacing:
+    """
+    Verify that AnalysisRunner.execute_step exposes failures via _last_failures
+    and emits a RuntimeWarning.
+    """
+
+    def test_last_failures_set_on_partial_failure(self, dispatch_ds):
+        """_last_failures must contain only the rows that failed."""
+        step = plStep(
+            'ar_fail', failing_perrow_func,
+            ['data_idx'], ['ar_fail_out'], 'per-row'
+        )
+        ar = AnalysisRunner(dispatch_ds)
+        import warnings as _warnings
+        with _warnings.catch_warnings(record=True):
+            _warnings.simplefilter('always')
+            ar.execute_step(step, data_idx=[0, 1, 2, 3])
+
+        assert ar._last_failures is not None
+        assert 2 in ar._last_failures
+        assert len(ar._last_failures) == 1
+
+    def test_warning_issued_on_failure(self, dispatch_ds):
+        """A RuntimeWarning should be raised when any row fails."""
+        step = plStep(
+            'ar_warn', failing_perrow_func,
+            ['data_idx'], ['ar_warn_out'], 'per-row'
+        )
+        ar = AnalysisRunner(dispatch_ds)
+        import warnings as _warnings
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter('always')
+            ar.execute_step(step, data_idx=[0, 2])
+
+        runtime_warnings = [w for w in caught if issubclass(w.category, RuntimeWarning)]
+        assert len(runtime_warnings) == 1
+        assert 'ar_warn' in str(runtime_warnings[0].message)
+        assert '2' in str(runtime_warnings[0].message)
+
+    def test_no_warning_on_full_success(self, dispatch_ds):
+        """No RuntimeWarning should be emitted when all rows succeed."""
+        step = plStep(
+            'ar_ok', perrow_step_func,
+            ['data_idx'], ['ar_ok_out'], 'per-row'
+        )
+        ar = AnalysisRunner(dispatch_ds)
+        import warnings as _warnings
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter('always')
+            ar.execute_step(step, data_idx=[0, 1])
+
+        runtime_warnings = [w for w in caught if issubclass(w.category, RuntimeWarning)]
+        assert len(runtime_warnings) == 0
+
+    def test_last_failures_none_for_global_step(self, dispatch_ds):
+        """_last_failures should be None after executing a global step."""
+        def global_noop(nrows):
+            return np.float64(1.0)
+        step = plStep('ar_global', global_noop, ['nrows'], ['ar_global_out'], 'global')
+        dispatch_ds._ensure_loaded('nrows')
+        ar = AnalysisRunner(dispatch_ds)
+        ar.execute_step(step, data_idx=None)
+        assert ar._last_failures is None
+
+    def test_last_failures_empty_dict_on_full_perrow_success(self, dispatch_ds):
+        """_last_failures should be {} (not None) after a clean per-row run."""
+        step = plStep(
+            'ar_empty', perrow_step_func,
+            ['data_idx'], ['ar_empty_out'], 'per-row'
+        )
+        ar = AnalysisRunner(dispatch_ds)
+        import warnings as _warnings
+        with _warnings.catch_warnings(record=True):
+            _warnings.simplefilter('always')
+            ar.execute_step(step, data_idx=[0])
+        assert ar._last_failures == {}

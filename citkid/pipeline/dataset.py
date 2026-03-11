@@ -1,4 +1,5 @@
 import os
+import traceback
 from sqlalchemy import func
 import yaml
 import importlib.util 
@@ -812,8 +813,9 @@ class DataSet:
             execution. Default is False.
         
         Returns:
-        None (results are stored in self._memory_cache and optionally written
-             to zarr)
+        dict or None: For 'per-row' steps, returns a dict mapping failed 
+            data_idx (int) to their traceback strings. Empty dict if all rows 
+            succeeded. Returns None for all other func_type values.
         
         Raises:
         TypeError: If step is not a plStep instance.
@@ -872,14 +874,16 @@ class DataSet:
 
             # Store outputs in memory cache
             self._store_step_outputs_global(step, out, run_idxs, deps, save)
+            failures = None
 
-        else:  # vectorized or per-row                      
-            # For vectorized/per-row, need to find run-idx for each data_idx
+        elif step.func_type == 'vectorized':
+            # Vectorized: group rows by shared deps and run each group in
+            # one stacked call
             run_deps = []  # (run_idxs_tuple, deps) for each data_idx
             for di in data_idx:
                 merged_deps_map = self.merge_deps_maps(di)
                 run_idxs = [get_most_recent_run(name, merged_deps_map) + 1
-                           for name in step.return_names]
+                            for name in step.return_names]
                 # run that doesn't exist yet should be 1
                 run_idxs = tuple([1 if r == 0 else r for r in run_idxs])
                 deps = get_deps(
@@ -888,14 +892,16 @@ class DataSet:
                     enforced_max_runs=enforced_max_runs
                 )
                 run_deps.append((run_idxs, deps))
-            
+
             # Group by unique run_idxs/deps combinations
-            unique_run_deps, indices_groups = util.group_unique_tuples(run_deps)
-            
+            unique_run_deps, indices_groups = util.group_unique_tuples(
+                run_deps
+            )
+
             for (run_idxs, deps), local_idx in zip(
                 unique_run_deps, indices_groups
                 ):
-                # Collect parameters 
+                # Collect parameters
                 params = []
                 param_is_global = []
                 for p in step.param_names:
@@ -904,7 +910,7 @@ class DataSet:
                         params.append(data_idx[local_idx])
                         param_is_global.append(False)
                         continue
-                    
+
                     param_is_global.append(self._is_global_cache[p])
                     if param_is_global[-1]:
                         val = self._get_existing(p, deps[p], data_idx=None)
@@ -913,25 +919,95 @@ class DataSet:
                             p, deps[p], data_idx=data_idx[local_idx]
                         )
                     params.append(val)
-                
-                # Run step 
+
+                # Run step
                 out = step._run(params, param_is_global)
 
                 # Store outputs in memory cache, each with its own run_idx
                 for (name, val), run_idx in zip(out.items(), run_idxs):
-                    # Per-row: store for specific data indices
                     self._store_param(
                         name, val, run_idx, deps,
                         is_global=False,
                         data_idx=data_idx[local_idx]
-                    ) 
-                
+                    )
+
                 # Write to disk if requested
                 if save:
                     for (name, _), run_idx in zip(out.items(), run_idxs):
                         self.write_data(
                             name, run_idx, data_idx=data_idx[local_idx]
-                            )
+                        )
+            failures = None
+
+        else:  # per-row: run each data_idx individually with error handling
+            failures = {}  # {data_idx: traceback_string}
+            for di in data_idx:
+                merged_deps_map = self.merge_deps_maps(di)
+                run_idxs = [get_most_recent_run(name, merged_deps_map) + 1
+                            for name in step.return_names]
+                # run that doesn't exist yet should be 1
+                run_idxs = tuple([1 if r == 0 else r for r in run_idxs])
+                deps = get_deps(
+                    [p for p in step.param_names if p != 'data_idx'],
+                    merged_deps_map,
+                    enforced_max_runs=enforced_max_runs
+                )
+
+                # Collect parameters for this single row
+                params = []
+                param_is_global = []
+                for p in step.param_names:
+                    if p == 'data_idx':
+                        params.append(np.atleast_1d([di]))
+                        param_is_global.append(False)
+                        continue
+
+                    param_is_global.append(self._is_global_cache[p])
+                    if param_is_global[-1]:
+                        val = self._get_existing(p, deps[p], data_idx=None)
+                    else:
+                        val = self._get_existing(
+                            p, deps[p], data_idx=np.atleast_1d([di])
+                        )
+                    params.append(val)
+
+                # Run step - allow per-row failure without aborting the loop
+                try:
+                    out = step._run(params, param_is_global)
+                except Exception:
+                    failures[int(di)] = traceback.format_exc()
+                    continue
+
+                # Store outputs for this row
+                for (name, val), run_idx in zip(out.items(), run_idxs):
+                    self._store_param(
+                        name, val, run_idx, deps,
+                        is_global=False,
+                        data_idx=np.atleast_1d([di])
+                    )
+
+                # Write to disk if requested
+                if save:
+                    for (name, _), run_idx in zip(out.items(), run_idxs):
+                        self.write_data(
+                            name, run_idx, data_idx=np.atleast_1d([di])
+                        )
+
+            # Persist failure report to zarr
+            if failures:
+                fail_grp = self.root.require_group(
+                    f'_failures/{step.name}'
+                )
+                timestamp = datetime.now().strftime('%Y%m%d-%H:%M:%S')
+                existing = dict(fail_grp.attrs.get('failures', {}))
+                for di, tb in failures.items():
+                    existing[f'idx{di}'] = {
+                        'traceback': tb, 
+                        'time': timestamp
+                    }
+                fail_grp.attrs['failures'] = existing
+
+        return failures
                         
     def merge_deps_maps(self, di):
         """

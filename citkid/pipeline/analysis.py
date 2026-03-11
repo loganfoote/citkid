@@ -1,7 +1,8 @@
 
-import os 
-import yaml 
-import numpy as np 
+import os
+import warnings
+import yaml
+import numpy as np
 from tqdm.auto import tqdm
 import importlib.util
 
@@ -238,13 +239,27 @@ class AnalysisRunner:
         
         # Execute the step using DataSet's _execute_step method
         try:
-            self.DS._execute_step(step, data_idx = data_idx, 
-                                  enforced_max_runs = enforced_max_runs,
-                                  save = save)
+            failures = self.DS._execute_step(
+                step, data_idx=data_idx,
+                enforced_max_runs=enforced_max_runs,
+                save=save
+            )
         except Exception as e:
             raise RuntimeError(
                 f"Error executing step '{step.name}': {str(e)}"
             ) from e
+
+        # Store failure report and surface it to the caller
+        self._last_failures = failures
+        if failures:
+            n = len(failures)
+            failed_idxs = sorted(failures.keys())
+            warnings.warn(
+                f"Step '{step.name}' failed for {n} row(s): "
+                f"data_idx={failed_idxs}",
+                RuntimeWarning,
+                stacklevel=2
+            )
     
     def _add_user_params(
             self, user_params, func_type, data_idx = None, save = False

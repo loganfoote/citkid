@@ -163,7 +163,7 @@ def get_deps(param_names, deps_map, enforced_max_runs = {}):
         )
     
     if solution is None:
-        raise ValueError('dependencies could not be resolved')
+        raise ValueError(f'dependencies could not be resolved for {param_names}')
     
     deps, run_sum, backtracked = solution
 
