@@ -195,7 +195,7 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
 
     ### Batch process parser file
     # Open files 
-    module_idxs = list(ch_map.keys())
+    module_idxs = list([k for k in ch_map.keys() if len(ch_map[k]) > 0])
     file_paths = [
         # module idxs are 1 - 4 in parser data, regardless of analog_bank_high
         # might be changed in future release
