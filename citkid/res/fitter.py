@@ -5,7 +5,7 @@ from .funcs import nonlinear_iq_for_fitter, nonlinear_iq, circle_objective
 from .util import bounds_check, calc_nrmse
 from .gain import fit_and_remove_gain_phase
 from .plot import plot_nonlinear_iq, plot_circle
-from ..util import  combine_figures_vertically
+from ..util import  combine_figures_vertically_legacy as combine_figures_vertically
 from citkid.res import guess
 from .data_io import make_fit_row
 

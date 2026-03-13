@@ -969,7 +969,7 @@ class CRS:
         from rfmux.tools import parser
         try:
             if verbose:
-                await run_with_time_bar(
+                run_with_time_bar(
                     parser.main, 
                     T, 
                     'Streaming', 

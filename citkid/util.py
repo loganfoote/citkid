@@ -410,3 +410,67 @@ def run_with_time_bar(fn, duration_s, desc, *args, **kwargs):
     finally:
         stop.set()
         t.join()
+
+
+
+def combine_figures_vertically_legacy(fig1, fig2, dpi = 200):
+    """
+    Combine two matplotlib figures vertically for saving as a single file
+
+    Parameters:
+    fig1, fig2 (pyplot.figure): figures to combine
+
+    Returns:
+    fig (pyplot.figure): combined figure
+    """
+    with save_figure_to_memory_legacy(fig1) as buf1, save_figure_to_memory_legacy(fig2) as buf2:
+        plt.close(fig1)
+        plt.close(fig2)
+        fig, axs = plt.subplots(2, 1, dpi = dpi, layout = 'tight')
+        for ax in axs:
+            ax.set_axis_off()
+        axs[0].imshow(plt.imread(buf1))
+        axs[1].imshow(plt.imread(buf2))
+        fig.tight_layout()
+    return fig
+
+def combine_figures_horizontally_legacy(fig1, fig2, dpi = 200):
+    """
+    Combine two matplotlib figures horizontally for saving as a single file
+
+    Parameters:
+    fig1, fig2 (pyplot.figure): figures to combine
+
+    Returns:
+    fig (pyplot.figure): combined figure
+    """
+    with save_figure_to_memory_legacy(fig1) as buf1, save_figure_to_memory_legacy(fig2) as buf2:
+        plt.close(fig1)
+        plt.close(fig2)
+        fig, axs = plt.subplots(1, 2, dpi = dpi, layout = 'tight')
+        for ax in axs:
+            ax.set_axis_off()
+        axs[0].imshow(plt.imread(buf1))
+        axs[1].imshow(plt.imread(buf2))
+        fig.tight_layout()
+    return fig
+
+def save_figure_to_memory_legacy(fig):
+    """
+    Saves a matplotlib figure to memory. Use this to easily stitch together
+    multiple figures without saving extra files
+
+    Parameters:
+    fig (pyplot.figure): figure to save
+
+    Returns:
+    buf (BytesIO): memory buffer of saved figure
+    """
+    buf = BytesIO()
+    fig.set_facecolor('white')
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning)
+        fig.tight_layout()
+    fig.savefig(buf, format='png', bbox_inches = 'tight', pad_inches = 0.05)
+    buf.seek(0)
+    return buf
