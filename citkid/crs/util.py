@@ -3,6 +3,7 @@ import os
 import rfmux
 import socket 
 import zarr 
+from tqdm.auto import tqdm
 from typing import TYPE_CHECKING
 from .. import zarr_util
 
@@ -232,44 +233,47 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
     if total_samples > 0:
         chunk_N = min(chunk_N, total_samples)
 
-    # Compute shard: smallest multiple of chunk_N that covers all samples,
-    # so all time data lands in one shard (one file).
+    # Shard covers all channels but only one chunk along the time axis,
+    # so each batch write lands in its own shard file without touching others.
     if total_samples > 0:
-        shard_N = int(np.ceil(total_samples / chunk_N)) * chunk_N
-        z_shards = (2, ntones, shard_N)
+        z_shards = (2, ntones, chunk_N)
     else:
         z_shards = None
 
-    # Initialize output Zarr array
+    # Initialize output Zarr array with full known shape
     z_out = grp.create_array(
         name = 'z', 
-        shape = (2, ntones, 0), 
+        shape = (2, ntones, total_samples), 
         chunks = (1, 1, chunk_N), 
         shards = z_shards, 
         dtype = np.int32
     )
 
     # Process batches
+    samples_per_batch = read_count // max_ntones
+    n_batches = int(np.ceil(total_samples / samples_per_batch)) if total_samples > 0 else 0
     try:
-        batch_idx = 0
-        # Pre-allocate buffers (will be resized if N exceeds chunk_N)
-        z_real_buf = np.zeros((ntones, chunk_N), dtype = np.int32)
-        z_imag_buf = np.zeros((ntones, chunk_N), dtype = np.int32)
+        # Pre-allocate buffers
+        z_real_buf = np.zeros((ntones, samples_per_batch), dtype = np.int32)
+        z_imag_buf = np.zeros((ntones, samples_per_batch), dtype = np.int32)
 
-        while True:
+        for batch_idx in tqdm(
+            range(n_batches), 
+            total = n_batches, 
+            desc = 'Processing batches', 
+            leave = False
+            ):
+            t0 = batch_idx * samples_per_batch
+            N = min(samples_per_batch, total_samples - t0)
+            count = N * max_ntones
             batch_parts = [
                 np.fromfile(
                     f, 
                     dtype = dtype, 
-                    count = read_count
+                    count = count
                 )
                 for f in files
             ]
-            N = min([b.shape[0] // (max_ntones) 
-                     for b in batch_parts]) 
-            if N == 0:
-                # End when one or more files ends
-                break
             
             # Resize buffers if needed
             if N > z_real_buf.shape[1]:
@@ -282,26 +286,19 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
             
             z_real = z_real_buf[:, :N]
             z_imag = z_imag_buf[:, :N]
-            for module_idx,  parser_dat  in zip(
-                module_idxs, batch_parts
-            ):
+            for module_idx, parser_dat in zip(module_idxs, batch_parts):
                 zi_real = parser_dat['i'][:N * max_ntones]
                 zi_imag = parser_dat['q'][:N * max_ntones]
                 ch_idxs = ch_map[module_idx]
                 # Extract only the channels we need from the parser data
                 n_ch = len(ch_idxs)
                 z_real[ch_idxs] = zi_real.reshape(N, max_ntones)[:, :n_ch].T
-                z_imag[ch_idxs] = zi_imag.reshape(N, max_ntones)[:, :n_ch].T            
-            
-            t0 = z_out.shape[2] 
-            t1 = t0 + N 
-            z_out.resize(
-                (z_out.shape[0], z_out.shape[1], z_out.shape[2] + N)
-                )
-            z_out[0, :, t0:t1] = z_real 
-            z_out[1, :, t0:t1] = z_imag 
-            
-            batch_idx += 1
+                z_imag[ch_idxs] = zi_imag.reshape(N, max_ntones)[:, :n_ch].T
+
+            t1 = t0 + N
+            z_out[0, :, t0:t1] = z_real
+            z_out[1, :, t0:t1] = z_imag
+
             batch_parts = None # free memory
     finally:
         for f in files:
