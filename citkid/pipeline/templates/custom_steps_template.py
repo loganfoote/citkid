@@ -13,9 +13,7 @@ def load_global_data():
     
     fres_all = np.load(os.path.join(d, 'fres_init/fres.npy'))
     fres_all = np.sort(fres_all)
-    qres_all = np.ones_like(fres_all) * 8000
-
-    
+    qres_all = np.ones_like(fres_all) * 8000    
     return fres_all, qres_all, dt, nrows
 
 def load_global_res_data():

@@ -1,7 +1,10 @@
 import numpy as np
 
+from tests import res
+
 from .framework import plStep
 from ..xcal import gain, circle, xcal 
+from ..res import fitter as res_fitter
  
 ############################## Default cal steps ###############################
 # name, function, input parameter names, output parameter names, 
@@ -66,6 +69,9 @@ default_analysis_steps =\
 
  ('fit_x_theta', xcal.fit_x_theta, 
   ['thetaf', 'xf', 'xcal_mask', 'poly_x_deg'], ['poly_x'], 'per-row'),
+
+ ('fit_iq', res_fitter.fit_nonlinear_iq_pl, 
+  ['ff', 'zf_rmv', 'iq_mask'], ['iq_p0', 'iq_popt', 'iq_nrmse'], 'per-row'),
 )
 
 ############################## Convert to plSteps ##############################

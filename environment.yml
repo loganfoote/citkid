@@ -28,6 +28,7 @@ dependencies:
   - corner=2.2.3
   - paramiko=4.0.0
   - zarr=3.1.5
+  - rich=14.3.3
 
   # Dev/test tools
   - pytest=9.0.1
