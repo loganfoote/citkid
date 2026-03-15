@@ -63,6 +63,11 @@ class GainFitPanel(StepPanel):
         self._run_btn.clicked.connect(self._on_run_clicked)
         ctrl.addWidget(self._run_btn)
 
+        self._save_btn = QtWidgets.QPushButton("Save")
+        self._save_btn.setFixedWidth(60)
+        self._save_btn.clicked.connect(self._on_save_clicked)
+        ctrl.addWidget(self._save_btn)
+
         self._status_label = QtWidgets.QLabel("—")
         self._status_label.setMinimumWidth(120)
         ctrl.addWidget(self._status_label)
@@ -87,27 +92,28 @@ class GainFitPanel(StepPanel):
         self._plot_phase.showGrid(x=True, y=True, alpha=0.3)
         self._plot_phase.setDownsampling(auto=True, mode='peak')
 
-        # Raw data curves
-        _data_pen = pg.mkPen(color=(100, 180, 255, 180), width=1)
-        self._amp_data  = self._plot_amp.plot(pen=_data_pen, name='data')
-        self._phase_data = self._plot_phase.plot(pen=_data_pen, name='data')
+        # Included data points (bright blue scatter)
+        _inc_brush = pg.mkBrush(100, 180, 255, 200)
+        self._amp_data   = self._plot_amp.plot(pen=None, symbolBrush=_inc_brush,
+                                               symbolPen=None, symbolSize=4, name='data')
+        self._phase_data = self._plot_phase.plot(pen=None, symbolBrush=_inc_brush,
+                                                 symbolPen=None, symbolSize=4, name='data')
 
-        # Fit overlay curves
+        # Fit overlay curves (red lines)
         _fit_pen = pg.mkPen(color=(255, 80, 80), width=2)
         self._amp_fit   = self._plot_amp.plot(pen=_fit_pen, name='fit')
         self._phase_fit = self._plot_phase.plot(pen=_fit_pen, name='fit')
 
-        # Masked-out region scatter (points excluded from the fit shown dimmed)
-        _mask_pen = pg.mkPen(color=(180, 180, 180, 60), width=1)
+        # Masked-out (excluded) data points (dimmed grey scatter)
         self._amp_masked   = self._plot_amp.plot(pen=None,
-                                                  symbolBrush=(180, 180, 180, 60),
+                                                  symbolBrush=(180, 180, 180, 80),
                                                   symbolPen=None,
-                                                  symbolSize=3,
+                                                  symbolSize=4,
                                                   name='masked')
         self._phase_masked = self._plot_phase.plot(pen=None,
-                                                    symbolBrush=(180, 180, 180, 60),
+                                                    symbolBrush=(180, 180, 180, 80),
                                                     symbolPen=None,
-                                                    symbolSize=3,
+                                                    symbolSize=4,
                                                     name='masked')
 
     # ------------------------------------------------------------------
@@ -133,27 +139,26 @@ class GainFitPanel(StepPanel):
         amp_db = 20.0 * np.log10(np.abs(zg))
         phase  = np.unwrap(np.angle(zg))
 
-        self._amp_data.setData(fg, amp_db)
-        self._phase_data.setData(fg, phase)
-
-        # Overlay fit and show masked points
+        # Split data into included/excluded once fit results are available
         try:
             p_amp   = np.asarray(DS.p_amp[di],    dtype=np.float64)
             p_phase = np.asarray(DS.p_phase[di],  dtype=np.float64)
             mask    = np.asarray(DS.gain_mask[di], dtype=bool)
 
+            self._amp_data.setData(fg[mask],   amp_db[mask])
+            self._phase_data.setData(fg[mask], phase[mask])
+            self._amp_masked.setData(fg[~mask],   amp_db[~mask])
+            self._phase_masked.setData(fg[~mask], phase[~mask])
             self._amp_fit.setData(fg, np.polyval(p_amp, fg))
             self._phase_fit.setData(fg, np.polyval(p_phase, fg))
-
-            # Show excluded points
-            self._amp_masked.setData(fg[~mask], amp_db[~mask])
-            self._phase_masked.setData(fg[~mask], phase[~mask])
         except Exception:
-            # Fit results not yet available — clear overlays
-            self._amp_fit.setData([], [])
-            self._phase_fit.setData([], [])
+            # Fit results not yet available — show all data, clear overlays
+            self._amp_data.setData(fg, amp_db)
+            self._phase_data.setData(fg, phase)
             self._amp_masked.setData([], [])
             self._phase_masked.setData([], [])
+            self._amp_fit.setData([], [])
+            self._phase_fit.setData([], [])
 
     # ------------------------------------------------------------------
     # Internals
@@ -168,6 +173,14 @@ class GainFitPanel(StepPanel):
             self.trigger_downstream()
         else:
             self._status_label.setText("Error ✗")
+
+    def _on_save_clicked(self):
+        try:
+            self.save_outputs()
+            self._status_label.setText("Saved ✓")
+        except Exception as exc:
+            self._status_label.setText("Save error ✗")
+            print(f"Save error: {exc}")
 
     def _on_step_error(self, step, exc):
         msg = f"'{step.name}' failed: {exc}"

@@ -315,6 +315,8 @@ class DataSet:
         # Build zarr_max_per_param once (O(n_runs) zarr I/O)
         zarr_max_per_param = {}
         for run_str, run_grp in self.root.groups():
+            if run_str == '_failures':
+                continue
             r = int(run_str.replace('run', ''))
             for pname, _ in run_grp.groups():
                 prev = zarr_max_per_param.get(pname, -1)
@@ -729,6 +731,17 @@ class DataSet:
             for idx, v in zip(data_idx, value):
                 self._memory_cache[run_idx][name]._cache[int(idx)] = v
             
+            # Update LazyAttr shape if not yet set.
+            # _store_param writes directly to ._cache (bypassing __setitem__)
+            # so we must propagate shape here explicitly.
+            lazy_attr = self._memory_cache[run_idx][name]
+            if lazy_attr._shape == () and len(value) > 0:
+                first_val = np.asarray(value[0])
+                if first_val.shape:
+                    lazy_attr._shape = (self.nrows, *first_val.shape)
+                else:
+                    lazy_attr._shape = (self.nrows,)
+
             # Store dependencies for each data_idx
             for di in data_idx:
                 if di not in self.deps_maps:
@@ -1807,6 +1820,88 @@ class DataSet:
         
         return path
     
+    def save_step_outputs(self, step, data_idx=None):
+        """
+        Persist the most recent in-memory outputs of *step* to the zarr file
+        without re-executing the step.
+
+        For each return name of the step the method looks up the most-recent
+        run index in ``deps_maps`` and calls :meth:`write_data`.  This is the
+        saving half of :meth:`_execute_step` extracted so that interactive
+        workflows can accumulate unsaved results during exploration and then
+        commit only the final result with a single call.
+
+        Parameters
+        ----------
+        step : plStep
+            The step whose outputs should be saved.  Its ``return_names`` are
+            used to determine which parameters to write.
+        data_idx : int, array-like, or None
+            Data indices whose outputs to save.  Must be ``None`` for global
+            and global-res steps; required for per-row / vectorized steps.
+            If ``None`` is passed for a per-row step all rows that exist in
+            memory are saved.
+
+        Raises
+        ------
+        ValueError
+            If a return name has no run index in ``deps_maps`` (i.e. the step
+            has never been executed).
+        """
+        from .dependencies import get_most_recent_run
+
+        is_global_step = step.func_type in ('global', 'global-res')
+
+        if is_global_step:
+            deps_map = self.deps_maps.get('global', {})
+            for name in step.return_names:
+                run_idx = get_most_recent_run(name, deps_map)
+                if run_idx < 0:
+                    raise ValueError(
+                        f"Step '{step.name}' output '{name}' has never been "
+                        f"executed — nothing to save."
+                    )
+                if step.func_type == 'global-res':
+                    self.write_data(name, run_idx, data_idx=range(self.nrows))
+                else:
+                    self.write_data(name, run_idx, data_idx=None)
+        else:
+            # per-row / vectorized
+            if data_idx is None:
+                # Default: save every row that is cached in memory
+                data_idx_arr = None  # resolved per-name below
+            else:
+                data_idx_arr = np.atleast_1d(
+                    np.asarray(data_idx, dtype=np.int32)
+                )
+
+            for name in step.return_names:
+                if data_idx_arr is None:
+                    # Find all cached rows for this name across all runs
+                    cached_rows = []
+                    for run_cache in self._memory_cache.values():
+                        la = run_cache.get(name)
+                        if la is not None and isinstance(la, pf.LazyAttr):
+                            cached_rows.extend(la._cache.keys())
+                    if not cached_rows:
+                        raise ValueError(
+                            f"Step '{step.name}' output '{name}' has no cached "
+                            f"rows in memory — nothing to save."
+                        )
+                    save_idx = np.array(sorted(set(cached_rows)), dtype=np.int32)
+                else:
+                    save_idx = data_idx_arr
+
+                # Determine the most-recent run for a representative data_idx
+                merged = self.merge_deps_maps(int(save_idx[0]))
+                run_idx = get_most_recent_run(name, merged)
+                if run_idx < 0:
+                    raise ValueError(
+                        f"Step '{step.name}' output '{name}' has never been "
+                        f"executed — nothing to save."
+                    )
+                self.write_data(name, run_idx, data_idx=save_idx)
+
     def plot(self, data_idx, plot_type, title = None, **kwargs):
         """
         Generate a plot for the specified data index and plot type.
@@ -2036,12 +2131,16 @@ def _load_deps_from_zarr(root):
     is_global_cache = {}
     # Iterate through runs
     for run_str, grp in root.groups():
+        # Skip the _failures group — it's reserved for per-step failure logs
+        if run_str == '_failures':
+            continue
         # Input validation
         if any(grp.arrays()):
             raise ValueError(f"{run_str} must not contain arrays.")
         if re.fullmatch(r"run\d+", run_str) is None:
             raise ValueError(
-                f"root can only contain run folders: {run_str} group found"
+                f"root can only contain run folders or '_failures': "
+                f"{run_str} group found"
                 ) 
         run_idx = int(run_str.replace('run', ''))
     

@@ -11,6 +11,17 @@ from . import default_steps
 from . import framework as pf
 from .dataset import _convert_yaml_to_steps
 
+# Maps each mask parameter name to the pipeline parameter whose per-row shape
+# defines the mask shape.  When the user passes None for a mask (e.g. in a YAML
+# file), AnalysisRunner automatically expands it to a full-True array whose
+# inner shape matches shape[1:] of the corresponding shape-source parameter.
+_MASK_SHAPE_SOURCES = {
+    'gain_mask': 'fg',
+    'xcal_mask': 'ff',
+    'iq_mask':   'ff',
+    'circ_mask': 'ff',
+}
+
 class AnalysisRunner:
     """
     Runner for executing analysis steps on a DataSet with user parameters.
@@ -94,7 +105,7 @@ class AnalysisRunner:
     def execute_path(self, data_idx = None, enforced_max_runs = None,
                      start_from_idx = 0, verbose = True):
         """
-        Execute each step in the path specified by the anlysis YAML file. 
+        Execute each step in the path specified by the analysis YAML file. 
 
         Parameters:
         data_idx (int, array-like, or None): Data indices to process for per-row
@@ -131,7 +142,7 @@ class AnalysisRunner:
                 enforced_max_runs = enforced_max_runs, save = save
             )
 
-    def execute_step(self, step, data_idx = None, user_params = None, 
+    def execute_step(self, step, data_idx = None, user_params = 'from_yaml', 
                      enforced_max_runs = None, save = False):
         """
         Execute a single analysis step with optional user-provided parameters.
@@ -145,11 +156,13 @@ class AnalysisRunner:
             data_idx (int, array-like, or None): Data indices to process. 
                 Required for per-row/vectorized steps, must be None for global 
                 steps.
-            user_params (dict or None): Dictionary mapping parameter names to 
-                values. These parameters will be stored in the DataSet before 
-                executing the step. Format: {param_name: value} for global 
-                params, or {param_name: array} for per-row params (length must 
-                match data_idx).
+            user_params (dict, None, or 'from_yaml'): Parameters to pass to
+                the step.
+                - None (default): no user parameters.
+                - dict: explicit mapping of {param_name: value}.
+                - 'from_yaml': look up the params defined in the analysis YAML
+                  for this step (uses self.path). Raises ValueError if no YAML
+                  was loaded or the step is not found in the path.
             enforced_max_runs (dict or None): Optional dict mapping parameter 
                 names to maximum run indices for dependency resolution.
             save (bool): If True, write the step outputs to the zarr file on 
@@ -160,7 +173,9 @@ class AnalysisRunner:
                  to zarr)
         
         Raises:
-            ValueError: If user parameter constraints are violated.
+            ValueError: If user parameter constraints are violated, or if
+                'from_yaml' is requested but no YAML path was loaded or the
+                step is not present in self.path.
             TypeError: If step is not a plStep instance.
         
         Examples:
@@ -169,7 +184,11 @@ class AnalysisRunner:
             >>> # Execute with user parameters and save to disk
             >>> runner.execute_step(step, data_idx=[0,1,2], 
             ...                     user_params={'threshold': 5.0}, save=True)
+            >>> # Use parameters from the loaded YAML file
+            >>> runner.execute_step(step, user_params='from_yaml')
         """
+        if user_params == 'from_yaml':
+            user_params = self._get_yaml_params(step)
         if user_params is None:
             user_params = {}
         if enforced_max_runs is None:
@@ -230,6 +249,12 @@ class AnalysisRunner:
                 f"provide these parameters via the user_params argument."
             )
         
+        # Expand any None mask values to full-True arrays before storing.
+        # None is used in YAML configs where a literal mask cannot be written;
+        # we materialise it here so the correct dtype/shape is saved to zarr.
+        user_params = self._expand_none_masks(user_params, step.func_type,
+                                              data_idx)
+
         # Store user parameters in DataSet before executing step
         if user_params:
             self._add_user_params(user_params, step.func_type, data_idx, save=save)
@@ -260,7 +285,147 @@ class AnalysisRunner:
                 RuntimeWarning,
                 stacklevel=2
             )
-    
+
+    def save_step_outputs(self, step, data_idx=None):
+        """
+        Persist the most recent in-memory outputs of *step* to zarr without
+        re-running the step.
+
+        This is the recommended way to save results from interactive sessions:
+        run :meth:`execute_step` (with ``save=False``) as many times as needed
+        while adjusting parameters, then call this once when satisfied.
+
+        Delegates to :meth:`DataSet.save_step_outputs`.
+
+        Parameters
+        ----------
+        step : plStep
+            The step whose outputs should be saved.
+        data_idx : int, array-like, or None
+            Data indices to save.  ``None`` saves all cached rows for per-row
+            steps, and is required for global steps.
+        """
+        self.DS.save_step_outputs(step, data_idx=data_idx)
+
+    def _get_yaml_params(self, step) -> dict:
+        """
+        Return the user parameters defined in the analysis YAML for *step*.
+
+        Searches ``self.path`` for a step dict whose ``'task'`` matches *step*
+        and returns its ``'params'`` value (defaulting to ``{}`` when the YAML
+        entry has no ``params`` key).
+
+        Parameters
+        ----------
+        step : plStep
+            The step whose YAML params should be retrieved.
+
+        Returns
+        -------
+        dict
+            Parameter mapping from the YAML, or ``{}`` if none were specified.
+
+        Raises
+        ------
+        ValueError
+            If no analysis YAML was loaded (``self.analysis_yaml_path`` is
+            ``None``) or if *step* is not found in ``self.path``.
+        """
+        if self.analysis_yaml_path is None:
+            raise ValueError(
+                "user_params='from_yaml' requires an analysis YAML to be "
+                "loaded, but analysis_yaml_path is None."
+            )
+        for step_dict in self.path:
+            if step_dict['task'] is step or step_dict['task'].name == step.name:
+                return dict(step_dict.get('params', {}) or {})
+        raise ValueError(
+            f"Step '{step.name}' not found in self.path. "
+            f"Available steps: {[sd['task'].name for sd in self.path]}"
+        )
+
+    def _expand_none_masks(
+            self, user_params: dict, func_type: str, data_idx
+            ) -> dict:
+        """
+        Replace ``None`` values for known mask parameters with full-True arrays.
+
+        Parameters
+        ----------
+        user_params : dict
+            User-supplied parameter dict (not mutated; a copy is returned).
+        func_type : str
+            Function type of the upcoming step.
+        data_idx : int, array-like, or None
+            Data indices being processed.
+
+        Returns
+        -------
+        dict
+            New dict with any ``None`` masks replaced by boolean arrays.
+        """
+        if not any(
+            v is None and k in _MASK_SHAPE_SOURCES
+            for k, v in user_params.items()
+        ):
+            return user_params  # nothing to do — avoid copying unnecessarily
+
+        user_params = dict(user_params)  # shallow copy; don't mutate caller's dict
+        for name, val in list(user_params.items()):
+            if val is None and name in _MASK_SHAPE_SOURCES:
+                user_params[name] = self._expand_none_mask(
+                    name, func_type, data_idx
+                )
+        return user_params
+
+    def _expand_none_mask(
+            self, mask_name: str, func_type: str, data_idx
+            ) -> np.ndarray:
+        """
+        Build a full-True boolean mask for *mask_name*.
+
+        The inner shape of the mask is taken from ``DS.<shape_source>.shape[1:]``
+        (the per-row shape, with the nrows axis removed).  If the shape is not
+        yet known (e.g. the shape-source parameter hasn't been run yet), one
+        row is fetched to determine it.
+
+        Parameters
+        ----------
+        mask_name : str
+            e.g. ``'iq_mask'``.
+        func_type : str
+        data_idx : int, array-like, or None
+
+        Returns
+        -------
+        np.ndarray of bool
+            * Shape ``(N,)`` for global/global-res steps.
+            * Shape ``(len(data_idx), N)`` for per-row/vectorized steps,
+              where N is the length of each row in the shape-source parameter.
+        """
+        shape_source = _MASK_SHAPE_SOURCES[mask_name]
+        collection = getattr(self.DS, shape_source)
+
+        # Try to get inner shape from the collection without fetching new data
+        coll_shape = collection.shape  # () if nothing loaded yet
+        if coll_shape:
+            inner_shape = coll_shape[1:]
+        else:
+            # Nothing loaded yet — fetch one representative row
+            probe_idx = (
+                0
+                if data_idx is None
+                else int(np.atleast_1d(np.asarray(data_idx, dtype=np.int32))[0])
+            )
+            sample = np.asarray(collection[probe_idx])
+            inner_shape = sample.shape
+
+        if func_type in ('global', 'global-res'):
+            return np.ones(inner_shape, dtype=bool)
+
+        data_idx_arr = np.atleast_1d(np.asarray(data_idx, dtype=np.int32))
+        return np.ones((len(data_idx_arr), *inner_shape), dtype=bool)
+
     def _add_user_params(
             self, user_params, func_type, data_idx = None, save = False
             ):

@@ -31,7 +31,7 @@ _IQ_PANELS = [
 ]
 
 
-def run_iq_analysis(AR, data_idx=0, title="IQ Analysis"):
+def run_iq_analysis(AR, data_idx=0, data_idxs=None, title="IQ Analysis"):
     """
     Launch the interactive IQ analysis window.
 
@@ -47,6 +47,9 @@ def run_iq_analysis(AR, data_idx=0, title="IQ Analysis"):
         *fit_gain*, and *fit_iq*.
     data_idx : int
         Starting per-row data index.  Can be changed in the toolbar.
+    data_idxs : list of int or None
+        Ordered sequence of data indices to step through with the ``◀``/``▶``
+        buttons (keyboard shortcuts ``[`` / ``]``).  ``None`` uses all rows.
     title : str
         Window title.
 
@@ -64,4 +67,4 @@ def run_iq_analysis(AR, data_idx=0, title="IQ Analysis"):
         run_interactive(AR, panels=[('make_fr_spans', 'fit_gain')], data_idx=0)
     """
     return run_interactive(AR, panels=_IQ_PANELS, data_idx=data_idx,
-                           title=title)
+                           data_idxs=data_idxs, title=title)

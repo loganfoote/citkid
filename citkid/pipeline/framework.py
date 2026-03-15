@@ -423,20 +423,21 @@ class LazyAttrCollection:
     @property
     def shape(self):
         """
-        Return the shape of the data array from the most recent run.
-        
-        Uses the LazyAttr with the highest run_idx to determine shape.
-        Returns () if no runs exist yet.
-        
-        Returns:
-            tuple: Shape of the data array from most recent run.
+        Return the shape ``(nrows, *inner_shape)`` of this parameter.
+
+        Scans runs from highest to lowest run_idx and returns the first
+        non-empty shape found.  All runs are expected to have the same
+        inner shape; the most recent one is authoritative.
+
+        Returns () if no runs exist or none have been populated yet.
         """
         if not self._lazy_attrs:
             return ()
-        
-        # Get the most recent run (max run_idx)
-        most_recent_run = max(self._lazy_attrs.keys())
-        return self._lazy_attrs[most_recent_run].shape
+        for run_idx in sorted(self._lazy_attrs.keys(), reverse=True):
+            s = self._lazy_attrs[run_idx].shape
+            if s != ():
+                return s
+        return ()
     
     def __len__(self):
         """

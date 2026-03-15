@@ -57,7 +57,7 @@ Cascade behaviour
 
 import numpy as np
 import pyqtgraph as pg
-from pyqtgraph.Qt import QtCore, QtWidgets
+from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
 from ..analysis import AnalysisRunner
 
@@ -278,6 +278,32 @@ class StepPanel(QtWidgets.QWidget):
         """
         self.downstream_rerun.emit(self)
 
+    def save_outputs(self):
+        """
+        Persist the most recent in-memory outputs of every step owned by this
+        panel to the zarr file.
+
+        Calls :meth:`AnalysisRunner.save_step_outputs` for each step.  Does
+        *not* re-run the steps.  Raises if any step has no cached results yet.
+        """
+        for step in self.steps:
+            step_di = (
+                None
+                if step.func_type in ("global", "global-res")
+                else self.data_idx
+            )
+            self.AR.save_step_outputs(step, data_idx=step_di)
+
+    def on_data_idx_changing(self):
+        """
+        Called by :class:`InteractiveAnalysisWindow` just before
+        ``run_steps()`` when the active data index changes.
+
+        Override in subclasses to reset panel-local state that is tied to
+        a specific data index (e.g. an interactive mask region).
+        """
+        pass
+
     def set_data_idx(self, data_idx: int):
         """Set a new data index and immediately re-run the panel."""
         self.data_idx = data_idx
@@ -286,6 +312,49 @@ class StepPanel(QtWidgets.QWidget):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _outputs_exist(self) -> bool:
+        """
+        Return ``True`` if every output produced by this panel's steps is
+        already present (cached in memory or stored on disk) for the current
+        ``data_idx``.
+
+        Only the *last* step's outputs are checked — earlier steps are
+        prerequisites whose results are implicitly required for the final
+        step to exist.
+        """
+        DS = self.AR.DS
+        check_steps = self.steps[-1:]  # last step's outputs are sufficient
+        for step in check_steps:
+            step_di = (
+                None
+                if step.func_type in ("global", "global-res")
+                else self.data_idx
+            )
+            for name in step.return_names:
+                try:
+                    attr = getattr(DS, name)
+                    val = attr[step_di]
+                    if val is None:
+                        return False
+                except Exception:
+                    return False
+        return True
+
+    def _auto_initialize(self):
+        """
+        Called once (via a zero-delay timer) after construction.
+
+        * If all output data already exist in the DataSet the plots are
+          drawn immediately without re-running the step.
+        * Otherwise the steps are executed with default parameters
+          (``save=False``) so that initial results are available for the
+          first render.
+        """
+        if self._outputs_exist():
+            self.update_plots()
+        else:
+            self.run_steps(save=False)
 
     def _on_step_error(self, step, exc: Exception):
         """
@@ -324,6 +393,10 @@ class DefaultStepPanel(StepPanel):
         self._run_btn.clicked.connect(self._on_run_clicked)
         layout.addWidget(self._run_btn)
 
+        self._save_btn = QtWidgets.QPushButton("Save")
+        self._save_btn.clicked.connect(self._on_save_clicked)
+        layout.addWidget(self._save_btn)
+
         self._status_label = QtWidgets.QLabel("—")
         self._status_label.setMinimumWidth(130)
         layout.addWidget(self._status_label)
@@ -337,6 +410,14 @@ class DefaultStepPanel(StepPanel):
             self.trigger_downstream()
         else:
             self._status_label.setText("Error ✗")
+
+    def _on_save_clicked(self):
+        try:
+            self.save_outputs()
+            self._status_label.setText("Saved ✓")
+        except Exception as exc:
+            self._status_label.setText("Save error ✗")
+            print(f"Save error: {exc}")
 
     def _on_step_error(self, step, exc: Exception):
         msg = f"Error in '{step.name}': {exc}"
@@ -426,12 +507,29 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         AR: AnalysisRunner,
         panels: list,
         data_idx=None,
+        data_idxs=None,
         title: str = "Interactive Analysis",
         parent=None,
     ):
         super().__init__(parent)
         self.AR = AR
         self.setWindowTitle(title)
+
+        # Navigation index list
+        if data_idxs is None:
+            try:
+                n = int(AR.DS.nrows)
+            except Exception:
+                n = 1
+            data_idxs = list(range(n))
+        self._data_idxs: list = list(data_idxs)
+        # Resolve starting position within the list
+        start_di = data_idx if data_idx is not None else (self._data_idxs[0] if self._data_idxs else 0)
+        self._nav_pos: int = (
+            self._data_idxs.index(start_di)
+            if start_di in self._data_idxs
+            else 0
+        )
 
         # Central widget + outer layout
         central = QtWidgets.QWidget()
@@ -440,8 +538,8 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         outer.setContentsMargins(4, 4, 4, 4)
         outer.setSpacing(4)
 
-        # Toolbar: data_idx selector + "Run All" button
-        outer.addWidget(self._build_toolbar(data_idx))
+        # Toolbar: data_idx selector + navigation + "Run All" button
+        outer.addWidget(self._build_toolbar(start_di))
 
         # Scrollable panel area
         scroll = QtWidgets.QScrollArea()
@@ -461,18 +559,54 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             panel.downstream_rerun.connect(self._on_panel_rerun)
             self._add_panel(panel)
 
+        # Keyboard shortcuts: ] → next (save + advance), [ → prev (save + back)
+        _sc_next = QtWidgets.QShortcut(
+            QtGui.QKeySequence(QtCore.Qt.Key_BracketRight), self
+        )
+        _sc_next.activated.connect(lambda: self._advance(+1))
+        _sc_prev = QtWidgets.QShortcut(
+            QtGui.QKeySequence(QtCore.Qt.Key_BracketLeft), self
+        )
+        _sc_prev.activated.connect(lambda: self._advance(-1))
+
         self.resize(1200, 900)
+        # Initialise panels in order once the event loop is running so that
+        # the window is fully laid out and panels are initialised sequentially
+        # (guaranteeing upstream data is ready before downstream panels run).
+        QtCore.QTimer.singleShot(0, self._auto_initialize_all)
 
     # ------------------------------------------------------------------
     # Build helpers
     # ------------------------------------------------------------------
 
     def _build_toolbar(self, data_idx) -> QtWidgets.QWidget:
-        """Build the top toolbar with a ``data_idx`` spinbox and Run All."""
+        """Build the top toolbar with navigation, a ``data_idx`` spinbox, and Run All."""
         w = QtWidgets.QWidget()
         layout = QtWidgets.QHBoxLayout(w)
         layout.setContentsMargins(4, 2, 4, 2)
 
+        # Previous button
+        self._prev_btn = QtWidgets.QPushButton("\u25c0")
+        self._prev_btn.setFixedWidth(30)
+        self._prev_btn.setToolTip("Previous index \u2014 saves all panels then steps back  [  ]")
+        self._prev_btn.clicked.connect(lambda: self._advance(-1))
+        layout.addWidget(self._prev_btn)
+
+        # Position indicator  "3 / 128"
+        self._nav_label = QtWidgets.QLabel()
+        self._nav_label.setMinimumWidth(60)
+        self._nav_label.setAlignment(QtCore.Qt.AlignCenter)
+        self._update_nav_label()
+        layout.addWidget(self._nav_label)
+
+        # Next button
+        self._next_btn = QtWidgets.QPushButton("\u25b6")
+        self._next_btn.setFixedWidth(30)
+        self._next_btn.setToolTip("Next index \u2014 saves all panels then steps forward  [ ]")
+        self._next_btn.clicked.connect(lambda: self._advance(+1))
+        layout.addWidget(self._next_btn)
+
+        layout.addSpacing(12)
         layout.addWidget(QtWidgets.QLabel("data_idx:"))
 
         self._idx_spin = QtWidgets.QSpinBox()
@@ -494,6 +628,33 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         layout.addWidget(run_all_btn)
 
         return w
+
+    def _update_nav_label(self):
+        n = len(self._data_idxs)
+        self._nav_label.setText(f"{self._nav_pos + 1} / {n}")
+
+    def _advance(self, delta: int):
+        """Save all panels, then move to the next/previous data index."""
+        # Save each panel's outputs, warning on failure but never aborting
+        for panel in self.panels:
+            try:
+                panel.save_outputs()
+            except Exception as exc:
+                print(f"Warning: save skipped for {panel.step_names}: {exc}")
+
+        new_pos = max(0, min(len(self._data_idxs) - 1, self._nav_pos + delta))
+        if new_pos == self._nav_pos:
+            return  # already at boundary
+        self._nav_pos = new_pos
+        new_di = self._data_idxs[new_pos]
+
+        # Update spinbox without double-firing _on_data_idx_changed
+        self._idx_spin.blockSignals(True)
+        self._idx_spin.setValue(new_di)
+        self._idx_spin.blockSignals(False)
+
+        self._update_nav_label()
+        self._on_data_idx_changed(new_di)
 
     def _add_panel(self, panel: StepPanel):
         """Add *panel* to the scroll area, separated by a horizontal line."""
@@ -521,12 +682,21 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             if not ok:
                 break
 
+    def _auto_initialize_all(self):
+        """Initialise every panel in order so upstream data is always ready."""
+        for panel in self.panels:
+            panel._auto_initialize()
+
     def _on_data_idx_changed(self, value: int):
         """
         Propagate a new ``data_idx`` to all panels, then re-run every panel
         that contains at least one per-row or vectorized step (stopping on
         the first failure).
         """
+        # Sync nav position when spinbox is changed manually
+        if value in self._data_idxs:
+            self._nav_pos = self._data_idxs.index(value)
+            self._update_nav_label()
         for panel in self.panels:
             panel.data_idx = value
         for panel in self.panels:
@@ -534,6 +704,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
                 s.func_type in ("per-row", "vectorized") for s in panel.steps
             )
             if has_per_row:
+                panel.on_data_idx_changing()
                 ok = panel.run_steps()
                 if not ok:
                     break
@@ -558,6 +729,7 @@ def run_interactive(
     AR: AnalysisRunner,
     panels=None,
     data_idx=None,
+    data_idxs=None,
     title: str = "Interactive Analysis",
 ):
     """
@@ -584,6 +756,10 @@ def run_interactive(
 
     data_idx : int or None
         Starting per-row data index.
+    data_idxs : list of int or None
+        Ordered sequence of data indices to step through with the ``◀``/``▶``
+        buttons (keyboard shortcuts ``[`` / ``]``).  ``None`` uses all rows
+        (``range(AR.DS.nrows)``).
     title : str
         Window title.
 
@@ -612,7 +788,7 @@ def run_interactive(
             normalized.append(tuple(p))
 
     win = InteractiveAnalysisWindow(
-        AR, normalized, data_idx=data_idx, title=title
+        AR, normalized, data_idx=data_idx, data_idxs=data_idxs, title=title
     )
     win.show()
     app.exec_()

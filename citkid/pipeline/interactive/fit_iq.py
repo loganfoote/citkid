@@ -12,12 +12,12 @@ Right: IQ loop — ``zf_rmv.imag`` vs ``zf_rmv.real`` — with the model
 
 Mask interaction
 ----------------
-The shaded region on the left plot defines which frequency samples are
-included in the fit (``iq_mask = True`` inside the region).  Drag either
-edge of the region to adjust the window.  Changes are debounced (300 ms)
-to avoid running the fitter on every mouse-move event.
+Hold **Shift** and left-click-drag on the amplitude plot to draw the mask
+window.  The shaded region updates in real time as you drag.  Click
+**Run** to apply the new mask and refit.
 
-Press **Reset Mask** to restore the full frequency range.
+Press **Reset Mask** to restore the full frequency range (all samples
+included).
 
 Cascade behaviour
 -----------------
@@ -31,6 +31,31 @@ from pyqtgraph.Qt import QtWidgets, QtCore
 
 from .core import register_panel, StepPanel
 from ...res.funcs import nonlinear_iq
+
+
+class _MaskViewBox(pg.ViewBox):
+    """ViewBox that emits ``sig_range_selected(lo, hi)`` on Shift + left-drag."""
+
+    sig_range_selected = QtCore.pyqtSignal(float, float)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._drag_origin_x = None
+
+    def mouseDragEvent(self, ev, axis=None):
+        if ev.modifiers() & QtCore.Qt.ShiftModifier:
+            ev.accept()
+            if ev.isStart():
+                self._drag_origin_x = self.mapToView(ev.buttonDownPos()).x()
+            cur_x = self.mapToView(ev.pos()).x()
+            if self._drag_origin_x is not None:
+                lo = min(self._drag_origin_x, cur_x)
+                hi = max(self._drag_origin_x, cur_x)
+                self.sig_range_selected.emit(lo, hi)
+            if ev.isFinish():
+                self._drag_origin_x = None
+        else:
+            super().mouseDragEvent(ev, axis=axis)
 
 
 @register_panel('fit_iq')
@@ -48,9 +73,6 @@ class FitIQPanel(StepPanel):
     data_idx : int or None
     parent : QWidget, optional
     """
-
-    # Debounce interval in ms before re-running the fit after the region moves
-    _DEBOUNCE_MS = 300
 
     def setup_ui(self):
         root = QtWidgets.QVBoxLayout(self)
@@ -71,6 +93,11 @@ class FitIQPanel(StepPanel):
         self._run_btn.clicked.connect(self._on_run_clicked)
         ctrl.addWidget(self._run_btn)
 
+        self._save_btn = QtWidgets.QPushButton("Save")
+        self._save_btn.setFixedWidth(60)
+        self._save_btn.clicked.connect(self._on_save_clicked)
+        ctrl.addWidget(self._save_btn)
+
         self._status_label = QtWidgets.QLabel("—")
         self._status_label.setMinimumWidth(180)
         ctrl.addWidget(self._status_label)
@@ -83,7 +110,8 @@ class FitIQPanel(StepPanel):
         self._gw.setMinimumHeight(340)
         root.addWidget(self._gw)
 
-        self._plot_amp = self._gw.addPlot(row=0, col=0, title="IQ Amplitude")
+        self._plot_amp = self._gw.addPlot(row=0, col=0, title="IQ Amplitude",
+                                           viewBox=_MaskViewBox())
         self._plot_amp.setLabel('left', '|S21| (dB)')
         self._plot_amp.setLabel('bottom', 'Frequency (Hz)')
         self._plot_amp.showGrid(x=True, y=True, alpha=0.3)
@@ -95,39 +123,48 @@ class FitIQPanel(StepPanel):
         self._plot_iq.showGrid(x=True, y=True, alpha=0.3)
         self._plot_iq.setAspectLocked(True)
 
-        # Data curves
-        _data_pen         = pg.mkPen(color=(100, 180, 255, 180), width=1)
-        _data_pen_dimmed  = pg.mkPen(color=(100, 180, 255, 60),  width=1)
-        self._amp_data      = self._plot_amp.plot(pen=_data_pen,       name='data')
-        self._amp_excl      = self._plot_amp.plot(pen=_data_pen_dimmed, name='excluded')
-        self._iq_data       = self._plot_iq.plot(pen=_data_pen,        name='data')
-        self._iq_data_excl  = self._plot_iq.plot(pen=_data_pen_dimmed, name='excluded')
+        # Data scatter plots — included (bright blue) and excluded (dimmed)
+        _inc_brush = pg.mkBrush(100, 180, 255, 200)
+        _exc_brush = pg.mkBrush(100, 180, 255, 80)
+        self._amp_data     = self._plot_amp.plot(pen=None, symbolBrush=_inc_brush,
+                                                  symbolPen=None, symbolSize=4, name='data')
+        self._amp_excl     = self._plot_amp.plot(pen=None, symbolBrush=_exc_brush,
+                                                  symbolPen=None, symbolSize=4, name='excluded')
+        self._iq_data      = self._plot_iq.plot(pen=None, symbolBrush=_inc_brush,
+                                                 symbolPen=None, symbolSize=4, name='data')
+        self._iq_data_excl = self._plot_iq.plot(pen=None, symbolBrush=_exc_brush,
+                                                  symbolPen=None, symbolSize=4, name='excluded')
 
-        # Fit overlay curve on IQ loop
+        # Fit overlay curve on IQ loop (red line)
         _fit_pen = pg.mkPen(color=(255, 80, 80), width=2)
         self._iq_fit = self._plot_iq.plot(pen=_fit_pen, name='fit')
 
-        # Linear region item for mask (shown on amplitude plot)
+        # Mask region indicator (visual only — updated via Shift+drag)
         self._region = pg.LinearRegionItem(
             brush=pg.mkBrush(255, 255, 100, 30),
-            pen=pg.mkPen(color=(255, 255, 100), width=1)
+            pen=pg.mkPen(color=(255, 255, 100), width=1),
+            movable=False,
         )
         self._plot_amp.addItem(self._region)
-        self._region.sigRegionChanged.connect(self._on_region_changed)
 
-        # Debounce timer
-        self._debounce_timer = QtCore.QTimer()
-        self._debounce_timer.setSingleShot(True)
-        self._debounce_timer.timeout.connect(self._on_run_clicked)
+        # Connect Shift+drag signal from the custom ViewBox
+        self._plot_amp.getViewBox().sig_range_selected.connect(self._on_range_selected)
 
         # Current mask state (None = full range, i.e. all True)
         self._mask: np.ndarray | None = None
         # Cache of current ff so the mask can be rebuilt from region bounds
         self._ff_cache: np.ndarray | None = None
+        # Has the region been positioned to the data range yet?
+        self._region_initialized: bool = False
 
     # ------------------------------------------------------------------
     # StepPanel interface
     # ------------------------------------------------------------------
+
+    def on_data_idx_changing(self):
+        """Reset the mask and region when the active data index changes."""
+        self._mask = None
+        self._region_initialized = False
 
     def get_params_for_step(self, step):
         if step.name == 'fit_iq':
@@ -147,6 +184,11 @@ class FitIQPanel(StepPanel):
 
         self._ff_cache = ff
 
+        # Initialise region to full data range on first call
+        if not self._region_initialized:
+            self._region.setRegion((float(ff.min()), float(ff.max())))
+            self._region_initialized = True
+
         # Build mask from current region bounds
         mask = self._build_mask(ff)
         amp_db = 20.0 * np.log10(np.abs(zf_rmv))
@@ -155,18 +197,9 @@ class FitIQPanel(StepPanel):
         self._amp_data.setData(ff[mask], amp_db[mask])
         self._amp_excl.setData(ff[~mask], amp_db[~mask])
 
-        # IQ loop — full data
+        # IQ loop
         self._iq_data.setData(zf_rmv[mask].real, zf_rmv[mask].imag)
         self._iq_data_excl.setData(zf_rmv[~mask].real, zf_rmv[~mask].imag)
-
-        # Initialise region to full data range on first call
-        lo, hi = self._region.getRegion()
-        full_lo, full_hi = float(ff.min()), float(ff.max())
-        if lo == hi or (lo <= full_lo and hi >= full_hi):
-            # Region spans the entire range — keep it that way
-            self._region.blockSignals(True)
-            self._region.setRegion((full_lo, full_hi))
-            self._region.blockSignals(False)
 
         # Model fit overlay
         try:
@@ -196,27 +229,24 @@ class FitIQPanel(StepPanel):
     def _reset_mask(self):
         """Reset the region to the full frequency range."""
         if self._ff_cache is not None:
-            lo = float(self._ff_cache.min())
-            hi = float(self._ff_cache.max())
-            self._region.blockSignals(True)
-            self._region.setRegion((lo, hi))
-            self._region.blockSignals(False)
+            self._region.setRegion(
+                (float(self._ff_cache.min()), float(self._ff_cache.max()))
+            )
         self._mask = None
-        ok = self.run_steps()
-        if ok:
-            self._status_label.setText("Mask reset ✓")
-            self.trigger_downstream()
+        self._status_label.setText("Mask reset — click Run")
 
-    def _on_region_changed(self):
-        """Debounced handler: rebuild the mask and re-run the fit."""
-        self._debounce_timer.start(self._DEBOUNCE_MS)
+    def _on_range_selected(self, lo: float, hi: float):
+        """Handle a Shift+drag mask selection from the ViewBox."""
+        self._region.setRegion((lo, hi))
+        if self._ff_cache is not None:
+            self._build_mask(self._ff_cache)
+        self._status_label.setText("Mask set — click Run")
 
     # ------------------------------------------------------------------
     # Execution helpers
     # ------------------------------------------------------------------
 
     def _on_run_clicked(self):
-        self._debounce_timer.stop()
         # Rebuild mask from current region before running
         if self._ff_cache is not None:
             self._build_mask(self._ff_cache)
@@ -228,6 +258,14 @@ class FitIQPanel(StepPanel):
             self.trigger_downstream()
         else:
             self._status_label.setText("Error ✗")
+
+    def _on_save_clicked(self):
+        try:
+            self.save_outputs()
+            self._status_label.setText("Saved ✓")
+        except Exception as exc:
+            self._status_label.setText("Save error ✗")
+            print(f"Save error: {exc}")
 
     def _on_step_error(self, step, exc):
         msg = f"'{step.name}' failed: {exc}"
