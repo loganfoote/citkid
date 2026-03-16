@@ -1,26 +1,30 @@
 """
-Interactive panel for the IQ resonance fitting step (fit_iq).
+Interactive panel for the circle fitting steps.
+
+Covers three linked analysis steps:
+
+    3. fit_iq_circle   — fits an IQ circle to ``zf_rmv[circ_mask]``
+    4. get_idx_t       — finds the index in ``ff`` closest to ``ft``
+    5. get_theta_phase_offset — computes the phase offset from ``zt_rmv``
+
+Because steps 4 and 5 depend on the result of step 3, the three steps are
+always executed together as a single logical unit.
 
 Plots
 -----
-Left : ``20*log10(|zf_rmv|)`` vs ``ff`` with a
-       :class:`~pyqtgraph.LinearRegionItem` that defines the fit mask (only
-       data inside the region is fitted).
-Right: IQ loop — ``zf_rmv.imag`` vs ``zf_rmv.real`` — with the model
-       curve from :func:`citkid.res.funcs.nonlinear_iq` overlaid in red
-       after a successful fit.
+Left : ``20*log10(|zf_rmv|)`` vs ``ff``, with a
+       :class:`~pyqtgraph.LinearRegionItem` for the circle-fit mask.
+       A green dot marks the ``idx_t`` frequency after a successful run.
+Right: IQ loop — ``zf_rmv.imag`` vs ``zf_rmv.real`` — with the fitted
+       circle overlaid in red and the ``idx_t`` point marked in green.
 
 Mask interaction
 ----------------
 Hold **Shift** and left-click-drag on the amplitude plot to draw the mask
-window.  The shaded region updates in real time as you drag.  Click
-**Run** to apply the new mask and refit.
+window.  Press **Reset Mask** to restore the full frequency range.
 
-Press **Reset Mask** to restore the full frequency range (all samples
-included).
-
-Cascade behaviour
------------------
+Step cascade
+------------
 After a successful run the panel emits ``downstream_rerun`` so that
 subsequent panels are automatically updated.
 """
@@ -30,7 +34,6 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtWidgets, QtCore
 
 from .core import register_panel, StepPanel
-from ...res.funcs import nonlinear_iq
 
 
 class _MaskViewBox(pg.ViewBox):
@@ -58,13 +61,15 @@ class _MaskViewBox(pg.ViewBox):
             super().mouseDragEvent(ev, axis=axis)
 
 
-@register_panel('fit_iq')
-class FitIQPanel(StepPanel):
+@register_panel('fit_iq_circle', 'get_idx_t', 'get_theta_phase_offset')
+class CircleFitPanel(StepPanel):
     """
-    Panel for the *fit_iq* step.
+    Panel for the *fit_iq_circle* + *get_idx_t* + *get_theta_phase_offset* steps.
 
-    The IQ mask is controlled interactively via a
+    The circle-fit mask is controlled interactively via a
     :class:`~pyqtgraph.LinearRegionItem` on the amplitude vs frequency plot.
+    Steps 4 and 5 do not accept user parameters; they run automatically after
+    step 3.
 
     Parameters
     ----------
@@ -110,7 +115,7 @@ class FitIQPanel(StepPanel):
         self._bad_btn.clicked.connect(self._on_bad_data_clicked)
         ctrl.addWidget(self._bad_btn)
 
-        self._status_label = QtWidgets.QLabel("—")
+        self._status_label = QtWidgets.QLabel("\u2014")
         self._status_label.setMinimumWidth(180)
         ctrl.addWidget(self._status_label)
 
@@ -122,7 +127,7 @@ class FitIQPanel(StepPanel):
         self._gw.setMinimumHeight(round(340 * self.plot_scale))
         root.addWidget(self._gw)
 
-        self._plot_amp = self._gw.addPlot(row=0, col=0, title="IQ Amplitude",
+        self._plot_amp = self._gw.addPlot(row=0, col=0, title="Circle Fit Amplitude",
                                            viewBox=_MaskViewBox())
         self._plot_amp.setLabel('left', '|S21| (dB)')
         self._plot_amp.setLabel('bottom', 'Frequency (Hz)')
@@ -137,35 +142,39 @@ class FitIQPanel(StepPanel):
 
         self._scale_plot_fonts(self._plot_amp, self._plot_iq)
 
-        # Data scatter plots — included (blue) and excluded (orange) for contrast
+        # Data scatter — included (blue) and excluded (orange)
         _inc_brush = pg.mkBrush(100, 180, 255, 210)
         _exc_brush = pg.mkBrush(255, 140, 50, 180)
-        self._amp_data     = self._plot_amp.plot(pen=None, symbolBrush=_inc_brush,
-                                                  symbolPen=None, symbolSize=4, name='data')
-        self._amp_excl     = self._plot_amp.plot(pen=None, symbolBrush=_exc_brush,
-                                                  symbolPen=None, symbolSize=4, name='excluded')
-        self._iq_data      = self._plot_iq.plot(pen=None, symbolBrush=_inc_brush,
-                                                 symbolPen=None, symbolSize=4, name='data')
-        self._iq_data_excl = self._plot_iq.plot(pen=None, symbolBrush=_exc_brush,
-                                                  symbolPen=None, symbolSize=4, name='excluded')
+        self._amp_data = self._plot_amp.plot(pen=None, symbolBrush=_inc_brush,
+                                              symbolPen=None, symbolSize=4, name='data')
+        self._amp_excl = self._plot_amp.plot(pen=None, symbolBrush=_exc_brush,
+                                              symbolPen=None, symbolSize=4, name='excluded')
+        self._iq_data  = self._plot_iq.plot(pen=None, symbolBrush=_inc_brush,
+                                             symbolPen=None, symbolSize=4, name='data')
+        self._iq_excl  = self._plot_iq.plot(pen=None, symbolBrush=_exc_brush,
+                                             symbolPen=None, symbolSize=4, name='excluded')
 
-        # Fit overlay curve on IQ loop (red line)
-        _fit_pen = pg.mkPen(color=(255, 80, 80), width=2)
-        self._iq_fit  = self._plot_iq.plot(pen=_fit_pen, name='fit')
-        self._amp_fit = self._plot_amp.plot(pen=_fit_pen, name='fit')
-
-        # Fit-parameter text overlay (top-right corner, ignored by autoRange)
-        self._fit_text = pg.TextItem(
-            text='', anchor=(1, 0), color=(220, 220, 220),
-            fill=pg.mkBrush(0, 0, 0, 140),
-        )
-        self._fit_text.setZValue(20)
-        self._plot_iq.getViewBox().addItem(self._fit_text, ignoreBounds=True)
-        self._plot_iq.getViewBox().sigRangeChanged.connect(
-            self._reposition_fit_text
+        # Circle fit overlay (red line)
+        self._circle_fit = self._plot_iq.plot(
+            pen=pg.mkPen(color=(255, 80, 80), width=2), name='circle fit'
         )
 
-        # Mask region indicator (visual only — updated via Shift+drag)
+        # idx_t markers (green dot on amplitude plot and IQ plot)
+        _idx_brush = pg.mkBrush(80, 255, 80, 220)
+        self._idx_t_amp = self._plot_amp.plot(
+            pen=None, symbolBrush=_idx_brush, symbolPen=None, symbolSize=8, name='ft'
+        )
+        self._idx_t_iq = self._plot_iq.plot(
+            pen=None, symbolBrush=_idx_brush, symbolPen=None, symbolSize=8, name='ft'
+        )
+
+        # zt_rmv timestream on IQ (light green, small dots)
+        _ts_brush = pg.mkBrush(160, 220, 160, 80)
+        self._zt_iq = self._plot_iq.plot(
+            pen=None, symbolBrush=_ts_brush, symbolPen=None, symbolSize=2, name='zt_rmv'
+        )
+
+        # Mask region indicator
         self._region = pg.LinearRegionItem(
             brush=pg.mkBrush(255, 255, 100, 30),
             pen=pg.mkPen(color=(255, 255, 100), width=1),
@@ -173,16 +182,13 @@ class FitIQPanel(StepPanel):
         )
         self._plot_amp.addItem(self._region)
 
-        # Connect Shift+drag signal from the custom ViewBox
+        # Connect Shift+drag signal
         self._plot_amp.getViewBox().sig_range_selected.connect(self._on_range_selected)
 
-        # Current mask state (None = full range, i.e. all True)
+        # State
         self._mask: np.ndarray | None = None
-        # Cache of current ff (Hz) so the mask can be rebuilt from region bounds
         self._ff_cache: np.ndarray | None = None
-        # Center frequency (Hz) used for the shifted-kHz x-axis
         self._f_center: float = 0.0
-        # Has the region been positioned to the data range yet?
         self._region_initialized: bool = False
 
     # ------------------------------------------------------------------
@@ -190,10 +196,10 @@ class FitIQPanel(StepPanel):
     # ------------------------------------------------------------------
 
     def on_data_idx_changing(self):
-        """Restore saved mask from DS for the incoming data index, or reset."""
+        """Restore saved circ_mask for the incoming data index, or reset."""
         self._autorange_next = True
         saved = self._get_initial_user_param(
-            'fit_iq', 'iq_mask', self.data_idx, fallback=None
+            'fit_iq_circle', 'circ_mask', self.data_idx, fallback=None
         )
         if saved is not None:
             self._mask = np.asarray(saved, dtype=bool)
@@ -203,13 +209,14 @@ class FitIQPanel(StepPanel):
         self._region_initialized = False
 
     def prepare_run(self):
-        """Rebuild mask from the current region state before running."""
+        """Rebuild mask from the current region before running."""
         if self._ff_cache is not None:
             self._build_mask(self._ff_cache)
 
-    def get_params_for_step(self, step):
-        if step.name == 'fit_iq':
-            return {'iq_mask': self._mask}
+    def get_params_for_step(self, step) -> dict:
+        """Only ``fit_iq_circle`` takes a user parameter (``circ_mask``)."""
+        if step.name == 'fit_iq_circle':
+            return {'circ_mask': self._mask}
         return {}
 
     def update_plots(self):
@@ -217,14 +224,13 @@ class FitIQPanel(StepPanel):
         DS = self.AR.DS
 
         try:
-            ff      = np.asarray(DS.ff[di],      dtype=np.float64)
-            zf_rmv  = np.asarray(DS.zf_rmv[di],  dtype=np.complex128)
+            ff     = np.asarray(DS.ff[di],     dtype=np.float64)
+            zf_rmv = np.asarray(DS.zf_rmv[di], dtype=np.complex128)
         except Exception as exc:
             self._status_label.setText(f"Data load error: {exc}")
             return
 
         self._ff_cache = ff
-
         f_center = float(ff.mean())
         self._f_center = f_center
         ff_plot = (ff - f_center) * 1e-3
@@ -246,7 +252,6 @@ class FitIQPanel(StepPanel):
                 ))
             self._region_initialized = True
 
-        # Build mask from current region bounds
         mask = self._build_mask(ff)
         amp_db = 20.0 * np.log10(np.abs(zf_rmv))
 
@@ -254,77 +259,55 @@ class FitIQPanel(StepPanel):
         self._amp_data.setData(ff_plot[mask],  amp_db[mask])
         self._amp_excl.setData(ff_plot[~mask], amp_db[~mask])
 
-        # IQ loop
-        self._iq_data.setData(zf_rmv[mask].real, zf_rmv[mask].imag)
-        self._iq_data_excl.setData(zf_rmv[~mask].real, zf_rmv[~mask].imag)
+        # IQ loop — included vs excluded
+        self._iq_data.setData(zf_rmv[mask].real,  zf_rmv[mask].imag)
+        self._iq_excl.setData(zf_rmv[~mask].real, zf_rmv[~mask].imag)
 
-        # Model fit overlay
+        # Circle fit overlay
         try:
-            iq_popt = np.asarray(DS.iq_popt[di], dtype=np.float64)
-            if not np.all(np.isfinite(iq_popt)):
-                raise ValueError("NaN popt")
-            f_model = np.linspace(ff[mask].min(), ff[mask].max(), 1000)
-            z_model = nonlinear_iq(f_model, *iq_popt, downward=True)
-            self._iq_fit.setData(z_model.real, z_model.imag)
-            self._amp_fit.setData(
-                (f_model - f_center) * 1e-3,
-                20.0 * np.log10(np.abs(z_model)),
-            )
-            Qr  = iq_popt[1]
-            amp = iq_popt[2]
-            Qc  = Qr / amp
-            Qi  = 1.0 / (1.0 / Qr - 1.0 / Qc)
-            phi = iq_popt[3]
-            a_nl = iq_popt[4]
-            self._fit_text.setText(
-                f"Qc = {int(round(Qc)):,}\n"
-                f"Qi = {int(round(Qi)):,}\n"
-                f"\u03d5 = {phi / np.pi:.2f}\u03c0\n"
-                f"a\u2099\u2097 = {a_nl:.2f}"
-            )
-            self._reposition_fit_text()
+            circ_origin = complex(DS.circ_origin[di])
+            circ_radius = float(DS.circ_radius[di])
+            if np.isfinite(circ_origin.real) and np.isfinite(circ_radius):
+                theta_c = np.linspace(0, 2 * np.pi, 360)
+                xc = circ_origin.real + circ_radius * np.cos(theta_c)
+                yc = circ_origin.imag + circ_radius * np.sin(theta_c)
+                self._circle_fit.setData(xc, yc)
+            else:
+                self._circle_fit.setData([], [])
         except Exception:
-            self._iq_fit.setData([], [])
-            self._amp_fit.setData([], [])
-            # Show NaN legend if iq_popt exists but is all NaN (bad data)
-            try:
-                iq_popt = np.asarray(DS.iq_popt[di], dtype=np.float64)
-                if not np.any(np.isfinite(iq_popt)):
-                    self._fit_text.setText(
-                        "Qc = NaN\nQi = NaN\n\u03d5 = NaN\na\u2099\u2097 = NaN"
-                    )
-                    self._reposition_fit_text()
-                else:
-                    self._fit_text.setText('')
-            except Exception:
-                self._fit_text.setText('')
+            self._circle_fit.setData([], [])
+
+        # idx_t marker
+        try:
+            idx_t = int(DS.idx_t[di])
+            self._idx_t_amp.setData([ff_plot[idx_t]], [amp_db[idx_t]])
+            self._idx_t_iq.setData([zf_rmv[idx_t].real], [zf_rmv[idx_t].imag])
+        except Exception:
+            self._idx_t_amp.setData([], [])
+            self._idx_t_iq.setData([], [])
+
+        # zt_rmv on IQ
+        try:
+            zt_rmv = np.asarray(DS.zt_rmv[di], dtype=np.complex128)
+            self._zt_iq.setData(zt_rmv.real, zt_rmv.imag)
+        except Exception:
+            self._zt_iq.setData([], [])
 
         if self._autorange_next:
             self._autorange_next = False
             self._plot_amp.autoRange()
             self._plot_iq.autoRange()
 
-    # ------------------------------------------------------------------
-    # Mask helpers
-    # ------------------------------------------------------------------
-
     def autoscale_plots(self):
         self._plot_amp.autoRange()
         self._plot_iq.autoRange()
 
-    def _reposition_fit_text(self):
-        """Keep the fit-parameter label in the top-right corner of the IQ view."""
-        vb = self._plot_iq.getViewBox()
-        xr, yr = vb.viewRange()
-        self._fit_text.setPos(xr[1], yr[1])
+    # ------------------------------------------------------------------
+    # Mask helpers
+    # ------------------------------------------------------------------
 
     def _build_mask(self, ff: np.ndarray) -> np.ndarray:
-        """
-        Return a boolean mask for *ff* (Hz) based on the current region bounds.
-
-        The region is stored in shifted-kHz coordinates
-        ``(f - f_center) * 1e-3``; convert back to Hz before comparing.
-        """
+        """Build a boolean mask from the current region (shifted-kHz coords)."""
         lo_kHz, hi_kHz = self._region.getRegion()
         lo = lo_kHz * 1e3 + self._f_center
         hi = hi_kHz * 1e3 + self._f_center
@@ -333,45 +316,53 @@ class FitIQPanel(StepPanel):
         return mask
 
     def _reset_mask(self):
-        """Reset the region to the full frequency range."""
         if self._ff_cache is not None:
             lo = float((self._ff_cache.min() - self._f_center) * 1e-3)
             hi = float((self._ff_cache.max() - self._f_center) * 1e-3)
             self._region.setRegion((lo, hi))
         self._mask = None
-        self._status_label.setText("Mask reset — click Run")
+        self._status_label.setText("Mask reset \u2014 click Run")
 
     def _on_range_selected(self, lo: float, hi: float):
-        """Handle a Shift+drag mask selection from the ViewBox."""
         self._region.setRegion((lo, hi))
         if self._ff_cache is not None:
             self._build_mask(self._ff_cache)
-        self._status_label.setText("Mask set — click Run")
+        self._status_label.setText("Mask set \u2014 click Run")
 
     # ------------------------------------------------------------------
     # Execution helpers
     # ------------------------------------------------------------------
 
     def _on_run_clicked(self):
-        # Rebuild mask from current region before running
         if self._ff_cache is not None:
             self._build_mask(self._ff_cache)
-        self._status_label.setText("Running…")
+        self._status_label.setText("Running\u2026")
         QtWidgets.QApplication.processEvents()
         ok = self.run_steps()
         if ok:
-            self._status_label.setText("Done ✓")
+            self._status_label.setText("Done \u2713")
             self.trigger_downstream()
         else:
-            self._status_label.setText("Error ✗")
+            self._status_label.setText("Error \u2717")
 
     def _on_save_clicked(self):
         try:
             self.save_outputs()
-            self._status_label.setText("Saved ✓")
+            self._status_label.setText("Saved \u2713")
         except Exception as exc:
-            self._status_label.setText("Save error ✗")
+            self._status_label.setText("Save error \u2717")
             print(f"Save error: {exc}")
+
+    def save_outputs(self):
+        """Save step outputs AND the ``circ_mask`` user param to zarr."""
+        circ_step = next(s for s in self.steps if s.name == 'fit_iq_circle')
+        user_params = self.get_params_for_step(circ_step)
+        if user_params:
+            self.AR._add_user_params(
+                user_params, circ_step.func_type,
+                self.data_idx, save=True
+            )
+        super().save_outputs()
 
     def _on_step_error(self, step, exc):
         msg = f"'{step.name}' failed: {exc}"
@@ -379,19 +370,19 @@ class FitIQPanel(StepPanel):
         print(msg)
 
     def _on_bad_data_clicked(self):
-        self._status_label.setText("Marking bad…")
+        self._status_label.setText("Marking bad\u2026")
         QtWidgets.QApplication.processEvents()
         ok = self._write_nan_outputs()
         if ok:
-            self._status_label.setText("Bad data marked ✓")
+            self._status_label.setText("Bad data marked \u2713")
             self.trigger_downstream()
         else:
-            self._status_label.setText("Bad data failed ✗")
+            self._status_label.setText("Bad data failed \u2717")
 
     def _nan_outputs(self) -> dict:
-        import numpy as np
         return {
-            'iq_p0':   np.full(8, np.nan),
-            'iq_popt': np.full(8, np.nan),
-            'iq_nrmse': np.nan,
+            'circ_origin':        np.complex128(np.nan + 1j * np.nan),
+            'circ_radius':        np.nan,
+            'idx_t':              np.int64(0),
+            'theta_phase_offset': np.nan,
         }

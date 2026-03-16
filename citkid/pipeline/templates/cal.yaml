@@ -2,6 +2,7 @@
 ###      x calibration steps      ###
 ### ----------------------------- ###
 
+# Need to add path to get res parameters from iq_popt
 CAL_STEPS:
   1 :
     task: load_global_data

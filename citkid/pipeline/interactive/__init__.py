@@ -27,10 +27,19 @@ Built-in panels
 :class:`~.fit_iq.FitIQPanel`
     Handles *fit_iq* with interactive mask selection.
 
+:class:`~.circ.CircleFitPanel`
+    Handles *fit_iq_circle* + *get_idx_t* + *get_theta_phase_offset*.
+
+:class:`~.xcal.XCalPanel`
+    Handles *get_xcal_mask* + *fit_x_theta*.
+
 Pipeline-specific launchers
 ---------------------------
 :func:`~.iq_analysis.run_iq_analysis`
     One-liner for the IQ analysis YAML pipeline.
+
+:func:`~.ts_analysis.run_ts_analysis`
+    One-liner for the ts_analysis YAML pipeline.
 """
 
 # Core framework — always imported
@@ -46,9 +55,12 @@ from .core import (
 # Built-in panels — importing them triggers @register_panel registration
 from . import gain      # noqa: F401
 from . import fit_iq    # noqa: F401
+from . import circ      # noqa: F401
+from . import xcal      # noqa: F401
 
 # Pipeline-specific assemblers
 from .iq_analysis import run_iq_analysis  # noqa: F401
+from .ts_analysis import run_ts_analysis  # noqa: F401
 
 __all__ = [
     # framework
@@ -61,6 +73,9 @@ __all__ = [
     # panels
     "gain",
     "fit_iq",
+    "circ",
+    "xcal",
     # assemblers
     "run_iq_analysis",
+    "run_ts_analysis",
 ]

@@ -103,7 +103,8 @@ class AnalysisRunner:
             self.analysis_yaml_dict = None
     
     def execute_path(self, data_idx = None, enforced_max_runs = None,
-                     start_from_idx = 0, verbose = True):
+                     start_from_idx = 0, verbose = True,
+                     save_override = None):
         """
         Execute each step in the path specified by the analysis YAML file. 
 
@@ -120,18 +121,23 @@ class AnalysisRunner:
             Default is 0 (start from the beginning). 
         verbose (bool): If True, displays a progress bar while executing the 
         path.
+        save_override (bool or None): When not None, overrides the per-step
+            ``save`` flag for every step in the path.  Useful for prefetch
+            runs (pass ``False``) that should not write to zarr.
         """
         pbar = self.path[start_from_idx:]
         if verbose:
             pbar = tqdm(pbar, leave = False, 
                         bar_format = "{desc}: {n_fmt}/{total_fmt}  |{bar}|")
         for step_dict in pbar:
-            pbar.set_description(f"Executing step: {step_dict['task'].name}")
+            if verbose:
+                pbar.set_description(f"Executing step: {step_dict['task'].name}")
             # Collect info from YAML step dict
             step = step_dict['task'] 
             params = step_dict.get('params', {})
-            # save defaults to True if not specified
-            save = step_dict.get('save', True) 
+            # save defaults to True if not specified; save_override wins when set
+            save = step_dict.get('save', True) if save_override is None \
+                else save_override
             # Execute step 
             if step.func_type in ['global', 'global-res']:
                 step_data_idx = None  
@@ -364,15 +370,20 @@ class AnalysisRunner:
         dict
             New dict with any ``None`` masks replaced by boolean arrays.
         """
+        def _is_null(v):
+            # PyYAML parses YAML `None` as the string "None" (only null/Null/
+            # NULL/~ are mapped to Python None).  Accept all common spellings.
+            return v is None or (isinstance(v, str) and v.strip().lower() == 'none')
+
         if not any(
-            v is None and k in _MASK_SHAPE_SOURCES
+            _is_null(v) and k in _MASK_SHAPE_SOURCES
             for k, v in user_params.items()
         ):
             return user_params  # nothing to do — avoid copying unnecessarily
 
         user_params = dict(user_params)  # shallow copy; don't mutate caller's dict
         for name, val in list(user_params.items()):
-            if val is None and name in _MASK_SHAPE_SOURCES:
+            if _is_null(val) and name in _MASK_SHAPE_SOURCES:
                 user_params[name] = self._expand_none_mask(
                     name, func_type, data_idx
                 )
@@ -400,8 +411,11 @@ class AnalysisRunner:
         -------
         np.ndarray of bool
             * Shape ``(N,)`` for global/global-res steps.
-            * Shape ``(len(data_idx), N)`` for per-row/vectorized steps,
-              where N is the length of each row in the shape-source parameter.
+            * Shape ``(N,)`` for per-row/vectorized steps with a **scalar**
+              ``data_idx`` — matches what ``_add_user_params`` stores after
+              wrapping the value in a list (one element of shape ``(N,)``).
+            * Shape ``(len(data_idx), N)`` for per-row/vectorized steps with
+              an array ``data_idx``.
         """
         shape_source = _MASK_SHAPE_SOURCES[mask_name]
         collection = getattr(self.DS, shape_source)
@@ -424,6 +438,12 @@ class AnalysisRunner:
             return np.ones(inner_shape, dtype=bool)
 
         data_idx_arr = np.atleast_1d(np.asarray(data_idx, dtype=np.int32))
+        # For a scalar data_idx, _add_user_params wraps the value in a list
+        # itself, so we must return a single-row mask (shape inner_shape) not
+        # a 2-D mask (shape (1, *inner_shape)) which would cause double-wrapping
+        # and store a (1, n)-shaped mask in the per-row cache instead of (n,).
+        if np.ndim(data_idx) == 0:
+            return np.ones(inner_shape, dtype=bool)
         return np.ones((len(data_idx_arr), *inner_shape), dtype=bool)
 
     def _add_user_params(

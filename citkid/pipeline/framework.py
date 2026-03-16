@@ -439,6 +439,49 @@ class LazyAttrCollection:
                 return s
         return ()
     
+    def __array__(self, dtype=None, copy=None):
+        """
+        Convert to a numpy array, filling each index with the most recent data.
+        
+        Fetches the most recent run's data for every data index in the dataset
+        and stacks them into a single numpy array.  Raises an error if any data
+        index has no data in any run.
+        
+        Parameters:
+            dtype: Optional numpy dtype to cast the result to.
+        
+        Returns:
+            np.ndarray: Array of shape (nrows, *inner_shape).
+        
+        Raises:
+            ValueError: If any data index has no data in any run.
+        """
+        all_indices = np.arange(self.DS.nrows, dtype=np.int32)
+
+        # Ensure data is loaded from storage
+        self.DS._ensure_loaded(self.name, all_indices)
+
+        # Check that every index has data in at least one run
+        missing = []
+        for di in all_indices:
+            if di not in self.DS.deps_maps:
+                self.DS.deps_maps[di] = {}
+            run_idx = get_most_recent_run(self.name, self.DS.deps_maps[di])
+            if run_idx == -1:
+                missing.append(int(di))
+        if missing:
+            raise ValueError(
+                f"Parameter '{self.name}' does not exist for data "
+                f"indices: {missing}"
+            )
+
+        result = self[:]
+        if dtype is not None:
+            result = result.astype(dtype)
+        if copy is False:
+            return result
+        return result.copy() if copy else result
+
     def __len__(self):
         """
         Return the number of data indices (nrows) in the dataset.

@@ -24,7 +24,8 @@ class DataSet:
     def __init__(self, 
         zarr_path, 
         cal_yaml_path, 
-        custom_path = None
+        custom_path = None,
+        zarr_mode = 'a'
         ):
         """
         Initialize the dataset with a calibration pipeline defined by a YAML 
@@ -36,6 +37,7 @@ class DataSet:
         cal_yaml_path (str): The path to the calibration YAML file.
         custom_path (str or None): Directory to the .py file containing custom 
             calibration functions, or None if no custom functions are used.
+        zarr_mode (str): Mode to open the zarr file ('r', 'r+', 'a', etc.).
         """
         ### Input validation and path normalization
         if custom_path is not None:
@@ -43,7 +45,7 @@ class DataSet:
         else:
             self.custom_path = None
         self.zarr_path = os.path.abspath(zarr_path)
-        self.root = zarr.open_group(self.zarr_path, mode = 'a')
+        self.root = zarr.open_group(self.zarr_path, mode = zarr_mode)
         self.cal_yaml_path = os.path.abspath(cal_yaml_path) 
 
         # Validate file types 
@@ -309,7 +311,7 @@ class DataSet:
 
         # Collect every param present in memory
         all_mem_params = set()
-        for run_cache in self._memory_cache.values():
+        for run_cache in list(self._memory_cache.values()):
             all_mem_params.update(run_cache.keys())
 
         # Build zarr_max_per_param once (O(n_runs) zarr I/O)
@@ -410,10 +412,10 @@ class DataSet:
         # ------------------------------------------------------------------
         # Any dep dict that references an old membrane run index (e.g.
         # {zf_rmv: 16}) must be updated to the new target (e.g. {zf_rmv: 1}).
-        for scope in self.deps_maps:
-            for run_idx in self.deps_maps[scope]:
+        for scope in list(self.deps_maps):
+            for run_idx in list(self.deps_maps[scope]):
                 for prod_param, inner_deps in \
-                        self.deps_maps[scope][run_idx].items():
+                        list(self.deps_maps[scope][run_idx].items()):
                     for dep_param, dep_run in list(inner_deps.items()):
                         if dep_param in rename_map:
                             old_max, target = rename_map[dep_param]
@@ -955,37 +957,36 @@ class DataSet:
         else:  # per-row: run each data_idx individually with error handling
             failures = {}  # {data_idx: traceback_string}
             for di in data_idx:
-                merged_deps_map = self.merge_deps_maps(di)
-                run_idxs = [get_most_recent_run(name, merged_deps_map) + 1
-                            for name in step.return_names]
-                # run that doesn't exist yet should be 1
-                run_idxs = tuple([1 if r == 0 else r for r in run_idxs])
-                deps = get_deps(
-                    [p for p in step.param_names if p != 'data_idx'],
-                    merged_deps_map,
-                    enforced_max_runs=enforced_max_runs
-                )
-
-                # Collect parameters for this single row
-                params = []
-                param_is_global = []
-                for p in step.param_names:
-                    if p == 'data_idx':
-                        params.append(np.atleast_1d([di]))
-                        param_is_global.append(False)
-                        continue
-
-                    param_is_global.append(self._is_global_cache[p])
-                    if param_is_global[-1]:
-                        val = self._get_existing(p, deps[p], data_idx=None)
-                    else:
-                        val = self._get_existing(
-                            p, deps[p], data_idx=np.atleast_1d([di])
-                        )
-                    params.append(val)
-
-                # Run step - allow per-row failure without aborting the loop
                 try:
+                    merged_deps_map = self.merge_deps_maps(di)
+                    run_idxs = [get_most_recent_run(name, merged_deps_map) + 1
+                                for name in step.return_names]
+                    # run that doesn't exist yet should be 1
+                    run_idxs = tuple([1 if r == 0 else r for r in run_idxs])
+                    deps = get_deps(
+                        [p for p in step.param_names if p != 'data_idx'],
+                        merged_deps_map,
+                        enforced_max_runs=enforced_max_runs
+                    )
+
+                    # Collect parameters for this single row
+                    params = []
+                    param_is_global = []
+                    for p in step.param_names:
+                        if p == 'data_idx':
+                            params.append(np.atleast_1d([di]))
+                            param_is_global.append(False)
+                            continue
+
+                        param_is_global.append(self._is_global_cache[p])
+                        if param_is_global[-1]:
+                            val = self._get_existing(p, deps[p], data_idx=None)
+                        else:
+                            val = self._get_existing(
+                                p, deps[p], data_idx=np.atleast_1d([di])
+                            )
+                        params.append(val)
+
                     out = step._run(params, param_is_global)
                 except Exception:
                     failures[int(di)] = traceback.format_exc()
@@ -1879,7 +1880,7 @@ class DataSet:
                 if data_idx_arr is None:
                     # Find all cached rows for this name across all runs
                     cached_rows = []
-                    for run_cache in self._memory_cache.values():
+                    for run_cache in list(self._memory_cache.values()):
                         la = run_cache.get(name)
                         if la is not None and isinstance(la, pf.LazyAttr):
                             cached_rows.extend(la._cache.keys())
@@ -2024,7 +2025,140 @@ class DataSet:
             util.open_in_file_explorer(
                 os.path.dirname(self.zarr_path)
                 )
-            
+
+    def get_param_deps(self, name, data_idx=None):
+        """
+        Return the dependencies of a parameter at its most recent run.
+
+        For global parameters pass ``data_idx=None`` (the default).  For
+        per-row parameters pass the integer row index; the global and
+        per-row dependency scopes are merged before the lookup so that
+        shared global inputs are included.
+
+        Parameters:
+        name (str): The parameter name.
+        data_idx (int or None): Row index for per-row parameters, or None
+            for global parameters.
+
+        Returns:
+        dict: Dependency dict mapping parameter names to their run indices,
+            e.g. ``{'zf_rmv': 1, 'gain_fit': 2}``.
+
+        Raises:
+        ValueError: If the parameter has no recorded run in deps_maps.
+        """
+        if data_idx is None:
+            deps_map = self.deps_maps.get('global', {})
+        else:
+            deps_map = self.merge_deps_maps(int(data_idx))
+        run_idx = get_most_recent_run(name, deps_map)
+        if run_idx < 0:
+            msg = f"Parameter '{name}' has no recorded run"
+            if data_idx is not None:
+                msg += f" for data_idx={data_idx}"
+            raise ValueError(msg)
+        return deps_map[run_idx][name]
+
+    def truncate_param(self, data_idx, name, run_idx):
+        """
+        Delete zarr data for (data_idx, name) at all run indices strictly
+        greater than run_idx, then update in-memory state to match.
+
+        Only per-row parameters are supported. For each run r > run_idx the
+        named parameter's row is cleared: row_exists is set to False, the
+        data slot is zeroed, and the per-row dependency and write-time entries
+        are removed from attrs. If clearing the row leaves no remaining rows in
+        the parameter group, the parameter group is deleted. If that empties
+        the run group, the run group is deleted too.
+
+        In-memory deps_maps and _memory_cache are pruned to stay consistent
+        with the zarr state.
+
+        Parameters:
+        data_idx (int): The row index whose future runs should be deleted.
+        name (str): Parameter name to truncate.
+        run_idx (int): Keep this run and all earlier runs; delete runs strictly
+            above this value.
+
+        Raises:
+        ValueError: If name is a global parameter (global parameters cannot be
+            truncated per-row).
+        """
+        data_idx = int(data_idx)
+        run_idx = int(run_idx)
+        di_str = f'idx{data_idx}'
+
+        # Validate not global
+        if name in self._is_global_cache and self._is_global_cache[name]:
+            raise ValueError(
+                f"'{name}' is a global parameter; per-row truncation is not "
+                f"supported."
+            )
+
+        # --- zarr cleanup ---
+        for run_str, run_grp in list(self.root.groups()):
+            try:
+                r = int(run_str[3:])  # 'run3' -> 3
+            except (ValueError, IndexError):
+                continue
+            if r <= run_idx:
+                continue
+            if name not in run_grp:
+                continue
+
+            param_grp = run_grp[name]
+            if param_grp.attrs.get('global', True):
+                continue  # skip global params
+
+            exists_arr = param_grp['row_exists']
+            if not exists_arr[data_idx]:
+                continue  # row not present in this run
+
+            # Clear the row
+            exists_arr[data_idx] = False
+            data_arr = param_grp['data']
+            data_arr[data_idx] = np.zeros_like(data_arr[data_idx])
+
+            # Remove per-row dep and write-time entries
+            deps_dict = dict(param_grp.attrs.get('deps', {}))
+            write_times_dict = dict(param_grp.attrs.get('write_times', {}))
+            deps_dict.pop(di_str, None)
+            write_times_dict.pop(di_str, None)
+            param_grp.attrs['deps'] = deps_dict
+            param_grp.attrs['write_times'] = write_times_dict
+
+            # If no rows remain, delete the parameter group
+            if not np.any(exists_arr[...]):
+                del run_grp[name]
+
+                # If the run group is now empty, delete it too
+                if not list(run_grp.keys()):
+                    del self.root[run_str]
+
+        # --- deps_maps cleanup ---
+        for scope in [data_idx, 'global']:
+            if scope not in self.deps_maps:
+                continue
+            scope_map = self.deps_maps[scope]
+            for r in [k for k in list(scope_map) if k > run_idx]:
+                scope_map[r].pop(name, None)
+                if not scope_map[r]:
+                    del scope_map[r]
+
+        # --- memory cache cleanup ---
+        for r in [k for k in list(self._memory_cache) if k > run_idx]:
+            run_cache = self._memory_cache[r]
+            if name not in run_cache:
+                continue
+            la = run_cache[name]
+            if isinstance(la, pf.LazyAttr):
+                la._cache.pop(data_idx, None)
+                # If the LazyAttr is now entirely empty, remove it from cache
+                if not la._cache:
+                    del run_cache[name]
+                    if not run_cache:
+                        del self._memory_cache[r]
+
 ################################################################################ 
 ############################# Custom steps loader ##############################
 ################################################################################
