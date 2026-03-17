@@ -10,7 +10,7 @@ ANALYSIS_STEPS:
   2 : 
     task: fit_gain
     params:
-      span_mult: 2 # I will implement this soon, multiplies all spans by this factor
+      span_mult: 1 # I will implement this soon, multiplies all spans by this factor
   3 :
     task: fit_iq_circle 
     params:
@@ -27,7 +27,7 @@ ANALYSIS_STEPS:
     params:
       xcal_idx0_offset: 3 
       xcal_idx1_offset: 9
-      xcal_std_cutoff: 12.0 
+      xcal_std_cutoff: 16.0 
   7 :
     task: fit_x_theta 
     params:

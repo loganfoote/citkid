@@ -33,7 +33,7 @@ import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtWidgets, QtCore
 
-from .core import register_panel, StepPanel
+from .core import register_panel, StepPanel, _density_subsample
 
 
 class _MaskViewBox(pg.ViewBox):
@@ -84,6 +84,7 @@ class CircleFitPanel(StepPanel):
         root.setContentsMargins(6, 4, 6, 6)
         root.setSpacing(4)
 
+        self._plot_cache: dict = {}  # populated by prefetch_plot_data
         # ---- control row ----
         ctrl = QtWidgets.QHBoxLayout()
         ctrl.setSpacing(8)
@@ -223,17 +224,21 @@ class CircleFitPanel(StepPanel):
         di = self.data_idx
         DS = self.AR.DS
 
+        # Use pre-computed numpy arrays from the prefetch cache when available.
+        cache = self._plot_cache.pop(di, None)
+
         try:
-            ff     = np.asarray(DS.ff[di],     dtype=np.float64)
-            zf_rmv = np.asarray(DS.zf_rmv[di], dtype=np.complex128)
+            ff     = cache['ff']     if cache else np.asarray(DS.ff[di],     dtype=np.float64)
+            zf_rmv = cache['zf_rmv'] if cache else np.asarray(DS.zf_rmv[di], dtype=np.complex128)
         except Exception as exc:
             self._status_label.setText(f"Data load error: {exc}")
             return
 
         self._ff_cache = ff
-        f_center = float(ff.mean())
+        f_center = cache['f_center'] if cache else float(ff.mean())
         self._f_center = f_center
-        ff_plot = (ff - f_center) * 1e-3
+        ff_plot  = cache['ff_plot']  if cache else (ff - f_center) * 1e-3
+        amp_db   = cache['amp_db']   if cache else 20.0 * np.log10(np.abs(zf_rmv))
         center_MHz = round(f_center * 1e-6, 2)
         xlabel = f"(f \u2212 {center_MHz} MHz) (kHz)"
         self._plot_amp.setLabel('bottom', xlabel)
@@ -265,31 +270,43 @@ class CircleFitPanel(StepPanel):
 
         # Circle fit overlay
         try:
-            circ_origin = complex(DS.circ_origin[di])
-            circ_radius = float(DS.circ_radius[di])
-            if np.isfinite(circ_origin.real) and np.isfinite(circ_radius):
-                theta_c = np.linspace(0, 2 * np.pi, 360)
-                xc = circ_origin.real + circ_radius * np.cos(theta_c)
-                yc = circ_origin.imag + circ_radius * np.sin(theta_c)
-                self._circle_fit.setData(xc, yc)
+            if cache and len(cache['xc']):
+                xc, yc = cache['xc'], cache['yc']
             else:
-                self._circle_fit.setData([], [])
+                circ_origin = complex(DS.circ_origin[di])
+                circ_radius = float(DS.circ_radius[di])
+                if np.isfinite(circ_origin.real) and np.isfinite(circ_radius):
+                    theta_c = np.linspace(0, 2 * np.pi, 360)
+                    xc = circ_origin.real + circ_radius * np.cos(theta_c)
+                    yc = circ_origin.imag + circ_radius * np.sin(theta_c)
+                else:
+                    xc, yc = [], []
+            self._circle_fit.setData(xc, yc)
         except Exception:
             self._circle_fit.setData([], [])
 
         # idx_t marker
         try:
-            idx_t = int(DS.idx_t[di])
-            self._idx_t_amp.setData([ff_plot[idx_t]], [amp_db[idx_t]])
-            self._idx_t_iq.setData([zf_rmv[idx_t].real], [zf_rmv[idx_t].imag])
+            idx_t = cache['idx_t'] if cache else int(DS.idx_t[di])
+            if idx_t is not None:
+                self._idx_t_amp.setData([ff_plot[idx_t]], [amp_db[idx_t]])
+                self._idx_t_iq.setData([zf_rmv[idx_t].real], [zf_rmv[idx_t].imag])
+            else:
+                self._idx_t_amp.setData([], [])
+                self._idx_t_iq.setData([], [])
         except Exception:
             self._idx_t_amp.setData([], [])
             self._idx_t_iq.setData([], [])
 
-        # zt_rmv on IQ
+        # zt_rmv on IQ — density-preserving subsample keeps sparse tail intact
         try:
-            zt_rmv = np.asarray(DS.zt_rmv[di], dtype=np.complex128)
-            self._zt_iq.setData(zt_rmv.real, zt_rmv.imag)
+            if cache and cache['zt'] is not None:
+                zt_sub = cache['zt']
+            else:
+                zt_sub = _density_subsample(
+                    np.asarray(DS.zt_rmv[di], dtype=np.complex128)
+                )
+            self._zt_iq.setData(zt_sub.real, zt_sub.imag)
         except Exception:
             self._zt_iq.setData([], [])
 
@@ -378,6 +395,54 @@ class CircleFitPanel(StepPanel):
             self.trigger_downstream()
         else:
             self._status_label.setText("Bad data failed \u2717")
+
+    def prefetch_plot_data(self, di: int):
+        """Pre-compute numpy arrays for *di* in the background prefetch thread."""
+        DS = self.AR.DS
+        try:
+            ff     = np.asarray(DS.ff[di],     dtype=np.float64)
+            zf_rmv = np.asarray(DS.zf_rmv[di], dtype=np.complex128)
+        except Exception:
+            return
+
+        f_center = float(ff.mean())
+        ff_plot  = (ff - f_center) * 1e-3
+        amp_db   = 20.0 * np.log10(np.abs(zf_rmv))
+
+        # circle overlay
+        try:
+            circ_origin = complex(DS.circ_origin[di])
+            circ_radius = float(DS.circ_radius[di])
+            if np.isfinite(circ_origin.real) and np.isfinite(circ_radius):
+                theta_c = np.linspace(0, 2 * np.pi, 360)
+                xc = circ_origin.real + circ_radius * np.cos(theta_c)
+                yc = circ_origin.imag + circ_radius * np.sin(theta_c)
+            else:
+                xc, yc = np.array([]), np.array([])
+        except Exception:
+            xc, yc = np.array([]), np.array([])
+
+        # idx_t
+        try:
+            idx_t = int(DS.idx_t[di])
+        except Exception:
+            idx_t = None
+
+        # zt_rmv subsampled
+        try:
+            zt = _density_subsample(
+                np.asarray(DS.zt_rmv[di], dtype=np.complex128)
+            )
+        except Exception:
+            zt = None
+
+        if not hasattr(self, '_plot_cache'):
+            self._plot_cache = {}
+        self._plot_cache[di] = dict(
+            ff=ff, ff_plot=ff_plot, f_center=f_center,
+            zf_rmv=zf_rmv, amp_db=amp_db,
+            xc=xc, yc=yc, idx_t=idx_t, zt=zt,
+        )
 
     def _nan_outputs(self) -> dict:
         return {

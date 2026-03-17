@@ -66,6 +66,57 @@ from ..dependencies import get_most_recent_run
 
 
 ################################################################################
+# Density-preserving subsample helper
+################################################################################
+
+def _density_subsample(z: np.ndarray, n_keep: int = 5000,
+                       n_bins: int = 100, seed: int = 0) -> np.ndarray:
+    """
+    Subsample a complex IQ array to *n_keep* points, preserving sparse tail
+    regions via inverse-density weighting along the principal variance axis.
+
+    Unlike uniform random sampling this keeps roughly equal representation
+    across the full signal range, so rare excursions (photon events, tails)
+    are retained even in very long timestreams.  Because the projection axis
+    is found by PCA the method works equally well for raw gain-removed data
+    (``zt_rmv``) and centred/rotated data (``zt_cent``) without any
+    array-specific tuning.
+
+    Parameters
+    ----------
+    z : np.ndarray of complex
+    n_keep : int
+    n_bins : int
+        Number of histogram bins for density estimation.
+    seed : int
+        RNG seed for reproducibility.
+
+    Returns
+    -------
+    np.ndarray
+        Subsampled complex array of length ``min(len(z), n_keep)``.
+    """
+    if len(z) <= n_keep:
+        return z
+    # Project onto 1st principal component (direction of maximum variance).
+    X   = np.column_stack([z.real, z.imag])
+    Xc  = X - X.mean(axis=0)
+    cov = Xc.T @ Xc  # 2×2; no normalisation needed for eigenvector direction
+    _, eigvecs = np.linalg.eigh(cov)  # ascending eigenvalues
+    proj = Xc @ eigvecs[:, -1]         # project onto largest-variance direction
+
+    # Inverse-density weights via histogram.
+    counts, edges = np.histogram(proj, bins=n_bins)
+    bin_idx = np.clip(np.digitize(proj, edges[:-1]) - 1, 0, n_bins - 1)
+    weights = 1.0 / np.maximum(counts[bin_idx], 1).astype(np.float64)
+    weights /= weights.sum()
+
+    rng  = np.random.default_rng(seed)
+    isub = rng.choice(len(z), size=n_keep, replace=False, p=weights)
+    return z[isub]
+
+
+################################################################################
 # Panel registry
 ################################################################################
 
@@ -400,6 +451,22 @@ class StepPanel(QtWidgets.QWidget):
         override this to provide NaN-filled arrays of the correct shape.
         """
         return {}
+
+    def prefetch_plot_data(self, di: int):
+        """
+        Pre-compute numpy arrays needed by :meth:`update_plots` for *di*.
+
+        Called from the background prefetch thread **before** the user
+        navigates to *di*.  Implementations must be thread-safe: only
+        read from ``AR.DS``, only write to ``self._plot_cache``.  Never
+        touch any Qt object here.
+
+        The base implementation is a no-op.  Sub-classes with expensive
+        numpy work inside ``update_plots`` (e.g. large array loads,
+        ``np.polyval``, subsampling) should override this method and store
+        results in ``self._plot_cache[di]``.  ``update_plots`` can then
+        consume the cache and skip the numpy work entirely.
+        """
 
     def on_data_idx_changing(self):
         """
@@ -1100,6 +1167,14 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
                 self.AR.execute_path(data_idx = next_di, save_override = False, 
                                      verbose = False)
                 self._prefetched_idx = next_di
+                # Pre-compute numpy plot data for each panel so update_plots
+                # only has to call setData() when the user navigates here.
+                for panel in self.panels:
+                    try:
+                        panel.prefetch_plot_data(next_di)
+                    except Exception as exc:
+                        print(f"[prefetch] prefetch_plot_data failed for "
+                              f"{panel.step_names}: {exc}")
                 self._prefetch_status_changed.emit(f"✓ prefetch {next_di}")
             except Exception as exc:
                 self._prefetch_status_changed.emit("")

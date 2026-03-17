@@ -29,7 +29,7 @@ from . import xcal   # noqa: F401 — registers XCalPanel
 
 # Step grouping that matches ts_analysis.yaml
 _TS_PANELS = [
-    ('make_fr_spans', 'fit_gain'),
+    ('fit_gain',),
     ('fit_iq_circle', 'get_idx_t', 'get_theta_phase_offset'),
     ('get_xcal_mask', 'fit_x_theta'),
 ]
