@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from ..res.plot import plot_circle
 from .psd import bin_psd
-from ..util import combine_figures_horizontally
+from ..util import combine_figs_horz
 
 import warnings 
 
@@ -114,7 +114,7 @@ def plot_cal(ffine, zfine, popt_circle, fnoise, znoise, znoise_offres,
     ax.plot([], [], '--k', label = 'cal range')
     ax.legend(loc = 'center')
     if znoise is not None:
-        fig = combine_figures_horizontally(fig, fig2)
+        fig = combine_figs_horz(fig, fig2)
     return fig
 
 def plot_timestream(dt, theta, theta_clean, dt_offres, theta_offres, x,

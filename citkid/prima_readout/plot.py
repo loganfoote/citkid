@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from ..res.plot import plot_circle
-from ..util import combine_figures_horizontally
+from ..util import combine_figs_horz
 from ..res.gain import remove_gain
 
 def plot_cal(ffine, zfine, origin, radius, v, theta_range, theta_fine, p_amp, p_phase,
@@ -59,5 +59,5 @@ def plot_cal(ffine, zfine, origin, radius, v, theta_range, theta_fine, p_amp, p_
 
     ax.plot([], [], '--k', label = 'cal range')
     ax.legend(loc = 'center')
-    fig = combine_figures_horizontally(fig, fig2)
+    fig = combine_figs_horz(fig, fig2)
     return fig
