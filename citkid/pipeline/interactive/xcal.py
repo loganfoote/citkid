@@ -35,17 +35,16 @@ from citkid.xcal.xcal import get_xcal_mask as _compute_xcal_mask
 @register_panel('get_xcal_mask', 'fit_x_theta')
 class XCalPanel(StepPanel):
     """
-    Panel for the *get_xcal_mask* + *fit_x_theta* steps.
+    Panel for the get_xcal_mask + fit_x_theta steps.
 
     The xcal mask is computed automatically from the user-adjustable offset and
-    cutoff parameters.  No interactive mask drawing is needed.
+    cutoff parameters. No interactive mask drawing is needed.
 
-    Parameters
-    ----------
-    AR : AnalysisRunner
-    step_names : tuple of str
-    data_idx : int or None
-    parent : QWidget, optional
+    Parameters:
+    AR (AnalysisRunner): The analysis runner.
+    step_names (tuple of str): Step names handled by this panel.
+    data_idx (int or None): Initial data index.
+    parent (QWidget or None): Parent widget.
     """
 
     def setup_ui(self):

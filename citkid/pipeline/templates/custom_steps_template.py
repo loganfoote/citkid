@@ -59,9 +59,6 @@ def load_data_g(data_idx):
     idx = np.argsort(fg)
     return fg[idx], zg[idx]
 
-def get_circle_mask(ff): 
-    return np.ones_like(ff, dtype = bool) 
-
 custom_steps =\
 [('load_global_data', load_global_data, 
   [], ['fres_all', 'qres_all', 'dt', 'nrows'], 
@@ -84,8 +81,4 @@ custom_steps =\
 ]
 
 custom_cal_steps = [plStep(*cs) for cs in custom_steps]
-custom_analysis_steps = [
-    plStep('get_circle_mask', get_circle_mask, 
-           ['ff'], ['circ_mask'], 'per-row'
-           )
-    ]
+custom_analysis_steps = []

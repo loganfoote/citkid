@@ -40,46 +40,23 @@ def run_ts_analysis(AR, start_idx=0, data_idxs=None, title="TS Analysis",
     """
     Launch the interactive ts_analysis window.
 
-    This is a convenience wrapper for :func:`~.core.run_interactive` that
-    pre-sets the panel grouping to match
-    ``pipeline/templates/ts_analysis.yaml``.
+    This is a convenience wrapper for run_interactive that pre-sets the panel
+    grouping to match pipeline/templates/ts_analysis.yaml.
 
-    Parameters
-    ----------
-    AR : AnalysisRunner
-        Runner whose ``DS`` already has the calibration pipeline loaded and
-        whose ``analysis_steps`` include the ts_analysis steps (make_fr_spans
-        through fit_x_theta).
-    start_idx : int
-        Index into ``data_idxs`` to start at (default 0 = first element).
-    data_idxs : list of int or None
-        Ordered sequence of data indices to step through with the ``◀``/``▶``
-        buttons (keyboard shortcuts ``A``/``D`` or ``←``/``→``).
-        ``None`` uses all rows.
-    title : str
-        Window title.
-    ui_scale : float
-        Scales text and widget chrome.  ``1.0`` is the default size.
-    plot_scale : float
-        Scales the minimum height of plot areas without affecting text.
-        ``1.0`` is the default.
+    Parameters:
+    AR (AnalysisRunner): Runner whose DS already has the calibration pipeline
+        loaded and whose analysis_steps include the ts_analysis steps
+        (make_fr_spans through fit_x_theta).
+    start_idx (int): Index into data_idxs to start at. Default 0.
+    data_idxs (list of int or None): Ordered sequence of data indices to step
+        through with the navigation buttons. None uses all rows.
+    title (str): Window title. Default 'TS Analysis'.
+    ui_scale (float): Scales text and widget chrome. 1.0 is the default size.
+    plot_scale (float): Scales the minimum height of plot areas. 1.0 is the
+        default.
 
-    Returns
-    -------
-    InteractiveAnalysisWindow
-        The created (and already shown) window.
-
-    Notes
-    -----
-    To run only a subset of panels or attach extra custom panels, call
-    :func:`~.core.run_interactive` directly::
-
-        from citkid.pipeline.interactive import run_interactive
-        run_interactive(AR,
-                        panels=[('make_fr_spans', 'fit_gain'),
-                                ('fit_iq_circle', 'get_idx_t',
-                                 'get_theta_phase_offset')],
-                        data_idx=0)
+    Returns:
+    win (InteractiveAnalysisWindow): The created (and already shown) window.
     """
     return run_interactive(AR, panels=_TS_PANELS, start_idx=start_idx,
                            data_idxs=data_idxs, title=title, ui_scale=ui_scale,

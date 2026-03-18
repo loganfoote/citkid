@@ -61,17 +61,16 @@ class _MaskViewBox(pg.ViewBox):
 @register_panel('fit_iq')
 class FitIQPanel(StepPanel):
     """
-    Panel for the *fit_iq* step.
+    Panel for the fit_iq step.
 
-    The IQ mask is controlled interactively via a
-    :class:`~pyqtgraph.LinearRegionItem` on the amplitude vs frequency plot.
+    The IQ mask is controlled interactively via a LinearRegionItem on the
+    amplitude vs frequency plot.
 
-    Parameters
-    ----------
-    AR : AnalysisRunner
-    step_names : tuple of str
-    data_idx : int or None
-    parent : QWidget, optional
+    Parameters:
+    AR (AnalysisRunner): The analysis runner.
+    step_names (tuple of str): Step names handled by this panel.
+    data_idx (int or None): Initial data index.
+    parent (QWidget or None): Parent widget.
     """
 
     def setup_ui(self):

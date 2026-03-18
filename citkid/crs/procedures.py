@@ -255,7 +255,8 @@ def _validate_target_sweep_inputs(
     if not isinstance(nsamps, (int, np.integer)) or nsamps <= 0:
         raise ValueError("nsamps must be a positive integer.") 
     # fres_update_method
-    if fres_update_method not in ['distance', 'spacing', 'minS21']:
+    if npoints_rough is not None and \
+        fres_update_method not in ['distance', 'spacing', 'minS21']:
         msg = "fres_update_method must be 'distance', 'spacing', or 'minS21'."
         raise ValueError(msg)
     # cable_delay

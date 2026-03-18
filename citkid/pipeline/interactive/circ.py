@@ -64,19 +64,17 @@ class _MaskViewBox(pg.ViewBox):
 @register_panel('fit_iq_circle', 'get_idx_t', 'get_theta_phase_offset')
 class CircleFitPanel(StepPanel):
     """
-    Panel for the *fit_iq_circle* + *get_idx_t* + *get_theta_phase_offset* steps.
+    Panel for the fit_iq_circle + get_idx_t + get_theta_phase_offset steps.
 
-    The circle-fit mask is controlled interactively via a
-    :class:`~pyqtgraph.LinearRegionItem` on the amplitude vs frequency plot.
-    Steps 4 and 5 do not accept user parameters; they run automatically after
-    step 3.
+    The circle-fit mask is controlled interactively via a LinearRegionItem on
+    the amplitude vs frequency plot. Steps 4 and 5 do not accept user
+    parameters; they run automatically after step 3.
 
-    Parameters
-    ----------
-    AR : AnalysisRunner
-    step_names : tuple of str
-    data_idx : int or None
-    parent : QWidget, optional
+    Parameters:
+    AR (AnalysisRunner): The analysis runner.
+    step_names (tuple of str): Step names handled by this panel.
+    data_idx (int or None): Initial data index.
+    parent (QWidget or None): Parent widget.
     """
 
     def setup_ui(self):

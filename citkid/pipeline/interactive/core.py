@@ -63,57 +63,7 @@ import threading
 
 from ..analysis import AnalysisRunner
 from ..dependencies import get_most_recent_run
-
-
-################################################################################
-# Density-preserving subsample helper
-################################################################################
-
-def _density_subsample(z: np.ndarray, n_keep: int = 5000,
-                       n_bins: int = 100, seed: int = 0) -> np.ndarray:
-    """
-    Subsample a complex IQ array to *n_keep* points, preserving sparse tail
-    regions via inverse-density weighting along the principal variance axis.
-
-    Unlike uniform random sampling this keeps roughly equal representation
-    across the full signal range, so rare excursions (photon events, tails)
-    are retained even in very long timestreams.  Because the projection axis
-    is found by PCA the method works equally well for raw gain-removed data
-    (``zt_rmv``) and centred/rotated data (``zt_cent``) without any
-    array-specific tuning.
-
-    Parameters
-    ----------
-    z : np.ndarray of complex
-    n_keep : int
-    n_bins : int
-        Number of histogram bins for density estimation.
-    seed : int
-        RNG seed for reproducibility.
-
-    Returns
-    -------
-    np.ndarray
-        Subsampled complex array of length ``min(len(z), n_keep)``.
-    """
-    if len(z) <= n_keep:
-        return z
-    # Project onto 1st principal component (direction of maximum variance).
-    X   = np.column_stack([z.real, z.imag])
-    Xc  = X - X.mean(axis=0)
-    cov = Xc.T @ Xc  # 2×2; no normalisation needed for eigenvector direction
-    _, eigvecs = np.linalg.eigh(cov)  # ascending eigenvalues
-    proj = Xc @ eigvecs[:, -1]         # project onto largest-variance direction
-
-    # Inverse-density weights via histogram.
-    counts, edges = np.histogram(proj, bins=n_bins)
-    bin_idx = np.clip(np.digitize(proj, edges[:-1]) - 1, 0, n_bins - 1)
-    weights = 1.0 / np.maximum(counts[bin_idx], 1).astype(np.float64)
-    weights /= weights.sum()
-
-    rng  = np.random.default_rng(seed)
-    isub = rng.choice(len(z), size=n_keep, replace=False, p=weights)
-    return z[isub]
+from ...signal.iq import density_subsample as _density_subsample
 
 
 ################################################################################
@@ -123,19 +73,16 @@ def _density_subsample(z: np.ndarray, n_keep: int = 5000,
 _PANEL_REGISTRY: dict[tuple, type] = {}
 
 
-def register_panel(*step_names: str):
+def register_panel(*step_names):
     """
-    Class decorator that registers a :class:`StepPanel` subclass for a group
-    of step names.
+    Class decorator that registers a StepPanel subclass for a group of step
+    names.
 
-    Parameters
-    ----------
-    *step_names : str
-        One or more pipeline step names this panel handles, in execution order.
+    Parameters:
+    *step_names (str): One or more pipeline step names this panel handles,
+        in execution order.
 
-    Example
-    -------
-    ::
+    Example::
 
         @register_panel('make_fr_spans', 'fit_gain')
         class GainFitPanel(StepPanel):
@@ -147,24 +94,20 @@ def register_panel(*step_names: str):
     return decorator
 
 
-def get_panel_class(step_names: tuple) -> type:
+def get_panel_class(step_names):
     """
-    Return the :class:`StepPanel` subclass registered for *step_names*.
+    Return the StepPanel subclass registered for step_names.
 
     Lookup order:
-
     1. Exact tuple match in the registry.
-    2. Single-step fallback: ``(step_names[0],)`` in the registry.
-    3. :class:`DefaultStepPanel` (always available).
+    2. Single-step fallback: (step_names[0],) in the registry.
+    3. DefaultStepPanel (always available).
 
-    Parameters
-    ----------
-    step_names : tuple of str
+    Parameters:
+    step_names (tuple of str): Step name tuple to look up.
 
-    Returns
-    -------
-    type
-        A :class:`StepPanel` subclass.
+    Returns:
+    type: A StepPanel subclass.
     """
     if step_names in _PANEL_REGISTRY:
         return _PANEL_REGISTRY[step_names]
@@ -181,27 +124,22 @@ class StepPanel(QtWidgets.QWidget):
     """
     Abstract base class for an interactive analysis step panel.
 
-    Each panel owns one or more pipeline steps.  Override
-    :meth:`setup_ui`, :meth:`get_params_for_step`, and
-    :meth:`update_plots` in subclasses.
+    Each panel owns one or more pipeline steps. Override setup_ui,
+    get_params_for_step, and update_plots in subclasses.
 
-    Signals
-    -------
-    downstream_rerun : pyqtSignal(object)
-        Emitted (with *self* as payload) when
-        :meth:`trigger_downstream` is called after a successful run.
-        :class:`InteractiveAnalysisWindow` connects to this to cascade
-        re-runs through all panels below this one.
+    Signals:
+    downstream_rerun (pyqtSignal(object)): Emitted (with self as payload) when
+        trigger_downstream is called after a successful run.
+        InteractiveAnalysisWindow connects to this to cascade re-runs through
+        all panels below this one.
 
-    Parameters
-    ----------
-    AR : AnalysisRunner
-        The analysis runner whose ``execute_step`` will be called.
-    step_names : tuple of str
-        Names of the steps this panel executes, in order.
-    data_idx : int or None
-        Initial data index for per-row steps.  ``None`` until set.
-    parent : QWidget, optional
+    Parameters:
+    AR (AnalysisRunner): The analysis runner whose execute_step will be called.
+    step_names (tuple of str): Names of the steps this panel executes, in order.
+    data_idx (int or None): Initial data index for per-row steps. None until set.
+    ui_scale (float): Font and widget size multiplier. Default 1.0.
+    plot_scale (float): Plot area height multiplier. Default 1.0.
+    parent (QWidget or None): Parent widget.
     """
 
     #: Emitted when downstream panels should re-run.  Payload is *self*.
@@ -249,9 +187,9 @@ class StepPanel(QtWidgets.QWidget):
 
     def setup_ui(self):
         """
-        Build the panel's widgets.  Called once during ``__init__``.
+        Build the panel's widgets. Called once during __init__.
 
-        The base implementation adds a single status label.  Override to
+        The base implementation adds a single status label. Override to
         replace this with domain-specific controls and plots.
         """
         layout = QtWidgets.QVBoxLayout(self)
@@ -259,24 +197,20 @@ class StepPanel(QtWidgets.QWidget):
         self._status_label = QtWidgets.QLabel("Not run")
         layout.addWidget(self._status_label)
 
-    def get_params_for_step(self, step) -> dict:
+    def get_params_for_step(self, step):
         """
-        Return user-controlled parameters for *step* as ``{name: value}``.
+        Return user-controlled parameters for step as {name: value}.
 
-        Called by :meth:`run_steps` just before each step executes.
-        Override to return widget values (e.g. spinbox, combobox).
+        Called by run_steps just before each step executes. Override to
+        return widget values (e.g. spinbox, combobox).
 
-        Parameters
-        ----------
-        step : plStep
-            The step about to be executed.
+        Parameters:
+        step (plStep): The step about to be executed.
 
-        Returns
-        -------
-        dict
-            Mapping of parameter name → value.  Only user-controlled
-            parameters need to be included; pipeline-produced parameters
-            are resolved automatically.
+        Returns:
+        params (dict): Mapping of parameter name to value. Only
+            user-controlled parameters need to be included; pipeline-produced
+            parameters are resolved automatically.
         """
         return {}
 
@@ -284,18 +218,18 @@ class StepPanel(QtWidgets.QWidget):
         """
         Refresh all plots and displays after the steps have run successfully.
 
-        Override in subclasses to read results from ``self.AR.DS`` and
-        update plot widgets.
+        Override in subclasses to read results from self.AR.DS and update
+        plot widgets.
         """
         pass
 
     def _scale_plot_fonts(self, *plot_items):
         """
-        Apply ``self.ui_scale`` to tick labels, axis labels, and titles on
-        each of the supplied pyqtgraph ``PlotItem`` objects.
+        Apply self.ui_scale to tick labels, axis labels, and titles on each
+        of the supplied pyqtgraph PlotItem objects.
 
-        Call at the end of ``setup_ui`` after all plots have been created.
-        No-op when ``ui_scale == 1.0``.
+        Call at the end of setup_ui after all plots have been created.
+        No-op when ui_scale == 1.0.
         """
         if self.ui_scale == 1.0:
             return
@@ -316,22 +250,19 @@ class StepPanel(QtWidgets.QWidget):
     # Core execution
     # ------------------------------------------------------------------
 
-    def run_steps(self, save: bool = False) -> bool:
+    def run_steps(self, save=False):
         """
-        Execute each step owned by this panel, then call :meth:`update_plots`.
+        Execute each step owned by this panel, then call update_plots.
 
-        Global and global-res steps always receive ``data_idx=None``; per-row
-        and vectorized steps receive ``self.data_idx``.
+        Global and global-res steps always receive data_idx=None; per-row
+        and vectorized steps receive self.data_idx.
 
-        Parameters
-        ----------
-        save : bool
-            Passed directly to :meth:`AnalysisRunner.execute_step`.
+        Parameters:
+        save (bool): Passed directly to AnalysisRunner.execute_step.
+            Default False.
 
-        Returns
-        -------
-        bool
-            ``True`` if all steps succeeded, ``False`` if any step raised.
+        Returns:
+        ok (bool): True if all steps succeeded, False if any step raised.
         """
         for step in self.steps:
             step_di = (
@@ -360,11 +291,11 @@ class StepPanel(QtWidgets.QWidget):
 
     def prepare_run(self):
         """
-        Called by :meth:`_run_through_panel` immediately before
-        :meth:`run_steps` on each panel.
+        Called by _run_through_panel immediately before run_steps on each
+        panel.
 
-        Base implementation is a no-op.  Sub-classes may override to perform
-        pre-run setup that is normally handled inside their ``_on_run_clicked``
+        Base implementation is a no-op. Sub-classes may override to perform
+        pre-run setup that is normally handled inside their _on_run_clicked
         handler (e.g. rebuilding a mask from the current region state).
         """
 
@@ -372,29 +303,26 @@ class StepPanel(QtWidgets.QWidget):
         """
         Auto-range every plot widget owned by this panel.
 
-        Base implementation is a no-op.  Sub-classes that own
-        :class:`~pyqtgraph.PlotItem` instances should override this method
-        and call ``plot.autoRange()`` / ``enableAutoRange()`` on each.
-        Called by the window when the user presses the rescale shortcut.
+        Base implementation is a no-op. Sub-classes should override this
+        and call plot.autoRange() on each PlotItem. Called by the window
+        when the user presses the rescale shortcut.
         """
 
     def trigger_downstream(self):
         """
-        Emit :attr:`downstream_rerun` to ask the window to re-run all panels
-        that come after this one.
+        Emit downstream_rerun to ask the window to re-run all panels that
+        come after this one.
 
-        Call this at the end of a user-triggered action (e.g. button click or
-        parameter change) after :meth:`run_steps` succeeds.
+        Call this at the end of a user-triggered action (e.g. button click
+        or parameter change) after run_steps succeeds.
         """
         self.downstream_rerun.emit(self)
 
     def save_outputs(self):
         """
         Persist the most recent in-memory outputs of every step owned by this
-        panel to the zarr file.
-
-        Calls :meth:`AnalysisRunner.save_step_outputs` for each step.  Does
-        *not* re-run the steps.  Raises if any step has no cached results yet.
+        panel to the zarr file. Does not re-run the steps. Raises if any step
+        has no cached results yet.
         """
         for step in self.steps:
             step_di = (
@@ -410,10 +338,12 @@ class StepPanel(QtWidgets.QWidget):
         Write NaN-filled placeholder values for every per-row output of this
         panel's steps, then mark the panel dirty.
 
-        Sub-classes must override :meth:`_nan_outputs` to return the dict of
-        ``{return_name: nan_value}`` appropriate for their step(s).  Returns
-        ``True`` on success, ``False`` if no override is provided or an error
-        occurs.
+        Sub-classes must override _nan_outputs to return the dict of
+        {return_name: nan_value} appropriate for their step(s).
+
+        Returns:
+        ok (bool): True on success, False if no override is provided or an
+            error occurs.
         """
         nan_vals = self._nan_outputs()
         if not nan_vals:
@@ -443,38 +373,43 @@ class StepPanel(QtWidgets.QWidget):
             print(f"_write_nan_outputs failed in {self.step_names}: {exc}")
             return False
 
-    def _nan_outputs(self) -> dict:
+    def _nan_outputs(self):
         """
-        Return a dict ``{return_name: nan_array}`` for each per-row output.
+        Return a dict {return_name: nan_array} for each per-row output.
 
-        Base implementation returns ``{}`` (no-op).  Sub-classes should
-        override this to provide NaN-filled arrays of the correct shape.
+        Base implementation returns {} (no-op). Sub-classes should override
+        this to provide NaN-filled arrays of the correct shape.
+
+        Returns:
+        nan_vals (dict): Mapping of output name to NaN array.
         """
         return {}
 
-    def prefetch_plot_data(self, di: int):
+    def prefetch_plot_data(self, di):
         """
-        Pre-compute numpy arrays needed by :meth:`update_plots` for *di*.
+        Pre-compute numpy arrays needed by update_plots for di.
 
-        Called from the background prefetch thread **before** the user
-        navigates to *di*.  Implementations must be thread-safe: only
-        read from ``AR.DS``, only write to ``self._plot_cache``.  Never
-        touch any Qt object here.
+        Called from the background prefetch thread before the user navigates
+        to di. Implementations must be thread-safe: only read from AR.DS,
+        only write to self._plot_cache. Never touch any Qt object here.
 
-        The base implementation is a no-op.  Sub-classes with expensive
-        numpy work inside ``update_plots`` (e.g. large array loads,
-        ``np.polyval``, subsampling) should override this method and store
-        results in ``self._plot_cache[di]``.  ``update_plots`` can then
-        consume the cache and skip the numpy work entirely.
+        The base implementation is a no-op. Sub-classes with expensive numpy
+        work inside update_plots (e.g. large array loads, np.polyval,
+        subsampling) should override this method and store results in
+        self._plot_cache[di]. update_plots can then consume the cache and
+        skip the numpy work entirely.
+
+        Parameters:
+        di (int): Data index to prefetch.
         """
 
     def on_data_idx_changing(self):
         """
-        Called by :class:`InteractiveAnalysisWindow` just before
-        ``run_steps()`` when the active data index changes.
+        Called by InteractiveAnalysisWindow just before run_steps when the
+        active data index changes.
 
-        Override in subclasses to reset panel-local state that is tied to
-        a specific data index (e.g. an interactive mask region).
+        Override in subclasses to reset panel-local state that is tied to a
+        specific data index (e.g. an interactive mask region).
         """
         pass
 
@@ -482,28 +417,21 @@ class StepPanel(QtWidgets.QWidget):
     # Parameter initialisation helpers
     # ------------------------------------------------------------------
 
-    def _get_initial_user_param(self, step_name: str, param_name: str,
-                                data_idx, fallback=None):
+    def _get_initial_user_param(self, step_name, param_name, data_idx,
+                                fallback=None):
         """
-        Return the best available initial value for a user-controlled parameter.
+        Return the best available initial value for a user-controlled
+        parameter.
 
-        Priority
-        --------
-        1. Existing value already stored in ``AR.DS`` (result of a previous
-           run for this data index).
-        2. Default specified in the analysis YAML for this step.
-        3. *fallback*.
+        Priority: (1) value stored in AR.DS from a previous run, (2) default
+        from the analysis YAML, (3) fallback.
 
-        Parameters
-        ----------
-        step_name : str
-            Name of the step that owns the parameter.
-        param_name : str
-            Name of the parameter / DS attribute.
-        data_idx : int or None
-            Data index currently active on this panel.
-        fallback :
-            Value to return when neither DS nor YAML provide a value.
+        Parameters:
+        step_name (str): Name of the step that owns the parameter.
+        param_name (str): Name of the parameter / DS attribute.
+        data_idx (int or None): Data index currently active on this panel.
+        fallback: Value to return when neither DS nor YAML provide a value.
+            Default None.
         """
         # 1. Try DS attribute
         try:
@@ -523,7 +451,7 @@ class StepPanel(QtWidgets.QWidget):
             pass
         return fallback
 
-    def set_data_idx(self, data_idx: int):
+    def set_data_idx(self, data_idx):
         """Set a new data index and immediately re-run the panel."""
         self.data_idx = data_idx
         self.run_steps()
@@ -532,15 +460,17 @@ class StepPanel(QtWidgets.QWidget):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _outputs_exist(self) -> bool:
+    def _outputs_exist(self):
         """
-        Return ``True`` if every output produced by this panel's steps is
-        already present (cached in memory or stored on disk) for the current
-        ``data_idx``.
+        Return True if every output produced by this panel's steps is already
+        present (cached in memory or stored on disk) for the current data_idx.
 
-        Only the *last* step's outputs are checked — earlier steps are
+        Only the last step's outputs are checked — earlier steps are
         prerequisites whose results are implicitly required for the final
         step to exist.
+
+        Returns:
+        exists (bool): True if all outputs are available.
         """
         DS = self.AR.DS
         check_steps = self.steps[-1:]  # last step's outputs are sufficient
@@ -564,23 +494,22 @@ class StepPanel(QtWidgets.QWidget):
         """
         Called once (via a zero-delay timer) after construction.
 
-        * If all output data already exist in the DataSet the plots are
-          drawn immediately without re-running the step.
-        * Otherwise the steps are executed with default parameters
-          (``save=False``) so that initial results are available for the
-          first render.
+        If all output data already exist in the DataSet the plots are drawn
+        immediately without re-running the step. Otherwise the steps are
+        executed with default parameters (save=False) so that initial results
+        are available for the first render.
         """
         if self._outputs_exist():
             self.update_plots()
         else:
             self.run_steps(save=False)
 
-    def _on_step_error(self, step, exc: Exception):
+    def _on_step_error(self, step, exc):
         """
         Handle a step-level execution error.
 
-        Writes a short message to ``_status_label`` if it exists and prints
-        to stdout.  Override to add custom error UI (e.g. a dialog).
+        Writes a short message to _status_label if it exists and prints to
+        stdout. Override to add custom error UI (e.g. a dialog).
         """
         msg = f"Error in '{step.name}': {exc}"
         if hasattr(self, "_status_label"):
@@ -714,26 +643,20 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
     Main window that vertically stacks step panels and orchestrates cascade
     re-runs.
 
-    When panel *i* emits :attr:`StepPanel.downstream_rerun`, panels
-    *i+1*, *i+2*, … are re-run in sequence (stopping on the first
-    failure).
+    When panel i emits StepPanel.downstream_rerun, panels i+1, i+2, ... are
+    re-run in sequence (stopping on the first failure).
 
-    Parameters
-    ----------
-    AR : AnalysisRunner
-        Runner with loaded steps.
-    panels : list of tuple of str
-        One tuple per panel group.  Each tuple contains the step names
-        that belong to that panel.
-        Example::
-
-            [('fit_gain',), ('fit_iq',)]
-
-    data_idx : int or None
-        Starting data index for per-row steps.
-    title : str
-        Window title.
-    parent : QWidget, optional
+    Parameters:
+    AR (AnalysisRunner): Runner with loaded steps.
+    panels (list of tuple of str): One tuple per panel group. Each tuple
+        contains the step names that belong to that panel.
+    start_idx (int): Index into data_idxs to start at. Default 0.
+    data_idxs (list of int or None): Ordered sequence of data indices to
+        navigate. None uses all rows.
+    title (str): Window title.
+    ui_scale (float): Font and widget size multiplier. Default 1.0.
+    plot_scale (float): Plot area height multiplier. Default 1.0.
+    parent (QWidget or None): Parent widget.
     """
 
     #: Emitted from the prefetch worker thread to update the status label.
@@ -1224,57 +1147,36 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
 ################################################################################
 
 def run_interactive(
-    AR: AnalysisRunner,
+    AR,
     panels=None,
-    start_idx: int = 0,
+    start_idx=0,
     data_idxs=None,
-    title: str = "Interactive Analysis",
-    ui_scale: float = 1.0,
-    plot_scale: float = 1.0,
+    title="Interactive Analysis",
+    ui_scale=1.0,
+    plot_scale=1.0,
 ):
     """
-    Build and show an :class:`InteractiveAnalysisWindow`, then start the Qt
-    event loop.
+    Build and show an InteractiveAnalysisWindow, then start the Qt event loop.
 
-    Parameters
-    ----------
-    AR : AnalysisRunner
-        Runner with loaded steps.  Must have ``AR.DS`` accessible for
-        ``data_idx`` spinbox bounds.
-    panels : list or None
-        Grouping of steps into panels.  Each element is either a ``str``
-        (single step) or a ``list``/``tuple`` of strings (multi-step panel).
-        If ``None``, one panel per step is created from ``AR.path`` (when
-        loaded from a YAML), or from ``AR.analysis_steps`` as a fallback.
+    Parameters:
+    AR (AnalysisRunner): Runner with loaded steps. Must have AR.DS accessible
+        for data_idx spinbox bounds.
+    panels (list or None): Grouping of steps into panels. Each element is
+        either a str (single step) or a list/tuple of strings (multi-step
+        panel). If None, one panel per step is created from AR.path (when
+        loaded from a YAML), or from AR.analysis_steps as a fallback.
+    start_idx (int): Index into data_idxs to start at. Default 0.
+    data_idxs (list of int or None): Ordered sequence of data indices to step
+        through with the navigation buttons. None uses all rows.
+    title (str): Window title. Default 'Interactive Analysis'.
+    ui_scale (float): Scales text and widget chrome. 1.0 is the default size.
+        Increase (e.g. 1.2) when text is too small; decrease (e.g. 0.85)
+        when the interface is too large.
+    plot_scale (float): Scales the minimum height of every plot area
+        independently of text. 1.0 is the default.
 
-        Example::
-
-            panels = [
-                ('fit_gain',),
-                ('fit_iq',),
-            ]
-
-    data_idx : int or None
-        Starting per-row data index.
-    data_idxs : list of int or None
-        Ordered sequence of data indices to step through with the ``◀``/``▶``
-        buttons (keyboard shortcuts ``A``/``D`` or ``←``/``→``).
-        ``None`` uses all rows (``range(AR.DS.nrows)``).
-    title : str
-        Window title.
-    ui_scale : float
-        Scales text and widget chrome (fonts, buttons, labels).  ``1.0`` is
-        the default size.  Increase (e.g. ``1.2``) when text is too small;
-        decrease (e.g. ``0.85``) when the interface is too large.
-    plot_scale : float
-        Scales the minimum height of every plot area independently of text.
-        ``1.0`` is the default.  Increase (e.g. ``1.5``) to get taller plots
-        without affecting font sizes.
-
-    Returns
-    -------
-    InteractiveAnalysisWindow
-        The created (and already shown) window.
+    Returns:
+    win (InteractiveAnalysisWindow): The created (and already shown) window.
     """
     app = QtWidgets.QApplication.instance()
     if app is None:
