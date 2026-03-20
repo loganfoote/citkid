@@ -17,7 +17,7 @@ import rfmux
 from rfmux.algorithms.measurement import take_netanal
 
 class CRS:
-    def __init__(self, serial_number = 27, interface = 'enp2s0'):
+    def __init__(self, serial_number, interface):
         """
         Initialize the CRS object.
 
@@ -25,8 +25,8 @@ class CRS:
         `CRS.configure_system` before measurements.
 
         Parameters:
-        serial_number (int): CRS serial number.
-        interface (str): Ethernet interface identifier.
+        serial_number (int): CRS serial number e.g., 27.
+        interface (str): Ethernet interface identifier e.g., 'enp2s0'.
 
         Returns:
         None
