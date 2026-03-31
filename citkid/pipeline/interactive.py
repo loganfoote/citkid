@@ -60,6 +60,7 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets
 
 from .analysis import AnalysisRunner
+from ..qt_compat import Qt as _Qt
 
 
 ################################################################################
@@ -448,7 +449,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         scroll.setWidgetResizable(True)
         self._container = QtWidgets.QWidget()
         self._panel_layout = QtWidgets.QVBoxLayout(self._container)
-        self._panel_layout.setAlignment(QtCore.Qt.AlignTop)
+        self._panel_layout.setAlignment(_Qt.AlignTop)
         self._panel_layout.setSpacing(6)
         scroll.setWidget(self._container)
         outer.addWidget(scroll)
@@ -499,8 +500,8 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         """Add *panel* to the scroll area, separated by a horizontal line."""
         if self.panels:
             sep = QtWidgets.QFrame()
-            sep.setFrameShape(QtWidgets.QFrame.HLine)
-            sep.setFrameShadow(QtWidgets.QFrame.Sunken)
+            sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+            sep.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
             self._panel_layout.addWidget(sep)
         header = _SectionHeader(panel)
         self._panel_layout.addWidget(header)
@@ -615,5 +616,5 @@ def run_interactive(
         AR, normalized, data_idx=data_idx, title=title
     )
     win.show()
-    app.exec_()
+    app.exec()
     return win

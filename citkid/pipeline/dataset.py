@@ -1007,19 +1007,29 @@ class DataSet:
                             name, run_idx, data_idx=np.atleast_1d([di])
                         )
 
-            # Persist failure report to zarr
+            # Persist failure report to zarr (best-effort; some filesystems
+            # like exFAT do not support the atomic renames zarr v3 uses).
             if failures:
-                fail_grp = self.root.require_group(
-                    f'_failures/{step.name}'
-                )
-                timestamp = datetime.now().strftime('%Y%m%d-%H:%M:%S')
-                existing = dict(fail_grp.attrs.get('failures', {}))
-                for di, tb in failures.items():
-                    existing[f'idx{di}'] = {
-                        'traceback': tb, 
-                        'time': timestamp
-                    }
-                fail_grp.attrs['failures'] = existing
+                try:
+                    fail_grp = self.root.require_group(
+                        f'_failures/{step.name}'
+                    )
+                    timestamp = datetime.now().strftime('%Y%m%d-%H:%M:%S')
+                    existing = dict(fail_grp.attrs.get('failures', {}))
+                    for di, tb in failures.items():
+                        existing[f'idx{di}'] = {
+                            'traceback': tb,
+                            'time': timestamp
+                        }
+                    fail_grp.attrs['failures'] = existing
+                except OSError as exc:
+                    import warnings
+                    warnings.warn(
+                        f"Could not write failure report for '{step.name}' "
+                        f"to zarr: {exc}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
 
         return failures
                         

@@ -740,7 +740,7 @@ class TestOnIQClick:
 
     def _make_event(self, ix, iy, shift=False):
         """Mock event that maps the given (ix, iy) IQ position."""
-        from pyqtgraph.Qt import QtCore
+        from citkid.qt_compat import Qt as _Qt
         event = Mock()
         event.scenePos.return_value = Mock()
         point = Mock()
@@ -748,9 +748,9 @@ class TestOnIQClick:
         point.y.return_value = iy
         mock_vb = Mock()
         mock_vb.mapSceneToView.return_value = point
-        event.button.return_value = QtCore.Qt.LeftButton
+        event.button.return_value = _Qt.LeftButton
         event.modifiers.return_value = (
-            QtCore.Qt.ShiftModifier if shift else QtCore.Qt.NoModifier
+            _Qt.ShiftModifier if shift else _Qt.NoModifier
         )
         return event, mock_vb
 
@@ -885,12 +885,12 @@ class TestOnClick:
 
     def _make_click_event(self, freq, shift=False):
         """Return a mock click event whose scene position maps to freq."""
-        from pyqtgraph.Qt import QtCore
+        from citkid.qt_compat import Qt as _Qt
         event = Mock()
         event.scenePos.return_value = Mock()
-        event.button.return_value = QtCore.Qt.LeftButton
+        event.button.return_value = _Qt.LeftButton
         event.modifiers.return_value = (
-            QtCore.Qt.ShiftModifier if shift else QtCore.Qt.NoModifier
+            _Qt.ShiftModifier if shift else _Qt.NoModifier
         )
         mouse_point = Mock()
         mouse_point.x.return_value = freq

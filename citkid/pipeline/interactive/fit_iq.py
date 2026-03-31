@@ -30,6 +30,7 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtWidgets, QtCore
 
 from .core import register_panel, StepPanel
+from ...qt_compat import Qt as _Qt
 from ...res.funcs import nonlinear_iq
 
 
@@ -43,7 +44,7 @@ class _MaskViewBox(pg.ViewBox):
         self._drag_origin_x = None
 
     def mouseDragEvent(self, ev, axis=None):
-        if ev.modifiers() & QtCore.Qt.ShiftModifier:
+        if ev.modifiers() & _Qt.ShiftModifier:
             ev.accept()
             if ev.isStart():
                 self._drag_origin_x = self.mapToView(ev.buttonDownPos()).x()

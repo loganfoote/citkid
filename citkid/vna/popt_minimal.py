@@ -5,6 +5,7 @@ Minimal power optimizer - just load, fit, and plot for one resonator
 import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtWidgets
+from ..qt_compat import Qt as _Qt
 from citkid.xcal.gain import make_fr_spans, fit_gain, remove_gain
 from citkid.res.fitter import fit_nonlinear_iq
 import zarr
@@ -161,7 +162,7 @@ def plot_power_sweep(zarr_path, data_idx=0, fres_all=None, qres_all=None):
     for i in range(n_powers):
         color = cmap.map(i / max(1, n_powers - 1))
         brush = pg.mkBrush(color)
-        pen_color = pg.mkPen(color, width=2, style=pg.QtCore.Qt.DotLine)
+        pen_color = pg.mkPen(color, width=2, style=_Qt.DotLine)
         
         # Gain plots - circular markers with fits
         p_gain_amp.plot(fg[i], 20 * np.log10(np.abs(zg[i])), 
@@ -221,4 +222,4 @@ if __name__ == '__main__':
     
     win, app = plot_power_sweep(zarr_path, data_idx)
     
-    sys.exit(app.exec_())
+    sys.exit(app.exec())

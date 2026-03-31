@@ -965,6 +965,10 @@ class CRS:
             '-s', f'{self.serial_number:04d}',
             '-n', f'{nframes:d}'
             ]
+        # Save timestamp
+        from datetime import datetime
+        grp.attrs['timestamp'] = datetime.now().strftime('%Y%m%d,%H:%M:%S')
+
         # Run parser
         from rfmux.tools import parser
         try:

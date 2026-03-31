@@ -62,6 +62,7 @@ from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 import threading
 
 from ..analysis import AnalysisRunner
+from ...qt_compat import Qt as _Qt
 from ..dependencies import get_most_recent_run
 from ...signal.iq import density_subsample as _density_subsample
 
@@ -722,7 +723,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         scroll.setWidgetResizable(True)
         self._container = QtWidgets.QWidget()
         self._panel_layout = QtWidgets.QVBoxLayout(self._container)
-        self._panel_layout.setAlignment(QtCore.Qt.AlignTop)
+        self._panel_layout.setAlignment(_Qt.AlignTop)
         self._panel_layout.setSpacing(6)
         scroll.setWidget(self._container)
         outer.addWidget(scroll)
@@ -745,34 +746,24 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         # Keyboard shortcuts: navigate resonator index
         # Forward:  D key  or  Right arrow
         # Backward: A key  or  Left arrow
-        for key in (QtCore.Qt.Key_D, QtCore.Qt.Key_Right):
-            sc = QtWidgets.QShortcut(QtGui.QKeySequence(key), self)
+        for seq in ("D", "Right"):
+            sc = QtGui.QShortcut(QtGui.QKeySequence(seq), self)
             sc.activated.connect(lambda: self._advance(+1))
-        for key in (QtCore.Qt.Key_A, QtCore.Qt.Key_Left):
-            sc = QtWidgets.QShortcut(QtGui.QKeySequence(key), self)
+        for seq in ("A", "Left"):
+            sc = QtGui.QShortcut(QtGui.QKeySequence(seq), self)
             sc.activated.connect(lambda: self._advance(-1))
 
         # R: auto-scale all plot axes
-        _sc_r = QtWidgets.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_R), self)
+        _sc_r = QtGui.QShortcut(QtGui.QKeySequence("R"), self)
         _sc_r.activated.connect(self._autoscale_all)
 
         # Number keys 1-9: run the corresponding panel (1-indexed)
-        _digit_keys = [
-            QtCore.Qt.Key_1, QtCore.Qt.Key_2, QtCore.Qt.Key_3,
-            QtCore.Qt.Key_4, QtCore.Qt.Key_5, QtCore.Qt.Key_6,
-            QtCore.Qt.Key_7, QtCore.Qt.Key_8, QtCore.Qt.Key_9,
-        ]
-        for idx, key in enumerate(_digit_keys):
-            _sc = QtWidgets.QShortcut(QtGui.QKeySequence(key), self)
-            _sc.activated.connect(
-                lambda _i=idx: self._run_panel_by_index(_i)
-            )
-            _sc_shift = QtWidgets.QShortcut(
-                QtGui.QKeySequence(QtCore.Qt.ShiftModifier | key), self
-            )
-            _sc_shift.activated.connect(
-                lambda _i=idx: self._run_through_panel(_i)
-            )
+        for idx in range(1, 10):
+            seq = str(idx)
+            _sc = QtGui.QShortcut(QtGui.QKeySequence(seq), self)
+            _sc.activated.connect(lambda _i=idx-1: self._run_panel_by_index(_i))
+            _sc_shift = QtGui.QShortcut(QtGui.QKeySequence(f"Shift+{seq}"), self)
+            _sc_shift.activated.connect(lambda _i=idx-1: self._run_through_panel(_i))
 
         self.resize(round(1200 * ui_scale), round(900 * ui_scale))
         # Initialise panels in order once the event loop is running so that
@@ -802,7 +793,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         # Position indicator  "3 / 128"
         self._nav_label = QtWidgets.QLabel()
         self._nav_label.setMinimumWidth(60)
-        self._nav_label.setAlignment(QtCore.Qt.AlignCenter)
+        self._nav_label.setAlignment(_Qt.AlignCenter)
         self._update_nav_label()
         layout.addWidget(self._nav_label)
 
@@ -894,15 +885,23 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         self._save_executor.submit(_do_save)
 
     def _advance(self, delta: int):
-        """Submit dirty-panel saves to the background thread, then navigate."""
-        # Clear dirty flag immediately and snapshot data_idx before it changes.
+        """Save dirty panels synchronously, then navigate.
+
+        Saves are done on the main thread *before* the data index changes so
+        that the in-memory cache still contains the old index's results.
+        A background save would race against ``_on_data_idx_changed`` which
+        overwrites the memory cache for the new index.
+        """
         for panel in self.panels:
             if not panel._dirty:
                 continue
             panel._dirty = False
-            self._submit_save(
-                list(panel.steps), panel.AR, panel.data_idx, panel.step_names
-            )
+            try:
+                panel.save_outputs()
+            except Exception as exc:
+                print(
+                    f"Warning: save failed for {panel.step_names}: {exc}"
+                )
 
         new_pos = max(0, min(len(self._data_idxs) - 1, self._nav_pos + delta))
         if new_pos == self._nav_pos:
@@ -922,8 +921,8 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         """Add *panel* to the scroll area, separated by a horizontal line."""
         if self.panels:
             sep = QtWidgets.QFrame()
-            sep.setFrameShape(QtWidgets.QFrame.HLine)
-            sep.setFrameShadow(QtWidgets.QFrame.Sunken)
+            sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
+            sep.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
             self._panel_layout.addWidget(sep)
         header = _SectionHeader(panel)
         self._panel_layout.addWidget(header)
@@ -1202,5 +1201,5 @@ def run_interactive(
         ui_scale=ui_scale, plot_scale=plot_scale,
     )
     win.show()
-    app.exec_()
+    app.exec()
     return win

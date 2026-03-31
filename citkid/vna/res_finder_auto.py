@@ -16,6 +16,9 @@ import os
 from .s21_filt import highpass_filter, polynomial_baseline
 
 
+# No enum helper needed — use string key sequences for portability.
+
+
 def run_res_finder_auto(f, z, outpath, overwrite = False):
     """
     Run the automatic res finder.
@@ -40,7 +43,7 @@ class SpinBoxEventFilter(QtCore.QObject):
     Event filter to select all text when spinbox gains focus.
     """
     def eventFilter(self, obj, event):
-        if event.type() == QtCore.QEvent.FocusIn:
+        if event.type() == QtCore.QEvent.Type.FocusIn:
             if hasattr(obj, 'lineEdit'):
                 QtCore.QTimer.singleShot(0, obj.lineEdit().selectAll)
         return False
@@ -142,7 +145,7 @@ class AutoResFinder:
         self.win.setCentralWidget(central)
         layout = QtWidgets.QHBoxLayout(central)
         
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        splitter = QtWidgets.QSplitter(_Qt.Horizontal)
         layout.addWidget(splitter)
         
         # Left side: plot
@@ -304,11 +307,11 @@ class AutoResFinder:
         # Spacer
         layout.addStretch()
         
-        # Setup keyboard shortcuts
-        self.save_action = QtGui.QShortcut(QtCore.Qt.Key_S, self.win)
+        # Setup keyboard shortcuts (use string sequences for portability)
+        self.save_action = QtGui.QShortcut(QtGui.QKeySequence("S"), self.win)
         self.save_action.activated.connect(self.save_data)
-        
-        self.help_action = QtGui.QShortcut(QtCore.Qt.Key_H, self.win)
+
+        self.help_action = QtGui.QShortcut(QtGui.QKeySequence("H"), self.win)
         self.help_action.activated.connect(self.show_help)
         
     def update_smoothing_controls(self):
@@ -416,14 +419,10 @@ class AutoResFinder:
         self.plot_original.setXLink(self.plot_filtered)
         
         # Setup keyboard shortcuts for panning
-        self.pan_left_action = QtGui.QShortcut(
-            QtCore.Qt.Key_Z, self.win
-        )
+        self.pan_left_action = QtGui.QShortcut(QtGui.QKeySequence("Z"), self.win)
         self.pan_left_action.activated.connect(self.pan_left)
-        
-        self.pan_right_action = QtGui.QShortcut(
-            QtCore.Qt.Key_X, self.win
-        )
+
+        self.pan_right_action = QtGui.QShortcut(QtGui.QKeySequence("X"), self.win)
         self.pan_right_action.activated.connect(self.pan_right)
         
     def auto_scale_y(self, plot, data):
@@ -473,7 +472,7 @@ class AutoResFinder:
         self.status_label.setText(
             '<span style="color: orange;">Updating...</span>'
         )
-        self.win.setCursor(QtCore.Qt.WaitCursor)
+        self.win.setCursor(_Qt.WaitCursor)
         
         # Process events to update UI
         QtWidgets.QApplication.processEvents()
@@ -495,7 +494,7 @@ class AutoResFinder:
         self.status_label.setText(
             '<span style="color: green;">Ready</span>'
         )
-        self.win.setCursor(QtCore.Qt.ArrowCursor)
+        self.win.setCursor(_Qt.ArrowCursor)
         
     def apply_smoothing(self):
         """
@@ -606,12 +605,12 @@ class AutoResFinder:
         # Cycle through 6 distinct (color, line-style) combinations so
         # adjacent markers are always visually distinct.
         _styles = [
-            ((255, 255,   0, 180), QtCore.Qt.SolidLine),  # yellow solid
-            ((  0, 255, 255, 180), QtCore.Qt.DashLine),   # cyan   dash
-            ((255, 100, 255, 180), QtCore.Qt.DotLine),    # magenta dot
-            ((255, 255,   0, 180), QtCore.Qt.DashLine),   # yellow dash
-            ((  0, 255, 255, 180), QtCore.Qt.DotLine),    # cyan   dot
-            ((255, 100, 255, 180), QtCore.Qt.SolidLine),  # magenta solid
+            ((255, 255,   0, 180), _Qt.SolidLine),  # yellow solid
+            ((  0, 255, 255, 180), _Qt.DashLine),   # cyan   dash
+            ((255, 100, 255, 180), _Qt.DotLine),    # magenta dot
+            ((255, 255,   0, 180), _Qt.DashLine),   # yellow dash
+            ((  0, 255, 255, 180), _Qt.DotLine),    # cyan   dot
+            ((255, 100, 255, 180), _Qt.SolidLine),  # magenta solid
         ]
 
         # Add new markers to both plots
@@ -755,9 +754,9 @@ class AutoResFinder:
         
         msg = QtWidgets.QMessageBox()
         msg.setWindowTitle("Auto Resonance Finder Help")
-        msg.setTextFormat(QtCore.Qt.RichText)
+        msg.setTextFormat(_Qt.RichText)
         msg.setText(help_text)
-        msg.exec_()
+        msg.exec()
         
     def run(self):
         """
@@ -773,5 +772,5 @@ class AutoResFinder:
         print(f"Output file: {self.outpath}")
         print("Press 'H' for help")
         
-        self.app.exec_()
+        self.app.exec()
 

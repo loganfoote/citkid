@@ -12,6 +12,8 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 import os
 
+from ..qt_compat import Qt as _Qt
+
 
 def run_res_finder_manual(f, z, fres_initial, outpath, margin_factor = 0.15,
                     overwrite = False):
@@ -300,35 +302,31 @@ class ResFinder:
         None
         """
         # Save shortcut
-        self.save_action = QtGui.QShortcut(QtCore.Qt.Key_S, self.win)
+        self.save_action = QtGui.QShortcut(QtGui.QKeySequence("S"), self.win)
         self.save_action.activated.connect(self.save_data)
-        
-        # Undo shortcut
-        self.undo_action = QtGui.QShortcut(
-            QtCore.Qt.ControlModifier | QtCore.Qt.Key_Z, self.win
-        )
+
+        # Undo shortcut (Ctrl+Z)
+        self.undo_action = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Z"), self.win)
         self.undo_action.activated.connect(self.undo)
-        
-        # Pan left shortcut
-        self.pan_left_action = QtGui.QShortcut(QtCore.Qt.Key_Z, self.win)
+
+        # Pan left/right shortcuts
+        self.pan_left_action = QtGui.QShortcut(QtGui.QKeySequence("Z"), self.win)
         self.pan_left_action.activated.connect(self.pan_left)
-        
-        # Pan right shortcut
-        self.pan_right_action = QtGui.QShortcut(QtCore.Qt.Key_X, self.win)
+        self.pan_right_action = QtGui.QShortcut(QtGui.QKeySequence("X"), self.win)
         self.pan_right_action.activated.connect(self.pan_right)
-        
+
         # IQ plot toggle shortcut
-        self.iq_action = QtGui.QShortcut(QtCore.Qt.Key_Q, self.win)
+        self.iq_action = QtGui.QShortcut(QtGui.QKeySequence("Q"), self.win)
         self.iq_action.activated.connect(self.toggle_iq)
 
         # Fast pan shortcuts (A/D = 80% jump, one resonance width)
-        self.fast_pan_left_action = QtGui.QShortcut(QtCore.Qt.Key_A, self.win)
+        self.fast_pan_left_action = QtGui.QShortcut(QtGui.QKeySequence("A"), self.win)
         self.fast_pan_left_action.activated.connect(self.fast_pan_left)
-        self.fast_pan_right_action = QtGui.QShortcut(QtCore.Qt.Key_D, self.win)
+        self.fast_pan_right_action = QtGui.QShortcut(QtGui.QKeySequence("D"), self.win)
         self.fast_pan_right_action.activated.connect(self.fast_pan_right)
 
         # Help shortcut
-        self.help_action = QtGui.QShortcut(QtCore.Qt.Key_H, self.win)
+        self.help_action = QtGui.QShortcut(QtGui.QKeySequence("H"), self.win)
         self.help_action.activated.connect(self.show_help)
         
     def on_click(self, event):
@@ -356,8 +354,8 @@ class ResFinder:
         if freq is not None:
             modifiers = event.modifiers()
             
-            if event.button() == QtCore.Qt.LeftButton:
-                if modifiers == QtCore.Qt.ShiftModifier:
+            if event.button() == _Qt.LeftButton:
+                if modifiers == _Qt.ShiftModifier:
                     # Shift + Click: Remove nearest resonance
                     self.remove_nearest_resonance(freq)
                 else:
@@ -392,8 +390,8 @@ class ResFinder:
         nearest_idx = int(np.argmin(distances))
         nearest_freq = float(self._iq_f_sel[nearest_idx])
         modifiers = event.modifiers()
-        if event.button() == QtCore.Qt.LeftButton:
-            if modifiers == QtCore.Qt.ShiftModifier:
+        if event.button() == _Qt.LeftButton:
+            if modifiers == _Qt.ShiftModifier:
                 self.remove_nearest_resonance(nearest_freq)
             else:
                 self.add_resonance(nearest_freq)
@@ -575,12 +573,12 @@ class ResFinder:
         # Cycle through 6 distinct (color, line-style) combinations so
         # adjacent markers are always visually distinct.
         _styles = [
-            ((255, 255,   0, 180), QtCore.Qt.SolidLine),  # yellow solid
-            ((  0, 255, 255, 180), QtCore.Qt.DashLine),   # cyan   dash
-            ((255, 100, 255, 180), QtCore.Qt.DotLine),    # magenta dot
-            ((255, 255,   0, 180), QtCore.Qt.DashLine),   # yellow dash
-            ((  0, 255, 255, 180), QtCore.Qt.DotLine),    # cyan   dot
-            ((255, 100, 255, 180), QtCore.Qt.SolidLine),  # magenta solid
+            ((255, 255,   0, 180), _Qt.SolidLine),  # yellow solid
+            ((  0, 255, 255, 180), _Qt.DashLine),   # cyan   dash
+            ((255, 100, 255, 180), _Qt.DotLine),    # magenta dot
+            ((255, 255,   0, 180), _Qt.DashLine),   # yellow dash
+            ((  0, 255, 255, 180), _Qt.DotLine),    # cyan   dot
+            ((255, 100, 255, 180), _Qt.SolidLine),  # magenta solid
         ]
 
         # Add new markers
@@ -931,9 +929,9 @@ class ResFinder:
         
         msg = QtWidgets.QMessageBox()
         msg.setWindowTitle("Resonance Finder Help")
-        msg.setTextFormat(QtCore.Qt.RichText)
+        msg.setTextFormat(_Qt.RichText)
         msg.setText(help_text)
-        msg.exec_()
+        msg.exec()
         
     def run(self):
         """
@@ -951,4 +949,4 @@ class ResFinder:
         self.log("Press 'H' for help")
         
         # Start the Qt event loop
-        self.app.exec_()
+        self.app.exec()

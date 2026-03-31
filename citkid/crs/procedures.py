@@ -1,5 +1,6 @@
 import numpy as np
 import zarr
+from datetime import datetime
 from typing import TYPE_CHECKING
 from citkid.multitone.fres import update_fres
 from . import util
@@ -76,6 +77,7 @@ async def target_sweep(
         # Rough sweep 
         grpr = grp.require_group('rough_sweep')
         fres_rough = fres.copy()
+        grpr.attrs['timestamp'] = datetime.now().strftime('%Y%m%d,%H:%M:%S')
         f_rough, z_rough = await crs.sweep_qres(
                 fres_rough,
                 ares,
@@ -120,6 +122,7 @@ async def target_sweep(
     # Gain sweep 
     if npoints_gain is not None:
         grpg = grp.require_group('gain_sweep')
+        grpg.attrs['timestamp'] = datetime.now().strftime('%Y%m%d,%H:%M:%S')
         f_gain, z_gain = await crs.sweep_qres(
                 fres,
                 ares,
@@ -139,6 +142,7 @@ async def target_sweep(
     # Fine sweep
     if npoints_fine is not None:
         grpf = grp.require_group('fine_sweep')
+        grpf.attrs['timestamp'] = datetime.now().strftime('%Y%m%d,%H:%M:%S')
         f_fine, z_fine = await crs.sweep_qres(
                 fres,
                 ares,
