@@ -55,6 +55,8 @@ Cascade behaviour
 * Changing the ``data_idx`` spinner reruns every per-row panel from the top.
 """
 
+import traceback
+
 import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets
@@ -263,6 +265,19 @@ class StepPanel(QtWidgets.QWidget):
                 self._last_error = exc
                 self._on_step_error(step, exc)
                 return False
+            failures = getattr(self.AR, '_last_failures', None)
+            if failures:
+                failed_idxs = sorted(failures.keys())
+                err = RuntimeError(
+                    f"Step '{step.name}' failed for row(s): {failed_idxs}"
+                )
+                self._last_error = err
+                msg = f"Error in '{step.name}': {err}"
+                if hasattr(self, "_status_label"):
+                    self._status_label.setText(msg)
+                for di, tb_str in sorted(failures.items()):
+                    print(f"--- Row {di} ---\n{tb_str}")
+                return False
 
         self._has_run = True
         self._last_error = None
@@ -293,12 +308,16 @@ class StepPanel(QtWidgets.QWidget):
         Handle a step-level execution error.
 
         Writes a short message to ``_status_label`` if it exists and prints
-        to stdout.  Override to add custom error UI (e.g. a dialog).
+        the full traceback to stdout.  Override to add custom error UI
+        (e.g. a dialog).
         """
         msg = f"Error in '{step.name}': {exc}"
         if hasattr(self, "_status_label"):
             self._status_label.setText(msg)
-        print(msg)
+        tb = "".join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__)
+        )
+        print(tb)
 
 
 ################################################################################
@@ -343,7 +362,10 @@ class DefaultStepPanel(StepPanel):
         msg = f"Error in '{step.name}': {exc}"
         if hasattr(self, "_status_label"):
             self._status_label.setText(msg)
-        print(msg)
+        tb = "".join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__)
+        )
+        print(tb)
 
 
 ################################################################################

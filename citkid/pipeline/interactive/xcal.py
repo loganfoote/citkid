@@ -203,7 +203,7 @@ class XCalPanel(StepPanel):
         self._mask_region = pg.LinearRegionItem(
             movable=True,
             brush=pg.mkBrush(100, 180, 255, 30),
-            pen=pg.mkPen(color=(100, 180, 255, 200), width=1.5),
+            pen=pg.mkPen(color=(100, 180, 255, 200), width=4),
         )
         self._mask_region.setZValue(-5)
         self._plot_amp.addItem(self._mask_region)
