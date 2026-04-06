@@ -363,8 +363,12 @@ def plot_nonlinear_iq_fit(ff, zf_rmv, popt, mask):
     # Plot data
     axs[0].plot(zf_rmv[mask].real, zf_rmv[mask].imag, '.', 
                 color = plt.cm.viridis(0.), aa = False, label = 'data')
-    axs[1].plot((ff - popt[0]) * 1e-3, 20 * np.log10(np.abs(zf_rmv[mask])), '.',
-                color = plt.cm.viridis(0.), aa = False)
+    axs[1].plot(
+        (ff[mask] - popt[0]) * 1e-3, 
+        20 * np.log10(np.abs(zf_rmv[mask])), 
+        '.', color = plt.cm.viridis(0.), 
+        aa = False
+    )
 
     # Plot fit
     fsamp = np.linspace(ff[0], ff[-1], 500) 
