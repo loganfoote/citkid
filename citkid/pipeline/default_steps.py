@@ -23,6 +23,12 @@ default_cal_steps =\
  ('center_t', circle.cent_rot_s21, 
   ['zt_rmv', 'circ_origin', 'theta_phase_offset'], ['zt_cent'], 'per-row'),
 
+ ('rotate_offres_t', lambda z, t: circle.cent_rot_s21(z, 0 + 0j, t), 
+  ['zt_rmv', 'theta_phase_offset'], ['zt_cent'], 'per-row'),
+
+ ('rotate_offres_f', lambda z, t: circle.cent_rot_s21(z, 0 + 0j, t), 
+  ['zf_rmv', 'theta_phase_offset'], ['zf_cent'], 'per-row'),
+
  ('get_thetaf', lambda z, idx_t: circle.convert_to_theta(
      z, unwrap = True, idx_t = idx_t), 
   ['zf_cent', 'idx_t'], ['thetaf'], 'per-row'),
@@ -58,10 +64,16 @@ default_analysis_steps =\
 
  ('fit_iq_circle', circle.fit_iq_circle, 
   ['zf_rmv', 'circ_mask'], ['circ_origin', 'circ_radius'], 'per-row'),
-  ('get_idx_t', lambda ff, ft: np.argmin(np.abs(ff - ft)), 
+
+ ('get_idx_t', lambda ff, ft: np.argmin(np.abs(ff - ft)), 
   ['ff', 'ft'], ['idx_t'], 'per-row'),
+
  ('get_theta_phase_offset', circle.get_theta_phase_offset, 
   ['zt_rmv', 'circ_origin'], ['theta_phase_offset'], 'per-row'),
+
+ ('get_theta_phase_offset_offres', 
+   lambda z: circle.get_theta_phase_offset(z, 0 + 0j), 
+  ['zt_rmv'], ['theta_phase_offset'], 'per-row'),
 
  ('get_xcal_mask', xcal.get_xcal_mask,
   ['ff', 'thetaf', 'thetat', 'xcal_idx0_offset', 'xcal_idx1_offset', 
