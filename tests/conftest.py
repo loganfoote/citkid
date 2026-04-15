@@ -17,9 +17,26 @@ def pytest_addoption(parser):
         default=None,
         help="CRS interface (e.g. 'enp3s0')",
     )
+    parser.addoption(
+        "--rfsoc_ip",
+        action="store",
+        default=None,
+        help="RFSOC UDP IP address (e.g. '192.168.3.40')",
+    )
+    parser.addoption(
+        "--rfsoc_out_dir",
+        action="store",
+        default=None,
+        help="Output directory for RFSOC hardware tests",
+    )
 
 
 def pytest_report_header(config):
     sn = config.getoption("--crs_sn")
     iface = config.getoption("--crs_iface")
-    return f"CRS options: --crs_sn={sn} --crs_iface={iface}"
+    rfsoc_ip = config.getoption("--rfsoc_ip")
+    rfsoc_out_dir = config.getoption("--rfsoc_out_dir")
+    return (
+        f"CRS options: --crs_sn={sn} --crs_iface={iface}\n"
+        f"RFSOC options: --rfsoc_ip={rfsoc_ip} --rfsoc_out_dir={rfsoc_out_dir}"
+    )

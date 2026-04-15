@@ -21,7 +21,7 @@ def test_crs_init_default_parameters(mock_rfmux_session):
         mock_rfmux.load_session.return_value = mock_rfmux_session
         mock_rfmux.CRS = Mock()
         
-        crs = CRS()
+        crs = CRS(serial_number=27, interface='enp2s0')
         
         # Check stored inputs
         assert crs.serial_number == 27
@@ -57,7 +57,7 @@ def test_crs_init_sets_versions(mock_rfmux_session):
         mock_rfmux.load_session.return_value = mock_rfmux_session
         mock_rfmux.CRS = Mock()
 
-        crs = CRS()
+        crs = CRS(serial_number=27, interface='enp2s0')
 
         assert crs.rfmux_version == mock_rfmux.__version__
         assert crs.citkid_version == citkid.__version__
@@ -105,7 +105,7 @@ def test_crs_init_session_string_formatting(mock_rfmux_session):
         
         for serial_number, expected_str in test_cases:
             mock_rfmux.load_session.reset_mock()
-            crs = CRS(serial_number = serial_number)
+            crs = CRS(serial_number=serial_number, interface='enp2s0')
             mock_rfmux.load_session.assert_called_once_with(expected_str)
 
 
@@ -121,7 +121,7 @@ def test_crs_init_wrong_rfmux_version():
             RuntimeError,
             match = f'rfmux version {RFMUX_VERSION} is required'
         ):
-            CRS()
+            CRS(serial_number=27, interface='enp2s0')
 
 
 def test_crs_init_serial_number_not_int():
@@ -136,7 +136,7 @@ def test_crs_init_serial_number_not_int():
             TypeError,
             match = 'serial_number must be an integer'
         ):
-            CRS(serial_number = '27')
+            CRS(serial_number='27', interface='enp2s0')
 
 
 def test_crs_init_serial_number_float():
@@ -151,7 +151,7 @@ def test_crs_init_serial_number_float():
             TypeError,
             match = 'serial_number must be an integer'
         ):
-            CRS(serial_number = 27.0)
+            CRS(serial_number=27.0, interface='enp2s0')
 
 
 def test_crs_init_serial_number_none():
@@ -166,7 +166,7 @@ def test_crs_init_serial_number_none():
             TypeError,
             match = 'serial_number must be an integer'
         ):
-            CRS(serial_number = None)
+            CRS(serial_number=None, interface='enp2s0')
 
 
 def test_crs_init_interface_does_not_exist():
@@ -181,7 +181,7 @@ def test_crs_init_interface_does_not_exist():
             ValueError,
             match = 'interface fake_interface does not exist'
         ):
-            CRS(interface = 'fake_interface')
+            CRS(serial_number=27, interface='fake_interface')
 
 
 def test_crs_init_device_query_chain(mock_rfmux_session,
@@ -195,7 +195,7 @@ def test_crs_init_device_query_chain(mock_rfmux_session,
         mock_rfmux.load_session.return_value = mock_rfmux_session
         mock_rfmux.CRS = Mock()
         
-        crs = CRS()
+        crs = CRS(serial_number=27, interface='enp2s0')
         
         # Verify the query chain
         mock_rfmux_session.query.assert_called_once_with(

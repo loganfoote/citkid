@@ -1,5 +1,10 @@
-import numpy as np
 import warnings
+warnings.warn(
+    "citkid.res.gain is legacy code and may be removed in a future version.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+import numpy as np
 from .plot import plot_gain_fit
 from ..xcal import gain as xcal_gain
 

@@ -1,3 +1,9 @@
+import warnings
+warnings.warn(
+    "citkid.res.data_io is legacy code and may be removed in a future version.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 import pandas as pd
 import numpy as np
 from .util import calc_qc_qi

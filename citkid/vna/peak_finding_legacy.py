@@ -1,3 +1,9 @@
+import warnings
+warnings.warn(
+    "citkid.vna.peak_finding_legacy is legacy code and may be removed in a future version.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 import numpy as np
 from scipy.signal import butter, sosfilt, sosfiltfilt, find_peaks
 

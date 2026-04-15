@@ -1,3 +1,9 @@
+import warnings
+warnings.warn(
+    "citkid.vna.interactive_peak_finder_legacy is legacy code and may be removed in a future version.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 import matplotlib.pyplot as plt
 import numpy as np
 import os

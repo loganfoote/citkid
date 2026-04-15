@@ -1,7 +1,5 @@
 import numpy as np
 
-from tests import res
-
 from .framework import plStep
 from ..xcal import gain, circle, xcal 
 from ..res import fitter as res_fitter

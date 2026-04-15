@@ -10,7 +10,6 @@ density_subsample
 
 import numpy as np
 
-
 def density_subsample(z, n_keep=5000, n_bins=100, seed=0):
     """
     Subsample a complex IQ array to n_keep points, preserving sparse tail

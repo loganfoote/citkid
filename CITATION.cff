@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "citkid"
+abstract: "Kinetic Inductance Detector data acquisition and analysis"
+authors:
+  - family-names: Foote
+    given-names: Logan
+    email: lfoote@caltech.edu
+    affiliation: "California Institute of Technology"
+repository-code: "https://github.com/loganfoote/citkid"
+license: Apache-2.0
+version: 1.0.0-dev
+keywords:
+  - kinetic inductance detector
+  - KID
+  - data acquisition
+  - data analysis

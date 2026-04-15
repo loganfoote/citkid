@@ -54,7 +54,7 @@ def base_crs(mock_rfmux_base):
         CRS: CRS instance with mocked device
     """
     mock_rfmux, mock_device = mock_rfmux_base
-    crs = CRS()
+    crs = CRS(serial_number=1, interface='eth0')
     crs.d = mock_device
     return crs
 

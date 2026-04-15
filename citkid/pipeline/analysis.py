@@ -148,7 +148,7 @@ class AnalysisRunner:
                 enforced_max_runs = enforced_max_runs, save = save
             )
 
-    def execute_step(self, step, data_idx = None, user_params = 'from_yaml', 
+    def execute_step(self, step, data_idx = None, user_params = None, 
                      enforced_max_runs = None, save = False):
         """
         Execute a single analysis step with optional user-provided parameters.
@@ -169,6 +169,9 @@ class AnalysisRunner:
                 - 'from_yaml': look up the params defined in the analysis YAML
                   for this step (uses self.path). Raises ValueError if no YAML
                   was loaded or the step is not found in the path.
+                  Note: the internal execute() loop always passes params
+                  explicitly; 'from_yaml' is only used when calling
+                  execute_step directly.
             enforced_max_runs (dict or None): Optional dict mapping parameter 
                 names to maximum run indices for dependency resolution.
             save (bool): If True, write the step outputs to the zarr file on 
