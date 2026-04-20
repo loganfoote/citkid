@@ -233,11 +233,10 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
     if total_samples > 0:
         chunk_N = min(chunk_N, total_samples)
 
-    # Shard must cover the entire time series to keep all data in a single
-    # shard file. Round up to the nearest multiple of chunk_N.
+    # Shard covers all channels but only one chunk along the time axis,
+    # so each batch write lands in its own shard file without touching others.
     if total_samples > 0:
-        shard_N = int(np.ceil(total_samples / chunk_N)) * chunk_N
-        z_shards = (2, ntones, shard_N)
+        z_shards = (2, ntones, chunk_N)
     else:
         z_shards = None
 
