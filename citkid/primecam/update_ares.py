@@ -82,8 +82,8 @@ cal_directory = os.path.join(
 )
 ares = np.load(os.path.join(cal_directory, 'ares_values.npy'))
 fres = np.load(os.path.join(cal_directory, 'fres_values.npy'))
-dBm_powers = np.load(os.path.join(cal_directory, 'dBm_powers.npy'))
-dBm_powers_aliased = np.load(os.path.join(cal_directory, 'dBm_powers_aliased.npy'))
+dBm_powers = np.load(os.path.join(cal_directory, 'dbm_powers.npy'))
+dBm_powers_aliased = np.load(os.path.join(cal_directory, 'dbm_powers_aliased.npy'))
 output_freqs = np.load(os.path.join(cal_directory, 'output_freqs.npy'))
 output_freqs_aliased = np.load(
     os.path.join(cal_directory, 'output_freqs_aliased.npy')
