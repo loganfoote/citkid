@@ -175,3 +175,5 @@ notebooks/tmp/
 .vscode/settings.json
 /.vscode
 .vscode/settings.json
+pytest_run_output.txt 
+pytest_run_verbose.txt

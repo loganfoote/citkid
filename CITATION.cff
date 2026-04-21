@@ -8,9 +8,13 @@ authors:
     given-names: Logan
     email: lfoote@caltech.edu
     affiliation: "California Institute of Technology"
+    orcid: "https://orcid.org/0000-0002-4162-8609:
 repository-code: "https://github.com/loganfoote/citkid"
 license: Apache-2.0
-version: 1.0.0-dev
+version: 1.0.0
+date-release: 2026-04-21 
+url: "https://github.com/loganfoote/citkid"
+abstract: "Kinetic Inductance Detector Data Acquisition and Analysis."
 keywords:
   - kinetic inductance detector
   - KID
