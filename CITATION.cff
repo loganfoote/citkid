@@ -14,6 +14,10 @@ license: Apache-2.0
 version: 1.0.0
 date-release: 2026-04-21 
 url: "https://github.com/loganfoote/citkid"
+doi: 10.5281/zenodo.19683541 
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.19683541 
 keywords:
   - kinetic inductance detector
   - KID

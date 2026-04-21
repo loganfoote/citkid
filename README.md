@@ -33,3 +33,21 @@ python -m pip install .
  python -m pip install --editable .
 ```
 
+## Citation
+
+If you use this software, please cite it as below.
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19683541.svg)](https://doi.org/10.5281/zenodo.19683541)
+
+```bibtex
+@software{citkid,
+  author       = {Foote, Logan},
+  title        = {citkid: Kinetic Inductance Detector data acquisition and analysis},
+  version      = {1.0.0},
+  date         = {2026-04-21},
+  doi          = {10.5281/zenodo.19683541},
+  url          = {https://github.com/loganfoote/citkid},
+  license      = {Apache-2.0},
+}
+```
+
