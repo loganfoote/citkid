@@ -8,7 +8,7 @@ authors:
     given-names: Logan
     email: lfoote@caltech.edu
     affiliation: "California Institute of Technology"
-    orcid: "https://orcid.org/0000-0002-4162-8609:
+    orcid: "https://orcid.org/0000-0002-4162-8609"
 repository-code: "https://github.com/loganfoote/citkid"
 license: Apache-2.0
 version: 1.0.0
