@@ -1,5 +1,14 @@
 # Kinetic Inductance Detector data acquisition and analysis
-Developed at the California Institute of Technology for far-infrared KID research.
+Collection of Kinetic Inductance Detector (KID) data acquisition and analysis code. Currently implemented analyses are:
+<ul>
+ <li> <b> citkid.res </b>: nonlinear resonance model fitting  </li>
+ <li> <b> citkid.noise </b>: noise analysis </li>
+ <li> <b> citkid.responsivity </b>: optical responsivity fitting  </li>
+ <li> <b> citkid.res_vs_temp </b>: Mattis-Bardeen model fitting of resonance frequencies and quality factors versus temperature </li>
+ <li> <b> citkid.multitone </b>: general multitone data acquisition and analysis procedures </li>
+ <li> <b> citkid.primecam </b>: PrimeCam readout interface software and measurement procedures </li>
+ <li> <b> citkid.crs </b>: t0.technology CRS readout interface software and measurement procedures </li>
+</ul>
 
 ## Installation with conda environment setup
 1. Clone this repository: `git clone https://github.com/loganfoote/citkid`
