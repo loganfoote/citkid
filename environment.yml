@@ -1,24 +1,43 @@
 name: citkid
 channels:
   - conda-forge
-  - anaconda
-  - defaults
 dependencies:
-  - scipy
-  - pandas
-  - jupyterlab
-  - tqdm
-  - numpy
-  - matplotlib
-  - python
-  - pyfftw
-  - numba
-  - ipywidgets
-  - ipympl
-  - pip
-  - emcee
-  - corner
-  - paramiko
-  - redis
+  # Core interpreter (pin first for fast solving)
+  - python=3.12
+
+  # ABI-heavy scientific stack
+  - numpy=1.26.4
+  - scipy=1.16.3
+  - numba=0.62.1
+  - pyfftw=0.15.1
+
+  # Plotting / widgets / UI
+  - matplotlib=3.10.8
+  - ipympl=0.9.8
+  - ipywidgets=8.1.8
+  - pyqtgraph=0.13.7
+  - pyqt=5.15.11
+
+  # Notebook environment
+  - jupyterlab=4.5.0
+  - tqdm=4.67.1
+  - pandas=2.3.3
+
+  # Domain-specific libraries
+  - emcee=3.1.6
+  - corner=2.2.3
+  - paramiko=4.0.0
+  - zarr=3.1.5
+  - rich=14.3.3
+
+  # Dev/test tools
+  - pytest=9.0.1
+
+  # pip installer
+  - pip=25.3
+
+  # Editable install (pip section always last)
   - pip:
-    - -e .
+      - -e .
+      - redis==3.5.3
+      - rfmux==1.4.1

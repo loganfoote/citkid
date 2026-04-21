@@ -1,5 +1,14 @@
 import numpy as np
 
+import warnings 
+
+warnings.warn(
+    "citkid.noise.pca is deprecated and will be removed in version 1.0.0"
+    "Please use citkid.xcal.corr module for correlated noise removal.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 def pca(y, n_components = 5):
     """
     Removes the largest principal components from a noise dataset using single

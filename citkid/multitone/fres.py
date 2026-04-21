@@ -6,7 +6,7 @@ def update_fres(fs, zs, fres, qres, fcal_indices, method = 'distance',
                 cable_delay = 0, plotq = False, res_indices = None, 
                 plot_directory = ''):
     """
-    Update resonance frequencies given fine sweep data
+    Update resonant frequencies given fine sweep data
 
     Parameters:
     fs (array-like): fine sweep frequency data in Hz for each resonator in fres
@@ -19,7 +19,7 @@ def update_fres(fs, zs, fres, qres, fcal_indices, method = 'distance',
         point. 'none' to return fres
     cable_delay (float): cable delay in seconds to remove before updating the 
         frequency 
-    fres (np.array or None): list of resonance frequencies in Hz
+    fres (np.array or None): list of resonant frequencies in Hz
     qres (np.array or None): list of quality factors to cut if
         cut_other_resonators, or None. Cuts spans of fres / Qres from each
         sweep
@@ -49,7 +49,7 @@ def update_fres(fs, zs, fres, qres, fcal_indices, method = 'distance',
     for index, (fi, zi) in enumerate(zip(fs, zs)):
         if index not in fcal_indices:
             spans = fres / qres / 1.5
-            fi, zi = cut_fine_scan(fi, zi, fres, spans)
+            fi, zi = cut_fine_sweep(fi, zi, fres, spans)
             fres_new.append(update(fi, zi))
         else:
             fres_new.append(np.mean(fi))
@@ -107,6 +107,8 @@ def update_fr_distance(f, z):
     Returns:
     fr (float): Updated frequency
     """
+    if len(f) < 1:
+        return np.nan
     offres = np.mean(np.roll(z, 10)[:20])
     diff = np.abs(z - offres)
     ix = np.argmax(diff)
@@ -116,12 +118,12 @@ def update_fr_distance(f, z):
         fr = f[ix]
     return fr
 
-def cut_fine_scan(f, z, fres, spans):
+def cut_fine_sweep(f, z, fres, spans):
     """
-    Cuts resonance frequencies out of a single set of fine scan data
+    Cuts resonant frequencies out of a single set of fine sweep data
 
     Parameters:
-    f, z (np.array, np.array): fine scan frequency in Hz and complex S21 data
+    f, z (np.array, np.array): fine sweep frequency in Hz and complex S21 data
     fres (np.array): array of frequencies to cut in Hz
     spans (np.array): array of frequency spans in Hz to cut
     """
@@ -132,5 +134,27 @@ def cut_fine_scan(f, z, fres, spans):
     for fr, sp in zip(fres, spans):
         ix = (np.abs(f - fr) > sp) | (np.abs(f - fr_keep) < sp_keep)
         f, z = f[ix], z[ix]
-    # Needs to leave the current scan
+    # Needs to leave the current sweep
     return f, z
+
+def trim_nearby_resonances(f, z, fres, ires):
+    """
+    Trims a fine scan to remove nearby resonances.
+    
+    Parameters:
+        f: fine scan frequencies
+        z: fine scan complex S21
+        fres: list of resonant frequencies
+        ires: index of resonant frequency we want to keep
+    Returns:
+        ftrim: trimmed fine scan frequencies
+        ztrim: trimmed fine scan complex S21
+    """
+    f1, f2 = min(f), max(f)
+    if ires > 0:
+        f1 = max(f1, (fres[ires-1]+fres[ires])/2)
+    if ires < len(fres)-1:
+        f2 = min(f2, (fres[ires+1]+fres[ires])/2)
+    mask = (f>f1)&(f<f2)
+    ftrim, ztrim = f[mask], z[mask]
+    return ftrim, ztrim

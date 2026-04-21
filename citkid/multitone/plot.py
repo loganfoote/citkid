@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib.ticker as mtick
-from ..util import fix_path, save_fig
+from ..util import save_fig
 import os
 
 
@@ -56,7 +56,7 @@ def plot_update_fres(fs, zs, fres, fcal_indices, res_indices, cable_delay, plot_
     Parameters:
     fs (array-like): fine sweep frequency data in Hz for each resonator in fres
     zs (array-like): fine sweep complex S21 data for each resonator in fres
-    fres (np.array or None): list of resonance frequencies in Hz
+    fres (np.array or None): list of resonant frequencies in Hz
     fcal_indices (array-like): list of calibrations tone indices (index into
         fs, zs, fres, Qres). Calibration tone frequencies will not be updated
     res_indices (array-like): resonator indices for plotting
@@ -65,7 +65,8 @@ def plot_update_fres(fs, zs, fres, fcal_indices, res_indices, cable_delay, plot_
     fs, zs, fres = np.array(fs), np.array(zs), np.array(fres)
     fcal_indices = np.array(fcal_indices)
     res_indices = np.array(res_indices)
-    plot_directory = fix_path(plot_directory)
+    if plot_directory:
+        plot_directory = os.path.normpath(os.path.expanduser(plot_directory))
     os.makedirs(plot_directory, exist_ok = True)
     num_plots = len(fres)
 

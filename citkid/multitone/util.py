@@ -1,7 +1,8 @@
 import numpy as np
 
 def make_cal_tones(fres, ares, qres, max_n_tones = 1000,
-                   res_indices = None, fcal_power = -55):
+                   res_indices = None, fcal_power = -55,
+                   fres_all = None):
     '''
     Adds calibration tones to the given resonator list. Fills in largest spaces
     between resonators, up to max_n_tones.
@@ -14,6 +15,8 @@ def make_cal_tones(fres, ares, qres, max_n_tones = 1000,
     res_indices (np.array or None): resonator indices corresponding to
         fres
     fcal_power (float): calibration tone power, in the same units as ares
+    fres_all (array-like or None): if given, uses this array to determine
+        calibration tone locations instead of fres. 
 
     Returns:
     fres, ares, qres (np.array): frequency, amplitude, and span factor arrays
@@ -34,8 +37,10 @@ def make_cal_tones(fres, ares, qres, max_n_tones = 1000,
         res_indices = np.asarray(range(len(fres)))
     new_res_indices = np.asarray(res_indices, dtype = int)
 
-    ix = np.flip(np.argsort(np.diff(fres) / fres[:1]))[:max_n_tones - len(fres)]
-    fcal = np.sort([np.mean(fres[i:i+2]) for i in ix])
+    if fres_all is None:
+        fres_all = fres
+    ix = np.flip(np.argsort(np.diff(fres_all) / fres_all[:1]))[:max_n_tones - len(fres)]
+    fcal = np.sort([np.mean(fres_all[i:i+2]) for i in ix])
     fcal_indices = np.searchsorted(fres, fcal)
     fcal_indices += np.asarray(range(len(fcal_indices)), dtype = int)
     for fcal_index, fres_index in enumerate(fcal_indices):

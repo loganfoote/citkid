@@ -4,23 +4,31 @@ import numpy as np
 responsivity_int_names = ['R0', 'P0', 'c']
 repsonsivity_int_labels = [r'$R_0$', r'$P_0$', r'$c$']
 
-def make_fit_row(p0, popt, perr, f1, f0, f0err, plot_path = '', prefix = 'resp'):
+def make_fit_row(
+    p0,
+    popt,
+    perr,
+    f1,
+    f0,
+    f0err,
+    plot_path = '',
+    prefix = 'resp',
+):
     """
-    Wraps the output of fit_responsivity_int fitting into a pd.Series instance
+    Wrap the output of fit_responsivity_int into a pd.Series.
 
     Parameters:
-    p0 (np.array): fit parameter guess
-    popt (np.array): fit parameters
-    perr (np.array): standard errors on fit parameters
-    f1 (float): frequency at P = 0 that was assumed when creating x
-    f0 (float): frequency at P = 0 from fit
-    f0err (float): uncertainty in f0
-    plot_path (str): path to the saved plot, or empty string if it does not
-        exists
-    prefix (str): prefix for the column names. default is 'resp'
+    p0 (np.array): Fit parameter guess.
+    popt (np.array): Fit parameters.
+    perr (np.array): Standard errors on fit parameters.
+    f1 (float): Frequency at P = 0 assumed when creating x.
+    f0 (float): Frequency at P = 0 from the fit.
+    f0err (float): Uncertainty in f0.
+    plot_path (str): Path to the saved plot, or empty string if missing.
+    prefix (str): Prefix for the column names. Default is 'resp'.
 
     Returns:
-    row (pd.Series): pd.Series object that includes all of the input data
+    row (pd.Series): pd.Series that includes all input data.
     """
     if len(prefix):
         prefix += '_'
@@ -39,11 +47,11 @@ def make_fit_row(p0, popt, perr, f1, f0, f0err, plot_path = '', prefix = 'resp')
 
 def separate_fit_row(row, prefix = 'resp'):
     """
-    Performs the inverse function of make_fit_row
+    Perform the inverse function of make_fit_row.
 
     Parameters:
-    row (pd.Series): pd.Series object that includes all of the input data
-    prefix (str): prefix for the column names. default is 'resp'
+    row (pd.Series): pd.Series with all input data.
+    prefix (str): Prefix for the column names. Default is 'resp'.
 
     Returns:
     p0 (np.array): fit parameter guess
@@ -52,8 +60,7 @@ def separate_fit_row(row, prefix = 'resp'):
     f1 (float): frequency at P = 0 that was assumed when creating x
     f0 (float): frequency at P = 0 from fit
     f0err (float): uncertainty in f0
-    plot_path (str): path to the saved plot, or empty string if it does not
-        exists
+    plot_path (str): Path to the saved plot, or empty string if missing.
     """
     if len(prefix):
         prefix += '_'

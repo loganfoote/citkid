@@ -1,5 +1,6 @@
 import os
 import numpy as np
+from scipy.interpolate import RegularGridInterpolator
 
 def update_ares_pscale(f, a, a_nl, dbm_change_high = 2, dbm_change_low = 2,
                        a_target = 0.5, a_max = 1000):
@@ -75,48 +76,56 @@ update_ares_addonly = np.vectorize(update_ares_addonly)
 ################################################################################
 ########################## power conversion functions ##########################
 ################################################################################
-cal_directory = os.path.dirname(os.path.realpath(__file__)) + '/cal_data/'
-ref_freqs      = np.load(cal_directory + 'ref_freqs.npy')
-ref_dbm_pdiffs = np.load(cal_directory + 'ref_dbm_pdiffs.npy')
-a_cal          = np.load(cal_directory + 'rfsoc_powers.npy')
-dbm_cal        = np.load(cal_directory + 'dbm_powers.npy')
+cal_directory = os.path.join(
+    os.path.dirname(os.path.realpath(__file__)),
+    'cal_data',
+)
+ares = np.load(os.path.join(cal_directory, 'ares_values.npy'))
+fres = np.load(os.path.join(cal_directory, 'fres_values.npy'))
+dBm_powers = np.load(os.path.join(cal_directory, 'dbm_powers.npy'))
+dBm_powers_aliased = np.load(os.path.join(cal_directory, 'dbm_powers_aliased.npy'))
+output_freqs = np.load(os.path.join(cal_directory, 'output_freqs.npy'))
+output_freqs_aliased = np.load(
+    os.path.join(cal_directory, 'output_freqs_aliased.npy')
+)
 
-def get_dbm(a, f):
+def get_dbm(a, f, aliased=False):
     """
-    Converts RFSoC power units to dBm. Uses two interpolations to predict the
-    dBm power based on a conversion of RFSoc unit --> dBm power at frequency
-    300MHz, plus a correction due to the fact that the RFSoC's output power
-    decreases as frequency increases.
+    Converts RFSoC power units to dBm.
 
     Parameters:
     a (float): A power level in RFSoC units, i.e. what you supply for ares
-    f (float): the frequency where the tone will be output
+    f (float): the tone frequency you write to the RFSoC
+    aliased (bool): False if you want to calculate the power in the base tone, 
+        True if you want to calculate the power in the aliased tone
 
     Returns:
     dbm (float): the predicted output power in dBm
     """
-    ix = np.argsort(a_cal)
-    dbm = np.interp(a, a_cal[ix], dbm_cal[ix])
-    ix = np.argsort(ref_freqs)
-    freq_correction = np.interp(f, ref_freqs[ix], ref_dbm_pdiffs[ix])
-    dbm += freq_correction
+    if aliased:
+        interp = RegularGridInterpolator((fres, ares), dBm_powers_aliased)
+    else:
+        interp = RegularGridInterpolator((fres, ares), dBm_powers)
+    
+    dbm = interp([f, a])
     return dbm
 
-def get_rfsoc_power(dbm, f):
+def get_rfsoc_power(dbm, f, aliased=False):
     '''
-    Converts power in dBm units to RFSoC units, using the same interpolations
-    from get_dbm.
+    Converts power in dBm units to RFSoC units.
 
     Parameters:
     dbm (float): power in dBm
     f (float): tone frequency in Hz
+    aliased (bool): False if you want to calculate the RFSoC power for the base tone, 
+        True if you want to calculate the RFSoC power for the aliased tone
 
     Returns:
     a (float): power in RFSoC units
     '''
-    ix = np.argsort(ref_freqs)
-    freq_correction = np.interp(f, ref_freqs[ix], ref_dbm_pdiffs[ix])
-    dbm -= freq_correction
-    ix = np.argsort(dbm_cal)
-    a = np.interp(dbm, dbm_cal[ix], a_cal[ix])
+    ii_freq = np.argmin(abs(fres - f))
+    if aliased:
+        a = ares[np.argmin(abs(dBm_powers_aliased[ii_freq,:] - dbm))]
+    else:
+        a = ares[np.argmin(abs(dBm_powers[ii_freq,:] - dbm))]
     return a

@@ -1,9 +1,16 @@
-import numpy as np
 from scipy.signal import butter, filtfilt
+import warnings
+
+warnings.warn(
+    'The citkid.noise.timestream_filter module is deprecated and will be '
+    'removed in a future release. Please use the citkid.signal.filter '
+    'module for timestream processing functions.',
+    DeprecationWarning,
+)
 
 def bandpass_filter(x, dt, f_low, f_high, order=8):
     """
-    Applies a sharp bandpass filter to a timestream.
+    Apply a sharp bandpass filter to a timestream.
 
     Parameters:
     x (np.ndarray): Input timestream data.
@@ -32,7 +39,7 @@ def bandpass_filter(x, dt, f_low, f_high, order=8):
 
 def lowpass_filter(x, dt, f_cutoff, order=8):
     """
-    Applies a lowpass filter to a timestream.
+    Apply a lowpass filter to a timestream.
 
     Parameters:
     x (np.ndarray): Input timestream data.
@@ -59,7 +66,7 @@ def lowpass_filter(x, dt, f_cutoff, order=8):
 
 def highpass_filter(x, dt, f_cutoff, order=8):
     """
-    Applies a highpass filter to a timestream.
+    Apply a highpass filter to a timestream.
 
     Parameters:
     x (np.ndarray): Input timestream data.

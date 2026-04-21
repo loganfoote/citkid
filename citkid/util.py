@@ -1,129 +1,103 @@
 import matplotlib.pyplot as plt
+import os
 from io import BytesIO
 import warnings
 import itertools
 import numpy as np
-
-def fix_path(path):
-    r"""
-    Given a path, convert \ to / and ensure the path ends in / if it is a folder
-
-    Parameters:
-    path (str): path to a folder or file
-
-    Returns:
-    fixed_path (str): fixed path
-    """
-    if path == '':
-        return path
-    fixed_path = path.replace('\\', '/')
-    if fixed_path[-1] != '/' and ('.' not in fixed_path.split('/')[-1]):
-        fixed_path += '/'
-    return fixed_path
+from PIL import Image
+import time
+import threading
+from tqdm.auto import tqdm
 
 def save_fig(fig, filename, plot_directory, ftype = 'png',
              tight_layout = False, close_fig = True):
     """
-    Saves a pyplot figure with standard settings
+    Save a matplotlib figure to disk with standard settings.
 
     Parameters:
-    fig (plt.figure): figure to save
-    filename (str): name of the file to save, without extension
-    plot_directory (str): directory to save the file
-    ftype (str): file type to save. Common types are 'png' and 'eps'
-    tight_layout (bool): if True, sets the figure layout to 'tight'
-    """
-    if fig is not None:
-        plot_directory = fix_path(plot_directory)
-        fig.set_facecolor('white')
-        if tight_layout:
-            fig.tight_layout()
-        plt.figure(fig.number)
-        try:
-            plt.savefig(plot_directory + filename + '.' + ftype,
-                        bbox_inches='tight', pad_inches = 0.05)
-        except Exception as e:
-            plt.savefig(plot_directory + filename + '.' + ftype,
-                        pad_inches = 0.05)
-        if close_fig:
-            plt.close(fig)
-
-def save_figure_to_memory(fig):
-    """
-    Saves a matplotlib figure to memory. Use this to easily stitch together
-    multiple figures without saving extra files
-
-    Parameters:
-    fig (pyplot.figure): figure to save
+    fig (plt.figure): Figure to save.
+    filename (str): File name without extension.
+    plot_directory (str): Directory to save the file.
+    ftype (str): File type to save (e.g., 'png', 'eps').
+    tight_layout (bool): If True, sets the figure layout to 'tight'.
+    close_fig (bool): If True, closes the figure after saving.
 
     Returns:
-    buf (BytesIO): memory buffer of saved figure
+    None
     """
+    # Input validation
+    if not isinstance(filename, str):
+        raise TypeError('filename must be a string')
+    if not isinstance(plot_directory, str):
+        raise TypeError('plot_directory must be a string')
+    if not isinstance(ftype, str):
+        raise TypeError('ftype must be a string')
+    if not isinstance(tight_layout, bool):
+        raise TypeError('tight_layout must be a boolean')
+    if not isinstance(close_fig, bool):
+        raise TypeError('close_fig must be a boolean')
+    
+    # Save figure 
+    if fig is None:
+        return 
+    if plot_directory:
+        plot_directory = os.path.normpath(
+            os.path.expanduser(plot_directory)
+        )
+        output_path = os.path.join(plot_directory, f'{filename}.{ftype}')
+    else:
+        output_path = f'{filename}.{ftype}'
+    fig.set_facecolor('white')
+    if tight_layout:
+        fig.tight_layout()
+    plt.figure(fig.number)
+    try:
+        plt.savefig(output_path, bbox_inches='tight', pad_inches = 0.05)
+    except Exception as e:
+        plt.savefig(output_path, pad_inches = 0.05)
+    if close_fig:
+        plt.close(fig)
+
+def save_fig_to_memory(fig):
+    """
+    Save a matplotlib figure to a memory buffer.
+
+    Parameters:
+    fig (pyplot.figure): Figure to save.
+
+    Returns:
+    buf (BytesIO): Memory buffer containing the saved figure.
+    """
+    # Input validation
+    if fig is None:
+        raise ValueError('fig cannot be None')
+    if not hasattr(fig, 'savefig'):
+        raise TypeError('fig must be a matplotlib figure object')
+    
     buf = BytesIO()
     fig.set_facecolor('white')
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=UserWarning)
-        fig.tight_layout()
-    fig.savefig(buf, format='png', bbox_inches = 'tight', pad_inches = 0.05)
+    fig.savefig(buf, format = 'png', bbox_inches = 'tight', pad_inches = 0.05)
     buf.seek(0)
     return buf
-
-def combine_figures_vertically(fig1, fig2, dpi = 200):
-    """
-    Combine two matplotlib figures vertically for saving as a single file
-
-    Parameters:
-    fig1, fig2 (pyplot.figure): figures to combine
-
-    Returns:
-    fig (pyplot.figure): combined figure
-    """
-    with save_figure_to_memory(fig1) as buf1, save_figure_to_memory(fig2) as buf2:
-        plt.close(fig1)
-        plt.close(fig2)
-        fig, axs = plt.subplots(2, 1, dpi = dpi, layout = 'tight')
-        for ax in axs:
-            ax.set_axis_off()
-        axs[0].imshow(plt.imread(buf1))
-        axs[1].imshow(plt.imread(buf2))
-        fig.tight_layout()
-    return fig
-
-def combine_figures_horizontally(fig1, fig2, dpi = 200):
-    """
-    Combine two matplotlib figures horizontally for saving as a single file
-
-    Parameters:
-    fig1, fig2 (pyplot.figure): figures to combine
-
-    Returns:
-    fig (pyplot.figure): combined figure
-    """
-    with save_figure_to_memory(fig1) as buf1, save_figure_to_memory(fig2) as buf2:
-        plt.close(fig1)
-        plt.close(fig2)
-        fig, axs = plt.subplots(1, 2, dpi = dpi, layout = 'tight')
-        for ax in axs:
-            ax.set_axis_off()
-        axs[0].imshow(plt.imread(buf1))
-        axs[1].imshow(plt.imread(buf2))
-        fig.tight_layout()
-    return fig
 
 def to_scientific_notation(number):
     """
     Converts a number to scientific notation and returns the value and exponent.
 
     Parameters:
-    number (float): The number to convert.
+    number (float): Number to convert.
 
     Returns:
-    tuple: A tuple containing the value in scientific notation and the exponent.
+    mantissa (float): Mantissa in scientific notation.
+    exponent (int): Exponent in scientific notation.
     """
+    # Input validation
+    if not isinstance(number, (int, float, np.integer, np.floating)):
+        raise TypeError('number must be a numeric type')
+    
     if number == 0:
         return (0.0, 0)  # Handle the special case where the number is zero
 
-    # Use Python's scientific notation formatting to get the exponent and mantissa
     exponent = int(np.floor(np.log10(abs(number))))
     mantissa = number / (10 ** exponent)
 
@@ -134,6 +108,183 @@ def to_scientific_notation(number):
 
     return (mantissa, exponent)
 
+def combine_figs_vert(figs, dpi = 200, rescale_to = 'max'):
+    """
+    Combine a list of matplotlib figures vertically into a single matplotlib figure.
+
+    Parameters:
+    figs (list of plt.Figure): Figures to combine (any length >= 1).
+    dpi (int): Dots per inch for the combined figure.
+    rescale_to (str): 'max' to scale images up to the max width, 'min' to scale 
+        down to min width.
+
+    Returns:
+    plt.Figure: Combined figure.
+    """
+    if not isinstance(dpi, (int, np.integer)):
+        raise TypeError('dpi must be an integer')
+    if dpi <= 0:
+        raise ValueError('dpi must be positive')
+    if not isinstance(figs, (list, tuple)):
+        raise TypeError('figs must be a list or tuple of matplotlib figures')
+    if len(figs) == 0:
+        raise ValueError('figs must contain at least one figure')
+
+    # If only one figure, return it unchanged
+    if len(figs) == 1:
+        return figs[0]
+
+    bufs = []
+    created_bufs = []
+    try:
+        for f in figs:
+            if f is None:
+                raise ValueError('figure in figs cannot be None')
+            # Accept either a matplotlib Figure (has savefig) or a BytesIO with
+            # PNG data
+            if hasattr(f, 'savefig'):
+                b = save_fig_to_memory(f)
+                created_bufs.append(b)
+                bufs.append(b)
+                plt.close(f)
+            elif isinstance(f, BytesIO):
+                f.seek(0)
+                bufs.append(f)
+            else:
+                raise TypeError(
+                    'each item in figs must be a matplotlib Figure '
+                    'or a BytesIO PNG buffer'
+                    )
+
+        images = [Image.open(b).convert('RGBA') for b in bufs]
+
+        widths = [im.width for im in images]
+        if rescale_to == 'max':
+            target_w = max(widths)
+        elif rescale_to == 'min':
+            target_w = min(widths)
+        else:
+            raise ValueError("rescale_to must be 'max' or 'min'")
+
+        resized = []
+        for im in images:
+            if im.width != target_w:
+                new_h = int(im.height * (target_w / im.width))
+                resized.append(im.resize((target_w, new_h), Image.LANCZOS))
+            else:
+                resized.append(im)
+
+        total_h = sum(im.height for im in resized)
+        combined = Image.new('RGBA', (target_w, total_h), (255, 255, 255, 255))
+        y = 0
+        for im in resized:
+            combined.paste(im, (0, y), im)
+            y += im.height
+
+        # Save combined image to a PNG bytes buffer and return it
+        out_buf = BytesIO()
+        combined.save(out_buf, format='PNG')
+        out_buf.seek(0)
+        return out_buf
+    finally:
+        for im in locals().get('images', []):
+            try:
+                im.close()
+            except Exception:
+                pass
+        for b in created_bufs:
+            try:
+                b.close()
+            except Exception:
+                pass
+
+def combine_figs_horz(figs, dpi = 200, rescale_to = 'max'):
+    """
+    Combine a list of matplotlib figures horizontally into a single matplotlib 
+    figure.
+
+    Parameters:
+    figs (list of plt.Figure): Figures to combine (any length >= 1).
+    dpi (int): Dots per inch for the combined figure.
+    rescale_to (str): 'max' to scale images up to the max height, 'min' to scale 
+        down to min height.
+
+    Returns:
+    plt.Figure: Combined figure.
+    """
+    if not isinstance(dpi, (int, np.integer)):
+        raise TypeError('dpi must be an integer')
+    if dpi <= 0:
+        raise ValueError('dpi must be positive')
+    if not isinstance(figs, (list, tuple)):
+        raise TypeError('figs must be a list or tuple of matplotlib figures')
+    if len(figs) == 0:
+        raise ValueError('figs must contain at least one figure')
+
+    if len(figs) == 1:
+        return figs[0]
+
+    bufs = []
+    created_bufs = []
+    try:
+        for f in figs:
+            if f is None:
+                raise ValueError('figure in figs cannot be None')
+            if hasattr(f, 'savefig'):
+                b = save_fig_to_memory(f)
+                created_bufs.append(b)
+                bufs.append(b)
+                plt.close(f)
+            elif isinstance(f, BytesIO):
+                f.seek(0)
+                bufs.append(f)
+            else:
+                raise TypeError(
+                    'each item in figs must be a matplotlib Figure '
+                    'or a BytesIO PNG buffer'
+                    )
+
+        images = [Image.open(b).convert('RGBA') for b in bufs]
+
+        heights = [im.height for im in images]
+        if rescale_to == 'max':
+            target_h = max(heights)
+        elif rescale_to == 'min':
+            target_h = min(heights)
+        else:
+            raise ValueError("rescale_to must be 'max' or 'min'")
+
+        resized = []
+        for im in images:
+            if im.height != target_h:
+                new_w = int(im.width * (target_h / im.height))
+                resized.append(im.resize((new_w, target_h), Image.LANCZOS))
+            else:
+                resized.append(im)
+
+        total_w = sum(im.width for im in resized)
+        combined = Image.new('RGBA', (total_w, target_h), (255, 255, 255, 255))
+        x = 0
+        for im in resized:
+            combined.paste(im, (x, 0), im)
+            x += im.width
+
+        out_buf = BytesIO()
+        combined.save(out_buf, format='PNG')
+        out_buf.seek(0)
+        return out_buf
+    finally:
+        for im in locals().get('images', []):
+            try:
+                im.close()
+            except Exception:
+                pass
+        for b in created_bufs:
+            try:
+                b.close()
+            except Exception:
+                pass
+
 def format_str_scientific_with_err(p, perr, for_plotting = True):
     r"""
     Formats a value and its uncertainty as a string in scientific notation,
@@ -141,14 +292,22 @@ def format_str_scientific_with_err(p, perr, for_plotting = True):
     figures. e.g. (1.54 ± 0.04) X 10^-4
 
     Parameters:
-    p (float): parameter value
-    perr (float) parameter uncertainty
-    for_plotting (bool): if True, formats the string in latex for plotting. If
-        False, formats the string for printing
+    p (float): Parameter value.
+    perr (float): Parameter uncertainty.
+    for_plotting (bool): If True, formats the string in LaTeX for plotting.
+        If False, formats the string for plain text.
 
     Returns:
-    formatted_str (str): formatted string
+    formatted_str (str): Formatted string.
     """
+    # Input validation
+    if not isinstance(p, (int, float, np.integer, np.floating)):
+        raise TypeError('p must be a numeric type')
+    if not isinstance(perr, (int, float, np.integer, np.floating)):
+        raise TypeError('perr must be a numeric type')
+    if not isinstance(for_plotting, bool):
+        raise TypeError('for_plotting must be a boolean')
+    
     p_mantissa, p_exponent = to_scientific_notation(p)
     perr_mantissa, perr_exponent = to_scientific_notation(perr)
     exp_diff = p_exponent - perr_exponent
@@ -168,16 +327,25 @@ def get_fit_bound_curves(x, popt, perr, model):
     optimal fit parameters and uncertainties
 
     Parameters:
-    x (array-like): x sample data
-    popt (array-like): fit parameters
-    perr (array-like): fit parameter uncertainties
-    model (func): model function that takes parameters (x, *popt)
+    x (array-like): Sample x data.
+    popt (array-like): Fit parameters.
+    perr (array-like): Fit parameter uncertainties.
+    model (callable): Model function that takes parameters (x, *popt).
 
     Returns:
-    y_best_fit (np.array): best fit data corresponding to x
-    y_lower (np.array): lower bound on fit data corresponding to x
-    y_upper (np.array): upper bound on fit data corresponding to x
+    y_best_fit (np.array): Best-fit data corresponding to x.
+    y_lower (np.array): Lower bound curve corresponding to x.
+    y_upper (np.array): Upper bound curve corresponding to x.
     """
+    # Input validation
+    if not callable(model):
+        raise TypeError('model must be callable')
+    popt = np.asarray(popt)
+    perr = np.asarray(perr)
+    x = np.asarray(x)
+    if popt.shape != perr.shape:
+        raise ValueError('popt and perr must have the same shape')
+    
     y_best_fit = model(x, *popt)
 
     param_combinations = list(itertools.product(*zip(popt - np.array(perr),
@@ -187,3 +355,122 @@ def get_fit_bound_curves(x, popt, perr, model):
     y_upper = np.nanmax(y_combinations, axis=0)
     y_lower = np.nanmin(y_combinations, axis=0)
     return y_best_fit, y_lower, y_upper
+
+def run_with_time_bar(fn, duration_s, desc, *args, **kwargs):
+    """
+    Runs a function while displaying a time progress bar for the specified 
+    duration.
+
+    Parameters:
+    fn (callable): Function to run.
+    duration_s (float): Duration in seconds for the progress bar.
+    desc (str): Description for the progress bar.
+
+    *args: Positional arguments to pass to fn.
+    **kwargs: Keyword arguments to pass to fn.
+    
+    Returns:
+    The return value of fn.
+        """
+    # Input validation
+    if not callable(fn):
+        raise TypeError('fn must be callable')
+    if not isinstance(duration_s, (int, float, np.integer, np.floating)):
+        raise TypeError('duration_s must be a numeric type')
+    if duration_s < 0:
+        raise ValueError('duration_s must be non-negative')
+    if not isinstance(desc, str):
+        raise TypeError('desc must be a string')
+    
+    stop = threading.Event()
+
+    def progress():
+        start = time.monotonic()
+        with tqdm(
+            total = duration_s, 
+            unit = "s", 
+            desc = desc, 
+            bar_format = "{l_bar}{bar}| {remaining}",
+            leave = False
+            ) as pbar:
+            while not stop.is_set():
+                elapsed = time.monotonic() - start
+                pbar.n = min(elapsed, duration_s)
+                pbar.refresh()
+                time.sleep(0.1)
+
+            pbar.n = duration_s 
+            pbar.refresh()
+
+    t = threading.Thread(target=progress, daemon=True)
+    t.start()
+
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        stop.set()
+        t.join()
+
+
+
+def combine_figures_vertically_legacy(fig1, fig2, dpi = 200):
+    """
+    Combine two matplotlib figures vertically for saving as a single file
+
+    Parameters:
+    fig1, fig2 (pyplot.figure): figures to combine
+
+    Returns:
+    fig (pyplot.figure): combined figure
+    """
+    with save_figure_to_memory_legacy(fig1) as buf1, save_figure_to_memory_legacy(fig2) as buf2:
+        plt.close(fig1)
+        plt.close(fig2)
+        fig, axs = plt.subplots(2, 1, dpi = dpi, layout = 'tight')
+        for ax in axs:
+            ax.set_axis_off()
+        axs[0].imshow(plt.imread(buf1))
+        axs[1].imshow(plt.imread(buf2))
+        fig.tight_layout()
+    return fig
+
+def combine_figures_horizontally_legacy(fig1, fig2, dpi = 200):
+    """
+    Combine two matplotlib figures horizontally for saving as a single file
+
+    Parameters:
+    fig1, fig2 (pyplot.figure): figures to combine
+
+    Returns:
+    fig (pyplot.figure): combined figure
+    """
+    with save_figure_to_memory_legacy(fig1) as buf1, save_figure_to_memory_legacy(fig2) as buf2:
+        plt.close(fig1)
+        plt.close(fig2)
+        fig, axs = plt.subplots(1, 2, dpi = dpi, layout = 'tight')
+        for ax in axs:
+            ax.set_axis_off()
+        axs[0].imshow(plt.imread(buf1))
+        axs[1].imshow(plt.imread(buf2))
+        fig.tight_layout()
+    return fig
+
+def save_figure_to_memory_legacy(fig):
+    """
+    Saves a matplotlib figure to memory. Use this to easily stitch together
+    multiple figures without saving extra files
+
+    Parameters:
+    fig (pyplot.figure): figure to save
+
+    Returns:
+    buf (BytesIO): memory buffer of saved figure
+    """
+    buf = BytesIO()
+    fig.set_facecolor('white')
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=UserWarning)
+        fig.tight_layout()
+    fig.savefig(buf, format='png', bbox_inches = 'tight', pad_inches = 0.05)
+    buf.seek(0)
+    return buf

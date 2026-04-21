@@ -1,23 +1,36 @@
+import warnings
+warnings.warn(
+    "citkid.res.plot is legacy code and may be removed in a future version.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 import matplotlib.pyplot as plt
 import numpy as np
 from .funcs import nonlinear_iq
 
-def plot_nonlinear_iq(f, z, popt, p0, plot_guess = False):
+def plot_nonlinear_iq(f, z, popt, p0, downward = True, plot_guess = False):
     """
-    Plots the fit to the nonlinear iq model
+    Plot the fit to the nonlinear IQ model.
 
     Parameters:
-    f (np.array): frequency data in Hz
-    z (np.array): complex iq data
-    popt (list): fit parameters
-    p0 (list): initial guess parameters
-    plot_guess (bool): If True, also plots the guess curve
+    f (np.array): Frequency data in Hz.
+    z (np.array): Complex IQ data.
+    popt (list): Fit parameters.
+    p0 (list): Initial guess parameters.
+    downward (bool): If True, plots the equation for a downward sweep. If
+        False, plots for an upward sweep.
+    plot_guess (bool): If True, also plot the guess curve.
 
     Returns:
-    fig, ax (pyplot figure and axes): plot of data with fit, both in IQ space
-        and as mag(S21)
+    fig, ax: Plot of data with fit in IQ space and |S21|.
     """
-    fig, axs = plt.subplots(1, 2, figsize = [6, 2.8], dpi = 200, layout = 'tight')
+    fig, axs = plt.subplots(
+        1,
+        2,
+        figsize = [6, 2.8],
+        dpi = 200,
+        layout = 'tight',
+    )
     axs[0].set_ylabel('Q')
     axs[0].set_xlabel('I')
     axs[1].set_ylabel(r'$S_{21}$ (dB)')
@@ -32,12 +45,12 @@ def plot_nonlinear_iq(f, z, popt, p0, plot_guess = False):
                 color = color0, markersize = 5)
 
     fsamp = np.linspace(min(f), max(f), 1000)
-    zsamp = nonlinear_iq(fsamp, *popt)
+    zsamp = nonlinear_iq(fsamp, *popt, downward)
     axs[0].plot(np.real(zsamp), np.imag(zsamp), '--r', label = 'fit')
     axs[1].plot((fsamp - f0) / 1e3, 20 * np.log10(abs(zsamp)), '--r')
 
     if plot_guess:
-        zsamp = nonlinear_iq(fsamp, *p0)
+        zsamp = nonlinear_iq(fsamp, *p0, downward)
         axs[0].plot(np.real(zsamp), np.imag(zsamp), '--k', label = 'guess')
         axs[1].plot((fsamp - f0) / 1e3, 20 * np.log10(abs(zsamp)), '--k')
         axs[0].legend(framealpha = 1)
@@ -45,15 +58,15 @@ def plot_nonlinear_iq(f, z, popt, p0, plot_guess = False):
 
 def plot_circle(z, A, B, R):
     """
-    Plots IQ data with a circular fit
+    Plot IQ data with a circular fit.
 
     Parameters:
-    z (np.array): complex IQ data
-    A, B (float, float): circle origin
-    R (float): circle radius
+    z (np.array): Complex IQ data.
+    A, B (float, float): Circle origin.
+    R (float): Circle radius.
 
     Returns:
-    fig, ax (pyplot figure and axis): data and fit plot
+    fig, ax: Data and fit plot.
     """
     fig, ax = plt.subplots(figsize = (4, 4), dpi = 200)
     ax.plot(np.real(z), np.imag(z), 'r.')
@@ -65,22 +78,28 @@ def plot_circle(z, A, B, R):
 
 def plot_gain_fit(f0, dB0, f, dB, phase, p_amp, p_phase):
     """
-    Plots the fit to gain amplitude and phase data
+    Plot the fit to gain amplitude and phase data.
 
     Parameters:
-    f0 (np.array): raw frequency data
-    dB0 (np.array): raw amplitude data
-    f (np.array): cut frequency data
-    dB (np.array): cut amplitude data
-    phase (np.array): cut phase data
-    p_amp (list): amplitude fit parameters
-    p_phase (list): phase fit parameters
+    f0 (np.array): Raw frequency data.
+    dB0 (np.array): Raw amplitude data.
+    f (np.array): Cut frequency data.
+    dB (np.array): Cut amplitude data.
+    phase (np.array): Cut phase data.
+    p_amp (list): Amplitude fit parameters.
+    p_phase (list): Phase fit parameters.
 
     Returns:
-    fig, axs (pyplot figure and axis): data and fit plot
+    fig, axs: Data and fit plot.
     """
     fmean = np.mean(f0)
-    fig, axs = plt.subplots(1, 2, figsize=[6, 2.8], dpi = 200, layout = 'tight')
+    fig, axs = plt.subplots(
+        1,
+        2,
+        figsize = [6, 2.8],
+        dpi = 200,
+        layout = 'tight',
+    )
     axs[1].set_ylabel('Phase')
     axs[1].set_xlabel(f'(f - {round(fmean / 1e9, 4)} GHz) (kHz)')
     axs[0].set_ylabel('|S21| (dB)')
@@ -88,16 +107,38 @@ def plot_gain_fit(f0, dB0, f, dB, phase, p_amp, p_phase):
 
     color = plt.cm.viridis(0.1)
     color0 = plt.cm.viridis(0.99)
-    axs[0].plot((f0 - fmean) * 1e-3, dB0, '.', color = color0, label='Raw data')
+    axs[0].plot(
+        (f0 - fmean) * 1e-3,
+        dB0,
+        '.',
+        color = color0,
+        label = 'Raw data',
+    )
     axs[0].plot((f - fmean) * 1e-3, dB, '.', color = color, label='Fitted data')
-    fsamp = np.linspace(np.min(f0),np.max(f0), 100)
+    fsamp = np.linspace(np.min(f0), np.max(f0), 100)
     if ~np.any(np.isnan(p_amp)):
-        axs[0].plot((fsamp - fmean) * 1e-3, np.polyval(p_amp, fsamp), '--r', label='Fit')
+        axs[0].plot(
+            (fsamp - fmean) * 1e-3,
+            np.polyval(p_amp, fsamp),
+            '--r',
+            label = 'Fit',
+        )
 
     axs[1].plot([], [], '.', color = color0, label = 'Raw data')
-    axs[1].plot((f - fmean) * 1e-3, phase, '.', color = color, label='Fitted data')
+    axs[1].plot(
+        (f - fmean) * 1e-3,
+        phase,
+        '.',
+        color = color,
+        label = 'Fitted data',
+    )
     if ~np.any(np.isnan(p_phase)):
-        axs[1].plot((fsamp - fmean) * 1e-3, np.polyval(p_phase, fsamp), '--r', label='Fit')
+        axs[1].plot(
+            (fsamp - fmean) * 1e-3,
+            np.polyval(p_phase, fsamp),
+            '--r',
+            label = 'Fit',
+        )
 
     # axs[1].legend(framealpha=1)
     return fig, axs

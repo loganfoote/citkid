@@ -2,7 +2,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 from ..res.plot import plot_circle
 from .psd import bin_psd
-from ..util import combine_figures_horizontally
+from ..util import combine_figs_horz
+
+import warnings 
+
+warnings.warn(
+    "citkid.noise.plot is deprecated and will be removed in version 1.0.0",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 def plot_cal(ffine, zfine, popt_circle, fnoise, znoise, znoise_offres,
              theta_range, theta_fine, theta, poly, ixs):
@@ -11,8 +19,8 @@ def plot_cal(ffine, zfine, popt_circle, fnoise, znoise, znoise_offres,
     plot is the theta to x calibration, if on-resonance noise is provided.
 
     Parameters:
-    ffine (array-like): fine scan frequency data in Hz
-    zfine (array-like): fine scan complex S21 data, with gain removed
+    ffine (array-like): fine sweep frequency data in Hz
+    zfine (array-like): fine sweep complex S21 data, with gain removed
     popt_circle (np.array): circle fit parameters
     fnoise (float): on-resonance noise tone frequency in Hz
     znoise (array-like or None): on-resonance complex noise data
@@ -69,14 +77,29 @@ def plot_cal(ffine, zfine, popt_circle, fnoise, znoise, znoise_offres,
         #         ix1 = len(theta_fine)
         # else:
         #     ix1 = len(theta_fine)
-        theta_samp = np.linspace(min(theta_fine[ix0:ix1]), max(theta_fine[ix0:ix1]), 200)
-        ax2.plot(theta_samp, (1 - np.polyval(poly, theta_samp) / fnoise) * 1e6,
-                 '-k')
-        ax2.plot(theta_fine[ix0:ix1], (1 - ffine[ix0:ix1] / fnoise) * 1e6, '.',
-                  color = 'r')
-        ax2.plot(theta[::nevery],
-                 (1 - np.polyval(poly, theta[::nevery]) / fnoise) * 1e6, '.',
-                  color = color0, markersize = 5)
+        theta_samp = np.linspace(
+            min(theta_fine[ix0:ix1]),
+            max(theta_fine[ix0:ix1]),
+            200,
+        )
+        ax2.plot(
+            theta_samp,
+            (1 - np.polyval(poly, theta_samp) / fnoise) * 1e6,
+            '-k',
+        )
+        ax2.plot(
+            theta_fine[ix0:ix1],
+            (1 - ffine[ix0:ix1] / fnoise) * 1e6,
+            '.',
+            color = 'r',
+        )
+        ax2.plot(
+            theta[::nevery],
+            (1 - np.polyval(poly, theta[::nevery]) / fnoise) * 1e6,
+            '.',
+            color = color0,
+            markersize = 5,
+        )
         ax2.axvline(theta_range[0], linestyle = '--', color = color0)
         ax2.axvline(theta_range[1], linestyle = '--', color = color0)
 
@@ -91,7 +114,7 @@ def plot_cal(ffine, zfine, popt_circle, fnoise, znoise, znoise_offres,
     ax.plot([], [], '--k', label = 'cal range')
     ax.legend(loc = 'center')
     if znoise is not None:
-        fig = combine_figures_horizontally(fig, fig2)
+        fig = combine_figs_horz([fig, fig2])
     return fig
 
 def plot_timestream(dt, theta, theta_clean, dt_offres, theta_offres, x,
@@ -135,7 +158,12 @@ def plot_timestream(dt, theta, theta_clean, dt_offres, theta_offres, x,
 
         time = np.linspace(0, len(theta) * dt, len(theta))
         axs[1].plot(time, theta, color = color0, label = 'raw data')
-        axs[1].plot(time, theta_clean, color = color1, label = 'deglitched data')
+        axs[1].plot(
+            time,
+            theta_clean,
+            color = color1,
+            label = 'deglitched data',
+        )
         axs[0].plot(time, x * 1e6, color = color0)
         axs[1].plot(time[cr_indices], theta[cr_indices], color = 'r',
                     marker = 'x', linestyle = '', label = 'removed peaks')
@@ -154,11 +182,11 @@ def plot_psd(f_psd, spar, sper, sxx, f_psd_offres, spar_offres, sper_offres):
     parallel noise, and one plot of Sxx, if provided
 
     Parameters:
-    f_psd (np.array or None): on-resonance frequency data in Hz
+    f_psd (np.array or None): on-resonant frequency data in Hz
     spar  (np.array or None): on-resonance parallel noise in dBc
     sper  (np.array or None): on-resonance perpendicular noise in dBc
     sxx   (np.array or None): on-resonance Sxx in 1 / Hz
-    f_psd_offres (np.array or None): off-resonance frequency data in Hz
+    f_psd_offres (np.array or None): off-resonant frequency data in Hz
     spar_offres  (np.array or None): off-resonance parallel noise in dBc
     sper_offres  (np.array or None): off-resonance perpendicular noise in dBc
 

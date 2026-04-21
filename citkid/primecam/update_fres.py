@@ -1,4 +1,14 @@
 import numpy as np
+
+import warnings 
+
+warnings.warn(
+    "citkid.noise.update_fres is deprecated and will be removed in a future"
+    "version. Please use multitone.fres instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 def update_fres(f, z, npoints, fcal_indices = [], method = 'mins21',
                     cut_other_resonators = False, fres = None, Qres = None):
     """
@@ -18,7 +28,7 @@ def update_fres(f, z, npoints, fcal_indices = [], method = 'mins21',
     cut_other_resonators (bool): if True, cuts other resonators out of each
         sweep before updating the tone. Other resonators are defined using
         fres and Qres
-    fres (np.array or None): list of resonance frequencies in Hz if
+    fres (np.array or None): list of resonant frequencies in Hz if
         cut_other_resonators, or None
     Qres (np.array or None): list of quality factors to cut if
         cut_other_resonators, or None. Cuts spans of fres / Qres from each
@@ -113,7 +123,7 @@ def update_fr_distance(fi, zi):
 
 def cut_fine_scan(fi, zi, fres, spans):
     """
-    Cuts resonance frequencies out of a single set of fine scan data
+    Cuts resonant frequencies out of a single set of fine scan data
 
     Parameters:
     fi, zi (np.array, np.array): fine scan frequency in Hz and complex S21 data

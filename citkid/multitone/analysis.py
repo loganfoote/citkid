@@ -6,23 +6,24 @@ from ..res.fitter import fit_nonlinear_iq_with_gain
 from ..res.funcs import nonlinear_iq
 from ..res.gain import fit_and_remove_gain_phase
 from ..res.data_io import make_fit_row, separate_fit_row
-from ..util import fix_path, save_fig
+from ..util import save_fig
 import matplotlib.pyplot as plt
 from ..res.gain import remove_gain
 from ..noise.analysis import compute_psd
 from ..noise.data_io import save_psd
 from .data_io import import_iq_noise
-from .fres import cut_fine_scan
+from .fres import cut_fine_sweep
+from rfmux.core.transferfunctions import compensate_psd_for_cics
 import matplotlib
 matplotlib.use('Agg')
 
 def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
            constant_atten, temperature_index, temperature, rejected_points = [],
            extra_fitdata_values = {}, plotq = False, plot_factor = 1,
-           cut_to_qres = False, overwrite = False, verbose = True,
-           catch_exceptions = False):
+           downward = True, cut_to_qres = False, overwrite = False,
+           verbose = True, catch_exceptions = False):
     """
-    Fits all IQ loops in a target scan
+    Fits all IQ loops in a target sweep
 
     Parameters:
     directory (str): directory containing the data for logging
@@ -37,7 +38,7 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
         cryostat should be taken into account here
     temperature_index (int): temperature index for logging
     temperature (float): temperature in K for logging
-    rejected_points (array-like): indices to discard from fine scan data before
+    rejected_points (array-like): indices to discard from fine sweep data before
         fitting
     extra_fitdata_values (dict): keys (str) are data column names and values
         (single value or np.array with same length as number of targets) are set
@@ -45,7 +46,9 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
     plotq (bool): If True, plots IQ fits and saves them
     plot_factor (int): for plotting a subset of resonators. Plots every
         plot_factor resonators
-    cut_to_qres (bool): If True, cuts the fine scan data to the span of fres / qres
+    downward (bool): If True, solves the equation for a downward sweep. If
+        False, solves for an upward sweep.
+    cut_to_qres (bool): If True, cuts the fine sweep data to the span of fres / qres
     overwrite (bool): if not True, raises an exception if the output data file
         already exists
     verbose (bool): If True, displays a progress bar as data is taken
@@ -55,7 +58,7 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
     Returns:
     data (pd.DataFrame): DataFrame of fit data
     """
-    directory = fix_path(directory)
+    directory = os.path.normpath(os.path.expanduser(directory))
     # Import data
     fres_initial, fres, ares, qres, fcal_indices, fres_all, qres_all, frough, zrough,\
            fgains, zgains, ffines, zfines, znoises, noise_dt, res_indices, fres_noise =\
@@ -65,12 +68,12 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
     if file_suffix != '':
         file_suffix = '_' + file_suffix
     if out_directory is not None:
-        out_directory = fix_path(out_directory)
+        out_directory = os.path.normpath(os.path.expanduser(out_directory))
         os.makedirs(out_directory, exist_ok = True)
-        fit_plot_directory = out_directory + 'plots_iq/'
+        fit_plot_directory = os.path.join(out_directory, 'plots_iq')
         if not os.path.exists(fit_plot_directory) and plotq:
             os.makedirs(fit_plot_directory)
-        out_path = out_directory + f'fitdata{file_suffix}.csv'
+        out_path = os.path.join(out_directory, f'fitdata{file_suffix}.csv')
         if not overwrite and os.path.exists(out_path):
             raise Exception(f'{out_path} already exists!!!')
     # Split data
@@ -93,7 +96,7 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
         fr, Qr = fres[pbar_index], qres[pbar_index]
         # Cut adjacent resonators from data before fitting
         if pbar_index not in fcal_indices:
-            ffine, zfine = cut_fine_scan(ffine, zfine, fres, fres / qres)
+            ffine, zfine = cut_fine_sweep(ffine, zfine, fres, fres / qres)
         if cut_to_qres:
             ix = np.abs(ffine - fr) < fr / Qr
             ffine, zfine = ffine[ix], zfine[ix]
@@ -101,15 +104,20 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
         file_prefix = f'Tn{temperature_index}Fn{resonator_index}'
         file_prefix += f'Pn{power_number}{file_suffix}'
         if plotq_single:
-            plot_path = fit_plot_directory + file_prefix + '_fit.png'
+            plot_path = os.path.join(
+                fit_plot_directory,
+                f'{file_prefix}_fit.png',
+            )
         else:
             plot_path = ''
         try:
             if pbar_index not in fcal_indices:
                 # For on-resonance, fit IQ loops
                 fitrow, fig = \
-                    fit_nonlinear_iq_with_gain(fgain, zgain, ffine, zfine, fres_all,
-                                               qres_all, plotq = plotq_single,
+                    fit_nonlinear_iq_with_gain(fgain, zgain, ffine, zfine,
+                                               fres_all, qres_all,
+                                               plotq = plotq_single,
+                                               downward = downward,
                                                return_dataframe = True)
                 fitrow['plotpath'] = plot_path
                 fitrow['fcal'] = 0
@@ -121,6 +129,7 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
                 p = [np.nan] * 7
                 res = np.nan
                 fitrow = make_fit_row(p_amp, p_phase, p, p, p, res,
+                                      downward = downward,
                                       plot_path = plot_path)
                 fitrow['fcal'] = 1
             if not fig is None:
@@ -162,7 +171,7 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
                   plot_timestreamq = False, plot_factor = 1, min_cal_points = 5,
                   deglitch_nstd = 10, cr_nstd = 5, cr_width = 100e-6,
                   cr_peak_spacing = 100e-6, cr_removal_time = 1e-3,
-                  circfit_npoints = None, correct_cic2 = False,
+                  circfit_npoints = None, correct_cic = False,
                   overwrite = False, catch_exceptions = False,
                   res_whitelist = None, xcal_weight_sigma = None,
                   xcal_weight_theta0 = 0.0, circfit_mode = 'sequential',
@@ -193,7 +202,7 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
     cr_removal_time (float): number of seconds to remove around each peak
     circfit_npoints (int): if not None, limits the number of points in the
         circle fit to circfit_npoints around the noise ball
-    correct_cic2 (bool): If True, corrects the PSDs for the CIC rolloff
+    correct_cic (bool): If True, corrects the PSDs for the CIC rolloff
         NOT IMPLEMENTED YET: WAITING FOR RFMUX UPDATE
     overwrite (bool): if False, raises an error instead of overwriting files
     catch_exceptions (bool): If True, catches any exceptions that occur while
@@ -215,16 +224,24 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
         main_out_directory with name
         f'fitdata_noise{file_suffix}_{noise_index:02d}.csv'
     """
-    out_directory = main_out_directory + 'noise_data/'
-    plot_directory = main_out_directory + 'noise_plots/'
+    main_out_directory = os.path.normpath(
+        os.path.expanduser(main_out_directory)
+    )
+    out_directory = os.path.join(main_out_directory, 'noise_data')
+    plot_directory = os.path.join(main_out_directory, 'noise_plots')
     os.makedirs(out_directory, exist_ok = True)
     if any([plot_calq, plot_psdq, plot_timestreamq]):
         os.makedirs(plot_directory, exist_ok = True)
     file_suffix0 = file_suffix
     if file_suffix != '':
         file_suffix = '_' + file_suffix
-    data = pd.read_csv(main_out_directory + f'fitdata{file_suffix}.csv')
-    outpath = main_out_directory + f'fitdata_noise{file_suffix}_{noise_index:02d}.csv'
+    data = pd.read_csv(
+        os.path.join(main_out_directory, f'fitdata{file_suffix}.csv')
+    )
+    outpath = os.path.join(
+        main_out_directory,
+        f'fitdata_noise{file_suffix}_{noise_index:02d}.csv',
+    )
     if os.path.exists(outpath) and not overwrite:
         raise Exception(f'{outpath} already exists!!!')
     # Import data
@@ -232,8 +249,17 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
     fres_initial, fres, ares, qres, fcal_indices, fres_all, qres_all, frough, zrough,\
            fgains, zgains, ffines, zfines, znoises, noise_dt, res_indices, fres_noise =\
     import_iq_noise(directory, file_suffix0, import_noiseq = True)
-    inoise, qnoise = np.load(directory + f'noise{file_suffix}_{noise_index:02d}.npy')
-    dt = float(np.load(directory + f'noise{file_suffix}_tsample_{noise_index:02d}.npy'))
+    inoise, qnoise = np.load(
+        os.path.join(directory, f'noise{file_suffix}_{noise_index:02d}.npy')
+    )
+    dt = float(
+        np.load(
+            os.path.join(
+                directory,
+                f'noise{file_suffix}_tsample_{noise_index:02d}.npy',
+            )
+        )
+    )
 
     pbar = res_indices
     if verbose:
@@ -255,7 +281,7 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
         znoise = i + 1j * q
         znoise = znoise[int(tstart / dt):]
 
-        p_amp, p_phase, p0, popt, perr, res, plot_path =\
+        p_amp, p_phase, p0, popt, perr, res, downward, plot_path =\
             separate_fit_row(iq_fit_row)
 
         zfine = remove_gain(ffine, zfine, p_amp, p_phase)
@@ -266,6 +292,8 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
             if circfit_npoints is not None:
                 ix_mid = np.argmin(np.abs(np.mean(znoise) - zfine))
                 ix0, ix1 = ix_mid - circfit_npoints // 2, ix_mid + (circfit_npoints - circfit_npoints // 2)
+                ix0 = max(ix0, 0)
+                ix1 = min(ix1, len(ffine))
                 ffine, zfine = ffine[ix0:ix1], zfine[ix0:ix1]
         elif circfit_mode == 'nearest_z':
             # Take the n points closest to the median of the noise by
@@ -276,6 +304,8 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
             ffine, zfine = ffine[i_nearest], zfine[i_nearest]
         else:
             raise ValueError("Invalid value for circfit_mode: " + str(circfit_mode))
+
+        assert len(zfine), "No fine sweep points remain after trim"
 
         try:
             if data_index in fcal_indices:
@@ -290,9 +320,10 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
                             plot_timestreamq = plot_timestreamq_single,
                             xcal_weight_theta0 = xcal_weight_theta0,
                             xcal_weight_sigma = xcal_weight_sigma)
-                if correct_cic2:
+                if correct_cic:
                     for i in range(1, 3):
-                        ftrim_off, s = apply_cic2_comp_psd(psd_offres[0], 10 ** (psd_offres[i] / 10), 1 / dt, trim=0.15)
+                        ftrim_off, s = compensate_psd_for_cics(psd_offres[0], 10 ** (psd_offres[i] / 10),
+                                                dec_stage=fir_stage, spectrum_cutoff=0.9)
                         psd_offres[i] = 10 * np.log10(s)
                     psd_offres[0] = ftrim_off
                 row =\
@@ -315,10 +346,10 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
                             xcal_weight_theta0 = xcal_weight_theta0,
                             xcal_weight_sigma = xcal_weight_sigma)
 
-                if correct_cic2:
-                    raise Exception('CIC correction is not implemented yet. Waiting for an rfmux update.')
-                    for i in range(1, 3):
-                        ftrim_on, s = apply_cic2_comp_psd(psd_onres[0], 10 ** (psd_onres[i] / 10), 1 / dt, trim=0.15)
+                if correct_cic:
+                    for i in range(1, 4):
+                        ftrim_off, s = compensate_psd_for_cics(psd_offres[0], 10 ** (psd_offres[i] / 10),
+                                                dec_stage=fir_stage, spectrum_cutoff=0.9)
                         psd_onres[i] = 10 * np.log10(s)
                     ftrim_on, psd_onres[3] = apply_cic2_comp_psd(psd_onres[0], psd_onres[3], 1 / dt, trim=0.15)
                     psd_onres[0] = ftrim_on
@@ -358,7 +389,7 @@ def plot_fits_batch(directory, file_suffix, plot_directory):
     fs, zs, popts, ress, res_indices = [], [], [], [], []
     for index in [d for d in range(len(fres)) if d not in fcal_indices]:
         row = data[data.dataIndex == index].iloc[0]
-        p_amp, p_phase, p0, popt, perr, res, plot_path = separate_fit_row(row, prefix = 'iq')
+        p_amp, p_phase, p0, popt, perr, res, downward, plot_path = separate_fit_row(row, prefix = 'iq')
 
         ff, zf = ffine[index], zfine[index]
         zs.append(remove_gain(ff, zf, p_amp, p_phase))
@@ -368,7 +399,8 @@ def plot_fits_batch(directory, file_suffix, plot_directory):
         res_indices.append(res_indices0[index])
         # fres.append(fres[index])
 
-    plot_directory = fix_path(plot_directory)
+    if plot_directory:
+        plot_directory = os.path.normpath(os.path.expanduser(plot_directory))
     os.makedirs(plot_directory, exist_ok = True)
 
 

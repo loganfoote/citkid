@@ -1,0 +1,30 @@
+### ----------------------------- ###
+###         Analysis steps        ###
+### ----------------------------- ###
+
+ANALYSIS_STEPS:
+  1 : 
+    task: make_fr_spans 
+    # global step. 
+  2 : 
+    task: fit_gain
+    params:
+      span_mult: 1 
+  3 :
+    task: fit_iq_circle 
+    params:
+      circ_mask: null # null will build a mask that is all True.
+  4 : 
+    task: get_idx_t
+  5 : 
+    task: get_theta_phase_offset 
+  6 :
+    task: get_xcal_mask 
+    params:
+      xcal_idx0_offset: 3 
+      xcal_idx1_offset: 9
+      xcal_std_cutoff: 16.0 
+  7 :
+    task: fit_x_theta 
+    params:
+      poly_x_deg: 3

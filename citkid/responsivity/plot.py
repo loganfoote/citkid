@@ -28,7 +28,9 @@ def plot_responsivity_int(power, x, x_err, popt, p0):
         ax.errorbar(power, x * 1e6, yerr = x_err * 1e6, marker = '.',
                     color = plt.cm.viridis(0), linestyle = '', label = 'Data')
 
-    psamp = np.geomspace(min(power), max(power), 200)
+    pow = np.sort(power)
+    pow0 = pow[0] if pow[0] != 0 else pow[1]
+    psamp = np.geomspace(pow0, max(power), 200)
     ysamp = responsivity_int(psamp, *popt)
     ax.plot(psamp, ysamp * 1e6, '--r', label = 'Fit')
     ysamp = responsivity_int(psamp, *p0)

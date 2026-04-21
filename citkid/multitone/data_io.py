@@ -16,7 +16,7 @@ def import_iq_noise(directory, file_suffix, noise_index = 0, import_noiseq = Tru
     fres (np.array): noise frequency array in Hz
     ares (np.array): RFSoC amplitude array
     qres (np.array): resonance Q array for cutting data
-    fres_all (np.array): full list of resonance frequencies in Hz 
+    fres_all (np.array): full list of resonant frequencies in Hz 
     qres_all (np.array): full list of resonance Qs for cutting data 
     fcal_indices (np.array): calibration tone indices
     frough, zrough (np.array): rough sweep frequency and complex S21 data
@@ -27,46 +27,46 @@ def import_iq_noise(directory, file_suffix, noise_index = 0, import_noiseq = Tru
     """
     if file_suffix != '':
         file_suffix = '_' + file_suffix
-    path = directory + f'fres_initial{file_suffix}.npy'
+    path = os.path.join(directory, f'fres_initial{file_suffix}.npy')
     if os.path.exists(path):
         fres_initial = np.load(path)
     else:
         fres_initial = None
-    fres = np.load(directory + f'fres{file_suffix}.npy')
-    ares = np.load(directory + f'ares{file_suffix}.npy')
-    qres = np.load(directory + f'qres{file_suffix}.npy')
-    fcal_indices = np.load(directory + f'fcal_indices{file_suffix}.npy')
-    res_indices = np.load(directory + f'res_indices{file_suffix}.npy')
-    path = directory + f'fres_all{file_suffix}.npy'
+    fres = np.load(os.path.join(directory, f'fres{file_suffix}.npy'))
+    ares = np.load(os.path.join(directory, f'ares{file_suffix}.npy'))
+    qres = np.load(os.path.join(directory, f'qres{file_suffix}.npy'))
+    fcal_indices = np.load(os.path.join(directory, f'fcal_indices{file_suffix}.npy'))
+    res_indices = np.load(os.path.join(directory, f'res_indices{file_suffix}.npy'))
+    path = os.path.join(directory, f'fres_all{file_suffix}.npy')
     if os.path.exists(path):
         fres_all = np.load(path)   
     else:
         fres_all = np.delete(fres, fcal_indices) 
-    path = directory + f'qres_all{file_suffix}.npy'
+    path = os.path.join(directory, f'qres_all{file_suffix}.npy')
     if os.path.exists(path):
         qres_all = np.load(path)   
     else:
         qres_all = np.delete(qres, fcal_indices)
     
     # sweeps
-    path = directory + f's21_rough{file_suffix}.npy'
+    path = os.path.join(directory, f's21_rough{file_suffix}.npy')
     if os.path.exists(path):
         frough, irough, qrough = np.load(path)
         zrough = irough + 1j * qrough
     else:
         frough, zrough = None, None
-    path = directory + f's21_gain{file_suffix}.npy'
+    path = os.path.join(directory, f's21_gain{file_suffix}.npy')
     fgain, igain, qgain = np.load(path)
     zgain = igain + 1j * qgain
-    path = directory + f's21_fine{file_suffix}.npy'
+    path = os.path.join(directory, f's21_fine{file_suffix}.npy')
     ffine, ifine, qfine = np.load(path)
     zfine = ifine + 1j * qfine
     if import_noiseq:
-        path = directory + f'noise{file_suffix}_{noise_index:02d}.npy'
-        noise_dt = float(np.load(directory + f'noise{file_suffix}_tsample_{noise_index:02d}.npy'))
+        path = os.path.join(directory, f'noise{file_suffix}_{noise_index:02d}.npy')
+        noise_dt = float(np.load(os.path.join(directory, f'noise{file_suffix}_tsample_{noise_index:02d}.npy')))
         inoise, qnoise = np.load(path)
         znoises = inoise + 1j * qnoise
-        fres_noise = np.load(directory + f'fres_noise{file_suffix}.npy')
+        fres_noise = np.load(os.path.join(directory, f'fres_noise{file_suffix}.npy'))
     else:
         noise_dt = None
         znoises = None 

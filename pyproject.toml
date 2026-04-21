@@ -6,19 +6,21 @@ build-backend = "setuptools.build_meta"
 [project]
 
 name = "citkid"
-version = "0.0"
+version = "1.0.0.dev0"
 description = "Kinetic Inductance Detector data acquisition and analysis"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 license = {file = "LICENSE.txt"}
 keywords = ["kinetic inductance detector"]
 
   authors = [
-    {name = "Logan Foote", email = "lfoote@caltech.edu"}
+    {name = "Logan Foote", email = "lfoote@caltech.edu"},
+    {name = "Elijah Kane", email = "ekane@caltech.edu"}
   ]
 
   maintainers = [
-    {name = "Logan Foote", email = "lfoote@caltech.edu"}
+    {name = "Logan Foote", email = "lfoote@caltech.edu"},
+    {name = "Elijah Kane", email = "ekane@caltech.edu"}
   ]
 
 classifiers = [
@@ -26,22 +28,39 @@ classifiers = [
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Build Tools",
     "License :: Apache-2.0",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3 :: Only",
 ]
 
 dependencies = [
-  "numpy",
-  "scipy",
-  "pandas",
-  "matplotlib",
-  "pyfftw",
-  "numba"
+  "numpy>=1.26.4",
+  "scipy>=1.16.3",
+  "numba>=0.62.1",
+  "pyfftw>=0.15.1",
+
+  # Plotting / widgets / UI
+  "matplotlib>=3.10.8",
+  "ipympl>=0.9.8",
+  "ipywidgets>=8.1.8",
+  "pyqtgraph>=0.13.7",
+  "pyqt5>=5.15.11",
+
+  # Notebook environment
+  "jupyterlab>=4.5.0",
+  "tqdm>=4.67.1",
+  "pandas>=2.3.3",
+
+  # Domain-specific libraries
+  "emcee>=3.1.6",
+  "corner>=2.2.3",
+  "paramiko>=4.0.0",
+  "zarr>=3.1.5",
+
+  # Dev/test tools
+  "pytest>=9.0.1",
+
+  # Runtime dependencies installed via pip in conda env
+  "redis>=3.5.3",
+  "rfmux>=1.4.1",
 ]
 
 [project.urls]
