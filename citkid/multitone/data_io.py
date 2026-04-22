@@ -1,3 +1,9 @@
+import warnings
+warnings.warn(
+    "citkid.multitone.data_io is legacy code and may be removed in a future version.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 import numpy as np
 import os
 

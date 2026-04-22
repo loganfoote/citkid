@@ -1,3 +1,9 @@
+import warnings
+warnings.warn(
+    "citkid.multitone.interactive_sweep_fitter is legacy code and may be removed in a future version.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 import os
 import numpy as np
 import pandas as pd

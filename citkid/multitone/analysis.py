@@ -1,3 +1,9 @@
+import warnings
+warnings.warn(
+    "citkid.multitone.analysis is legacy code and may be removed in a future version.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 import numpy as np
 import pandas as pd
 import os

@@ -1,3 +1,9 @@
+import warnings
+warnings.warn(
+    "citkid.multitone.util is legacy code and may be removed in a future version.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 import numpy as np
 
 def make_cal_tones(fres, ares, qres, max_n_tones = 1000,
