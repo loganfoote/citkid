@@ -66,6 +66,20 @@ class AnalysisRunner:
         
         # Load analysis YAML
         if analysis_yaml_path is not None:
+            # Resolve shorthand aliases
+            _ANALYSIS_YAML_ALIASES = {
+                'iq':       'iq_analysis.yaml',
+                'ts':       'ts_analysis.yaml',
+                'ts_offres':'ts_offres_analysis.yaml',
+            }
+            _templates_dir = os.path.join(
+                os.path.dirname(__file__), 'templates'
+            )
+            if analysis_yaml_path in _ANALYSIS_YAML_ALIASES:
+                analysis_yaml_path = os.path.join(
+                    _templates_dir,
+                    _ANALYSIS_YAML_ALIASES[analysis_yaml_path]
+                )
             self.analysis_yaml_path = os.path.abspath(analysis_yaml_path)
             
             # Validate file type

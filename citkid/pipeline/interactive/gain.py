@@ -223,6 +223,13 @@ class GainFitPanel(StepPanel):
         self._plot_amp.autoRange()
         self._plot_phase.autoRange()
 
+    def clear_plots(self):
+        for curve in (self._amp_data, self._phase_data,
+                      self._amp_masked, self._phase_masked,
+                      self._amp_fit, self._phase_fit):
+            curve.setData([], [])
+        self._status_label.setText("—")
+
     def _on_run_clicked(self):
         self._status_label.setText("Running…")
         QtWidgets.QApplication.processEvents()

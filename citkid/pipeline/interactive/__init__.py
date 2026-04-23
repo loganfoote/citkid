@@ -58,6 +58,8 @@ from . import fit_iq    # noqa: F401
 from . import circ      # noqa: F401
 from . import xcal      # noqa: F401
 
+from .sweep_fitter import SweepFitterWindow, run_sweep_fitter
+
 # Pipeline-specific assemblers
 from .iq_analysis import run_iq_analysis  # noqa: F401
 from .ts_analysis import run_ts_analysis  # noqa: F401

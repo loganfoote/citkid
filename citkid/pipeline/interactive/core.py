@@ -225,6 +225,17 @@ class StepPanel(QtWidgets.QWidget):
         """
         pass
 
+    def clear_plots(self):
+        """
+        Blank all plot displays without re-running steps.
+
+        Override in subclasses to set all plot curves to empty data, reset
+        status labels, etc.  Called by the sweep fitter when the user
+        navigates to a different resonator so the panels do not show stale
+        results.
+        """
+        pass
+
     def _scale_plot_fonts(self, *plot_items):
         """
         Apply self.ui_scale to tick labels, axis labels, and titles on each
@@ -514,10 +525,53 @@ class StepPanel(QtWidgets.QWidget):
         executed with default parameters (save=False) so that initial results
         are available for the first render.
         """
+        self._ensure_global_prerequisites()
         if self._outputs_exist():
             self.update_plots()
         else:
             self.run_steps(save=False)
+
+    def _ensure_global_prerequisites(self):
+        """
+        Silently run any global analysis steps in AR.path whose outputs are
+        needed by this panel's steps but are not yet available in AR.DS.
+
+        For example, ``make_fr_spans`` must run before ``fit_gain`` because
+        ``fr_spans`` is a required input.  This method is called once during
+        ``_auto_initialize`` so the dependency is satisfied automatically.
+        """
+        if not hasattr(self.AR, 'path'):
+            return
+        # Collect parameter names consumed by this panel's steps
+        needed = set()
+        for step in self.steps:
+            needed.update(step.param_names)
+        # Walk AR.path in order and run any global step whose outputs are both
+        # needed and not yet available in DS.
+        for step_dict in self.AR.path:
+            step = step_dict['task']
+            if step.func_type not in ('global', 'global-res'):
+                continue
+            if not needed.intersection(step.return_names):
+                continue
+            ds = self.AR.DS
+            already_done = True
+            for name in step.return_names:
+                try:
+                    val = getattr(ds, name)
+                    if val is None:
+                        already_done = False
+                        break
+                except Exception:
+                    already_done = False
+                    break
+            if not already_done:
+                try:
+                    self.AR.execute_step(step, data_idx=None, save=False)
+                except Exception as exc:
+                    print(
+                        f"Warning: auto-prerequisite '{step.name}' failed: {exc}"
+                    )
 
     def _on_step_error(self, step, exc):
         """

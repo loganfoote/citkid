@@ -25,27 +25,53 @@ class DataSet:
         zarr_path, 
         cal_yaml_path, 
         custom_path = None,
-        zarr_mode = 'a'
+        zarr_mode = 'a',
+        custom_cal_steps = None
         ):
         """
         Initialize the dataset with a calibration pipeline defined by a YAML 
         file.  
         
         Parameters:
-        zarr_path (str): The path to the zarr file containing the analysis 
-            outputs.
+        zarr_path (str or zarr.Group): The path to the zarr file containing
+            the analysis outputs, or a pre-opened zarr.Group (e.g. a subgroup
+            of a larger zarr store). When a zarr.Group is passed, zarr_mode
+            is ignored.
         cal_yaml_path (str): The path to the calibration YAML file.
         custom_path (str or None): Directory to the .py file containing custom 
             calibration functions, or None if no custom functions are used.
+            Ignored when custom_cal_steps is provided.
         zarr_mode (str): Mode to open the zarr file ('r', 'r+', 'a', etc.).
+            Ignored when zarr_path is a zarr.Group.
+        custom_cal_steps (list of plStep or None): Custom calibration steps to
+            use directly, bypassing file loading via custom_path. When
+            provided, custom_path is ignored.
         """
         ### Input validation and path normalization
         if custom_path is not None:
             self.custom_path = os.path.abspath(custom_path)
         else:
             self.custom_path = None
-        self.zarr_path = os.path.abspath(zarr_path)
-        self.root = zarr.open_group(self.zarr_path, mode = zarr_mode)
+
+        # Accept either a zarr.Group or a path string
+        if isinstance(zarr_path, zarr.Group):
+            self.root = zarr_path
+            self.zarr_path = None
+        else:
+            self.zarr_path = os.path.abspath(zarr_path)
+            self.root = zarr.open_group(self.zarr_path, mode = zarr_mode)
+
+        # Resolve cal_yaml_path shorthand aliases
+        _CAL_YAML_ALIASES = {
+            'ts':       'cal.yaml',
+            'iq':       'cal-iqonly.yaml',
+            'ts_offres':'cal-offres.yaml',
+        }
+        _templates_dir = os.path.join(os.path.dirname(__file__), 'templates')
+        if cal_yaml_path in _CAL_YAML_ALIASES:
+            cal_yaml_path = os.path.join(
+                _templates_dir, _CAL_YAML_ALIASES[cal_yaml_path]
+            )
         self.cal_yaml_path = os.path.abspath(cal_yaml_path) 
 
         # Validate file types 
@@ -53,8 +79,9 @@ class DataSet:
         if self.custom_path is not None and \
             not self.custom_path.endswith('.py'):
             raise ValueError("custom_path must point to a .py file.")
-        # zarr_path must be .zarr
-        if not self.zarr_path.endswith('.zarr'):
+        # zarr_path must be .zarr (only when a path string was given)
+        if self.zarr_path is not None and \
+                not self.zarr_path.endswith('.zarr'):
             raise ValueError("zarr_path must point to a .zarr file.")
         # cal_yaml_path must be .yaml or .yml
         is_yaml = self.cal_yaml_path.endswith('.yaml') \
@@ -64,10 +91,13 @@ class DataSet:
                 "cal_yaml_path must point to a .yaml or .yml file."
             )
 
-        ### Load steps from custom_steps.py
-        self.cal_steps = _load_custom_steps(
-            self.custom_path
-            )
+        ### Load calibration steps
+        if custom_cal_steps is not None:
+            self.cal_steps = list(custom_cal_steps)
+        else:
+            self.cal_steps = _load_custom_steps(
+                self.custom_path
+                )
         # Add default calibration steps if not already present
         for step in default_steps.default_cal_steps:
             if step.name not in [s.name for s in self.cal_steps]:
@@ -2032,6 +2062,11 @@ class DataSet:
                     os.path.dirname(self.custom_path)
                     )
         elif ftype == 'zarr':
+            if self.zarr_path is None:
+                raise ValueError(
+                    "Cannot open file explorer: DataSet was constructed from "
+                    "a zarr.Group with no associated path."
+                )
             util.open_in_file_explorer(
                 os.path.dirname(self.zarr_path)
                 )

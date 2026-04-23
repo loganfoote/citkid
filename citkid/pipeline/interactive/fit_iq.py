@@ -312,6 +312,13 @@ class FitIQPanel(StepPanel):
         self._plot_amp.autoRange()
         self._plot_iq.autoRange()
 
+    def clear_plots(self):
+        for curve in (self._amp_data, self._amp_excl, self._amp_fit,
+                      self._iq_data, self._iq_data_excl, self._iq_fit):
+            curve.setData([], [])
+        self._fit_text.setText('')
+        self._status_label.setText("—")
+
     def _reposition_fit_text(self):
         """Keep the fit-parameter label in the top-right corner of the IQ view."""
         vb = self._plot_iq.getViewBox()
