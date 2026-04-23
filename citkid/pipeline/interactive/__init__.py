@@ -63,6 +63,7 @@ from .sweep_fitter import SweepFitterWindow, run_sweep_fitter
 # Pipeline-specific assemblers
 from .iq_analysis import run_iq_analysis  # noqa: F401
 from .ts_analysis import run_ts_analysis  # noqa: F401
+from .gain_only_analysis import run_gain_only_analysis  # noqa: F401
 
 __all__ = [
     # framework
@@ -79,5 +80,6 @@ __all__ = [
     "xcal",
     # assemblers
     "run_iq_analysis",
+    "run_gain_only_analysis",
     "run_ts_analysis",
 ]

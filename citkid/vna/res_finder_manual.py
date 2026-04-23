@@ -7,7 +7,7 @@ visualization, and undo support.
 """
 
 import numpy as np
-import h5py
+import zarr
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 import os
@@ -15,7 +15,7 @@ import os
 from ..qt_compat import Qt as _Qt
 
 
-def run_res_finder_manual(f, z, fres_initial, outpath, margin_factor = 0.15,
+def run_res_finder_manual(f, z, fres_initial, zarr_grp, margin_factor = 0.15,
                     overwrite = False):
     """
     Run the interactive manual resonance finder.
@@ -23,31 +23,35 @@ def run_res_finder_manual(f, z, fres_initial, outpath, margin_factor = 0.15,
     Parameters:
     f (np.ndarray): Frequency data in Hz.
     z (np.ndarray): Complex S21 data.
-    fres_initial (array-like or str): Initial resonant frequency
-        guesses in Hz, or path to .h5 file containing 'fres' dataset.
-    outpath (str): Path to save the resonance list (.h5 file).
+    fres_initial (array-like or zarr.Group or str): Initial resonant
+        frequency guesses in Hz, or a zarr group (or path) containing
+        a 'fres_auto' dataset.
+    zarr_grp (zarr.Group or str): Zarr group or path to save the resonance
+        list.  The resonances are saved as 'fres_manual' in the group.
     margin_factor (float): Y-axis margin factor for auto-scaling.
         Default is 0.15.
-    overwrite (bool): If False, raise error if output file already
-        exists. Default is False.
+    overwrite (bool): If False, raise error if 'fres_manual' already exists
+        in the group. Default is False.
         
     Returns:
     fres (np.ndarray): Final list of resonant frequencies.
     """
-    # Handle loading fres from file if string is provided
-    if isinstance(fres_initial, str):
-        with h5py.File(fres_initial, 'r') as hf:
-            fres_initial = hf['fres'][:]
+    # Handle loading fres from zarr group or path if provided
+    if isinstance(fres_initial, (str, os.PathLike)):
+        grp = zarr.open_group(str(fres_initial), mode = 'r')
+        fres_initial = grp['fres_auto'][:]
+    elif isinstance(fres_initial, zarr.Group):
+        fres_initial = fres_initial['fres_auto'][:]
     
     finder = ResFinder(
-        f, z, fres_initial, outpath, margin_factor, overwrite
+        f, z, fres_initial, zarr_grp, margin_factor, overwrite
     )
     finder.run()
     return np.array(finder.fres)
 
 
 class ResFinder:
-    def __init__(self, f, z, fres_initial, outpath, margin_factor = 0.15,
+    def __init__(self, f, z, fres_initial, zarr_grp, margin_factor = 0.15,
                  overwrite = False):
         """
         Interactive resonance finder for VNA sweep data.
@@ -57,11 +61,13 @@ class ResFinder:
         z (np.ndarray): Complex S21 data (1D array).
         fres_initial (array-like): Initial resonant frequency guesses
             in Hz.
-        outpath (str): Path to save the resonance list (.h5 file).
+        zarr_grp (zarr.Group or str): Zarr group or path to save the
+            resonance list.  The resonances are saved as 'fres_manual' in
+            the group.
         margin_factor (float): Fraction of data range to add as margin
             when auto-scaling y-axis. Default is 0.15 (15% margin).
-        overwrite (bool): If False, raise error if output file already
-            exists. Default is False.
+        overwrite (bool): If False, raise error if 'fres_manual' already
+            exists in the group. Default is False.
 
         Returns:
         None
@@ -69,32 +75,24 @@ class ResFinder:
         self.f = np.asarray(f, dtype = np.float64)
         self.z = np.asarray(z, dtype = np.complex128)
         self.fres = list(np.asarray(fres_initial, dtype = np.float64))
-        self.outpath = os.path.normpath(os.path.expanduser(outpath))
         self.margin_factor = margin_factor
 
-        # Check file extension
-        if not self.outpath.lower().endswith('.h5'):
-            raise ValueError(
-                f'Output path must have a .h5 extension, got: {self.outpath}'
-            )
+        # Resolve zarr_grp to a zarr group
+        if isinstance(zarr_grp, (str, os.PathLike)):
+            self.zarr_group = zarr.open_group(str(zarr_grp), mode = 'a')
+        else:
+            self.zarr_group = zarr_grp
 
-        # Check output directory exists
-        outdir = os.path.dirname(self.outpath)
-        if outdir and not os.path.isdir(outdir):
-            raise FileNotFoundError(
-                f'Output directory does not exist: {outdir}'
-            )
-
-        # Check if file exists
-        if os.path.exists(self.outpath):
+        # Check if fres already exists
+        if 'fres_manual' in self.zarr_group:
             if not overwrite:
-                msg = (f'Output file {self.outpath} already exists. '
-                       f'Set overwrite=True to overwrite.')
-                raise FileExistsError(msg)
+                raise FileExistsError(
+                    "'fres_manual' already exists in the zarr group. "
+                    "Set overwrite=True to overwrite."
+                )
             else:
-                msg = (f'Warning: {self.outpath} already exists and '
-                       f'will be overwritten on save.')
-                print(msg)
+                print("Warning: 'fres_manual' already exists in the zarr group "
+                      "and will be overwritten on save.")
 
         # Unwrap phase and remove 3rd order polynomial trend
         unwrapped_phase = np.unwrap(np.angle(self.z))
@@ -181,6 +179,11 @@ class ResFinder:
         
         # Initialize markers and auto-scale
         self.update_resonance_markers()
+        # Set the initial view to the full data range so _update_curves
+        # has a valid range on the first call (curves start empty).
+        self.plot_mag.setXRange(
+            float(self.f[0]), float(self.f[-1]), padding = 0.02
+        )
         self._update_curves()
         self.auto_scale_y()
         
@@ -218,14 +221,12 @@ class ResFinder:
         self.plot_mag.showGrid(x = True, y = True, alpha = 0.3)
         self.plot_mag.getAxis('bottom').setStyle(showValues = False)
         
-        # Plot magnitude data — only the visible slice is pushed to the curve
-        # on each range change (see _update_curves), so pyqtgraph never sees
-        # more than a few thousand points at once.
+        # Plot magnitude data — initialised empty; _update_curves pushes
+        # only the visible slice on each range change, so pyqtgraph never
+        # processes the full 1e6-point array during startup or interaction.
         self.mag_curve = self.plot_mag.plot(
-            self.f, self.mag_db,
-            pen = pg.mkPen(color = (100, 200, 255, 90), width = 1.5),
-            autoDownsample = True,
-            downsampleMethod = 'peak'
+            [], [],
+            pen = pg.mkPen(color = (100, 200, 255, 90), width = 1.5)
         )
         # Highlighted overlay (IQ window) — drawn on top, hidden by default
         self.mag_highlight = self.plot_mag.plot(
@@ -242,12 +243,10 @@ class ResFinder:
         self.plot_phase.setLabel('bottom', 'Frequency', units = 'Hz')
         self.plot_phase.showGrid(x = True, y = True, alpha = 0.3)
         
-        # Plot phase data
+        # Plot phase data — initialised empty; populated by _update_curves
         self.phase_curve = self.plot_phase.plot(
-            self.f, self.phase,
-            pen = pg.mkPen(color = (255, 150, 100, 90), width = 1.5),
-            autoDownsample = True,
-            downsampleMethod = 'peak'
+            [], [],
+            pen = pg.mkPen(color = (255, 150, 100, 90), width = 1.5)
         )
         # Highlighted overlay (IQ window) — drawn on top, hidden by default
         self.phase_highlight = self.plot_phase.plot(
@@ -858,7 +857,7 @@ class ResFinder:
         
     def save_data(self):
         """
-        Save the current resonance list to HDF5 file.
+        Save the current resonance list to zarr group.
 
         Parameters:
         None
@@ -867,11 +866,12 @@ class ResFinder:
         None
         """
         fres_array = np.array(self.fres, dtype = np.float64)
-        
-        with h5py.File(self.outpath, 'w') as hf:
-            hf.create_dataset('fres', data = fres_array)
-        
-        self.log(f"Saved {len(self.fres)} resonances to {self.outpath}")
+
+        if 'fres_manual' in self.zarr_group:
+            del self.zarr_group['fres_manual']
+        self.zarr_group.create_array('fres_manual', data = fres_array)
+
+        self.log(f"Saved {len(self.fres)} resonances to zarr group")
         
     def quit_and_save(self):
         """
@@ -923,7 +923,7 @@ class ResFinder:
         <p><b>Current Status:</b></p>
         <ul>
         <li>Total resonances: """ + str(len(self.fres)) + """</li>
-        <li>Output file: """ + self.outpath + """</li>
+        <li>Output: """ + str(self.zarr_group.store) + """</li>
         </ul>
         """
         
@@ -945,7 +945,7 @@ class ResFinder:
         """
         self.log("Starting Resonance Finder...")
         self.log(f"Initial resonances: {len(self.fres)}")
-        self.log(f"Output file: {self.outpath}")
+        self.log(f"Output: {self.zarr_group.store}")
         self.log("Press 'H' for help")
         
         # Start the Qt event loop

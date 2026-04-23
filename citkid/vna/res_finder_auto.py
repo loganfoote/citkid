@@ -8,32 +8,32 @@ resonance finder.
 """
 
 import numpy as np
-import h5py
+import zarr
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 from scipy.signal import find_peaks
 import os
 from .s21_filt import highpass_filter, polynomial_baseline
+from ..qt_compat import Qt as _Qt
 
 
-# No enum helper needed — use string key sequences for portability.
 
-
-def run_res_finder_auto(f, z, outpath, overwrite = False):
+def run_res_finder_auto(f, z, zarr_grp, overwrite = False):
     """
     Run the automatic res finder.
     
     Parameters:
     f (np.ndarray): Frequency data in Hz.
     z (np.ndarray): Complex S21 data.
-    outpath (str): Path to save results (.h5 file).
-    overwrite (bool): If False, raise error if output file already
-        exists. Default is True.
+    out (zarr.Group or str): Zarr group or path to save results.
+        The resonances are saved as 'fres_auto' in the group.
+    overwrite (bool): If False, raise error if 'fres_auto' already exists
+        in the group. Default is False.
         
     Returns:
     fres (np.ndarray): Found resonant frequencies.
     """
-    finder = AutoResFinder(f, z, outpath, overwrite)
+    finder = AutoResFinder(f, z, zarr_grp, overwrite)
     finder.run()
     return np.array(finder.fres)
 
@@ -50,47 +50,40 @@ class SpinBoxEventFilter(QtCore.QObject):
 
 
 class AutoResFinder:
-    def __init__(self, f, z, outpath, overwrite = True):
+    def __init__(self, f, z, zarr_grp, overwrite = True):
         """
         Automatic res finder for VNA sweep data.
         
         Parameters:
         f (np.ndarray): Frequency data in Hz (1D array).
         z (np.ndarray): Complex S21 data (1D array).
-        outpath (str): Path to save results (.h5 file).
-        overwrite (bool): If False, raise error if output file already
-            exists. Default is True.
+        zarr_grp (zarr.Group or str): Zarr group or path to save results.
+            The resonances are saved as 'fres_auto' in the group.
+        overwrite (bool): If False, raise error if 'fres_auto' already
+            exists in the group. Default is True.
 
         Returns:
         None
         """
         self.f = np.asarray(f, dtype = np.float64)
         self.z = np.asarray(z, dtype = np.complex128)
-        self.outpath = os.path.normpath(os.path.expanduser(outpath))
-        
-        # Check file extension
-        if not self.outpath.lower().endswith('.h5'):
-            raise ValueError(
-                f'Output path must have a .h5 extension, got: {self.outpath}'
-            )
 
-        # Check output directory exists
-        outdir = os.path.dirname(self.outpath)
-        if outdir and not os.path.isdir(outdir):
-            raise FileNotFoundError(
-                f'Output directory does not exist: {outdir}'
-            )
+        # Resolve zarr_grp to a zarr group
+        if isinstance(zarr_grp, (str, os.PathLike)):
+            self.zarr_group = zarr.open_group(str(zarr_grp), mode = 'a')
+        else:
+            self.zarr_group = zarr_grp
 
-        # Check if file exists
-        if os.path.exists(self.outpath):
+        # Check if fres already exists
+        if 'fres_auto' in self.zarr_group:
             if not overwrite:
-                msg = (f'Output file {self.outpath} already exists. '
-                       f'Set overwrite=True to overwrite.')
-                raise FileExistsError(msg)
+                raise FileExistsError(
+                    "'fres_auto' already exists in the zarr group. "
+                    "Set overwrite=True to overwrite."
+                )
             else:
-                msg = (f'Warning: {self.outpath} already exists and '
-                       f'will be overwritten on save.')
-                print(msg)
+                print("Warning: 'fres_auto' already exists in the zarr group "
+                      "and will be overwritten on save.")
         
         # Compute magnitude
         self.mag_db = 20 * np.log10(np.abs(self.z))
@@ -111,15 +104,25 @@ class AutoResFinder:
         
         self.fres = []
         self.filtered_mag = self.mag_db.copy()
-        
+
         # Event filter for select-all behavior
         self.event_filter = SpinBoxEventFilter()
-        
+
+        # Debounce timers — created lazily on first use
+        self._range_timer = None
+        self._param_timer = None
+
         # Setup the application
         self.app = pg.mkQApp("Auto Res Finder")
         self.setup_ui()
         self.setup_plot()
-        
+
+        # Set initial view so _update_curves can populate the curves on
+        # the first update_peaks call.
+        self.plot_filtered.setXRange(
+            float(self.f[0]), float(self.f[-1]), padding = 0.02
+        )
+
         try:
             self.update_peaks()
         except Exception as e:
@@ -377,9 +380,11 @@ class AutoResFinder:
         self.plot_filtered.showGrid(x = True, y = True, alpha = 0.3)
         self.plot_filtered.getAxis('bottom').setStyle(showValues = False)
         
-        # Plot filtered data
+        # Plot filtered data — initialised empty; _update_curves pushes
+        # only the visible slice on every range-change, so pyqtgraph never
+        # processes the full 1e6-point array during interactive use.
         self.filtered_curve = self.plot_filtered.plot(
-            self.f, self.filtered_mag,
+            [], [],
             pen = pg.mkPen(color = (100, 200, 255), width = 1.5),
             name = 'Filtered'
         )
@@ -387,10 +392,9 @@ class AutoResFinder:
         # Peak markers for filtered plot
         self.peak_markers_filtered = []
         
-        # Connect range change for auto-scaling
-        self.plot_filtered.sigRangeChanged.connect(
-            lambda: self.auto_scale_y(self.plot_filtered, self.filtered_mag)
-        )
+        # Connect range change — single debounced handler covers both plots
+        # (plot_original shares the x-axis via setXLink).
+        self.plot_filtered.sigRangeChanged.connect(self.on_range_changed)
         
         self.plot_layout.nextRow()
         
@@ -400,9 +404,9 @@ class AutoResFinder:
         self.plot_original.setLabel('bottom', 'Frequency', units = 'Hz')
         self.plot_original.showGrid(x = True, y = True, alpha = 0.3)
         
-        # Plot original data
+        # Plot original data — initialised empty; populated by _update_curves
         self.mag_curve = self.plot_original.plot(
-            self.f, self.mag_db,
+            [], [],
             pen = pg.mkPen(color = (150, 150, 150), width = 1),
             name = 'Original'
         )
@@ -410,10 +414,8 @@ class AutoResFinder:
         # Peak markers for original plot
         self.peak_markers_original = []
         
-        # Connect range change for auto-scaling
-        self.plot_original.sigRangeChanged.connect(
-            lambda: self.auto_scale_y(self.plot_original, self.mag_db)
-        )
+        # No separate sigRangeChanged needed — plots share the x-axis
+        # (setXLink) so the single debounced handler on plot_filtered covers both.
         
         # Link x-axes
         self.plot_original.setXLink(self.plot_filtered)
@@ -436,27 +438,93 @@ class AutoResFinder:
         Returns:
         None
         """
-        x_range = plot.viewRange()[0]
-        x_min, x_max = x_range
-        
-        # Find data within visible range
-        mask = (self.f >= x_min) & (self.f <= x_max)
-        if not np.any(mask):
+        x_min, x_max = plot.viewRange()[0]
+
+        # Binary search — O(log n) regardless of array length
+        lo = int(np.searchsorted(self.f, x_min, side = 'left'))
+        hi = int(np.searchsorted(self.f, x_max, side = 'right'))
+        if lo >= hi:
             return
-        
-        visible_data = data[mask]
-        data_min = np.min(visible_data)
-        data_max = np.max(visible_data)
-        
+
+        visible_data = data[lo:hi]
+        data_min = float(visible_data.min())
+        data_max = float(visible_data.max())
+
         # Add margin
         data_range = data_max - data_min
         margin = data_range * self.margin_factor
-        
+
         plot.setYRange(
             data_min - margin,
             data_max + margin,
             padding = 0
         )
+
+    def _visible_slice(self, x_min, x_max):
+        """
+        Return a slice of the sorted frequency array covering [x_min, x_max].
+
+        Uses binary search — O(log n) regardless of array length.
+
+        Parameters:
+        x_min (float): Left edge of range in Hz.
+        x_max (float): Right edge of range in Hz.
+
+        Returns:
+        sl (slice): Slice into self.f / self.mag_db / self.filtered_mag.
+        """
+        lo = int(np.searchsorted(self.f, x_min, side = 'left'))
+        hi = int(np.searchsorted(self.f, x_max, side = 'right'))
+        return slice(lo, hi)
+
+    def _update_curves(self):
+        """
+        Push only the visible data slice to the filtered and original curves.
+
+        Using a 50% pad on each side prevents blank edges during fast
+        panning.  pyqtgraph then only renders the visible ~1,000 points
+        instead of the full 1e6-point dataset.
+
+        Parameters:
+        None
+
+        Returns:
+        None
+        """
+        if not hasattr(self, 'plot_filtered'):
+            return
+        x_min, x_max = self.plot_filtered.viewRange()[0]
+        span = x_max - x_min
+        sl = self._visible_slice(x_min - 0.5 * span, x_max + 0.5 * span)
+        if sl.start >= sl.stop:
+            return
+        self.filtered_curve.setData(self.f[sl], self.filtered_mag[sl])
+        self.mag_curve.setData(self.f[sl], self.mag_db[sl])
+
+    def on_range_changed(self):
+        """
+        Called when the view range changes (pan/zoom).
+
+        Debounced: coalesces rapid-fire events into a single update every
+        50 ms so the UI stays responsive during continuous mouse drag.
+
+        Parameters:
+        None
+
+        Returns:
+        None
+        """
+        if self._range_timer is None:
+            self._range_timer = QtCore.QTimer()
+            self._range_timer.setSingleShot(True)
+            self._range_timer.timeout.connect(self._do_range_update)
+        self._range_timer.start(50)
+
+    def _do_range_update(self):
+        """Actual work triggered by the range debounce timer."""
+        self._update_curves()
+        self.auto_scale_y(self.plot_filtered, self.filtered_mag)
+        self.auto_scale_y(self.plot_original, self.mag_db)
         
     def on_param_changed(self):
         """
@@ -468,16 +536,8 @@ class AutoResFinder:
         Returns:
         None
         """
-        # Show updating status
-        self.status_label.setText(
-            '<span style="color: orange;">Updating...</span>'
-        )
-        self.win.setCursor(_Qt.WaitCursor)
-        
-        # Process events to update UI
-        QtWidgets.QApplication.processEvents()
-        
-        # Update parameters
+        # Capture the latest spinbox values immediately so rapid changes
+        # are not lost while the debounce timer is pending.
         self.params['f_min'] = self.f_min_spin.value() * 1e6
         self.params['f_max'] = self.f_max_spin.value() * 1e6
         self.params['highpass_mhz'] = self.highpass_spin.value()
@@ -486,11 +546,23 @@ class AutoResFinder:
         self.params['width'] = self.width_spin.value()
         self.params['distance'] = self.distance_spin.value()
         self.params['smoothing'] = self.smooth_combo.currentText()
-        
-        # Update peaks
+
+        self.status_label.setText(
+            '<span style="color: orange;">Updating...</span>'
+        )
+
+        # Debounce the expensive smoothing + peak-detection work (300 ms).
+        if self._param_timer is None:
+            self._param_timer = QtCore.QTimer()
+            self._param_timer.setSingleShot(True)
+            self._param_timer.timeout.connect(self._do_param_update)
+        self._param_timer.start(300)
+
+    def _do_param_update(self):
+        """Actual work triggered by the parameter-change debounce timer."""
+        self.win.setCursor(_Qt.WaitCursor)
+        QtWidgets.QApplication.processEvents()
         self.update_peaks()
-        
-        # Restore status
         self.status_label.setText(
             '<span style="color: green;">Ready</span>'
         )
@@ -530,11 +602,8 @@ class AutoResFinder:
         # Apply smoothing
         self.apply_smoothing()
         
-        # Update filtered curve
-        self.filtered_curve.setData(self.f, self.filtered_mag)
-        
-        # Force plot update
-        self.plot_filtered.update()
+        # Update curves with visible slice only
+        self._update_curves()
         
         # Trigger auto-scaling
         self.auto_scale_y(self.plot_filtered, self.filtered_mag)
@@ -683,7 +752,7 @@ class AutoResFinder:
         
     def save_data(self):
         """
-        Save resonances and parameters to HDF5 file.
+        Save resonances to zarr group.
 
         Parameters:
         None
@@ -692,14 +761,15 @@ class AutoResFinder:
         None
         """
         fres_array = np.array(self.fres, dtype = np.float64)
-        
-        with h5py.File(self.outpath, 'w') as hf:
-            hf.create_dataset('fres', data = fres_array)
-            # Save parameters
-            for key, val in self.params.items():
-                hf.attrs[key] = val
-        
-        print(f"Saved {len(self.fres)} resonances to {self.outpath}")
+
+        if 'fres_auto' in self.zarr_group:
+            del self.zarr_group['fres_auto']
+        self.zarr_group.create_array('fres_auto', data = fres_array)
+        # Save parameters as group attributes
+        for key, val in self.params.items():
+            self.zarr_group.attrs[key] = val
+
+        print(f"Saved {len(self.fres)} resonances to zarr group")
         
     def quit_and_save(self):
         """
@@ -750,7 +820,7 @@ class AutoResFinder:
         </ul>
         <p><b>Status:</b> {0} peaks found</p>
         <p><b>Output:</b> {1}</p>
-        """.format(len(self.fres), self.outpath)
+        """.format(len(self.fres), self.zarr_group.store)
         
         msg = QtWidgets.QMessageBox()
         msg.setWindowTitle("Auto Resonance Finder Help")
@@ -769,7 +839,7 @@ class AutoResFinder:
         None
         """
         print("Starting Auto Resonance Finder...")
-        print(f"Output file: {self.outpath}")
+        print(f"Output: {self.zarr_group.store}")
         print("Press 'H' for help")
         
         self.app.exec()
