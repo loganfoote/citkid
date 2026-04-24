@@ -620,44 +620,23 @@ class AnalysisRunner:
         for param_name in step.param_names:
             if param_name == 'data_idx':
                 continue
-            
-            # Check if parameter exists in deps_maps
-            param_exists = False
-            
-            # Check global deps_maps
-            if 'global' in self.DS.deps_maps:
-                for run_idx in self.DS.deps_maps['global']:
-                    if param_name in self.DS.deps_maps['global'][run_idx]:
-                        param_exists = True
-                        break
-            
-            # Check per-row deps_maps if needed and not found in global
-            if not param_exists and data_idx is not None:
-                data_idx_array = np.atleast_1d(np.asarray(data_idx, 
-                                                          dtype=np.int32))
-                for di in data_idx_array:
-                    if di in self.DS.deps_maps:
-                        for run_idx in self.DS.deps_maps[di]:
-                            if param_name in self.DS.deps_maps[di][run_idx]:
-                                param_exists = True
-                                break
-                    if param_exists:
-                        break
-            
-            # If parameter doesn't exist, try to produce it
-            if not param_exists:
-                # Determine appropriate data_idx for production
-                if step.func_type in ['global', 'global-res']:
-                    produce_data_idx = None
-                else:
-                    produce_data_idx = data_idx
-                
-                # Attempt to produce the parameter
-                self.DS._ensure_loaded(
-                    param_name, 
-                    data_idx=produce_data_idx,
-                    enforced_max_runs=enforced_max_runs
-                )
+
+            # Determine appropriate data_idx for production
+            if step.func_type in ['global', 'global-res']:
+                produce_data_idx = None
+            else:
+                produce_data_idx = data_idx
+
+            # Always call _ensure_loaded so that stale cal-pipeline outputs
+            # (e.g. zf_rmv whose p_amp dependency is behind the current run
+            # index) are recomputed before the step runs.  _ensure_loaded is
+            # a no-op when the parameter already exists and its dependencies
+            # are up-to-date, so this has no cost for fresh data.
+            self.DS._ensure_loaded(
+                param_name,
+                data_idx=produce_data_idx,
+                enforced_max_runs=enforced_max_runs
+            )
 
 ################################################################################ 
 ############################# Custom steps loader ##############################

@@ -359,10 +359,13 @@ class FitIQPanel(StepPanel):
     # Execution helpers
     # ------------------------------------------------------------------
 
-    def _on_run_clicked(self):
-        # Rebuild mask from current region before running
+    def prepare_run(self):
+        """Rebuild the mask from the current region before run_steps is called."""
         if self._ff_cache is not None:
             self._build_mask(self._ff_cache)
+
+    def _on_run_clicked(self):
+        self.prepare_run()
         self._status_label.setText("Running…")
         QtWidgets.QApplication.processEvents()
         ok = self.run_steps()

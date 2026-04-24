@@ -158,7 +158,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self._plot_scale = plot_scale
         self._n_sweep = len(self._ARs)
 
-        self._sweep_idx = int(start_sweep_idx)
+        self._sweep_idx: int | None = None  # nothing selected until user clicks
         self._data_idx = int(start_data_idx)
 
         try:
@@ -203,9 +203,10 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
             base_pt = round(10 * ui_scale)
             central.setStyleSheet(f"* {{ font-size: {base_pt}pt; }}")
 
-        # Build GainFitPanel + FitIQPanel for the starting AR
+        # Build GainFitPanel + FitIQPanel — use ARs[0] as placeholder until
+        # the user selects a sweep point by clicking the scatter.
         self.panels = []
-        AR = self._ARs[self._sweep_idx]
+        AR = self._ARs[0]
         for i, step_names_tuple in enumerate(_IQ_PANELS):
             cls = get_panel_class(step_names_tuple)
             panel = cls(
@@ -237,6 +238,8 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
             sc.activated.connect(lambda: self._advance_sweep(-1))
         sc_r = QtGui.QShortcut(QtGui.QKeySequence('R'), self)
         sc_r.activated.connect(self._autoscale_all)
+        sc_b = QtGui.QShortcut(QtGui.QKeySequence('B'), self)
+        sc_b.activated.connect(self._mark_all_bad)
         for idx in range(1, 10):
             _sc = QtGui.QShortcut(QtGui.QKeySequence(str(idx)), self)
             _sc.activated.connect(lambda _i=idx - 1: self._run_panel_by_index(_i))
@@ -284,40 +287,20 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
         layout.addSpacing(16)
 
-        # Sweep navigation
-        self._sweep_prev_btn = QtWidgets.QPushButton('◀')
-        self._sweep_prev_btn.setFixedWidth(30)
-        self._sweep_prev_btn.setToolTip('Previous sweep index  (W / ↑)')
-        self._sweep_prev_btn.clicked.connect(lambda: self._advance_sweep(-1))
-        layout.addWidget(self._sweep_prev_btn)
-
-        self._sweep_label = QtWidgets.QLabel()
-        self._sweep_label.setMinimumWidth(60)
-        self._sweep_label.setAlignment(_Qt.AlignCenter)
-        layout.addWidget(self._sweep_label)
-
-        self._sweep_next_btn = QtWidgets.QPushButton('▶')
-        self._sweep_next_btn.setFixedWidth(30)
-        self._sweep_next_btn.setToolTip('Next sweep index  (S / ↓)')
-        self._sweep_next_btn.clicked.connect(lambda: self._advance_sweep(+1))
-        layout.addWidget(self._sweep_next_btn)
-
-        layout.addWidget(QtWidgets.QLabel(f'{self._x_name}:'))
-        self._sweep_spin = QtWidgets.QSpinBox()
-        self._sweep_spin.setMinimum(0)
-        self._sweep_spin.setMaximum(self._n_sweep - 1)
-        self._sweep_spin.setValue(self._sweep_idx)
-        self._sweep_spin.valueChanged.connect(self._on_sweep_spin_changed)
-        layout.addWidget(self._sweep_spin)
-
-        self._x_val_label = QtWidgets.QLabel()
-        self._x_val_label.setMinimumWidth(80)
-        layout.addWidget(self._x_val_label)
+        # Sweep selection — dropdown showing index + x value for each sweep
+        layout.addWidget(QtWidgets.QLabel(f'sweep index, {self._x_name}:'))
+        self._sweep_combo = QtWidgets.QComboBox()
+        self._sweep_combo.setMinimumWidth(160)
+        for i in range(self._n_sweep):
+            self._sweep_combo.addItem(f'{i + 1}, —')
+        self._sweep_combo.setCurrentIndex(-1)  # nothing selected on startup
+        self._sweep_combo.currentIndexChanged.connect(self._on_sweep_combo_changed)
+        layout.addWidget(self._sweep_combo)
 
         layout.addSpacing(16)
 
         hints = QtWidgets.QLabel(
-            '[A/D] resonator   [W/S] sweep   [R] rescale'
+            '[A/D] resonator   [W/S] sweep   [R] rescale   [B] mark bad'
             '   [N] run panel   [⇧N] run+'
         )
         hints.setStyleSheet('color: palette(mid); font-style: italic;')
@@ -330,7 +313,6 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         layout.addWidget(run_all_btn)
 
         self._update_res_label()
-        self._update_sweep_label()
         return w
 
     def _build_sweep_plots(self) -> QtWidgets.QWidget:
@@ -393,13 +375,22 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
     def _update_res_label(self):
         self._res_label.setText(f'{self._data_idx + 1} / {self._nrows}')
 
-    def _update_sweep_label(self):
-        self._sweep_label.setText(f'{self._sweep_idx + 1} / {self._n_sweep}')
-        xi = self._get_x_value(self._sweep_idx, self._data_idx)
-        self._x_val_label.setText('—' if xi is None else f'{xi:.4g}')
-        self._sweep_spin.blockSignals(True)
-        self._sweep_spin.setValue(self._sweep_idx)
-        self._sweep_spin.blockSignals(False)
+    def _update_sweep_combo_items(self, data_idx: int):
+        """Repopulate every combo item text with the x value for *data_idx*."""
+        self._sweep_combo.blockSignals(True)
+        for i in range(self._n_sweep):
+            xi = self._get_x_value(i, data_idx)
+            label = f'{i + 1}, {xi:.4g}' if xi is not None else f'{i + 1}, —'
+            self._sweep_combo.setItemText(i, label)
+        self._sweep_combo.blockSignals(False)
+
+    def _update_sweep_combo_selection(self):
+        """Sync the combo's selected index to self._sweep_idx."""
+        self._sweep_combo.blockSignals(True)
+        self._sweep_combo.setCurrentIndex(
+            -1 if self._sweep_idx is None else self._sweep_idx
+        )
+        self._sweep_combo.blockSignals(False)
 
     # ------------------------------------------------------------------
     # Navigation
@@ -411,7 +402,10 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
             self._set_data_idx(new_di)
 
     def _advance_sweep(self, delta: int):
-        new_si = max(0, min(self._n_sweep - 1, self._sweep_idx + delta))
+        base = self._sweep_idx if self._sweep_idx is not None else (
+            -1 if delta > 0 else self._n_sweep
+        )
+        new_si = max(0, min(self._n_sweep - 1, base + delta))
         if new_si != self._sweep_idx:
             self._set_sweep_idx(new_si)
 
@@ -419,12 +413,12 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         if value != self._data_idx:
             self._set_data_idx(value)
 
-    def _on_sweep_spin_changed(self, value: int):
+    def _on_sweep_combo_changed(self, value: int):
         if value != self._sweep_idx:
             self._set_sweep_idx(value)
 
     def _set_data_idx(self, new_di: int):
-        """Change the active resonator, blank the panels, and refresh the scatter."""
+        """Change the active resonator, load/run data, and refresh the scatter."""
         self._data_idx = new_di
         self._data_idx_spin.blockSignals(True)
         self._data_idx_spin.setValue(new_di)
@@ -436,13 +430,25 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
             panel.on_data_idx_changing()
             panel.clear_plots()
 
+        # Silently run (or load) the full pipeline for every sweep AR at the
+        # new data_idx, so the scatter and waterfall are fully populated and
+        # the active panels can show results immediately.
+        self._batch_init_all_sweeps()
+        self._update_sweep_combo_items(new_di)
         self._update_sweep_scatter()
         self._update_waterfall()
+
+        # If a sweep is already selected, re-run the active panels so they
+        # display results for the new resonator.
+        if self._sweep_idx is not None:
+            if self.panels:
+                self.panels[0]._ensure_global_prerequisites()
+            self._run_all_panels()
 
     def _set_sweep_idx(self, new_si: int):
         """Change the active sweep index, swap ARs in panels, and re-run."""
         self._sweep_idx = new_si
-        self._update_sweep_label()
+        self._update_sweep_combo_selection()
 
         new_AR = self._ARs[new_si]
         for panel in self.panels:
@@ -463,7 +469,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         if not spots:
             return
         si = spots[0].data()
-        if si is not None and int(si) != self._sweep_idx:
+        if si is not None:
             self._set_sweep_idx(int(si))
 
     # ------------------------------------------------------------------
@@ -499,6 +505,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
     def _auto_initialize_all(self):
         self._batch_init_all_sweeps()
+        self._update_sweep_combo_items(self._data_idx)
         self._update_sweep_scatter()
         self._update_waterfall()
 
@@ -535,15 +542,31 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self._update_sweep_point(self._sweep_idx)
 
     def _on_panel_rerun(self, source_panel):
-        """Cascade re-runs after source_panel, then refresh the scatter point."""
+        """Cascade re-runs after source_panel, then refresh the scatter point.
+
+        If a downstream panel fails to run (e.g. because source_panel was
+        marked bad and its outputs are NaN), write NaN outputs for that panel
+        and all subsequent ones so the scatter point is removed cleanly.
+        """
         try:
             src_idx = self.panels.index(source_panel)
         except ValueError:
             return
-        for panel in self.panels[src_idx + 1:]:
+        for i, panel in enumerate(self.panels[src_idx + 1:], start=src_idx + 1):
+            panel.prepare_run()
             ok = panel.run_steps()
             if not ok:
+                # Upstream data was bad — NaN-ify this and all remaining panels.
+                for p in self.panels[i:]:
+                    p._write_nan_outputs()
                 break
+        self._update_sweep_point(self._sweep_idx)
+
+    def _mark_all_bad(self):
+        """Mark every panel's outputs as NaN, clear their plots, and refresh scatter."""
+        for panel in self.panels:
+            panel._write_nan_outputs()
+            panel.clear_plots()
         self._update_sweep_point(self._sweep_idx)
 
     def _autoscale_all(self):
@@ -623,6 +646,9 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
     def _update_selected_marker(self):
         """Draw a white ring around the currently selected sweep point."""
+        if self._sweep_idx is None:
+            self._selected_marker.setData([], [])
+            return
         x = self._get_x_array(self._data_idx)
         y = self._get_y_array(self._data_idx)
         xi = x[self._sweep_idx]
