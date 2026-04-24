@@ -93,11 +93,6 @@ class CircleFitPanel(StepPanel):
         self._reset_btn.clicked.connect(self._reset_mask)
         ctrl.addWidget(self._reset_btn)
 
-        self._run_btn = QtWidgets.QPushButton("Run")
-        self._run_btn.setFixedWidth(60)
-        self._run_btn.clicked.connect(self._on_run_clicked)
-        ctrl.addWidget(self._run_btn)
-
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setFixedWidth(55)
         self._run_through_btn.setToolTip("Run this panel and all following panels")
@@ -348,19 +343,7 @@ class CircleFitPanel(StepPanel):
     # ------------------------------------------------------------------
     # Execution helpers
     # ------------------------------------------------------------------
-
-    def _on_run_clicked(self):
-        if self._ff_cache is not None:
-            self._build_mask(self._ff_cache)
-        self._status_label.setText("Running\u2026")
-        QtWidgets.QApplication.processEvents()
-        ok = self.run_steps()
-        if ok:
-            self._status_label.setText("Done \u2713")
-            self.trigger_downstream()
-        else:
-            self._status_label.setText("Error \u2717")
-
+    
     def _on_save_clicked(self):
         try:
             self.save_outputs()

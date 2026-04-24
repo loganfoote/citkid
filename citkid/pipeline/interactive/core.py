@@ -321,8 +321,7 @@ class StepPanel(QtWidgets.QWidget):
         panel.
 
         Base implementation is a no-op. Sub-classes may override to perform
-        pre-run setup that is normally handled inside their _on_run_clicked
-        handler (e.g. rebuilding a mask from the current region state).
+        pre-run setup (e.g. rebuilding a mask from the current region state).
         """
 
     def autoscale_plots(self):
@@ -598,7 +597,7 @@ class DefaultStepPanel(StepPanel):
     """
     Generic fallback panel for steps that have no registered custom panel.
 
-    Displays the step names, a *Run* button, and a status indicator.
+    Displays the step names, a *Run+* button, and a status indicator.
     On success it calls :meth:`trigger_downstream` to cascade re-runs.
     """
 
@@ -609,10 +608,6 @@ class DefaultStepPanel(StepPanel):
         names_str = " + ".join(self.step_names)
         layout.addWidget(QtWidgets.QLabel(f"<i>{names_str}</i>"))
         layout.addStretch()
-
-        self._run_btn = QtWidgets.QPushButton("Run")
-        self._run_btn.clicked.connect(self._on_run_clicked)
-        layout.addWidget(self._run_btn)
 
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setToolTip("Run this panel and all following panels")
@@ -626,16 +621,6 @@ class DefaultStepPanel(StepPanel):
         self._status_label = QtWidgets.QLabel("—")
         self._status_label.setMinimumWidth(130)
         layout.addWidget(self._status_label)
-
-    def _on_run_clicked(self):
-        self._status_label.setText("Running…")
-        QtWidgets.QApplication.processEvents()
-        ok = self.run_steps()
-        if ok:
-            self._status_label.setText("Done ✓")
-            self.trigger_downstream()
-        else:
-            self._status_label.setText("Error ✗")
 
     def _on_save_clicked(self):
         try:
@@ -700,7 +685,7 @@ class _SectionHeader(QtWidgets.QWidget):
         names_str = "  →  ".join(panel.step_names)
         if idx is not None:
             n = idx + 1
-            hints = f"[{n}] run   [⇧{n}] run+following"
+            hints = f"[{n}] run+following"
             return f"{arrow}  {num_str}{names_str}    —    {hints}"
         return f"{arrow}  {num_str}{names_str}"
 
@@ -832,11 +817,11 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         _sc_r = QtGui.QShortcut(QtGui.QKeySequence("R"), self)
         _sc_r.activated.connect(self._autoscale_all)
 
-        # Number keys 1-9: run the corresponding panel (1-indexed)
+        # Number keys 1-9: run panel and all following (1-indexed)
         for idx in range(1, 10):
             seq = str(idx)
             _sc = QtGui.QShortcut(QtGui.QKeySequence(seq), self)
-            _sc.activated.connect(lambda _i=idx-1: self._run_panel_by_index(_i))
+            _sc.activated.connect(lambda _i=idx-1: self._run_through_panel(_i))
             _sc_shift = QtGui.QShortcut(QtGui.QKeySequence(f"Shift+{seq}"), self)
             _sc_shift.activated.connect(lambda _i=idx-1: self._run_through_panel(_i))
 
@@ -900,7 +885,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         layout.addSpacing(8)
 
         _hints = QtWidgets.QLabel(
-            "[\u2190/A  \u2192/D] navigate    [R] rescale    [N] run panel    [\u21e7N] run+following"
+            "[\u2190/A  \u2192/D] navigate    [R] rescale    [N] run+following"
         )
         _hints.setStyleSheet("color: palette(mid); font-style: italic;")
         layout.addWidget(_hints)

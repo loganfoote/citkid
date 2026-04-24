@@ -88,11 +88,6 @@ class FitIQPanel(StepPanel):
         self._reset_btn.clicked.connect(self._reset_mask)
         ctrl.addWidget(self._reset_btn)
 
-        self._run_btn = QtWidgets.QPushButton("Run")
-        self._run_btn.setFixedWidth(60)
-        self._run_btn.clicked.connect(self._on_run_clicked)
-        ctrl.addWidget(self._run_btn)
-
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setFixedWidth(55)
         self._run_through_btn.setToolTip("Run this panel and all following panels")
@@ -363,17 +358,6 @@ class FitIQPanel(StepPanel):
         """Rebuild the mask from the current region before run_steps is called."""
         if self._ff_cache is not None:
             self._build_mask(self._ff_cache)
-
-    def _on_run_clicked(self):
-        self.prepare_run()
-        self._status_label.setText("Running…")
-        QtWidgets.QApplication.processEvents()
-        ok = self.run_steps()
-        if ok:
-            self._status_label.setText("Done ✓")
-            self.trigger_downstream()
-        else:
-            self._status_label.setText("Error ✗")
 
     def _on_save_clicked(self):
         try:

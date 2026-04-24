@@ -60,11 +60,6 @@ class GainFitPanel(StepPanel):
         self._span_spin.setFixedWidth(80)
         ctrl.addWidget(self._span_spin)
 
-        self._run_btn = QtWidgets.QPushButton("Run")
-        self._run_btn.setFixedWidth(60)
-        self._run_btn.clicked.connect(self._on_run_clicked)
-        ctrl.addWidget(self._run_btn)
-
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setFixedWidth(55)
         self._run_through_btn.setToolTip("Run this panel and all following panels")
@@ -229,16 +224,6 @@ class GainFitPanel(StepPanel):
                       self._amp_fit, self._phase_fit):
             curve.setData([], [])
         self._status_label.setText("—")
-
-    def _on_run_clicked(self):
-        self._status_label.setText("Running…")
-        QtWidgets.QApplication.processEvents()
-        ok = self.run_steps()
-        if ok:
-            self._status_label.setText("Done ✓")
-            self.trigger_downstream()
-        else:
-            self._status_label.setText("Error ✗")
 
     def _on_save_clicked(self):
         try:

@@ -205,10 +205,10 @@ class TestDefaultStepPanel:
         panel = DefaultStepPanel(ar, ('dsp1',))
         assert isinstance(panel, StepPanel)
 
-    def test_has_run_button(self, qt_app):
+    def test_has_run_through_button(self, qt_app):
         ar, _ = _make_ar('dsp2')
         panel = DefaultStepPanel(ar, ('dsp2',))
-        assert hasattr(panel, '_run_btn')
+        assert hasattr(panel, '_run_through_btn')
 
     def test_has_save_button(self, qt_app):
         ar, _ = _make_ar('dsp3')
@@ -225,40 +225,8 @@ class TestDefaultStepPanel:
         panel = DefaultStepPanel(ar, ('dsp5',))
         assert panel._status_label.text() == '—'
 
-    def test_on_run_clicked_success_updates_label(self, qt_app):
-        ar, _ = _make_ar('dsp6')
-        ar.execute_step.return_value = None
-        panel = DefaultStepPanel(ar, ('dsp6',))
-        panel._on_run_clicked()
-        assert panel._status_label.text() == 'Done ✓'
-
-    def test_on_run_clicked_success_emits_downstream(self, qt_app):
-        ar, _ = _make_ar('dsp7')
-        ar.execute_step.return_value = None
-        panel = DefaultStepPanel(ar, ('dsp7',))
-        received = []
-        panel.downstream_rerun.connect(received.append)
-        panel._on_run_clicked()
-        assert len(received) == 1
-
-    def test_on_run_clicked_failure_updates_label(self, qt_app):
-        ar, _ = _make_ar('dsp8')
-        ar.execute_step.side_effect = RuntimeError('test error')
-        panel = DefaultStepPanel(ar, ('dsp8',))
-        panel._on_run_clicked()
-        assert panel._status_label.text() == 'Error ✗'
-
-    def test_on_run_clicked_failure_no_downstream(self, qt_app):
-        ar, _ = _make_ar('dsp9')
-        ar.execute_step.side_effect = RuntimeError('test error')
-        panel = DefaultStepPanel(ar, ('dsp9',))
-        received = []
-        panel.downstream_rerun.connect(received.append)
-        panel._on_run_clicked()
-        assert len(received) == 0
-
     def test_get_params_for_step_returns_empty_dict(self, qt_app):
-        ar, steps = _make_ar('dsp10')
-        panel = DefaultStepPanel(ar, ('dsp10',))
+        ar, steps = _make_ar('dsp6')
+        panel = DefaultStepPanel(ar, ('dsp6',))
         result = panel.get_params_for_step(steps[0])
         assert result == {}
