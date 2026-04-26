@@ -61,6 +61,14 @@ class DataSet:
             self.zarr_path = os.path.abspath(zarr_path)
             self.root = zarr.open_group(self.zarr_path, mode = zarr_mode)
 
+        # Ensure _failures group has valid zarr v3 metadata so that
+        # root.groups() can recognise it and does not emit ZarrUserWarning.
+        # This is a no-op when the group already exists with valid metadata.
+        try:
+            self.root.require_group('_failures')
+        except Exception:
+            pass  # read-only or otherwise non-writable store
+
         # Resolve cal_yaml_path shorthand aliases
         _CAL_YAML_ALIASES = {
             'ts':       'cal.yaml',
