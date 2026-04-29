@@ -419,6 +419,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
     def _set_data_idx(self, new_di: int):
         """Change the active resonator, load/run data, and refresh the scatter."""
+        self._save_dirty_panels()  # persist results for the outgoing resonator
         self._data_idx = new_di
         self._data_idx_spin.blockSignals(True)
         self._data_idx_spin.setValue(new_di)
@@ -447,6 +448,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
     def _set_sweep_idx(self, new_si: int):
         """Change the active sweep index, swap ARs in panels, and re-run."""
+        self._save_dirty_panels()  # persist results for the outgoing sweep point
         self._sweep_idx = new_si
         self._update_sweep_combo_selection()
 
@@ -508,6 +510,22 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self._update_sweep_combo_items(self._data_idx)
         self._update_sweep_scatter()
         self._update_waterfall()
+
+    def _save_dirty_panels(self):
+        """Save any panels that have unsaved results for the current state."""
+        if self._sweep_idx is None:
+            return
+        for panel in self.panels:
+            if panel._dirty:
+                try:
+                    panel.save_outputs()
+                except Exception as exc:
+                    print(f"Auto-save failed for {panel.step_names}: {exc}")
+
+    def closeEvent(self, event):
+        """Auto-save dirty panels before closing."""
+        self._save_dirty_panels()
+        super().closeEvent(event)
 
     def _run_all_panels(self):
         for panel in self.panels:
