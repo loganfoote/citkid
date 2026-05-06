@@ -787,7 +787,7 @@ class AutoResFinder:
         
     def show_help(self):
         """
-        Display help dialog.
+        Toggle the help panel on/off.
 
         Parameters:
         None
@@ -795,38 +795,58 @@ class AutoResFinder:
         Returns:
         None
         """
-        help_text = """
-        <h3>Auto Resonance Finder Help</h3>
-        <p><b>Controls:</b></p>
-        <ul>
-        <li>Adjust parameters in right panel to tune resonance detection</li>
-        <li><b>Z/X:</b> Pan left/right</li>
-        <li><b>Mouse Wheel:</b> Zoom</li>
-        <li><b>S:</b> Save results</li>
-        <li><b>H:</b> Show this help</li>
-        </ul>
-        <p><b>Parameters:</b></p>
-        <ul>
-        <li><b>Frequency Range:</b> Limit search to this range</li>
-        <li><b>Smoothing Method:</b></li>
-        <ul>
-        <li><b>highpass:</b> Remove slow baseline drift (cutoff in MHz)</li>
-        <li><b>polynomial:</b> Subtract polynomial baseline (order)</li>
-        <li><b>none:</b> No smoothing</li>
-        </ul>
-        <li><b>Height:</b> Minimum peak depth (dB below baseline)</li>
-        <li><b>Width:</b> Min peak width (kHz/GHz)</li>
-        <li><b>Distance:</b> Min spacing (kHz/GHz)</li>
-        </ul>
-        <p><b>Status:</b> {0} peaks found</p>
-        <p><b>Output:</b> {1}</p>
-        """.format(len(self.fres), self.zarr_group.store)
-        
-        msg = QtWidgets.QMessageBox()
-        msg.setWindowTitle("Auto Resonance Finder Help")
-        msg.setTextFormat(_Qt.RichText)
-        msg.setText(help_text)
-        msg.exec()
+        if not hasattr(self, '_help_dlg'):
+            self._help_dlg = self._build_help_dialog()
+        if self._help_dlg.isVisible():
+            self._help_dlg.hide()
+        else:
+            dlg = self._help_dlg
+            dlg.adjustSize()
+            dlg.show()
+            # Centre within the main window
+            _parent_center = self.win.frameGeometry().center()
+            _dlg_frame = dlg.frameGeometry()
+            _dlg_frame.moveCenter(_parent_center)
+            dlg.move(_dlg_frame.topLeft())
+
+    def _build_help_dialog(self):
+        """Create the floating help dialog (created lazily on first use)."""
+        dlg = QtWidgets.QDialog(self.win)
+        dlg.setWindowTitle("Auto Resonance Finder Help (H to close)")
+        layout = QtWidgets.QVBoxLayout(dlg)
+        lbl = QtWidgets.QLabel(
+            "<h3>Auto Resonance Finder Controls</h3>"
+            "<p><b>Controls:</b></p>"
+            "<ul>"
+            "<li>Adjust parameters in the right panel to tune resonance detection</li>"
+            "<li><b>Z/X:</b> Pan left/right by 20%</li>"
+            "<li><b>Mouse Wheel:</b> Zoom in/out</li>"
+            "<li><b>S:</b> Save results</li>"
+            "<li><b>H:</b> Toggle this help panel</li>"
+            "</ul>"
+            "<p><b>Parameters:</b></p>"
+            "<ul>"
+            "<li><b>Frequency Range:</b> Limit peak search to this range</li>"
+            "<li><b>Smoothing Method:</b></li>"
+            "<ul>"
+            "<li><b>highpass:</b> Remove slow baseline drift (cutoff in MHz)</li>"
+            "<li><b>polynomial:</b> Subtract polynomial baseline (order)</li>"
+            "<li><b>none:</b> No smoothing</li>"
+            "</ul>"
+            "<li><b>Height:</b> Minimum peak depth (dB below baseline)</li>"
+            "<li><b>Width:</b> Minimum peak width (kHz/GHz)</li>"
+            "<li><b>Distance:</b> Minimum spacing between peaks (kHz/GHz)</li>"
+            "</ul>"
+        )
+        lbl.setTextFormat(_Qt.RichText)
+        lbl.setWordWrap(False)
+        layout.addWidget(lbl)
+        close_btn = QtWidgets.QPushButton("Close (H)")
+        close_btn.clicked.connect(dlg.hide)
+        layout.addWidget(close_btn)
+        _sc = QtGui.QShortcut(QtGui.QKeySequence("H"), dlg)
+        _sc.activated.connect(dlg.hide)
+        return dlg
         
     def run(self):
         """

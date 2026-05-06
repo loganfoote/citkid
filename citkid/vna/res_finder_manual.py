@@ -888,7 +888,7 @@ class ResFinder:
         
     def show_help(self):
         """
-        Display help dialog.
+        Toggle the help panel on/off.
 
         Parameters:
         None
@@ -896,42 +896,59 @@ class ResFinder:
         Returns:
         None
         """
-        help_text = """
-        <h3>Resonance Finder Controls</h3>
-        <p><b>Mouse:</b></p>
-        <ul>
-        <li><b>Left Click:</b> Add resonance at clicked frequency</li>
-        <li><b>Shift + Click:</b> Remove nearest resonance in view</li>
-        <li><b>Mouse Wheel:</b> Zoom in/out</li>
-        <li><b>Right Click + Drag:</b> Zoom to rectangle</li>
-        </ul>
-        <p><b>Keyboard:</b></p>
-        <ul>
-        <li><b>Z:</b> Pan left by 20%</li>
-        <li><b>X:</b> Pan right by 20%</li>
-        <li><b>A:</b> Pan left by 80%</li>
-        <li><b>D:</b> Pan right by 80%</li>
-        <li><b>S:</b> Save resonances to file</li>
-        <li><b>Ctrl+Z:</b> Undo last add/remove</li>
-        <li><b>Q:</b> Toggle IQ (I vs Q) plot</li>
-        <li><b>H:</b> Show this help</li>
-        </ul>
-        <p><b>Button:</b></p>
-        <ul>
-        <li><b>Quit and Save:</b> Save and close application</li>
-        </ul>
-        <p><b>Current Status:</b></p>
-        <ul>
-        <li>Total resonances: """ + str(len(self.fres)) + """</li>
-        <li>Output: """ + str(self.zarr_group.store) + """</li>
-        </ul>
-        """
-        
-        msg = QtWidgets.QMessageBox()
-        msg.setWindowTitle("Resonance Finder Help")
-        msg.setTextFormat(_Qt.RichText)
-        msg.setText(help_text)
-        msg.exec()
+        if not hasattr(self, '_help_dlg'):
+            self._help_dlg = self._build_help_dialog()
+        if self._help_dlg.isVisible():
+            self._help_dlg.hide()
+        else:
+            dlg = self._help_dlg
+            dlg.adjustSize()
+            dlg.show()
+            # Centre within the main window
+            _parent_center = self.win.frameGeometry().center()
+            _dlg_frame = dlg.frameGeometry()
+            _dlg_frame.moveCenter(_parent_center)
+            dlg.move(_dlg_frame.topLeft())
+
+    def _build_help_dialog(self):
+        """Create the floating help dialog (created lazily on first use)."""
+        dlg = QtWidgets.QDialog(self.win)
+        dlg.setWindowTitle("Resonance Finder Help (H to close)")
+        layout = QtWidgets.QVBoxLayout(dlg)
+        lbl = QtWidgets.QLabel(
+            "<h3>Resonance Finder Controls</h3>"
+            "<p><b>Mouse:</b></p>"
+            "<ul>"
+            "<li><b>Left Click:</b> Add resonance at clicked frequency</li>"
+            "<li><b>Shift+Click:</b> Remove nearest resonance in view</li>"
+            "<li><b>Mouse Wheel:</b> Zoom in/out</li>"
+            "<li><b>Right Click + Drag:</b> Zoom to rectangle</li>"
+            "</ul>"
+            "<p><b>Keyboard:</b></p>"
+            "<ul>"
+            "<li><b>Z:</b> Pan left by 20%</li>"
+            "<li><b>X:</b> Pan right by 20%</li>"
+            "<li><b>A:</b> Pan left by 80%</li>"
+            "<li><b>D:</b> Pan right by 80%</li>"
+            "<li><b>S:</b> Save resonances to file</li>"
+            "<li><b>Ctrl+Z:</b> Undo last add/remove</li>"
+            "<li><b>Q:</b> Toggle IQ (I vs Q) plot</li>"
+            "<li><b>H:</b> Toggle this help panel</li>"
+            "</ul>"
+            "<p><b>Button:</b></p>"
+            "<ul>"
+            "<li><b>Quit and Save:</b> Save and close application</li>"
+            "</ul>"
+        )
+        lbl.setTextFormat(_Qt.RichText)
+        lbl.setWordWrap(False)
+        layout.addWidget(lbl)
+        close_btn = QtWidgets.QPushButton("Close (H)")
+        close_btn.clicked.connect(dlg.hide)
+        layout.addWidget(close_btn)
+        _sc = QtGui.QShortcut(QtGui.QKeySequence("H"), dlg)
+        _sc.activated.connect(dlg.hide)
+        return dlg
         
     def run(self):
         """

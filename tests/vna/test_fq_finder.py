@@ -495,22 +495,22 @@ class TestFqFinderReject:
         w = basic_win
         items = [w._reason_combo.itemText(i)
                  for i in range(w._reason_combo.count())]
-        assert items == FqFinderWindow._REJECT_REASONS
+        assert items == ["not rejected"] + list(FqFinderWindow._REJECT_REASONS)
 
     def test_reason_edit_hidden_by_default(self, basic_win):
-        assert basic_win._reason_edit.isHidden()
+        assert not basic_win._reason_edit.isEnabled()
 
     def test_on_reason_combo_changed_shows_edit_for_other(self, basic_win):
         w = basic_win
         w._reason_combo.setCurrentText("other")
-        assert not w._reason_edit.isHidden()
+        assert w._reason_edit.isEnabled()
 
     def test_on_reason_combo_changed_hides_edit_for_preset(self, basic_win):
         w = basic_win
         w._reason_combo.setCurrentText("other")
-        assert not w._reason_edit.isHidden()
+        assert w._reason_edit.isEnabled()
         w._reason_combo.setCurrentText("bifurcated")
-        assert w._reason_edit.isHidden()
+        assert not w._reason_edit.isEnabled()
 
 
 # ===========================================================================

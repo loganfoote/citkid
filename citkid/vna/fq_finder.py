@@ -52,8 +52,6 @@ from ..multitone.fres import update_fres as _update_fres
 
 def _scale_plot_fonts(ui_scale: float, *plot_items) -> None:
     """Apply *ui_scale* to tick labels, axis labels, and titles."""
-    if ui_scale == 1.0:
-        return
     tick_pt  = max(6, round(9  * ui_scale))
     label_pt = max(7, round(11 * ui_scale))
     tick_font  = QtGui.QFont()
@@ -249,8 +247,8 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         res_idxs,
         zarr_group,
         title: str = "FQ Finder",
-        ui_scale: float = 1.0,
-        plot_scale: float = 1.0,
+        ui_scale: float = None,   # deprecated — ignored; scale is auto-computed
+        plot_scale: float = None,  # deprecated — ignored; scale is auto-computed
         overwrite: bool = False,
         fres_update_method: str = "none",
         start_idx: int = 0,
@@ -282,9 +280,23 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         self._res_idxs = res_idxs
         self._zg = zarr_group
         self._M = self._f.shape[0]
-        self._ui_scale = ui_scale
-        self._plot_scale = plot_scale
+
+        # Auto-compute scale from the screen that the cursor is on.
+        # ui_scale / plot_scale are accepted for backward compatibility but ignored.
+        _app = QtWidgets.QApplication.instance()
+        _screen = (_app.screenAt(QtGui.QCursor.pos())
+                   if hasattr(_app, 'screenAt') else None)
+        if _screen is None:
+            _screen = _app.primaryScreen()
+        _geom = _screen.availableGeometry()
+        self._win_w = round(_geom.width() * 0.8)
+        self._win_h = round(_geom.height() * 0.8)
+        self._screen_geom = _geom
+        # Scale relative to the baseline 1100×520 window
+        self._ui_scale = max(0.7, min(self._win_w / 1100, self._win_h / 520))
+
         self._reject_reasons: dict = {}
+        self._pre_reject: dict = {}   # fres/qres saved before rejection
 
         _ensure_zarr_arrays(self._zg, self._M, overwrite)
 
@@ -311,6 +323,13 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         )
 
         self._build_ui()
+        # Size and centre on the target screen
+        self.resize(self._win_w, self._win_h)
+        _g = self._screen_geom
+        self.move(
+            _g.x() + (_g.width() - self._win_w) // 2,
+            _g.y() + (_g.height() - self._win_h) // 2,
+        )
         self._load_resonator()
 
     # ------------------------------------------------------------------
@@ -324,7 +343,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         vbox.setContentsMargins(6, 4, 6, 6)
         vbox.setSpacing(4)
 
-        # ---- top control bar ----
+        # ---- top control bar (row 1): navigation + fres/qres + status ----
         ctrl = QtWidgets.QHBoxLayout()
         ctrl.setSpacing(10)
 
@@ -364,29 +383,36 @@ class FqFinderWindow(QtWidgets.QMainWindow):
 
         ctrl.addStretch()
 
-        self._reason_combo = QtWidgets.QComboBox()
-        for _r in self._REJECT_REASONS:
-            self._reason_combo.addItem(_r)
-        self._reason_combo.setFixedWidth(round(160 * self._ui_scale))
-        self._reason_combo.currentTextChanged.connect(self._on_reason_combo_changed)
-        ctrl.addWidget(self._reason_combo)
-
-        self._reason_edit = QtWidgets.QLineEdit()
-        self._reason_edit.setPlaceholderText("custom reason…")
-        self._reason_edit.setFixedWidth(round(150 * self._ui_scale))
-        self._reason_edit.setVisible(False)
-        ctrl.addWidget(self._reason_edit)
-
-        self._reject_btn = QtWidgets.QPushButton("Reject")
-        self._reject_btn.setFixedWidth(round(70 * self._ui_scale))
-        self._reject_btn.clicked.connect(self._reject_current)
-        ctrl.addWidget(self._reject_btn)
-
         self._status_label = QtWidgets.QLabel("")
         self._status_label.setMinimumWidth(round(220 * self._ui_scale))
         ctrl.addWidget(self._status_label)
 
         vbox.addLayout(ctrl)
+
+        # ---- control bar row 2: rejection ----
+        reject_row = QtWidgets.QHBoxLayout()
+        reject_row.setSpacing(10)
+
+        self._reason_combo = QtWidgets.QComboBox()
+        self._reason_combo.addItem("not rejected")
+        for _r in self._REJECT_REASONS:
+            self._reason_combo.addItem(_r)
+        self._reason_combo.setFixedWidth(round(200 * self._ui_scale))
+        self._reason_combo.currentTextChanged.connect(self._on_reason_combo_changed)
+        reject_row.addWidget(self._reason_combo)
+
+        self._reason_edit = QtWidgets.QLineEdit()
+        self._reason_edit.setPlaceholderText("custom reason…")
+        self._reason_edit.setFixedWidth(round(150 * self._ui_scale))
+        self._reason_edit.editingFinished.connect(self._on_reason_edit_finished)
+        reject_row.addWidget(self._reason_edit)
+
+        self._reject_label = QtWidgets.QLabel("")
+        self._reject_label.setMinimumWidth(round(120 * self._ui_scale))
+        reject_row.addWidget(self._reject_label)
+
+        reject_row.addStretch()
+        vbox.addLayout(reject_row)
 
         # Widget font — built once here and applied to the hint bar and
         # the central widget so all child widgets inherit the same size.
@@ -401,7 +427,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             "Shift+scroll → fine Δqres  |  "
             "Ctrl+scroll → coarse Δqres  |  "
             "←/A → back  |  →/D → next / save  |  "
-            "R → rescale  |  Z → reset to initial"
+            "R → rescale  |  Z → reset to initial  |  H → help"
         )
         hint.setStyleSheet("color: #aaa;")
         hint.setFont(widget_font)
@@ -409,7 +435,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
 
         # ---- plots ----
         self._gw = pg.GraphicsLayoutWidget()
-        self._gw.setMinimumHeight(round(400 * self._plot_scale))
+        self._gw.setMinimumHeight(300)
         vbox.addWidget(self._gw)
 
         # Left: amplitude plot
@@ -524,7 +550,10 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         _sc_z = QtGui.QShortcut(QtGui.QKeySequence("Z"), self)
         _sc_z.activated.connect(self._reset_current)
 
-        self.resize(round(1100 * self._ui_scale), round(520 * self._ui_scale))
+        # H shortcut: toggle help panel
+        _sc_h = QtGui.QShortcut(QtGui.QKeySequence("H"), self)
+        _sc_h.activated.connect(self._toggle_help)
+
         self.installEventFilter(self)
 
     # ------------------------------------------------------------------
@@ -587,19 +616,20 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         stored_reason = self._reject_reasons.get(ri, None)
         self._reason_combo.blockSignals(True)
         if stored_reason is None:
-            self._reason_combo.setCurrentIndex(0)
-            self._reason_edit.setVisible(False)
+            self._reason_combo.setCurrentText("not rejected")
+            self._reason_edit.setEnabled(False)
             self._reason_edit.clear()
         elif stored_reason in self._REJECT_REASONS[:-1]:
             self._reason_combo.setCurrentText(stored_reason)
-            self._reason_edit.setVisible(False)
+            self._reason_edit.setEnabled(False)
         else:
             self._reason_combo.setCurrentText("other")
             self._reason_edit.setText(
                 "" if stored_reason == "other" else stored_reason
             )
-            self._reason_edit.setVisible(True)
+            self._reason_edit.setEnabled(True)
         self._reason_combo.blockSignals(False)
+        self._update_reject_label()
 
         # Autoscale after all items are updated, always deferred so pyqtgraph
         # has processed the new data before autoRange runs
@@ -648,35 +678,95 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         self._plot_iq.autoRange()
 
     def _reject_current(self):
-        """Set fres/qres to NaN (reject this resonator) and record reason."""
-        ri = self._ri
-        reason_text = self._reason_combo.currentText()
-        if reason_text == "other":
-            reason_text = self._reason_edit.text().strip() or "other"
-        self._reject_reasons[ri] = reason_text
-        self._fres_work[ri] = np.nan
-        self._qres_work[ri] = np.nan
-        self._fres_spin.blockSignals(True)
-        self._qres_spin.blockSignals(True)
-        self._fres_spin.setValue(0.0)
-        self._qres_spin.setValue(0.0)
-        self._fres_spin.blockSignals(False)
-        self._qres_spin.blockSignals(False)
-        self._update_overlay(self._f[ri], self._z[ri], np.nan, np.nan)
+        """Reject the current resonator using the current combo selection.
+
+        If the combo is on 'not rejected', switches to the first predefined
+        rejection reason. This method is kept for backward compatibility
+        (e.g. the test suite calls it directly).
+        """
+        if self._reason_combo.currentText() == "not rejected":
+            self._reason_combo.setCurrentText(self._REJECT_REASONS[0])
+        else:
+            # Re-apply (idempotent); picks up any edit-field changes for "other"
+            self._on_reason_combo_changed(self._reason_combo.currentText())
 
     def _on_reason_combo_changed(self, text: str):
-        """Show/hide the custom reason line-edit based on combo selection."""
-        self._reason_edit.setVisible(text == "other")
+        """Apply or remove rejection based on the combo selection."""
+        self._reason_edit.setEnabled(text == "other")
+        ri = self._ri
+        if text == "not rejected":
+            # Un-reject: restore pre-rejection values (or initial values)
+            self._reject_reasons.pop(ri, None)
+            pre = self._pre_reject.get(ri)
+            if pre is not None:
+                fres, qres = pre
+            else:
+                fres, qres = self._fres_init[ri], self._qres_init[ri]
+            self._fres_work[ri] = fres
+            self._qres_work[ri] = qres
+            self._fres_spin.blockSignals(True)
+            self._qres_spin.blockSignals(True)
+            self._fres_spin.setValue(fres * 1e-6)
+            self._qres_spin.setValue(round(qres))
+            self._fres_spin.blockSignals(False)
+            self._qres_spin.blockSignals(False)
+            self._update_overlay(self._f[ri], self._z[ri], fres, qres)
+        else:
+            # Reject: save current fres/qres to pre-reject cache, then NaN them
+            reason = text if text != "other" else (
+                self._reason_edit.text().strip() or "other"
+            )
+            if not np.isnan(self._fres_work[ri]):
+                self._pre_reject[ri] = (self._fres_work[ri], self._qres_work[ri])
+            self._reject_reasons[ri] = reason
+            self._fres_work[ri] = np.nan
+            self._qres_work[ri] = np.nan
+            self._fres_spin.blockSignals(True)
+            self._qres_spin.blockSignals(True)
+            self._fres_spin.setValue(0.0)
+            self._qres_spin.setValue(0.0)
+            self._fres_spin.blockSignals(False)
+            self._qres_spin.blockSignals(False)
+            self._update_overlay(self._f[ri], self._z[ri], np.nan, np.nan)
+        self._update_reject_label()
+        self.setFocus()
+
+    def _on_reason_edit_finished(self):
+        """Update the stored rejection reason when the custom text field changes."""
+        ri = self._ri
+        if self._reason_combo.currentText() == "other" and ri in self._reject_reasons:
+            custom = self._reason_edit.text().strip() or "other"
+            self._reject_reasons[ri] = custom
+            self._update_reject_label()
+
+    def _update_reject_label(self):
+        """Refresh the rejection status indicator label."""
+        ri = self._ri
+        reason = self._reject_reasons.get(ri, None)
+        pt = max(7, round(9 * self._ui_scale))
+        base_style = f"font-size: {pt}pt; font-weight: bold;"
+        if reason is None:
+            self._reject_label.setText("✓ Not rejected")
+            self._reject_label.setStyleSheet(f"color: #4f4; {base_style}")
+        else:
+            self._reject_label.setText("✗ Rejected")
+            self._reject_label.setStyleSheet(f"color: #f44; {base_style}")
 
     def _reset_current(self):
         """Reset fres/qres for the current resonator to their initial values."""
         ri = self._ri
         self._reject_reasons.pop(ri, None)
+        self._pre_reject.pop(ri, None)
         self._fres_work[ri] = self._fres_init[ri]
         self._qres_work[ri] = self._qres_init[ri]
+        self._reason_combo.blockSignals(True)
+        self._reason_combo.setCurrentText("not rejected")
+        self._reason_edit.setEnabled(False)
+        self._reason_edit.clear()
+        self._reason_combo.blockSignals(False)
         self._fres_spin.blockSignals(True)
         self._qres_spin.blockSignals(True)
-        self._fres_spin.setValue(self._fres_work[ri])
+        self._fres_spin.setValue(self._fres_work[ri] * 1e-6)
         self._qres_spin.setValue(round(self._qres_work[ri]))
         self._fres_spin.blockSignals(False)
         self._qres_spin.blockSignals(False)
@@ -684,6 +774,68 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             self._f[ri], self._z[ri],
             self._fres_work[ri], self._qres_work[ri],
         )
+        self._update_reject_label()
+
+    def _toggle_help(self):
+        """Toggle the floating help panel on/off."""
+        if not hasattr(self, '_help_dlg'):
+            self._help_dlg = self._build_help_dialog()
+        if self._help_dlg.isVisible():
+            self._help_dlg.hide()
+        else:
+            dlg = self._help_dlg
+            dlg.adjustSize()
+            # Centre within the main window using the stored screen geometry
+            # (avoids platform-specific inaccuracies from frameGeometry())
+            _sc = self._screen_geom
+            _cx = _sc.x() + _sc.width()  // 2
+            _cy = _sc.y() + _sc.height() // 2
+            dlg.move(_cx - dlg.width() // 2, _cy - dlg.height() // 2)
+            dlg.show()
+
+    def _build_help_dialog(self) -> QtWidgets.QDialog:
+        """Create the floating help dialog (created lazily on first use)."""
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("FQ Finder \u2014 Help (H to close)")
+        layout = QtWidgets.QVBoxLayout(dlg)
+        lbl = QtWidgets.QLabel(
+            "<h3>FQ Finder Controls</h3>"
+            "<p><b>Amplitude plot</b></p>"
+            "<ul>"
+            "<li><b>Shift+Click:</b> Move fres to clicked frequency</li>"
+            "<li><b>Drag fres line:</b> Adjust fres directly</li>"
+            "<li><b>Drag span edge:</b> Adjust qres symmetrically</li>"
+            "<li><b>Shift+Scroll:</b> Fine qres adjust (\u00b14% per notch)</li>"
+            "<li><b>Ctrl+Scroll:</b> Coarse qres adjust (\u00b140% per notch)</li>"
+            "</ul>"
+            "<p><b>IQ plot</b></p>"
+            "<ul>"
+            "<li><b>Shift+Click:</b> Snap fres to nearest IQ sample</li>"
+            "<li><b>Shift/Ctrl+Scroll:</b> Adjust qres (same as amp plot)</li>"
+            "</ul>"
+            "<p><b>Keyboard</b></p>"
+            "<ul>"
+            "<li><b>\u2192 / D:</b> Save current resonator and go to next</li>"
+            "<li><b>\u2190 / A:</b> Go back to previous resonator</li>"
+            "<li><b>R:</b> Auto-scale both plots</li>"
+            "<li><b>Z:</b> Reset fres/qres to initial values for this resonator</li>"
+            "<li><b>H:</b> Toggle this help panel</li>"
+            "</ul>"
+            "<p><b>Rejection</b></p>"
+            "<ul>"
+            "<li>Select a rejection reason from the dropdown to reject a resonator.</li>"
+            "<li>Selecting <i>not rejected</i> restores the last fres/qres values.</li>"
+            "</ul>"
+        )
+        lbl.setTextFormat(_Qt.RichText)
+        lbl.setWordWrap(False)
+        layout.addWidget(lbl)
+        close_btn = QtWidgets.QPushButton("Close (H)")
+        close_btn.clicked.connect(dlg.hide)
+        layout.addWidget(close_btn)
+        _sc = QtGui.QShortcut(QtGui.QKeySequence("H"), dlg)
+        _sc.activated.connect(dlg.hide)
+        return dlg
 
     def _save_current(self):
         """Write working fres/qres and rejection reason for the current
@@ -850,8 +1002,8 @@ def run_fqfinder(
     res_idxs,
     zarr_group,
     title: str = "FQ Finder",
-    ui_scale: float = 1.0,
-    plot_scale: float = 1.0,
+    ui_scale: float = None,    # deprecated — ignored; scale is auto-computed
+    plot_scale: float = None,  # deprecated — ignored; scale is auto-computed
     overwrite: bool = False,
     fres_update_method: str = "none",
     start_idx: int = 0,
@@ -882,9 +1034,11 @@ def run_fqfinder(
     title : str, optional
         Window title.  Default ``'FQ Finder'``.
     ui_scale : float, optional
-        Multiplier for fonts and widget/window sizes.  Default 1.0.
+        Deprecated.  Accepted for backward compatibility but has no effect.
+        The window is automatically sized to 80% of the screen and all fonts
+        scale accordingly.
     plot_scale : float, optional
-        Multiplier for the minimum plot area height.  Default 1.0.
+        Deprecated.  Accepted for backward compatibility but has no effect.
     overwrite : bool, optional
         If False (default) and ``fres_opt`` or ``qres_opt`` already exist
         in *zarr_group*, raise ``FileExistsError``.  Set True to resume:
@@ -923,8 +1077,6 @@ def run_fqfinder(
         res_idxs=res_idxs,
         zarr_group=zarr_group,
         title=title,
-        ui_scale=ui_scale,
-        plot_scale=plot_scale,
         overwrite=overwrite,
         fres_update_method=fres_update_method,
         start_idx=start_idx,
