@@ -107,6 +107,7 @@ def _sweep_color(i, n):
 ################################################################################
 
 class SweepFitterWindow(QtWidgets.QMainWindow):
+    _prefetch_status_changed = QtCore.pyqtSignal(str)
     """
     Main window for interactive IQ fitting across a parameter sweep.
 
@@ -169,6 +170,12 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         # x and y value caches: {data_idx: np.ndarray of shape (n_sweep,)}
         self._x_cache: dict = {}
         self._y_cache: dict = {}
+
+        # Prefetch state
+        self._prefetch_thread: __import__('threading').Thread | None = None
+        self._prefetching_idx: int | None = None
+        self._prefetched_idx: int | None = None
+        self._prefetch_status_changed.connect(self._on_prefetch_status)
 
         self.setWindowTitle(title)
 
@@ -323,6 +330,11 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self._apply_status_label.setMinimumWidth(120)
         layout.addWidget(self._apply_status_label)
 
+        self._prefetch_label = QtWidgets.QLabel('')
+        self._prefetch_label.setMinimumWidth(110)
+        self._prefetch_label.setToolTip('Background prefetch status for the next resonator')
+        layout.addWidget(self._prefetch_label)
+
         self._update_res_label()
         return w
 
@@ -449,10 +461,23 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         # Silently run (or load) the full pipeline for every sweep AR at the
         # new data_idx, so the scatter and waterfall are fully populated and
         # the active panels can show results immediately.
-        self._batch_init_all_sweeps()
+        if self._prefetched_idx == new_di:
+            # Background thread already has results in memory — skip re-run.
+            pass
+        else:
+            # If the prefetch thread is still running for this index, wait.
+            if (self._prefetch_thread is not None
+                    and self._prefetch_thread.is_alive()
+                    and self._prefetching_idx == new_di):
+                while self._prefetch_thread.is_alive():
+                    self._prefetch_thread.join(timeout=0.05)
+                    QtWidgets.QApplication.processEvents()
+            if self._prefetched_idx != new_di:
+                self._batch_init_all_sweeps()
         self._update_sweep_combo_items(new_di)
         self._update_sweep_scatter()
         self._update_waterfall()
+        QtCore.QTimer.singleShot(200, self._prefetch_next)
 
     def _set_sweep_idx(self, new_si: int):
         """Change the active sweep index, swap ARs in panels, and re-run."""
@@ -518,6 +543,56 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self._update_sweep_combo_items(self._data_idx)
         self._update_sweep_scatter()
         self._update_waterfall()
+        QtCore.QTimer.singleShot(200, self._prefetch_next)
+
+    # ------------------------------------------------------------------
+    # Prefetch
+    # ------------------------------------------------------------------
+
+    def _prefetch_next(self):
+        """
+        Pre-run the full pipeline for every sweep AR at ``data_idx + 1`` on a
+        background daemon thread so that navigating forward feels instant.
+        """
+        import threading as _threading
+        next_di = self._data_idx + 1
+        if next_di >= self._nrows:
+            return
+        if next_di == self._prefetched_idx:
+            return
+        if (self._prefetch_thread is not None
+                and self._prefetch_thread.is_alive()
+                and self._prefetching_idx == next_di):
+            return
+
+        self._prefetching_idx = next_di
+        self._prefetch_status_changed.emit(f'\u27f3 prefetch {next_di}')
+        ARs = list(self._ARs)
+
+        def _worker():
+            try:
+                for AR in ARs:
+                    AR.execute_path(
+                        data_idx=next_di, save_override=False, verbose=False
+                    )
+                self._prefetched_idx = next_di
+                self._prefetch_status_changed.emit(f'\u2713 prefetch {next_di}')
+            except Exception as exc:
+                self._prefetch_status_changed.emit('')
+                print(f'[prefetch] data_idx={next_di} failed: {exc}')
+
+        self._prefetch_thread = _threading.Thread(
+            target=_worker, daemon=True, name=f'prefetch-{next_di}'
+        )
+        self._prefetch_thread.start()
+
+    def _on_prefetch_status(self, msg: str):
+        """Update the prefetch label on the UI thread via signal."""
+        self._prefetch_label.setText(msg)
+        if msg.startswith('\u2713'):
+            QtCore.QTimer.singleShot(
+                4000, lambda: self._prefetch_label.setText('')
+            )
 
     def _save_dirty_panels(self):
         """Save any panels that have unsaved results for the current state."""
