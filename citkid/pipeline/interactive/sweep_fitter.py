@@ -312,6 +312,17 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         run_all_btn.clicked.connect(self._run_all)
         layout.addWidget(run_all_btn)
 
+        apply_all_btn = QtWidgets.QPushButton('Apply to All')
+        apply_all_btn.setToolTip(
+            'Apply current panel settings to every dataset in the active sweep and save'
+        )
+        apply_all_btn.clicked.connect(self._apply_to_all)
+        layout.addWidget(apply_all_btn)
+
+        self._apply_status_label = QtWidgets.QLabel('')
+        self._apply_status_label.setMinimumWidth(120)
+        layout.addWidget(self._apply_status_label)
+
         self._update_res_label()
         return w
 
@@ -426,6 +437,10 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self._data_idx_spin.blockSignals(False)
         self._update_res_label()
 
+        # Reset sweep selection so no point is pre-selected on the new dataset.
+        self._sweep_idx = None
+        self._update_sweep_combo_selection()
+
         for panel in self.panels:
             panel.data_idx = new_di
             panel.on_data_idx_changing()
@@ -438,13 +453,6 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self._update_sweep_combo_items(new_di)
         self._update_sweep_scatter()
         self._update_waterfall()
-
-        # If a sweep is already selected, re-run the active panels so they
-        # display results for the new resonator.
-        if self._sweep_idx is not None:
-            if self.panels:
-                self.panels[0]._ensure_global_prerequisites()
-            self._run_all_panels()
 
     def _set_sweep_idx(self, new_si: int):
         """Change the active sweep index, swap ARs in panels, and re-run."""
@@ -537,6 +545,61 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
     def _run_all(self):
         self._run_through_panel(0)
+
+    def _apply_to_all(self):
+        """
+        Apply the current panel settings to every sweep index for the current
+        data_idx and save results to zarr.
+
+        Each panel's ``get_params_for_step`` is called with the current widget
+        state (e.g. span_mult, iq_mask) so the same settings are used for
+        every sweep index.  Results are saved after each sweep index.
+        """
+        if self._sweep_idx is None:
+            return
+
+        di = self._data_idx
+
+        # Snapshot current settings from each panel before iterating.
+        # Each entry is a list of (step, params_dict) pairs.
+        panel_params = []
+        for panel in self.panels:
+            step_params = [(step, panel.get_params_for_step(step))
+                           for step in panel.steps]
+            panel_params.append(step_params)
+
+        total = self._n_sweep
+        errors = []
+        for si in range(total):
+            self._apply_status_label.setText(f'Applying {si + 1}/{total}…')
+            QtWidgets.QApplication.processEvents()
+            AR = self._ARs[si]
+            try:
+                for (step_params_list, panel) in zip(panel_params, self.panels):
+                    for step, params in step_params_list:
+                        step_di = (
+                            None
+                            if step.func_type in ('global', 'global-res')
+                            else di
+                        )
+                        AR.execute_step(
+                            step, data_idx=step_di,
+                            user_params=params, save=True,
+                        )
+            except Exception as exc:
+                errors.append((si, exc))
+                print(f'Apply to all: error at sweep_idx={si}: {exc}')
+
+        # Invalidate y-cache for this data_idx so scatter refreshes.
+        self._y_cache.pop(di, None)
+        self._update_sweep_scatter()
+
+        if errors:
+            self._apply_status_label.setText(
+                f'Done with {len(errors)} error(s)'
+            )
+        else:
+            self._apply_status_label.setText(f'Applied to all {total} ✓')
 
     def _run_panel_by_index(self, index: int):
         if index >= len(self.panels):
