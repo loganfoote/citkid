@@ -27,4 +27,4 @@ ANALYSIS_STEPS:
   7 :
     task: fit_x_theta 
     params:
-      poly_x_deg: 3
+      xcal_mask: null

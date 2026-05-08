@@ -2,7 +2,6 @@
 ###      x calibration steps      ###
 ### ----------------------------- ###
 
-# Need to add path to get res parameters from iq_popt
 CAL_STEPS:
   1 :
     task: load_global_data
@@ -13,8 +12,6 @@ CAL_STEPS:
         task: load_data_f # must be sorted on axis 1
       2:
         task: rmv_gain_f 
-        # delete_input: [zf]
-        # Add nonlinear IQ fitting here when it is ready 
       3:
         task: center_f 
       4:

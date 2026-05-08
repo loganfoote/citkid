@@ -16,6 +16,7 @@ def get_psd(x, dt, get_frequencies=False):
     psd (np.array, float64): Power spectral density.
     """
     x = np.asarray(x, dtype=np.float64)
+    dt = float(np.asarray(dt))
     a = pyfftw.interfaces.numpy_fft.rfft(x)
     psd = 2 * np.abs(a) ** 2 * dt / len(x)
     if not get_frequencies:

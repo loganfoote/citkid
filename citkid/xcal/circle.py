@@ -165,6 +165,8 @@ def get_spar_sper(theta, A, radius, dt, get_freqs = True):
     # Input validation
     theta = np.asarray(theta, dtype = np.float64)
     A = np.asarray(A, dtype = np.float64)
+    dt = float(np.asarray(dt))
+    radius = float(np.asarray(radius))
     if not np.isfinite(radius): 
         raise ValueError("radius must be a finite number")
     if not (np.isfinite(dt) and dt > 0):

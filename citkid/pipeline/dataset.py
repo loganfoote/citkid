@@ -1175,13 +1175,35 @@ class DataSet:
                 
                 return data
         
-        # Data doesn't exist - raise error
+        # Data doesn't exist - check _failures for a helpful error message
+        hint = ""
+        try:
+            fail_groups = [k for k in self.root['_failures'].group_keys()]
+            for step_name in fail_groups:
+                fail_grp = self.root[f'_failures/{step_name}']
+                failures = fail_grp.attrs.get('failures', {})
+                if data_idx is not None:
+                    keys_to_check = [f'idx{int(i)}' for i in 
+                                     np.atleast_1d(data_idx)]
+                    relevant = {k: failures[k] for k in keys_to_check 
+                                if k in failures}
+                else:
+                    relevant = failures
+                if relevant:
+                    example_key = next(iter(relevant))
+                    tb = relevant[example_key].get('traceback', '').rstrip()
+                    hint = (f"\n\nStep '{step_name}' has recorded failures "
+                            f"that may have prevented '{name}' from being "
+                            f"produced. Most recent failure "
+                            f"({example_key}):\n{tb}")
+                    break
+        except Exception:
+            pass
         raise ValueError(
             f"Parameter '{name}' at run_idx={run_idx} "
-            f"{'with data_idx=' + str(data_idx) 
-               if data_idx is not None else ''}"
-            f" does not exist in memory or zarr and cannot be computed here. "
-            f"Use _execute_path to generate missing data."
+            f"{'with data_idx=' + str(data_idx) if data_idx is not None else ''}"
+            f" does not exist in memory or zarr and cannot be computed here."
+            f"{hint}"
         )
     
     def _get_needs_execution_global(self, step, enforced_max_runs):
@@ -1332,10 +1354,19 @@ class DataSet:
             # Execute step 
             if not needs_execution:
                 continue
-            self._execute_step(
+            failures = self._execute_step(
                 step, 
                 data_idx = step_data_idx, 
                 enforced_max_runs = enforced_max_runs_i)
+            if failures:
+                failed_detail = "\n\n".join(
+                    f"  data_idx={di}:\n{tb.rstrip()}"
+                    for di, tb in sorted(failures.items())
+                )
+                raise RuntimeError(
+                    f"Pipeline step '{step.name}' failed for "
+                    f"{len(failures)} row(s):\n\n{failed_detail}"
+                )
             
     def _fetch_rows(
             self, name, run_idx, data_idx = None, enforced_max_runs = {}

@@ -72,5 +72,56 @@ def get_xcal_mask(ff, theta_f, theta_t, idx0_offset = 3, idx1_offset = 7,
     return mask
 
 def fit_x_theta(thetat, xf, mask, poly_x_deg):
+    """
+    Fits a polynomial to x vs theta data for the fine s21 sweep, using only the
+    points where mask is True. The resulting polynomial is used for x 
+    calibration.
+
+    Parameters:
+    thetat (array-like, float64): Theta values from the noise measurement.
+    xf (array-like, float64): x values from the fine S21 sweep.
+    mask (array-like, bool): Mask to apply to the data before fitting.
+    poly_x_deg (int): Degree of the polynomial to fit.
+
+    Returns:
+    poly (np.array, float64): Coefficients of the fitted polynomial.
+    """
     poly = np.polyfit(thetat[mask], xf[mask], poly_x_deg) 
-    return poly
+    return poly 
+
+
+################################################################################
+# Simplified xcal creation for DataSet #
+################################################################################
+def create_xcal(DS, data_idx, ft):
+    """
+    Placeholder, I haven't decided how to implement this. Maybe as method of 
+    DataSet, though it does rely on the specific pipeline.
+    
+    Converts gain fit and circle fit data into simplified calibration parameters
+    z1, z2, and xpoly, such that 
+        zt_cent = zt * z1 + z2
+        thetat = angle(zt_cent) 
+        At = abs(zt_cent) 
+        xt = polyval(xpoly, thetat)
+
+    Parameters:
+    DS (dataset.DataSet): DataSet instance from which calibration parameters are 
+        built. 
+    data_idx (int): data index. 
+    ft (float): tone frequency corresponding to the dataset of interest.
+    """
+    # remove gain
+    amp = 10 ** (np.polyval(DS.p_amp[data_idx], ft) / 20)
+    phase = np.exp(1j * np.polyval(DS.p_phase[data_idx], ft))
+    z1 = 1 / (amp * phase)
+    # center and rotate circle 
+    za = np.exp(-1j * DS.theta_phase_offset[data_idx])  
+    z1 *= za 
+    z2 = -DS.circ_origin[data_idx] * za
+    if not np.isfinite(z1):
+        z2 = np.nan + 1j * np.nan 
+    if not np.isfinite(z2):
+        z1 = np.nan + 1j * np.nan
+    poly_x = DS.poly_x[data_idx] 
+    return z1, z2, poly_x

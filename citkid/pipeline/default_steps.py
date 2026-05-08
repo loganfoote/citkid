@@ -3,6 +3,8 @@ import numpy as np
 from .framework import plStep
 from ..xcal import gain, circle, xcal 
 from ..res import fitter as res_fitter
+from ..signal import psd
+from ..xcal import reduced_params
  
 ############################## Default cal steps ###############################
 # name, function, input parameter names, output parameter names, 
@@ -44,9 +46,24 @@ default_cal_steps =\
  ('get_At', circle.convert_to_A, 
   ['zt_cent'], ['At'], 'per-row'),
 
- ('get_sparper', circle.get_spar_sper, 
+ ('get_sparper', 
+  lambda a, b, c, d: circle.get_spar_sper(a, b, c, d, get_freqs = True), 
   ['thetat', 'At', 'circ_radius', 'dt'], 
-  ['sparper_freq', 'spar', 'sper'], 'per-row'),
+  ['f_sparper', 'spar', 'sper'], 'per-row'),
+
+  ('get_sxx', lambda x, dt: psd.get_psd(x, dt, get_frequencies = True),
+   ['xt', 'dt'],
+   ['f_sxx', 'sxx'], 'per-row'),
+
+   ('get_sxx_reduced', reduced_params.get_sxx_reduced_default_freqs,
+    ['f_sxx', 'sxx'], 
+    [f'sxx_{_freq}'.replace('.', 'p') for _freq in reduced_params._freqs], 
+    'per-row'),
+
+   ('get_sfactor_reduced', reduced_params.get_sfactor_reduced_default_freqs,
+    ['f_sparper', 'spar', 'sper'], 
+    [f'sfactor_{_freq}'.replace('.', 'p') for _freq in reduced_params._freqs], 
+    'per-row')
   
 )
 
@@ -77,8 +94,10 @@ default_analysis_steps =\
   ['ff', 'thetaf', 'thetat', 'xcal_idx0_offset', 'xcal_idx1_offset', 
    'xcal_std_cutoff'], ['xcal_mask'], 'per-row'),
 
- ('fit_x_theta', xcal.fit_x_theta, 
-  ['thetaf', 'xf', 'xcal_mask', 'poly_x_deg'], ['poly_x'], 'per-row'),
+ ('fit_x_theta', 
+  lambda thetaf, xf, xcal_mask: xcal.fit_x_theta(
+                                    thetaf, xf, xcal_mask, poly_x_deg = 3), 
+  ['thetaf', 'xf', 'xcal_mask'], ['poly_x'], 'per-row'),
 
  ('fit_iq', res_fitter.fit_nonlinear_iq_pl, 
   ['ff', 'zf_rmv', 'iq_mask'], ['iq_p0', 'iq_popt', 'iq_nrmse'], 'per-row'),
