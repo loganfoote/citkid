@@ -87,9 +87,18 @@ class LazyAttr:
         """
         rows, return_array, inner_key = self._normalize_key(key)
         
-        # Handle sub-indexing (e.g., lazy_attr[5, 10:20])
+        # Handle sub-indexing (e.g., lazy_attr[5, 10:20] or lazy_attr[[0,1], 3])
         if inner_key is not None:
-            return self[rows[0]][inner_key]
+            if not return_array:
+                # Single row: load it and sub-index
+                return self[rows[0]][inner_key]
+            else:
+                # Multiple rows: load all, then apply inner_key to inner dims
+                rows_data = self[rows]  # shape: (len(rows), ...)
+                if isinstance(inner_key, tuple):
+                    return rows_data[(slice(None),) + inner_key]
+                else:
+                    return rows_data[(slice(None), inner_key)]
         
         # Check cache first, fetch missing rows from DataSet
         missing = [r for r in rows if r not in self._cache]
@@ -332,6 +341,12 @@ class LazyAttrCollection:
             >>> collection[[0, 1, 5]]   # List of indices
             >>> collection[mask]        # Boolean mask
         """
+        # Handle tuple for sub-indexing: collection[row_key, inner_key]
+        inner_key = None
+        if isinstance(data_idx, tuple):
+            inner_key = data_idx[1:] if len(data_idx) > 2 else data_idx[1]
+            data_idx = data_idx[0]
+
         # Normalize input to array of indices
         data_idx_arr, is_scalar = self._normalize_index(data_idx)
 
@@ -374,8 +389,17 @@ class LazyAttrCollection:
         
         # Return scalar or array based on input
         if is_scalar:
-            return results[0]
-        return np.array(results)
+            result_val = results[0]
+            if inner_key is not None:
+                return result_val[inner_key]
+            return result_val
+        result_arr = np.array(results)
+        if inner_key is not None:
+            if isinstance(inner_key, tuple):
+                return result_arr[(slice(None),) + inner_key]
+            else:
+                return result_arr[(slice(None), inner_key)]
+        return result_arr
         
     def at_run(self, run_idx):
         """

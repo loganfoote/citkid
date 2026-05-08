@@ -159,21 +159,27 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# Jupyter Notebook
-.ipynb_checkpoints
-
 # Redis
 citkid/primecam/dump.rdb
-citkid/primecam/dump.rdb
 
-# Misc folders
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
 .vscode/
+.idea/
+
+# Scientific Python (numba, zarr)
+*.nbc
+*.nbi
+*.zarr/
+
+# Misc
 tmp/
+custom_tmp/
 crs_test_data/
-.vscode/settings.json
 notebooks/tmp/
-.vscode/settings.json
-/.vscode
-.vscode/settings.json
-pytest_run_output.txt 
+pytest_run_output.txt
 pytest_run_verbose.txt
+.gitignore.swp

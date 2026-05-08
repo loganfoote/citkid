@@ -11,5 +11,6 @@
             "envManager": "ms-python.python:conda",
             "packageManager": "ms-python.python:conda"
         }
-    ]
+    ],
+    "explorer.excludeGitIgnore": true
 }

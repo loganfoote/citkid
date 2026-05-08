@@ -929,6 +929,59 @@ def test_lazyattr_getitem_tuple_subindexing():
     assert result == 3
 
 
+def test_lazyattr_getitem_tuple_multi_row_scalar_inner():
+    """Test __getitem__ with tuple (list_of_rows, scalar_inner_key)."""
+    DS = MockDataSetForLazyAttr()
+    LA = pf.LazyAttr(DS, 'test_attr', run_idx=5)
+
+    # LA mock returns np.array([r*10 + run_idx]) per row
+    # LA[[0,1,2], 0] should give [5, 15, 25]
+    result = LA[[0, 1, 2], 0]
+    assert result.shape == (3,)
+    assert np.array_equal(result, [5, 15, 25])
+
+
+def test_lazyattr_getitem_tuple_slice_rows_scalar_inner():
+    """Test __getitem__ with tuple (slice_rows, scalar_inner_key)."""
+    DS = MockDataSetForLazyAttr()
+    LA = pf.LazyAttr(DS, 'test_attr', run_idx=0)
+
+    # LA[0:3, 0] should give [0, 10, 20]
+    result = LA[0:3, 0]
+    assert result.shape == (3,)
+    assert np.array_equal(result, [0, 10, 20])
+
+
+def test_lazyattr_getitem_tuple_multi_row_slice_inner():
+    """Test __getitem__ with tuple (list_of_rows, slice_inner_key)."""
+    DS = MockDataSetForLazyAttr()
+    LA = pf.LazyAttr(DS, 'test_attr', run_idx=0)
+
+    # Pre-populate cache with 1D arrays of length 5
+    LA._cache = {0: np.array([0, 1, 2, 3, 4]),
+                 1: np.array([10, 11, 12, 13, 14]),
+                 2: np.array([20, 21, 22, 23, 24])}
+
+    result = LA[[0, 1, 2], 1:4]
+    assert result.shape == (3, 3)
+    assert np.array_equal(result, [[1, 2, 3], [11, 12, 13], [21, 22, 23]])
+
+
+def test_lazyattr_getitem_tuple_multi_row_2d_inner():
+    """Test __getitem__ with tuple (list_of_rows, inner_row, inner_col)."""
+    DS = MockDataSetForLazyAttr()
+    LA = pf.LazyAttr(DS, 'test_attr', run_idx=0)
+
+    # Pre-populate cache with 2D arrays
+    LA._cache = {0: np.array([[0, 1], [2, 3]]),
+                 1: np.array([[10, 11], [12, 13]])}
+
+    # LA[[0, 1], 1, 0] → [row0[1,0], row1[1,0]] = [2, 12]
+    result = LA[[0, 1], 1, 0]
+    assert result.shape == (2,)
+    assert np.array_equal(result, [2, 12])
+
+
 def test_lazyattr_getitem_updates_shape():
     """Test that __getitem__ updates shape on first fetch."""
     DS = MockDataSetForLazyAttr()
@@ -1576,6 +1629,93 @@ def test_lazyattrcollection_repr():
     assert "LazyAttrCollection" in result
     assert "my_param" in result
     assert "[1, 3, 5]" in result  # Sorted
+
+
+def test_lazyattrcollection_getitem_tuple_scalar_row_scalar_inner():
+    """Test __getitem__ with (scalar_row, scalar_inner_key) tuple."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+
+    DS.deps_maps[3] = {1: {'param': {}}}
+    la = pf.LazyAttr(DS, 'param', run_idx=1)
+    la._cache = {3: np.array([10, 20, 30, 40])}
+    collection.add_run(1, la)
+
+    result = collection[3, 2]
+    assert result == 30
+
+
+def test_lazyattrcollection_getitem_tuple_scalar_row_slice_inner():
+    """Test __getitem__ with (scalar_row, slice_inner_key) tuple."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+
+    DS.deps_maps[5] = {1: {'param': {}}}
+    la = pf.LazyAttr(DS, 'param', run_idx=1)
+    la._cache = {5: np.array([0, 1, 2, 3, 4, 5, 6, 7])}
+    collection.add_run(1, la)
+
+    result = collection[5, 2:5]
+    assert np.array_equal(result, [2, 3, 4])
+
+
+def test_lazyattrcollection_getitem_tuple_list_rows_scalar_inner():
+    """Test __getitem__ with (list_of_rows, scalar_inner_key) tuple."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+
+    for di in [0, 1, 2]:
+        DS.deps_maps[di] = {1: {'param': {}}}
+
+    la = pf.LazyAttr(DS, 'param', run_idx=1)
+    la._cache = {
+        0: np.array([100, 101, 102]),
+        1: np.array([110, 111, 112]),
+        2: np.array([120, 121, 122]),
+    }
+    collection.add_run(1, la)
+
+    result = collection[[0, 1, 2], 1]
+    assert result.shape == (3,)
+    assert np.array_equal(result, [101, 111, 121])
+
+
+def test_lazyattrcollection_getitem_tuple_slice_rows_scalar_inner():
+    """Test __getitem__ with (slice_rows, scalar_inner_key) tuple."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+
+    for di in range(5):
+        DS.deps_maps[di] = {1: {'param': {}}}
+
+    la = pf.LazyAttr(DS, 'param', run_idx=1)
+    la._cache = {i: np.array([i * 10, i * 10 + 1]) for i in range(5)}
+    collection.add_run(1, la)
+
+    result = collection[0:3, 0]
+    assert result.shape == (3,)
+    assert np.array_equal(result, [0, 10, 20])
+
+
+def test_lazyattrcollection_getitem_tuple_2d_inner():
+    """Test __getitem__ with (list_of_rows, inner_row, inner_col) tuple."""
+    DS = MockDataSetForCollection(nrows=10)
+    collection = pf.LazyAttrCollection(DS, 'param')
+
+    for di in [0, 1]:
+        DS.deps_maps[di] = {1: {'param': {}}}
+
+    la = pf.LazyAttr(DS, 'param', run_idx=1)
+    la._cache = {
+        0: np.array([[1, 2], [3, 4]]),
+        1: np.array([[5, 6], [7, 8]]),
+    }
+    collection.add_run(1, la)
+
+    # collection[[0, 1], 1, 0] → [row0[1,0], row1[1,0]] = [3, 7]
+    result = collection[[0, 1], 1, 0]
+    assert result.shape == (2,)
+    assert np.array_equal(result, [3, 7])
 
 
 def test_lazyattrcollection_str():
