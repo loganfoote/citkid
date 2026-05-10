@@ -1038,3 +1038,91 @@ class TestIntegration:
         
         # Verify that we can load from file path string
         np.testing.assert_array_almost_equal(loaded_fres, fres_auto)
+
+
+# ---------------------------------------------------------------------------
+# Overview navigator (added in this session)
+# ---------------------------------------------------------------------------
+
+class TestOverviewNavigator:
+    """Tests for the LinearRegionItem overview navigator."""
+
+    def _make_finder(self, synthetic_vna_data, tmp_path):
+        import zarr
+        outpath = str(tmp_path / 'out.zarr')
+        finder = ResFinder(
+            synthetic_vna_data['f'],
+            synthetic_vna_data['z'],
+            [],
+            outpath,
+        )
+        # Attach mock overview items so the methods can run without a real window
+        finder._overview_region = Mock()
+        finder._overview_updating = False
+        finder.plot_mag = Mock()
+        return finder
+
+    def test_update_overview_region_calls_setRegion(
+        self, synthetic_vna_data, tmp_path
+    ):
+        """`_update_overview_region` passes current x-range to setRegion."""
+        finder = self._make_finder(synthetic_vna_data, tmp_path)
+        finder.plot_mag.viewRange.return_value = [[5e9, 6e9], [-30, 0]]
+        finder._update_overview_region()
+        finder._overview_region.setRegion.assert_called_once_with([5e9, 6e9])
+
+    def test_update_overview_region_guard_prevents_reentry(
+        self, synthetic_vna_data, tmp_path
+    ):
+        """When _overview_updating is True, setRegion must not be called."""
+        finder = self._make_finder(synthetic_vna_data, tmp_path)
+        finder._overview_updating = True
+        finder.plot_mag.viewRange.return_value = [[5e9, 6e9], [-30, 0]]
+        finder._update_overview_region()
+        finder._overview_region.setRegion.assert_not_called()
+
+    def test_update_overview_region_releases_guard(
+        self, synthetic_vna_data, tmp_path
+    ):
+        """Guard must be False again after `_update_overview_region` returns."""
+        finder = self._make_finder(synthetic_vna_data, tmp_path)
+        finder.plot_mag.viewRange.return_value = [[5e9, 6e9], [-30, 0]]
+        finder._update_overview_region()
+        assert finder._overview_updating is False
+
+    def test_on_overview_region_changed_sets_xrange(
+        self, synthetic_vna_data, tmp_path
+    ):
+        """`_on_overview_region_changed` propagates region to plot_mag.setXRange."""
+        finder = self._make_finder(synthetic_vna_data, tmp_path)
+        finder._overview_region.getRegion.return_value = (4.8e9, 5.5e9)
+        finder._on_overview_region_changed()
+        finder.plot_mag.setXRange.assert_called_once_with(4.8e9, 5.5e9, padding=0)
+
+    def test_on_overview_region_changed_guard_prevents_reentry(
+        self, synthetic_vna_data, tmp_path
+    ):
+        """When _overview_updating is True, setXRange must not be called."""
+        finder = self._make_finder(synthetic_vna_data, tmp_path)
+        finder._overview_updating = True
+        finder._on_overview_region_changed()
+        finder.plot_mag.setXRange.assert_not_called()
+
+    def test_on_overview_region_changed_releases_guard(
+        self, synthetic_vna_data, tmp_path
+    ):
+        """Guard must be False again after the handler returns."""
+        finder = self._make_finder(synthetic_vna_data, tmp_path)
+        finder._overview_region.getRegion.return_value = (4.8e9, 5.5e9)
+        finder._on_overview_region_changed()
+        assert finder._overview_updating is False
+
+    def test_two_way_sync_does_not_loop(self, synthetic_vna_data, tmp_path):
+        """Calling both helpers back-to-back must not recurse infinitely."""
+        finder = self._make_finder(synthetic_vna_data, tmp_path)
+        finder.plot_mag.viewRange.return_value = [[5e9, 6e9], [-30, 0]]
+        finder._overview_region.getRegion.return_value = (5e9, 6e9)
+        # Neither should raise a RecursionError
+        finder._update_overview_region()
+        finder._on_overview_region_changed()
+        assert finder._overview_updating is False

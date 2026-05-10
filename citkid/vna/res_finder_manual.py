@@ -116,6 +116,9 @@ class ResFinder:
         # Debounce timer for range-change events (pan/zoom)
         self._range_timer = None
 
+        # Overview navigator re-entrancy guard
+        self._overview_updating = False
+
         # Setup the application
         self.app = pg.mkQApp("Resonance Finder")
         self.setup_ui()
@@ -172,20 +175,21 @@ class ResFinder:
         self.log_text.setStyleSheet(style)
         log_proxy = QtWidgets.QGraphicsProxyWidget()
         log_proxy.setWidget(self.log_text)
-        self.win.addItem(log_proxy, row = 3, col = 0, colspan = 2)
+        self.win.addItem(log_proxy, row = 4, col = 0, colspan = 2)
         
         # Setup plots after UI is ready
         self.setup_plots()
         
         # Initialize markers and auto-scale
         self.update_resonance_markers()
-        # Set the initial view to the full data range so _update_curves
-        # has a valid range on the first call (curves start empty).
-        self.plot_mag.setXRange(
-            float(self.f[0]), float(self.f[-1]), padding = 0.02
-        )
+        # Start zoomed to the first 10 MHz for a fast initial render;
+        # the overview navigator shows the full range.
+        _f_lo = float(self.f[0])
+        _f_hi = _f_lo + 10e6
+        self.plot_mag.setXRange(_f_lo, _f_hi, padding=0.02)
         self._update_curves()
         self.auto_scale_y()
+        self._update_overview_region()
         
     def log(self, message):
         """
@@ -215,8 +219,40 @@ class ResFinder:
         Returns:
         None
         """
-        # Magnitude plot on top
-        self.plot_mag = self.win.addPlot(row = 1, col = 0)
+        # ---- Overview navigator (row 1) ------------------------------------
+        self.plot_overview = self.win.addPlot(row = 1, col = 0)
+        self.plot_overview.setMaximumHeight(80)
+        self.plot_overview.showAxis('left')
+        self.plot_overview.getAxis('left').setStyle(showValues = False)
+        self.plot_overview.getAxis('bottom').setStyle(showValues = False)
+        self.plot_overview.showGrid(x = False, y = False)
+        self.plot_overview.setMouseEnabled(x = True, y = False)
+        self.plot_overview.hideButtons()
+
+        _stride = max(1, len(self.f) // 3000)
+        self.plot_overview.plot(
+            self.f[::_stride], self.mag_db[::_stride],
+            pen = pg.mkPen(color = (100, 200, 255, 120), width = 1),
+        )
+
+        self._overview_region = pg.LinearRegionItem(
+            values = [float(self.f[0]), float(self.f[-1])],
+            brush = pg.mkBrush(255, 255, 255, 30),
+            pen = pg.mkPen('w', width = 1),
+            movable = True,
+        )
+        self.plot_overview.addItem(self._overview_region)
+        self.plot_overview.setXRange(
+            float(self.f[0]), float(self.f[-1]), padding = 0.01
+        )
+        self._overview_region.sigRegionChanged.connect(
+            self._on_overview_region_changed
+        )
+
+        self.win.nextRow()
+
+        # ---- Magnitude plot (row 2) ----------------------------------------
+        self.plot_mag = self.win.addPlot(row = 2, col = 0)
         self.plot_mag.setLabel('left', '|S21| (dB)')
         self.plot_mag.showGrid(x = True, y = True, alpha = 0.3)
         self.plot_mag.getAxis('bottom').setStyle(showValues = False)
@@ -237,8 +273,8 @@ class ResFinder:
         # Move to next row for phase plot
         self.win.nextRow()
         
-        # Phase plot on bottom
-        self.plot_phase = self.win.addPlot(row = 2, col = 0)
+        # Phase plot on bottom (row 3)
+        self.plot_phase = self.win.addPlot(row = 3, col = 0)
         self.plot_phase.setLabel('left', 'Phase (rad)')
         self.plot_phase.setLabel('bottom', 'Frequency', units = 'Hz')
         self.plot_phase.showGrid(x = True, y = True, alpha = 0.3)
@@ -258,7 +294,7 @@ class ResFinder:
         self.plot_phase.setXLink(self.plot_mag)
 
         # IQ (I vs Q) plot — right column, spans both mag and phase rows
-        self.plot_iq = self.win.addPlot(row = 1, col = 1, rowspan = 2)
+        self.plot_iq = self.win.addPlot(row = 2, col = 1, rowspan = 2)
         self.plot_iq.setLabel('left', 'Q (Im)')
         self.plot_iq.setLabel('bottom', 'I (Re)')
         self.plot_iq.showGrid(x = True, y = True, alpha = 0.3)
@@ -636,8 +672,27 @@ class ResFinder:
         """Actual work triggered by the debounce timer."""
         self._update_curves()
         self.auto_scale_y()
+        self._update_overview_region()
         if self.iq_visible:
             self.update_iq_plot()
+
+    def _on_overview_region_changed(self):
+        """Pan/zoom the main plot to match the dragged overview region."""
+        if self._overview_updating:
+            return
+        lo, hi = self._overview_region.getRegion()
+        self._overview_updating = True
+        self.plot_mag.setXRange(lo, hi, padding = 0)
+        self._overview_updating = False
+
+    def _update_overview_region(self):
+        """Move the overview region to reflect the current main plot view."""
+        if self._overview_updating:
+            return
+        x_min, x_max = self.plot_mag.viewRange()[0]
+        self._overview_updating = True
+        self._overview_region.setRegion([x_min, x_max])
+        self._overview_updating = False
 
     def _update_curves(self):
         """
