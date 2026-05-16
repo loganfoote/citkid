@@ -175,6 +175,9 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self._prefetch_thread: __import__('threading').Thread | None = None
         self._prefetching_idx: int | None = None
         self._prefetched_idx: int | None = None
+
+        # Background save state
+        self._save_thread: __import__('threading').Thread | None = None
         self._prefetch_status_changed.connect(self._on_prefetch_status)
 
         self.setWindowTitle(title)
@@ -443,6 +446,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
     def _set_data_idx(self, new_di: int):
         """Change the active resonator, load/run data, and refresh the scatter."""
         self._save_dirty_panels()  # persist results for the outgoing resonator
+        self._save_all_sweep_data_async(self._data_idx)  # flush in-memory fits to zarr (background)
         self._data_idx = new_di
         self._data_idx_spin.blockSignals(True)
         self._data_idx_spin.setValue(new_di)
@@ -515,25 +519,29 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         """
         Silently run or load all pipeline steps for every AR at self._data_idx.
 
-        For each sweep AR: if ``iq_popt`` already exists in memory or zarr for
-        the current data_idx it is used as-is; otherwise the full pipeline
-        (make_fr_spans → fit_gain → fit_iq) is executed without saving to
-        disk.  Pre-populates the y-cache so the scatter is fully drawn on
-        startup.
+        For each sweep AR: if ``iq_popt`` already exists in zarr for the
+        current data_idx it is loaded as-is; otherwise the full pipeline
+        (make_fr_spans → fit_gain → fit_iq) is executed and saved to disk.
+        Pre-populates the y-cache so the scatter is fully drawn on startup.
         """
         di = self._data_idx
         for AR in self._ARs:
-            needs_run = True
+            # Check zarr directly — not DS.iq_popt, which would silently run
+            # the pipeline in memory without saving, defeating the purpose.
+            in_zarr = False
             try:
-                val = AR.DS.iq_popt[di]
-                if val is not None:
-                    needs_run = False
+                root = AR.DS.root
+                for rk in root.group_keys():
+                    if rk.startswith('run') and 'iq_popt' in root[rk]:
+                        if root[rk]['iq_popt']['row_exists'][di]:
+                            in_zarr = True
+                            break
             except Exception:
                 pass
-            if needs_run:
+            if not in_zarr:
                 try:
                     AR.execute_path(
-                        data_idx=di, save_override=False, verbose=False
+                        data_idx=di, save_override=True, verbose=False
                     )
                 except Exception as exc:
                     print(f"Warning: batch init failed for sweep AR: {exc}")
@@ -594,6 +602,54 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
                 4000, lambda: self._prefetch_label.setText('')
             )
 
+    def _save_all_sweep_data(self, di: int):
+        """
+        Flush in-memory pipeline results for *di* to zarr for every sweep AR,
+        without re-running any computation.  Only saves a sweep if its
+        ``iq_popt`` row is not already in zarr (i.e. was computed in memory
+        by prefetch or batch-init but never persisted).
+        """
+        for AR in self._ARs:
+            # Skip if already saved to zarr.
+            in_zarr = False
+            try:
+                root = AR.DS.root
+                for rk in root.group_keys():
+                    if rk.startswith('run') and 'iq_popt' in root[rk]:
+                        if root[rk]['iq_popt']['row_exists'][di]:
+                            in_zarr = True
+                            break
+            except Exception:
+                pass
+            if in_zarr:
+                continue
+            # Save each step's cached outputs — no recomputation.
+            for step_dict in AR.path:
+                step = step_dict['task']
+                if step.func_type in ('global', 'global-res'):
+                    continue
+                try:
+                    AR.save_step_outputs(step, data_idx=di)
+                except Exception:
+                    pass  # data not in memory for this step — skip
+
+    def _save_all_sweep_data_async(self, di: int):
+        """
+        Launch ``_save_all_sweep_data`` on a daemon background thread so that
+        navigation is not blocked by zarr I/O.  If a previous save thread is
+        still running it is left to finish on its own (zarr writes are
+        per-row and safe to interleave across different *di* values).
+        """
+        import threading as _threading
+        t = _threading.Thread(
+            target=self._save_all_sweep_data,
+            args=(di,),
+            daemon=True,
+            name=f'save-di-{di}',
+        )
+        self._save_thread = t
+        t.start()
+
     def _save_dirty_panels(self):
         """Save any panels that have unsaved results for the current state."""
         if self._sweep_idx is None:
@@ -608,6 +664,9 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event):
         """Auto-save dirty panels before closing."""
         self._save_dirty_panels()
+        self._save_all_sweep_data(self._data_idx)  # final flush (blocking)
+        if self._save_thread is not None and self._save_thread.is_alive():
+            self._save_thread.join()
         super().closeEvent(event)
 
     def _run_all_panels(self):

@@ -45,6 +45,12 @@ from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 from ..qt_compat import Qt as _Qt
 from ..multitone.fres import update_fres as _update_fres
 
+# QEvent.KeyPress moved to QEvent.Type.KeyPress in PyQt6 / some PySide6 builds.
+_QEVENT_KEY_PRESS = getattr(
+    QtCore.QEvent, 'KeyPress',
+    getattr(getattr(QtCore.QEvent, 'Type', None), 'KeyPress', None),
+)
+
 
 # ---------------------------------------------------------------------------
 # Font-scaling helper (mirrors StepPanel._scale_plot_fonts)
@@ -964,7 +970,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
 
     def eventFilter(self, obj, event):
-        if event.type() == QtCore.QEvent.KeyPress:
+        if event.type() == _QEVENT_KEY_PRESS:
             key = event.key()
             mods = event.modifiers()
             # Skip if Shift or Ctrl is held (reserved for plot interaction)
@@ -1083,4 +1089,5 @@ def run_fqfinder(
         rmv_gain_simple=rmv_gain_simple,
     )
     win.show()
-    app.exec_()
+    # exec() is the modern name (PyQt6+); exec_() is kept for PyQt5/PySide2.
+    (getattr(app, 'exec', None) or app.exec_)()
