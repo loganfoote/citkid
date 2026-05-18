@@ -21,7 +21,6 @@ User parameters
 ``xcal_idx0_offset``  int   — extra indices to extend the mask below (default 3)
 ``xcal_idx1_offset``  int   — extra indices to extend the mask above (default 9)
 ``xcal_std_cutoff``   float — sigma cutoff on theta_t before range detection (default 12.0)
-``poly_x_deg``        int   — polynomial degree for the x vs theta fit (default 3)
 """
 
 import numpy as np
@@ -94,18 +93,6 @@ class XCalPanel(StepPanel):
         )
         ctrl.addWidget(self._std_spin)
 
-        # poly_x_deg (int)
-        ctrl.addWidget(QtWidgets.QLabel("poly_deg:"))
-        self._poly_spin = QtWidgets.QSpinBox()
-        self._poly_spin.setRange(1, 20)
-        self._poly_spin.setFixedWidth(55)
-        self._poly_spin.setValue(
-            int(self._get_initial_user_param(
-                'fit_x_theta', 'poly_x_deg', self.data_idx, fallback=3
-            ))
-        )
-        ctrl.addWidget(self._poly_spin)
-
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setFixedWidth(55)
         self._run_through_btn.setToolTip("Run this panel and all following panels")
@@ -131,7 +118,7 @@ class XCalPanel(StepPanel):
         root.addLayout(ctrl)
 
         # Per-index cache of user-param values set this session.
-        self._param_cache: dict = {}  # {data_idx: (idx0, idx1, std, poly_deg)}
+        self._param_cache: dict = {}  # {data_idx: (idx0, idx1, std)}
         self._plot_cache:  dict = {}  # populated by prefetch_plot_data
 
         # ---- plots ----
@@ -223,7 +210,7 @@ class XCalPanel(StepPanel):
         self._autorange_next = True
         new_di = self.data_idx
         if new_di in self._param_cache:
-            idx0, idx1, std, poly = self._param_cache[new_di]
+            idx0, idx1, std = self._param_cache[new_di]
         else:
             idx0 = self._get_initial_user_param(
                 'get_xcal_mask', 'xcal_idx0_offset', new_di, fallback=None)
@@ -231,8 +218,6 @@ class XCalPanel(StepPanel):
                 'get_xcal_mask', 'xcal_idx1_offset', new_di, fallback=None)
             std  = self._get_initial_user_param(
                 'get_xcal_mask', 'xcal_std_cutoff',  new_di, fallback=None)
-            poly = self._get_initial_user_param(
-                'fit_x_theta', 'poly_x_deg', new_di, fallback=None)
 
         def _set(spin, val):
             if val is not None:
@@ -243,7 +228,6 @@ class XCalPanel(StepPanel):
         _set(self._idx0_spin, idx0)
         _set(self._idx1_spin, idx1)
         _set(self._std_spin,  std)
-        _set(self._poly_spin, poly)
 
     def run_steps(self, save: bool = False) -> bool:
         """Cache the current param values for this data_idx before running."""
@@ -251,7 +235,6 @@ class XCalPanel(StepPanel):
             self._idx0_spin.value(),
             self._idx1_spin.value(),
             self._std_spin.value(),
-            self._poly_spin.value(),
         )
         ok = super().run_steps(save=save)
         if ok:
@@ -265,8 +248,6 @@ class XCalPanel(StepPanel):
                 'xcal_idx1_offset': int(self._idx1_spin.value()),
                 'xcal_std_cutoff':  float(self._std_spin.value()),
             }
-        if step.name == 'fit_x_theta':
-            return {'poly_x_deg': int(self._poly_spin.value())}
         return {}
 
     def update_plots(self):
@@ -502,7 +483,7 @@ class XCalPanel(StepPanel):
             print(f"Save error: {exc}")
 
     def save_outputs(self):
-        """Save step outputs AND user params (offsets, cutoff, poly_deg) to zarr."""
+        """Save step outputs AND user params (offsets, cutoff) to zarr."""
         for step in self.steps:
             user_params = self.get_params_for_step(step)
             if user_params:
@@ -628,8 +609,7 @@ class XCalPanel(StepPanel):
             ff_len = len(np.asarray(DS.ff[di]))
         except Exception:
             ff_len = 1
-        poly_deg = int(self._poly_spin.value())
         return {
             'xcal_mask': np.zeros(ff_len, dtype=bool),
-            'poly_x':    np.full(poly_deg + 1, np.nan),
+            'poly_x':    np.full(3 + 1, np.nan),
         }
