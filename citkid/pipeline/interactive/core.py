@@ -1087,9 +1087,9 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
                 panel.on_data_idx_changing()
                 if is_prefetched and panel._outputs_exist():
                     # Results are already in the DS cache — just render them.
-                    # Mark dirty so _advance saves these unsaved prefetch results.
+                    # Do not mark dirty here: prefetch is read-only and should
+                    # not create new unsaved pipeline outputs.
                     panel._has_run = True
-                    panel._dirty = True
                     panel.update_plots()
                 else:
                     ok = panel.run_steps()
@@ -1116,13 +1116,12 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
 
     def _prefetch_next(self):
         """
-        Start a background daemon thread that pre-runs ``AR.execute_path``
+        Start a background daemon thread that pre-computes panel plot caches
         for the next data index in the navigation sequence.
 
-        When the user subsequently navigates to that index,
-        ``_on_data_idx_changed`` skips ``run_steps`` and calls
-        ``update_plots`` directly because the results already live in the
-        DS memory cache.
+        Prefetch intentionally avoids executing pipeline steps because that
+        mutates DS run history and can interfere with explicit save-on-nav
+        semantics in interactive sessions.
         """
         next_pos = self._nav_pos + 1
         if next_pos >= len(self._data_idxs):
@@ -1146,9 +1145,6 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
 
         def _worker():
             try:
-                self.AR.execute_path(data_idx = next_di, save_override = False, 
-                                     verbose = False)
-                self._prefetched_idx = next_di
                 # Pre-compute numpy plot data for each panel so update_plots
                 # only has to call setData() when the user navigates here.
                 for panel in self.panels:
@@ -1157,6 +1153,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
                     except Exception as exc:
                         print(f"[prefetch] prefetch_plot_data failed for "
                               f"{panel.step_names}: {exc}")
+                self._prefetched_idx = next_di
                 self._prefetch_status_changed.emit(f"✓ prefetch {next_di}")
             except Exception as exc:
                 self._prefetch_status_changed.emit("")

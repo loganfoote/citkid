@@ -26,5 +26,3 @@ ANALYSIS_STEPS:
       xcal_std_cutoff: 16.0 
   7 :
     task: fit_x_theta 
-    params:
-      xcal_mask: null

@@ -7,9 +7,15 @@ conftest.py to ensure a QApplication exists before widget instantiation.
 
 import pytest
 from unittest.mock import MagicMock, patch
+from pyqtgraph.Qt import QtWidgets
 
 from citkid.pipeline.framework import plStep
-from citkid.pipeline.interactive.core import StepPanel, DefaultStepPanel
+import citkid.pipeline.interactive.core as icore
+from citkid.pipeline.interactive.core import (
+    StepPanel,
+    DefaultStepPanel,
+    InteractiveAnalysisWindow,
+)
 
 
 ################################################################################
@@ -230,3 +236,90 @@ class TestDefaultStepPanel:
         panel = DefaultStepPanel(ar, ('dsp6',))
         result = panel.get_params_for_step(steps[0])
         assert result == {}
+
+
+################################################################################
+# InteractiveAnalysisWindow regressions
+################################################################################
+
+class _WindowTestPanel(StepPanel):
+    """Minimal StepPanel for window-level behavior tests."""
+
+    def setup_ui(self):
+        layout = QtWidgets.QVBoxLayout(self)
+        self._status_label = QtWidgets.QLabel("ok")
+        layout.addWidget(self._status_label)
+        self.update_calls = 0
+        self.prefetch_calls = []
+
+    def _outputs_exist(self):
+        return True
+
+    def update_plots(self):
+        self.update_calls += 1
+
+    def prefetch_plot_data(self, di):
+        self.prefetch_calls.append(di)
+
+
+def _make_window_ar():
+    step = plStep('win_step', lambda x: x, ['x'], ['y'], 'per-row')
+    ar = MagicMock()
+    ar.analysis_steps = [step]
+    ar.path = [{'task': step}]
+    ar._last_failures = {}
+    ar.DS = MagicMock()
+    ar.DS.nrows = 2
+    return ar
+
+
+class TestInteractiveWindowPrefetchRegressions:
+    def test_prefetched_render_does_not_mark_panel_dirty(self, qt_app, monkeypatch):
+        """Rendering already-prefetched data should not create unsaved outputs."""
+        ar = _make_window_ar()
+
+        monkeypatch.setattr(icore, 'get_panel_class', lambda _names: _WindowTestPanel)
+        monkeypatch.setattr(icore.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
+
+        win = InteractiveAnalysisWindow(
+            ar,
+            panels=[('win_step',)],
+            start_idx=0,
+            data_idxs=[0, 1],
+            title='test',
+        )
+        panel = win.panels[0]
+
+        win._prefetched_idx = 1
+        assert panel._dirty is False
+        win._on_data_idx_changed(1)
+
+        assert panel._has_run is True
+        assert panel.update_calls == 1
+        assert panel._dirty is False
+        win.close()
+
+    def test_prefetch_next_does_not_execute_pipeline_path(self, qt_app, monkeypatch):
+        """Prefetch should only build panel plot caches and never run execute_path."""
+        ar = _make_window_ar()
+
+        monkeypatch.setattr(icore, 'get_panel_class', lambda _names: _WindowTestPanel)
+        monkeypatch.setattr(icore.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
+
+        win = InteractiveAnalysisWindow(
+            ar,
+            panels=[('win_step',)],
+            start_idx=0,
+            data_idxs=[0, 1],
+            title='test',
+        )
+        panel = win.panels[0]
+
+        win._prefetch_next()
+        if win._prefetch_thread is not None:
+            win._prefetch_thread.join(timeout=2)
+
+        assert ar.execute_path.call_count == 0
+        assert panel.prefetch_calls == [1]
+        assert win._prefetched_idx == 1
+        win.close()
