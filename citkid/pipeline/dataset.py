@@ -1046,7 +1046,8 @@ class DataSet:
                         )
 
             # Persist failure report to zarr (best-effort; some filesystems
-            # like exFAT do not support the atomic renames zarr v3 uses).
+            # like exFAT do not support the atomic renames zarr v3 uses, and
+            # read-only stores raise ValueError rather than OSError).
             if failures:
                 try:
                     fail_grp = self.root.require_group(
@@ -1060,7 +1061,7 @@ class DataSet:
                             'time': timestamp
                         }
                     fail_grp.attrs['failures'] = existing
-                except OSError as exc:
+                except Exception as exc:
                     import warnings
                     warnings.warn(
                         f"Could not write failure report for '{step.name}' "
@@ -1267,7 +1268,6 @@ class DataSet:
             needs_execution = True
             # Do any run indices have deps that are equal to new_deps?
             for run_idx, curr_deps in curr_deps_map.items():
-                curr_deps = curr_deps_map[1]
                 deps_match = [] 
                 for name in step.return_names:
                     runs_match = [] 
