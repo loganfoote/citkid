@@ -57,8 +57,10 @@ class DataSet:
         if isinstance(zarr_path, zarr.Group):
             self.root = zarr_path
             self.zarr_path = None
+            self.zarr_mode = None
         else:
             self.zarr_path = os.path.abspath(zarr_path)
+            self.zarr_mode = zarr_mode
             self.root = zarr.open_group(self.zarr_path, mode = zarr_mode)
 
         # Ensure _failures group has valid zarr v3 metadata so that
@@ -1049,26 +1051,36 @@ class DataSet:
             # like exFAT do not support the atomic renames zarr v3 uses, and
             # read-only stores raise ValueError rather than OSError).
             if failures:
-                try:
-                    fail_grp = self.root.require_group(
-                        f'_failures/{step.name}'
-                    )
-                    timestamp = datetime.now().strftime('%Y%m%d-%H:%M:%S')
-                    existing = dict(fail_grp.attrs.get('failures', {}))
-                    for di, tb in failures.items():
-                        existing[f'idx{di}'] = {
-                            'traceback': tb,
-                            'time': timestamp
-                        }
-                    fail_grp.attrs['failures'] = existing
-                except Exception as exc:
+                if self.zarr_mode == 'r':
                     import warnings
-                    warnings.warn(
-                        f"Could not write failure report for '{step.name}' "
-                        f"to zarr: {exc}",
-                        RuntimeWarning,
-                        stacklevel=2,
-                    )
+                    for di, tb in failures.items():
+                        warnings.warn(
+                            f"Step '{step.name}' failed for idx {di} "
+                            f"(zarr is read-only, failure not saved):\n{tb}",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
+                else:
+                    try:
+                        fail_grp = self.root.require_group(
+                            f'_failures/{step.name}'
+                        )
+                        timestamp = datetime.now().strftime('%Y%m%d-%H:%M:%S')
+                        existing = dict(fail_grp.attrs.get('failures', {}))
+                        for di, tb in failures.items():
+                            existing[f'idx{di}'] = {
+                                'traceback': tb,
+                                'time': timestamp
+                            }
+                        fail_grp.attrs['failures'] = existing
+                    except Exception as exc:
+                        import warnings
+                        warnings.warn(
+                            f"Could not write failure report for '{step.name}' "
+                            f"to zarr: {exc}",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
 
         return failures
                         

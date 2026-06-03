@@ -850,3 +850,140 @@ class TestAnalysisRunnerFailureSurfacing:
             _warnings.simplefilter('always')
             ar.execute_step(step, data_idx=[0])
         assert ar._last_failures == {}
+
+
+# ============================================================================
+class TestReadOnlyZarrFailureHandling:
+    """
+    Verify that when zarr_mode='r', failures emit a RuntimeWarning with the
+    original traceback instead of attempting to write to the zarr store.
+    """
+
+    @pytest.fixture
+    def readonly_ds(self, temp_dataset_dir):
+        """DataSet opened in write mode with nrows bootstrapped, then
+        zarr_mode is set to 'r' on the instance to exercise the read-only
+        failure-reporting branch without re-opening the store."""
+        zarr_path = str(Path(temp_dataset_dir) / 'readonly_test.zarr')
+        cal_yaml_path = str(Path(temp_dataset_dir) / 'cal.yaml')
+        custom_path = str(Path(temp_dataset_dir) / 'custom_steps.py')
+
+        ds = DataSet(zarr_path=zarr_path, cal_yaml_path=cal_yaml_path,
+                     custom_path=custom_path)
+        import_step = plStep(
+            'import_raw_data', import_raw_data,
+            ['base_value'], ['nrows', 'sampling_rate', 'base_value_stored'], 'global'
+        )
+        ds.cal_pl = {'CAL_STEPS': {0: {'task': import_step}}}
+        ar = AnalysisRunner(ds)
+        ar.execute_step(import_step, user_params={'base_value': 0.0})
+
+        # Simulate read-only mode for failure-reporting tests.
+        ds.zarr_mode = 'r'
+        return ds
+
+    def test_zarr_mode_stored(self, readonly_ds):
+        """DataSet must expose the zarr_mode it was opened with (fixture sets 'r')."""
+        assert readonly_ds.zarr_mode == 'r'
+
+    def test_failure_issues_warning_with_traceback(self, readonly_ds):
+        """On zarr_mode='r', a RuntimeWarning containing the traceback
+        must be raised instead of attempting to write to the store."""
+        step = plStep(
+            'ro_fail', failing_perrow_func,
+            ['data_idx'], ['ro_fail_out'], 'per-row'
+        )
+        import warnings as _warnings
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter('always')
+            readonly_ds._execute_step(step, data_idx=[0, 2])
+
+        runtime_warnings = [w for w in caught
+                            if issubclass(w.category, RuntimeWarning)]
+        assert len(runtime_warnings) == 1
+        msg = str(runtime_warnings[0].message)
+        assert 'Intentional failure' in msg
+
+    def test_failure_warning_mentions_step_name(self, readonly_ds):
+        """The warning message must name the step."""
+        step = plStep(
+            'ro_named_fail', failing_perrow_func,
+            ['data_idx'], ['ro_named_out'], 'per-row'
+        )
+        import warnings as _warnings
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter('always')
+            readonly_ds._execute_step(step, data_idx=[2])
+
+        msgs = [str(w.message) for w in caught
+                if issubclass(w.category, RuntimeWarning)]
+        assert any('ro_named_fail' in m for m in msgs)
+
+    def test_failure_warning_mentions_idx(self, readonly_ds):
+        """The warning message must identify the failing data index."""
+        step = plStep(
+            'ro_idx_fail', failing_perrow_func,
+            ['data_idx'], ['ro_idx_out'], 'per-row'
+        )
+        import warnings as _warnings
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter('always')
+            readonly_ds._execute_step(step, data_idx=[2])
+
+        msgs = [str(w.message) for w in caught
+                if issubclass(w.category, RuntimeWarning)]
+        assert any('2' in m for m in msgs)
+
+    def test_no_write_attempt_on_readonly(self, readonly_ds):
+        """On zarr_mode='r', no 'Could not write failure report' warning
+        must be emitted – the write is skipped entirely."""
+        step = plStep(
+            'ro_nowrite', failing_perrow_func,
+            ['data_idx'], ['ro_nowrite_out'], 'per-row'
+        )
+        import warnings as _warnings
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter('always')
+            readonly_ds._execute_step(step, data_idx=[2])
+
+        msgs = [str(w.message) for w in caught
+                if issubclass(w.category, RuntimeWarning)]
+        assert not any('Could not write failure report' in m for m in msgs)
+
+    def test_readonly_failures_dict_still_returned(self, readonly_ds):
+        """_execute_step must still return the failures dict on zarr_mode='r'."""
+        step = plStep(
+            'ro_dict', failing_perrow_func,
+            ['data_idx'], ['ro_dict_out'], 'per-row'
+        )
+        import warnings as _warnings
+        with _warnings.catch_warnings(record=True):
+            _warnings.simplefilter('always')
+            failures = readonly_ds._execute_step(step, data_idx=[0, 2])
+
+        assert isinstance(failures, dict)
+        assert 2 in failures
+
+    def test_writable_ds_still_writes_failures(self, temp_dataset_dir):
+        """Normal (non-read-only) DataSet must still persist failures to zarr."""
+        zarr_path = str(Path(temp_dataset_dir) / 'rw_fail_test.zarr')
+        cal_yaml_path = str(Path(temp_dataset_dir) / 'cal.yaml')
+        custom_path = str(Path(temp_dataset_dir) / 'custom_steps.py')
+        ds = DataSet(zarr_path=zarr_path, cal_yaml_path=cal_yaml_path,
+                     custom_path=custom_path)
+        import_step = plStep(
+            'import_raw_data', import_raw_data,
+            ['base_value'], ['nrows', 'sampling_rate', 'base_value_stored'], 'global'
+        )
+        ds.cal_pl = {'CAL_STEPS': {0: {'task': import_step}}}
+        AnalysisRunner(ds).execute_step(import_step, user_params={'base_value': 0.0})
+
+        step = plStep(
+            'rw_fail', failing_perrow_func,
+            ['data_idx'], ['rw_fail_out'], 'per-row'
+        )
+        ds._execute_step(step, data_idx=[0, 2])
+
+        fail_grp = ds.root['_failures/rw_fail']
+        stored = dict(fail_grp.attrs['failures'])
+        assert 'idx2' in stored
