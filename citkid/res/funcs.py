@@ -6,16 +6,16 @@ from .util import cardan
 def get_y(y0, a, largest = True):
     """
     Calculates the largest or smallest real root of
-        y0 = y + a / (1 + y^2)
+        y0 = y - a / (1 + y^2).
 
     Parameters:
     y0 (np.array): resonance shift in the low-power and linear limit.
-    a (float): nonlinearity parameter
+    a (float): nonlinearity parameter.
     largest (bool): If True, returns the largest root. Otherwise, returns the
-        smallest root
+        smallest root.
 
     Returns:
-    y (float or np.array): largest or smallest real root of the above equation
+    y (float or np.array): largest or smallest real root of the above equation.
     """
     y = cardan(4.0, -4.0 * y0, 1.0, -(y0 + a), largest)
     # Built-in numpy function can do this, but it is not compilable with numba
@@ -33,28 +33,28 @@ def nonlinear_iq(f, fr, Qr, amp, phi, a, i0, q0, tau, downward = True):
                                        \     Qc * cos(phi)       (1+ 2jy)    /
 
         where the nonlinearity of y is described by
-            y0 = y+ a/(1+y^2)
-        and y0 = Qr*x0, where x0 is the fractional frequency shift in the
-        low-power, linear limit.
+            y0 = y - a/(1+y^2)
+        and y0 = Qr*x0, where x0 = (f - fr) / fr is the fractional frequency shift in 
+        the low-power, linear limit.
 
     Parameters:
-    f (np.array): array of frequencies in Hz
-    fr (float): resonant frequency in Hz
-    Qr (float): total quality factor
-    amp (float): Qr / Qc, where Qc is the coupling quality factor
+    f (np.array): array of frequencies in Hz.
+    fr (float): resonant frequency in the zero uW power limit, in Hz.
+    Qr (float): total quality factor.
+    amp (float): Qr / Qc, where Qc is the coupling quality factor.
     phi (float): rotation parameter for impedance mismatch between KID and
-        readout circuit
+        readout circuit.
     a (float): nonlinearity parameter. Bifurcation occurs at
-        a = 4 * sqrt(3) / 9 ~ 0.77.  Sometimes referred to as a_nl
-    i0 (float): I gain factor
-    q0 (float): Q gain factor
-        i0 + j * q0 describes the overall constant gain and phase offset
+        a = 4 * sqrt(3) / 9 ~ 0.77.  Sometimes referred to as a_nl.
+    i0 (float): I gain factor.
+    q0 (float): Q gain factor.
+        i0 + j * q0 describes the overall constant gain and phase offset.
     tau(float): cable delay in seconds
     downward (bool): If True, solves the equation for a downward sweep. If
         False, solves for an upward sweep.
 
     Returns:
-    z (np.array): array of complex IQ data corresponding to f
+    z (np.array): array of complex IQ data corresponding to f.
     """
     deltaf = f - fr
     y0 = Qr * deltaf / fr
@@ -72,12 +72,12 @@ def circle_objective(params, x, y):
 
     Parameters:
     params (A: float, B: float, R: float): circle fit parameters. (A, B) is the
-        origin and R is the radius
-    x (np.array): x data
-    y (np.array): y data
+        origin and R is the radius.
+    x (np.array): x data.
+    y (np.array): y data.
 
     Returns:
-    error (float): error for minimization
+    error (float): error for minimization.
     """
     A, B, R = params
     error = sum(((x - A) ** 2 + (y - B) ** 2 - R ** 2) ** 2)
@@ -95,7 +95,7 @@ def nonlinear_iq_for_fitter(f, fr, Qr, amp, phi, a, i0, q0, tau,
     for the fitter. The input data should be scaled as follows
     fr X 100^6
     Qr X 10^-4
-    tau * 1e6
+    tau * 1e6.
     """
     z = nonlinear_iq(f, fr / 100e-6, Qr / 1e-4, amp, phi, a, i0, q0, tau / 1e6,
                      downward)

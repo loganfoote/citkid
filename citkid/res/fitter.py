@@ -14,14 +14,14 @@ def fit_nonlinear_iq(f, z, bounds = None, p0 = None, fr_guess = None,
     It is assumed that the system gain and phase are removed from the data
     before fitting. i0, q0, and tau are fitted only for fine-tuning.
 
-    The optimal span of the data is 6 * fr / Qr
-    The optimal length of the data is 500, but down to 200 still works ok
+    The optimal span of the data is 6 * fr / Qr.
+    The optimal length of the data is 500, but down to 200 still works ok.
 
     Parameters:
-    f (numpy.array): frequencies Hz
+    f (numpy.array): frequencies Hz.
     z (numpy.array): complex s21.
     bounds (tuple or None): 2d tuple of low values bounds[0] the high values
-        bounds[1] to bound the fitting problem. If None, sets default bounds
+        bounds[1] to bound the fitting problem. If None, sets default bounds.
     p0 (list or None): initial guesses for all parameters
         fr_guess  = p0[0]
         Qr_guess  = p0[1]
@@ -30,23 +30,23 @@ def fit_nonlinear_iq(f, z, bounds = None, p0 = None, fr_guess = None,
         a_guess   = p0[4]
         i0_guess  = p0[5]
         q0_guess  = p0[6]
-        tau_guess = p0[7]
+        tau_guess = p0[7].
         If None, calls citkid.fit.guess.guess_nonlinear_iq to find p0.
     fr_guess (float or None): if float, overrides p0[0].
     fit_tau (bool): if False, tau is enforced from p0[7] to speed up fitting.
         If True, tau is fit.
-    tau_guess (float or None): If float, overides p0[7]
+    tau_guess (float or None): If float, overides p0[7].
     downward (bool): If True, fits the equation for a downward sweep. If
         False, fits for an upward sweep.
-    plotq (bool): if True, plots the data with the fit
+    plotq (bool): if True, plots the data with the fit.
 
     Returns:
     p0 (np.array): fit parameter guess.
-    popt (np.array): fit parameters. See p0 parameter
-    perr (np.array): standard errors on fit parameters
+    popt (np.array): fit parameters. 
+    perr (np.array): standard errors on fit parameters.
     nrmse (float): normalized root mean square error of the fit.
     fig, ax (pyplot figure and axes, or None): plot of data with fit if plotq,
-        or None, None
+        or None, None.
     """
     # Sort f and z
     f, z = np.array(f), np.array(z)
@@ -135,18 +135,18 @@ def fit_util(p0, bounds, fit_tau, f, z_stacked, z, downward = True):
     fit parameters.
 
     Parameters:
-    p0 (list): fit guess parameters
-    bounds (list): fit bounds
-    fit_tau (bool): if False, uses given tau instead of fitting
-    f (np.array): frequency data in Hz
-    z_stacked (np.array): stacked complex S21 data
-    z (np.array) complex S21 data
+    p0 (list): fit guess parameters.
+    bounds (list): fit bounds.
+    fit_tau (bool): if False, uses given tau instead of fitting.
+    f (np.array): frequency data in Hz.
+    z_stacked (np.array): stacked complex S21 data.
+    z (np.array) complex S21 data.
     downward (bool): If True, fits the equation for a downward sweep. If
         False, fits for an upward sweep.
 
     Returns:
-    popt (np.array): fit parameters
-    perr (np.array): fit parameter uncertainties
+    popt (np.array): fit parameters.
+    perr (np.array): fit parameter uncertainties.
     nrmse (float): normalized root mean square error of the fit.
     """
     #             fr,   Qr, amp, phi, a, i0, q0, tau
@@ -281,14 +281,14 @@ def fit_iq_circle(z, x0 = None, plotq = False):
        where the origin is (A, B) and the radius is R.
 
     Parameters:
-    z (np.array): complex S21 data
+    z (np.array): complex S21 data.
     x0: Initial guess for the fit parameters (A, B, R).
         If x0 == None, this function will generate its own guess.
-    plotq (bool): if True, plots the fit and data
+    plotq (bool): if True, plots the fit and data.
 
     Returns:
     popt (list): fit parameters (A, B, R).
-    fig, ax (pyplot figure and axis): fit figure and axis, or None if not plotq
+    fig, ax (pyplot figure and axis): fit figure and axis, or None if not plotq.
     """
     warnings.warn(
         "fit_iq_circle is deprecated. Use citkid.xcal.circle.fit_iq_circle "
