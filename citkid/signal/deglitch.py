@@ -6,6 +6,28 @@ from scipy.signal import find_peaks
 from scipy.stats import binned_statistic
 
 
+def get_binned_baseline(ts, dt, dtbin):
+    """
+    Bins a timestream to lower sample rate, then interpolates
+    back up to the original sample rate to get a measure of the
+    baseline.
+    
+    Parameters:
+    ts (float, array-like): Timestream data. Glitches should have positive amplitude.
+    dt (float): Sample time of timestream.
+    dtbin (float): Sample time to bin the data to for subtraction.
+    
+    Returns:
+    ts_baseline (array): Baseline array
+    """
+    tarr = np.arange(len(ts))*dt
+    nbins = int(len(ts) * dt/dtbin)
+    result = binned_statistic(tarr, [tarr, ts], statistic='mean', bins=nbins)
+    tbin, ts_bin = result.statistic
+    ts_baseline = np.interp(tarr, tbin, ts_bin)
+    return ts_baseline
+    
+
 def find_glitch_idxs(ts, dt, dtbin, nstd, distance, nrounds, i0, i1):
     """
     Find glitch peaks in a timestream.
@@ -29,11 +51,8 @@ def find_glitch_idxs(ts, dt, dtbin, nstd, distance, nrounds, i0, i1):
     Returns:
     idxs (int, array-like): The sample points of peaks which were found.
     """
-    tarr = np.arange(len(ts))*dt
-    nbins = int(len(ts) * dt/dtbin)
-    result = binned_statistic(tarr, [tarr, ts], statistic='mean', bins=nbins)
-    tbin, ts_bin = result.statistic
-    ts_bin_interp = np.interp(tarr, tbin, ts_bin)
+    ts_bin_interp = get_binned_baseline(ts, dt, dtbin)
+    
     ts_subtr = ts - ts_bin_interp
     ts_subtr -= np.nanmedian(ts_subtr)
     ts_clean = ts_subtr
