@@ -2,8 +2,13 @@ import numpy as np
 from numba import njit, float64, complex128, boolean
 from .util import cardan
 
-@njit(float64[:](float64[:], float64, boolean), cache = True)
-def get_y(y0, a, largest = True):
+@njit(
+    [float64[:](float64[:], float64, boolean), 
+     float64(float64, float64, boolean)
+    ], 
+    cache = True
+)
+def get_y(y0, a, largest):
     """
     Calculates the largest or smallest real root of
         y0 = y - a / (1 + y^2).
