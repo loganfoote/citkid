@@ -28,7 +28,7 @@ def get_binned_baseline(ts, dt, dtbin):
     return ts_baseline
     
 
-def find_glitch_idxs(ts, dt, dtbin, nstd, distance, nrounds, i0, i1):
+def find_glitch_idxs(ts, dt, dtbin, nstd, distance, width, nrounds, i0, i1):
     """
     Find glitch peaks in a timestream.
     The steps are as follows:
@@ -50,23 +50,25 @@ def find_glitch_idxs(ts, dt, dtbin, nstd, distance, nrounds, i0, i1):
     
     Returns:
     idxs (int, array-like): The sample points of peaks which were found.
+    ts_bin_interp (float, array-like): Baseline array which was
+        subtracted when finding peaks.
     """
     ts_bin_interp = get_binned_baseline(ts, dt, dtbin)
     
     ts_subtr = ts - ts_bin_interp
     ts_subtr -= np.nanmedian(ts_subtr)
-    ts_clean = ts_subtr
+    ts_clean = np.copy(ts_subtr)
     idxs = np.array([], dtype=int)
     
     for _ in range(nrounds):
-        this_idxs, _ = find_peaks(ts_clean, height=nstd*np.nanstd(ts_clean), distance=distance)
+        this_idxs, _ = find_peaks(ts_clean, height=nstd*np.nanstd(ts_clean), distance=distance, width=width)
         idxs = np.append(idxs, this_idxs)
         for idx in this_idxs:
             thisi0 = max(0, idx-i0)
             thisi1 = min(len(ts), idx+i1)
             ts_clean[thisi0:thisi1] = 0
         
-    return idxs
+    return idxs, ts_bin_interp
 
 def replace_glitches_with_gaussian_noise(ts, idxs, i0, i1):
     """
