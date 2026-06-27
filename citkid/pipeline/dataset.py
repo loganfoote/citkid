@@ -1997,6 +1997,8 @@ class DataSet:
     def plot(self, data_idx, plot_type, title = None, **kwargs):
         """
         Generate a plot for the specified data index and plot type.
+        Available plot types are: 
+        'raw_data', 'gain_fit', 's21_rmv', 'circfit', 'sparper', 'xcal'
         
         Parameters:
             data_idx (int): The index of the data to plot.
