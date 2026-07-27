@@ -91,7 +91,7 @@ class DataSet:
             raise ValueError("custom_path must point to a .py file.")
         # zarr_path must be .zarr (only when a path string was given)
         if self.zarr_path is not None and \
-                not self.zarr_path.endswith('.zarr'):
+                not ('.zarr' in self.zarr_path):
             raise ValueError("zarr_path must point to a .zarr file.")
         # cal_yaml_path must be .yaml or .yml
         is_yaml = self.cal_yaml_path.endswith('.yaml') \
