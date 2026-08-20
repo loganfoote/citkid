@@ -104,6 +104,12 @@ class ResFinder:
         # Compute magnitude and phase
         self.mag_db = 20 * np.log10(np.abs(self.z))
         self.phase = np.unwrap(np.angle(self.z))
+
+        # Compute baseline minimum y-range limits so auto-scaling doesn't
+        # collapse the view when there are no strong features in the
+        # current window. These are estimated from median per-bin ranges
+        # across the full sweep.
+        self._compute_min_y_ranges()
         
         # Undo history
         self.undo_stack = []
@@ -844,17 +850,79 @@ class ResFinder:
         phase_min, phase_max = float(visible_phase.min()), float(visible_phase.max())
         phase_margin = (phase_max - phase_min) * self.margin_factor
 
-        # Set y-ranges
-        self.plot_mag.setYRange(
-            mag_min - mag_margin,
-            mag_max + mag_margin,
-            padding = 0
-        )
-        self.plot_phase.setYRange(
-            phase_min - phase_margin,
-            phase_max + phase_margin,
-            padding = 0
-        )
+        # Determine ranges and enforce minimum sensible ranges computed
+        # at initialization so we don't zoom in too far when a window is
+        # featureless.
+        raw_mag_range = mag_max - mag_min
+        desired_mag_range = max(raw_mag_range + 2 * mag_margin,
+                                getattr(self, 'min_mag_range', 1.0))
+        mag_center = 0.5 * (mag_max + mag_min)
+        mag_half = 0.5 * desired_mag_range
+
+        raw_phase_range = phase_max - phase_min
+        desired_phase_range = max(raw_phase_range + 2 * phase_margin,
+                                  getattr(self, 'min_phase_range', 0.1))
+        phase_center = 0.5 * (phase_max + phase_min)
+        phase_half = 0.5 * desired_phase_range
+
+        self.plot_mag.setYRange(mag_center - mag_half,
+                                mag_center + mag_half,
+                                padding = 0)
+        self.plot_phase.setYRange(phase_center - phase_half,
+                                  phase_center + phase_half,
+                                  padding = 0)
+
+    def _compute_min_y_ranges(self, bin_count=100, min_bin_width=1e6,
+                              min_mag=1.0, min_phase=0.1):
+        """
+        Estimate minimum y-range for magnitude (dB) and phase (rad) by
+        computing the per-bin dynamic range across the full frequency
+        sweep and taking the median (then halving it). This prevents
+        auto-scaling from collapsing when the visible window lacks strong
+        features.
+
+        Parameters:
+        bin_count (int): Number of bins to divide the sweep into.
+        min_bin_width (float): Minimum bin width in Hz.
+        min_mag (float): Absolute floor for magnitude range in dB.
+        min_phase (float): Absolute floor for phase range in radians.
+        """
+        f0, f1 = float(self.f[0]), float(self.f[-1])
+        span = f1 - f0
+        if span <= 0 or len(self.f) < 2:
+            self.min_mag_range = min_mag
+            self.min_phase_range = min_phase
+            return
+
+        bin_width = max(span / float(bin_count), float(min_bin_width))
+        mag_ranges = []
+        phase_ranges = []
+        for i in range(int(np.ceil(span / bin_width))):
+            left = f0 + i * bin_width
+            right = left + bin_width
+            lo = int(np.searchsorted(self.f, left, side='left'))
+            hi = int(np.searchsorted(self.f, right, side='right'))
+            if hi - lo < 2:
+                continue
+            seg_mag = self.mag_db[lo:hi]
+            seg_phase = self.phase[lo:hi]
+            mag_ranges.append(float(np.max(seg_mag) - np.min(seg_mag)))
+            phase_ranges.append(float(np.max(seg_phase) - np.min(seg_phase)))
+
+        if mag_ranges:
+            med_mag = float(np.median(np.asarray(mag_ranges)))
+        else:
+            med_mag = float(np.ptp(self.mag_db)) if len(self.mag_db) > 0 else 0.0
+
+        if phase_ranges:
+            med_phase = float(np.median(np.asarray(phase_ranges)))
+        else:
+            med_phase = float(np.ptp(self.phase)) if len(self.phase) > 0 else 0.0
+
+        # Use half the median per-bin range as a conservative minimum, but
+        # don't go below absolute floors.
+        self.min_mag_range = max(med_mag * 0.5, float(min_mag))
+        self.min_phase_range = max(med_phase * 0.5, float(min_phase))
         
     def _pan(self, fraction):
         """Shift the x-axis by *fraction* of the current view width."""
