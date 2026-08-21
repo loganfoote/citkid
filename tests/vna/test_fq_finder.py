@@ -337,7 +337,7 @@ class TestFqFinderWindowInit:
         w.close()
 
     def test_cal_tones_pre_saved(self, qapp):
-        """Resonators with res_idxs < 1 are written to zarr immediately."""
+        """Resonators with res_idxs < 0 are written to zarr immediately."""
         f, z, fres, qres, _ = _make_sweep(M=3)
         res_idxs = np.array([-1, 1, 2])  # index 0 is calibration
         zg = _make_zarr()
@@ -348,7 +348,7 @@ class TestFqFinderWindowInit:
 
     def test_interactive_indices_excludes_cal_tones(self, qapp):
         f, z, fres, qres, _ = _make_sweep(M=3)
-        res_idxs = np.array([0, 1, 2])  # 0 is cal
+        res_idxs = np.array([-1, 1, 2])  # -1 is cal
         zg = _make_zarr()
         w = FqFinderWindow(f, z, fres, qres, res_idxs, zg)
         assert 0 not in w._interactive_indices
@@ -383,7 +383,7 @@ class TestFqFinderWindowInit:
     def test_all_cal_tones_no_interactive(self, qapp):
         """All-cal input: interactive_indices is empty; window closes itself."""
         f, z, fres, qres, _ = _make_sweep(M=2)
-        res_idxs = np.array([0, -1])  # both cal
+        res_idxs = np.array([-1, -2])  # both cal
         zg = _make_zarr()
         w = FqFinderWindow(f, z, fres, qres, res_idxs, zg)
         assert w._interactive_indices == []
@@ -511,6 +511,13 @@ class TestFqFinderReject:
         assert w._reason_edit.isEnabled()
         w._reason_combo.setCurrentText("bifurcated")
         assert not w._reason_edit.isEnabled()
+
+    def test_on_reason_combo_changed_restores_focus_to_window(self, basic_win):
+        """After combo change setFocus is called so key shortcuts keep working."""
+        w = basic_win
+        with patch.object(w, "setFocus") as mock_focus:
+            w._on_reason_combo_changed("bifurcated")
+            mock_focus.assert_called_once()
 
 
 # ===========================================================================
@@ -1022,7 +1029,7 @@ class TestFqFinderLoadResonator:
         w._reject_reasons[ri] = "some custom text"
         w._load_resonator()
         assert w._reason_combo.currentText() == "other"
-        assert not w._reason_edit.isHidden()
+        assert w._reason_edit.isEnabled()
         assert w._reason_edit.text() == "some custom text"
 
     def test_reason_edit_empty_for_stored_other(self, basic_win):

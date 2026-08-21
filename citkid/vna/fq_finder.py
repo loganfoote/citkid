@@ -26,7 +26,7 @@ Interaction
 
 Calibration tones
 -----------------
-Resonators whose ``res_idxs[i] < 1`` are treated as calibration tones: the
+Resonators whose ``res_idxs[i] < 0`` are treated as calibration tones: the
 input ``fres`` and ``qres`` values are written directly to the output zarr
 arrays and the interactive step is skipped.
 
@@ -231,7 +231,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
     qres : array-like, length M
         Initial Q-factors.
     res_idxs : array-like, length M
-        Resonator indices.  Values < 1 indicate calibration tones.
+        Resonator indices.  Values < 0 indicate calibration tones.
     zarr_group : zarr.Group
         Output group; ``fres_opt`` and ``qres_opt`` 1-D arrays are
         created here (length M).
@@ -308,13 +308,13 @@ class FqFinderWindow(QtWidgets.QMainWindow):
 
         # Pre-save calibration tones immediately (they are never interactive)
         for i in range(self._M):
-            if self._res_idxs[i] < 1:
+            if self._res_idxs[i] < 0:
                 self._zg["fres_opt"][i] = self._fres_work[i]
                 self._zg["qres_opt"][i] = self._qres_work[i]
 
         # Build the list of interactive indices (non-cal tones)
         self._interactive_indices = [
-            i for i in range(self._M) if self._res_idxs[i] >= 1
+            i for i in range(self._M) if self._res_idxs[i] >= 0
         ]
         if not self._interactive_indices:
             # Nothing to do
@@ -1018,7 +1018,7 @@ def run_fqfinder(
     """
     Launch the interactive resonance frequency and Q-factor finder.
 
-    Calibration tones (``res_idxs[i] < 1``) are saved immediately with
+    Calibration tones (``res_idxs[i] < 0``) are saved immediately with
     their input values and skipped in the interactive loop.
 
     Parameters
@@ -1032,7 +1032,7 @@ def run_fqfinder(
     qres : array-like, length M
         Initial Q-factors.
     res_idxs : array-like, length M
-        Resonator indices.  Values < 1 mark calibration tones.
+        Resonator indices.  Values < 0 mark calibration tones.
     zarr_group : zarr.Group
         Output group.  Three arrays of length M are written here:
         ``fres_opt`` (float64), ``qres_opt`` (float64), and

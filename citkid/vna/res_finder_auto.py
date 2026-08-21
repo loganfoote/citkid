@@ -117,11 +117,7 @@ class AutoResFinder:
         self.setup_ui()
         self.setup_plot()
 
-        # Set initial view so _update_curves can populate the curves on
-        # the first update_peaks call.
-        self.plot_filtered.setXRange(
-            float(self.f[0]), float(self.f[-1]), padding = 0.02
-        )
+        # Initial view will be set in setup_plot after plot_filtered is created
 
         try:
             self.update_peaks()
@@ -419,6 +415,12 @@ class AutoResFinder:
         
         # Link x-axes
         self.plot_original.setXLink(self.plot_filtered)
+        
+        # Set initial view so _update_curves can populate the curves on
+        # the first update_peaks call.
+        self.plot_filtered.setXRange(
+            float(self.f[0]), float(self.f[-1]), padding = 0.02
+        )
         
         # Setup keyboard shortcuts for panning
         self.pan_left_action = QtGui.QShortcut(QtGui.QKeySequence("Z"), self.win)

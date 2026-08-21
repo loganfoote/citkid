@@ -154,7 +154,7 @@ class ResFinder:
             'Shift+Click: Remove nearest | '
             'Ctrl+Z: Undo | '
             'Z/X: Pan 20% | '
-            'A/D: Pan 80% | '
+            'A/S: Pan 80% | '
             'S: Save | '
             'Q: Toggle IQ plot'
             '</span>'
@@ -360,10 +360,10 @@ class ResFinder:
         self.iq_action = QtGui.QShortcut(QtGui.QKeySequence("Q"), self.win)
         self.iq_action.activated.connect(self.toggle_iq)
 
-        # Fast pan shortcuts (A/D = 80% jump, one resonance width)
+        # Fast pan shortcuts (A/S = 80% jump, one resonance width)
         self.fast_pan_left_action = QtGui.QShortcut(QtGui.QKeySequence("A"), self.win)
         self.fast_pan_left_action.activated.connect(self.fast_pan_left)
-        self.fast_pan_right_action = QtGui.QShortcut(QtGui.QKeySequence("D"), self.win)
+        self.fast_pan_right_action = QtGui.QShortcut(QtGui.QKeySequence("S"), self.win)
         self.fast_pan_right_action.activated.connect(self.fast_pan_right)
 
         # Help shortcut
