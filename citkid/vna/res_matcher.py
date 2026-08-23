@@ -18,20 +18,19 @@ Automatic Re-Matching
 Shift+click sets a frequency threshold (yellow line). Press T to re-run the
 matching algorithm (sorted or nearest) on all groups above that frequency,
 while keeping manually corrected lower-frequency groups unchanged.
-
 Output layout (zarr)
 --------------------
-fres1_out        float64[N1]  — final DS1 resonance frequencies (Hz)
-res_idx1_out     int64[N1]    — resonator indices for DS1
+fres1            float64[N1]  — final DS1 resonance frequencies (Hz)
+res_idx1         int64[N1]    — resonator indices for DS1
 group_ids1       int64[N1]    — match-group ID for each DS1 resonance
 
-fres2_out        float64[N2]  — final DS2 resonance frequencies (Hz)
-res_idx2_out     int64[N2]    — resonator indices for DS2
+fres2            float64[N2]  — final DS2 resonance frequencies (Hz)
+res_idx2         int64[N2]    — resonator indices for DS2
 group_ids2       int64[N2]    — match-group ID for each DS2 resonance
 
 ambiguous_groups int64[K]     — group IDs flagged as ambiguous
 
-To query group g: fres1_out[group_ids1 == g] and fres2_out[group_ids2 == g].
+To query group g: fres1[group_ids1 == g] and fres2[group_ids2 == g].
 """
 
 import copy
@@ -187,6 +186,7 @@ class ResMatcher:
         new_res_start_idx: int = 2000,
         init_match: str = 'sorted',
         margin_factor: float = 0.15,
+        overwrite: bool = False,
         apply_filter: bool = False,
     ):
         # ---- store raw arrays -----------------------------------------------
@@ -232,8 +232,8 @@ class ResMatcher:
 
         # Check if zarr data exists and show dialog
         _output_keys = [
-            'fres1_out', 'res_idx1_out', 'group_ids1',
-            'fres2_out', 'res_idx2_out', 'group_ids2',
+            'fres1', 'res_idx1', 'group_ids1',
+            'fres2', 'res_idx2', 'group_ids2',
             'ambiguous_groups',
         ]
         _load_from_zarr = False
@@ -522,12 +522,12 @@ class ResMatcher:
         Returns:
         tuple: (groups, next_group_id)
         """
-        fres1_out = np.array(self.zarr_group['fres1_out'])
-        res_idx1_out = np.array(self.zarr_group['res_idx1_out'])
+        fres1_out = np.array(self.zarr_group['fres1'])
+        res_idx1_out = np.array(self.zarr_group['res_idx1'])
         group_ids1 = np.array(self.zarr_group['group_ids1'])
         
-        fres2_out = np.array(self.zarr_group['fres2_out'])
-        res_idx2_out = np.array(self.zarr_group['res_idx2_out'])
+        fres2_out = np.array(self.zarr_group['fres2'])
+        res_idx2_out = np.array(self.zarr_group['res_idx2'])
         group_ids2 = np.array(self.zarr_group['group_ids2'])
         
         ambiguous_groups = set(np.array(self.zarr_group['ambiguous_groups']))
@@ -2466,25 +2466,39 @@ class ResMatcher:
 
     # ================================================================ save / quit
 
-    def save_data(self):
+    def save_data(self, compact_on_save: bool = True):
+        """
+        Save groups to the zarr group.
+
+        If `compact_on_save` is True, group IDs written to disk are remapped
+        to a dense 0..N-1 range based on the sorted groups order. This does
+        not mutate `self.groups` in memory.
+        """
         fres1_out, ridx1_out, gids1 = [], [], []
         fres2_out, ridx2_out, gids2 = [], [], []
         ambiguous_groups = []
 
+        if compact_on_save:
+            sorted_groups = self._sorted_groups()
+            gid_map = {g.group_id: i for i, g in enumerate(sorted_groups)}
+        else:
+            gid_map = None
+
         for g in self.groups:
+            out_gid = gid_map[g.group_id] if gid_map is not None else g.group_id
             if g.ambiguous:
-                ambiguous_groups.append(g.group_id)
+                ambiguous_groups.append(out_gid)
             for fres, ridx in g.entries1:
-                fres1_out.append(fres);  ridx1_out.append(ridx);  gids1.append(g.group_id)
+                fres1_out.append(fres);  ridx1_out.append(ridx);  gids1.append(out_gid)
             for fres, ridx in g.entries2:
-                fres2_out.append(fres);  ridx2_out.append(ridx);  gids2.append(g.group_id)
+                fres2_out.append(fres);  ridx2_out.append(ridx);  gids2.append(out_gid)
 
         _to_save = {
-            'fres1_out':        (np.float64, fres1_out),
-            'res_idx1_out':     (np.int64,   ridx1_out),
+            'fres1':            (np.float64, fres1_out),
+            'res_idx1':         (np.int64,   ridx1_out),
             'group_ids1':       (np.int64,   gids1),
-            'fres2_out':        (np.float64, fres2_out),
-            'res_idx2_out':     (np.int64,   ridx2_out),
+            'fres2':            (np.float64, fres2_out),
+            'res_idx2':         (np.int64,   ridx2_out),
             'group_ids2':       (np.int64,   gids2),
             'ambiguous_groups': (np.int64,   ambiguous_groups),
             'max_view_left':    (np.float64, [self._max_view_left]),
@@ -2614,11 +2628,11 @@ class ResMatcher:
             '</ul>'
             '<p><b>Output arrays (zarr):</b></p>'
             '<ul>'
-            '<li>fres1_out, res_idx1_out, group_ids1</li>'
-            '<li>fres2_out, res_idx2_out, group_ids2</li>'
+            '<li>fres1, res_idx1, group_ids1</li>'
+            '<li>fres2, res_idx2, group_ids2</li>'
             '<li>ambiguous_groups</li>'
             '</ul>'
-            '<p>To query group g: <code>fres1_out[group_ids1 == g]</code></p>'
+            '<p>To query group g: <code>fres1[group_ids1 == g]</code></p>'
             '<p><b>Workflow:</b> Ctrl+click to multi-select → F/W/S/U → Close window to save</p>'
         )
         lbl.setTextFormat(_Qt.RichText)

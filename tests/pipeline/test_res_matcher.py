@@ -458,8 +458,8 @@ class TestSaveData:
         matcher.log = Mock()
         matcher.save_data()
         expected = [
-            'fres1_out', 'res_idx1_out', 'group_ids1',
-            'fres2_out', 'res_idx2_out', 'group_ids2',
+            'fres1', 'res_idx1', 'group_ids1',
+            'fres2', 'res_idx2', 'group_ids2',
             'ambiguous_groups',
         ]
         for key in expected:
@@ -469,26 +469,30 @@ class TestSaveData:
         matcher.log = Mock()
         matcher.save_data()
         zg = matcher.zarr_group
-        assert zg['fres1_out'].shape[0] == zg['res_idx1_out'].shape[0] == zg['group_ids1'].shape[0]
-        assert zg['fres2_out'].shape[0] == zg['res_idx2_out'].shape[0] == zg['group_ids2'].shape[0]
+        assert zg['fres1'].shape[0] == zg['res_idx1'].shape[0] == zg['group_ids1'].shape[0]
+        assert zg['fres2'].shape[0] == zg['res_idx2'].shape[0] == zg['group_ids2'].shape[0]
 
     def test_group_ids_round_trip(self, matcher):
-        """Every saved group_id can be looked up in the groups list."""
+        """Saved group IDs are compact (0..N-1) and dense."""
         matcher.log = Mock()
         matcher.save_data()
         zg = matcher.zarr_group
-        all_ids = set(int(i) for i in zg['group_ids1'][:]) | \
-                  set(int(i) for i in zg['group_ids2'][:])
-        group_ids_in_list = {g.group_id for g in matcher.groups}
-        assert all_ids <= group_ids_in_list
+        all_ids = set(int(i) for i in zg['group_ids1'][:]) | set(int(i) for i in zg['group_ids2'][:])
+        # IDs should be dense in the range 0..(n_groups-1)
+        assert max(all_ids) < len(matcher.groups)
+        assert len(all_ids) == len(matcher.groups)
 
     def test_ambiguous_groups_recorded(self, matcher):
         matcher.log = Mock()
         matcher.groups[0].ambiguous = True
-        gid = matcher.groups[0].group_id
+        orig_gid = matcher.groups[0].group_id
         matcher.save_data()
-        ambig = list(matcher.zarr_group['ambiguous_groups'][:])
-        assert gid in ambig
+        zg = matcher.zarr_group
+        ambig = list(zg['ambiguous_groups'][:])
+        # compact_on_save maps group ids based on sorted groups order
+        sorted_gs = matcher._sorted_groups()
+        expected_compact = next(i for i, g in enumerate(sorted_gs) if g.group_id == orig_gid)
+        assert expected_compact in list(ambig)
 
     def test_overwrite_raises_when_false(self, simple_data, tmp_path, qt_app):
         sd = simple_data

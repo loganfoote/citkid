@@ -141,17 +141,17 @@ class TestResMatcherInitialization:
         
         # Create existing zarr data
         grp = zarr.open_group(str(zarr_path), mode='w')
-        grp.create_dataset('fres1_out', data=np.array([4.2e9, 4.8e9]))
-        grp.create_dataset('res_idx1_out', data=np.array([10, 20]))
+        grp.create_dataset('fres1', data=np.array([4.2e9, 4.8e9]))
+        grp.create_dataset('res_idx1', data=np.array([10, 20]))
         grp.create_dataset('group_ids1', data=np.array([0, 1]))
-        grp.create_dataset('fres2_out', data=np.array([4.21e9, 4.79e9]))
-        grp.create_dataset('res_idx2_out', data=np.array([10, 20]))
+        grp.create_dataset('fres2', data=np.array([4.21e9, 4.79e9]))
+        grp.create_dataset('res_idx2', data=np.array([10, 20]))
         grp.create_dataset('group_ids2', data=np.array([0, 1]))
         grp.create_dataset('ambiguous_groups', data=np.array([]))
         grp.create_dataset('max_view_left', data=np.array([5.0e9]))
         
         # Verify zarr data was created
-        assert 'fres1_out' in grp
+        assert 'fres1' in grp
         assert 'max_view_left' in grp
         assert float(grp['max_view_left'][()]) == 5.0e9
 
@@ -313,19 +313,19 @@ class TestZarrDataStructure:
         grp = zarr.open_group(str(zarr_path), mode='w')
         
         # Create all expected arrays
-        grp.create_dataset('fres1_out', data=np.array([4.2e9, 4.8e9]))
-        grp.create_dataset('res_idx1_out', data=np.array([10, 20]))
+        grp.create_dataset('fres1', data=np.array([4.2e9, 4.8e9]))
+        grp.create_dataset('res_idx1', data=np.array([10, 20]))
         grp.create_dataset('group_ids1', data=np.array([0, 1]))
-        grp.create_dataset('fres2_out', data=np.array([4.21e9, 4.79e9]))
-        grp.create_dataset('res_idx2_out', data=np.array([10, 20]))
+        grp.create_dataset('fres2', data=np.array([4.21e9, 4.79e9]))
+        grp.create_dataset('res_idx2', data=np.array([10, 20]))
         grp.create_dataset('group_ids2', data=np.array([0, 1]))
         grp.create_dataset('ambiguous_groups', data=np.array([]))
         grp.create_dataset('max_view_left', data=np.array([5.0e9]))
         
         # Verify all arrays exist
         required_arrays = [
-            'fres1_out', 'res_idx1_out', 'group_ids1',
-            'fres2_out', 'res_idx2_out', 'group_ids2',
+            'fres1', 'res_idx1', 'group_ids1',
+            'fres2', 'res_idx2', 'group_ids2',
             'ambiguous_groups', 'max_view_left'
         ]
         
@@ -338,17 +338,17 @@ class TestZarrDataStructure:
         grp = zarr.open_group(str(zarr_path), mode='w')
         
         # Create data where group 0 has resonances in both datasets
-        grp.create_dataset('fres1_out', data=np.array([4.2e9, 4.8e9]))
-        grp.create_dataset('res_idx1_out', data=np.array([10, 20]))
+        grp.create_dataset('fres1', data=np.array([4.2e9, 4.8e9]))
+        grp.create_dataset('res_idx1', data=np.array([10, 20]))
         grp.create_dataset('group_ids1', data=np.array([0, 1]))
         
-        grp.create_dataset('fres2_out', data=np.array([4.21e9]))
-        grp.create_dataset('res_idx2_out', data=np.array([10]))
+        grp.create_dataset('fres2', data=np.array([4.21e9]))
+        grp.create_dataset('res_idx2', data=np.array([10]))
         grp.create_dataset('group_ids2', data=np.array([0]))
         
         # Group 0 should have one resonance in each dataset
-        group0_ds1 = grp['fres1_out'][grp['group_ids1'][:] == 0]
-        group0_ds2 = grp['fres2_out'][grp['group_ids2'][:] == 0]
+        group0_ds1 = grp['fres1'][grp['group_ids1'][:] == 0]
+        group0_ds2 = grp['fres2'][grp['group_ids2'][:] == 0]
         
         assert len(group0_ds1) == 1
         assert len(group0_ds2) == 1
@@ -430,23 +430,23 @@ class TestLoadFromZarr:
         # Create sample data: 2 groups
         # Group 0: DS1=[10], DS2=[10, 20]
         # Group 1: DS1=[30], DS2=[]
-        grp.create_dataset('fres1_out', data=np.array([4.2e9, 4.8e9]))
-        grp.create_dataset('res_idx1_out', data=np.array([10, 30]))
+        grp.create_dataset('fres1', data=np.array([4.2e9, 4.8e9]))
+        grp.create_dataset('res_idx1', data=np.array([10, 30]))
         grp.create_dataset('group_ids1', data=np.array([0, 1]))
         
-        grp.create_dataset('fres2_out', data=np.array([4.21e9, 4.22e9]))
-        grp.create_dataset('res_idx2_out', data=np.array([10, 20]))
+        grp.create_dataset('fres2', data=np.array([4.21e9, 4.22e9]))
+        grp.create_dataset('res_idx2', data=np.array([10, 20]))
         grp.create_dataset('group_ids2', data=np.array([0, 0]))
         
         grp.create_dataset('ambiguous_groups', data=np.array([0]))
         
         # Simulate loading
-        fres1 = grp['fres1_out'][:]
-        res_idx1 = grp['res_idx1_out'][:]
+        fres1 = grp['fres1'][:]
+        res_idx1 = grp['res_idx1'][:]
         gids1 = grp['group_ids1'][:]
         
-        fres2 = grp['fres2_out'][:]
-        res_idx2 = grp['res_idx2_out'][:]
+        fres2 = grp['fres2'][:]
+        res_idx2 = grp['res_idx2'][:]
         gids2 = grp['group_ids2'][:]
         
         ambig = set(grp['ambiguous_groups'][:])
