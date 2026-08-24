@@ -1014,7 +1014,7 @@ def run_fqfinder(
     fres_update_method = "none",
     start_idx = 0,
     rmv_gain_simple = False,
-    load_qres_opt = False
+    load_fq = False
 ):
     """
     Launch the interactive resonance frequency and Q-factor finder.
@@ -1070,8 +1070,9 @@ def run_fqfinder(
         Divides each row by the median off-resonance amplitude, then rotates
         so the off-resonance mean lies on the positive real axis.
         Default False.
-    load_qres_opt : bool
-        If True, loads 'qres_opt' from the zarr group to use instead of qres. 
+    load_fq : bool
+        If True, loads 'fres_opt' and 'qres_opt' from the zarr group to use 
+        instead of qres and fres.
         This allows the user to keep overwrite = True and load the previously 
         saved state, rather than manually loading qres_opt and being forced to 
         set overwrite = False. Default False.
@@ -1081,15 +1082,22 @@ def run_fqfinder(
     None
     """
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
-    if load_qres_opt:
-        if 'qres_opt' in zarr_group:
-            qres_opt = zarr_group['qres_opt'][:]
-            if fres.shape != qres_opt.shape:
+    if load_fq:
+        b1 = 'fres_opt' in zarr_group
+        b2 = 'qres_opt' in zarr_group
+        if (b1 and not b2) or (not b1 and b2):
+            raise ValueError(
+                "fres_opt and qres_opt must both exist in zarr_group or neither"
+            )
+        if b1 and b2:            
+            qres = zarr_group['qres_opt'][:]
+            fres = zarr_group['fres_opt'][:]
+            if fres.shape != qres.shape:
                 raise ValueError(
-                    f"fres shape {fres.shape} does not match qres_opt shape {qres_opt.shape}"
+                    f"fres_opt shape {fres.shape} does not match qres_opt shape {qres.shape}"
                 )
-            qres = qres_opt
-            overwrite = True 
+            overwrite = True
+
     win = FqFinderWindow(
         f=f,
         z=z,
