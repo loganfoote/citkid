@@ -15,8 +15,10 @@ import os
 from ..qt_compat import Qt as _Qt
 
 
-def run_res_finder_manual(f, z, fres_initial, zarr_grp, margin_factor = 0.15,
-                    overwrite = False):
+def run_res_finder_manual(
+        f, z, fres_initial, zarr_grp, margin_factor = 0.15,
+        overwrite = False
+):
     """
     Run the interactive manual resonance finder.
     
