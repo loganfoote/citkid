@@ -216,7 +216,7 @@ def get_S21_vs_freq_dual(
     nsamps,
     p1,
     p2,
-    fl_phase
+    fl_tau
 ):
     """
     Generate complex S21 data vs frequency for two resonators. Applies realistic
@@ -237,7 +237,9 @@ def get_S21_vs_freq_dual(
         resonator 1.
     p2 (np.array): array of resonator parameters [fr, Qr, amp, phi, a] for
         resonator 2.
-    fl_phase (float): phase of the feedline between the two resonators.
+    fl_tau (float): L / vp of the feedline between the two resonators, where L 
+        is the distance on the feedline between the resonators and vp is the 
+        propogation velocity.
 
     Returns:
     S21 (np.array): complex S21 array corresponding to f.
@@ -264,7 +266,7 @@ def get_S21_vs_freq_dual(
         nsamps,
         p2
     )
-    gamma = np.exp(-2j * fl_phase)
+    gamma = np.exp(-2j * 2 * np.pi * f * fl_tau)
     S21 = S21a * S21b / (1 - (1 - S21a) * (1 - S21b) * gamma)
     return S21
 
