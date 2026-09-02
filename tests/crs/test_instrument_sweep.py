@@ -1886,35 +1886,27 @@ async def test_sweep_full_single_nco(base_crs):
     npoints = 5
     nsamps = 10
     
-    # Mock sweep_span to capture parameters
+    # Mock sweep to capture parameters
     captured_params = {}
-    async def mock_sweep_span(fres, ares, span, npts, ns, **kwargs):
-        captured_params['fres'] = fres.copy()
+    async def mock_sweep(frequencies, ares, nsamps, **kwargs):
+        captured_params['frequencies'] = frequencies.copy()
         captured_params['ares'] = ares.copy()
-        captured_params['span'] = span
-        captured_params['npoints'] = npts
-        captured_params['nsamps'] = ns
-        captured_params['center_fres'] = kwargs.get('center_fres')
-        captured_params['downward'] = kwargs.get('downward')
-        
-        # Return mock data (shape: 1024 x npoints)
-        freqs = np.tile(fres[:, np.newaxis], (1, npts))
-        return freqs, np.ones_like(freqs, dtype = complex)
+        captured_params['nsamps'] = nsamps
+
+        # Return mock data with same shape as frequencies
+        return frequencies, np.ones_like(frequencies, dtype = complex)
     
-    crs.sweep_span = mock_sweep_span
+    crs.sweep = mock_sweep
     
     f, z = await crs.sweep_full(amplitude, npoints, nsamps, verbose = False)
     
     # Verify 1024 tones were created for the NCO
-    assert len(captured_params['fres']) == 1024
+    assert captured_params['frequencies'].shape[0] == 1024
     assert len(captured_params['ares']) == 1024
+    assert captured_params['frequencies'].shape[1] == npoints
     
     # Verify all amplitudes are the same
     assert np.all(captured_params['ares'] == amplitude)
-    
-    # Verify center_fres = True and downward = True
-    assert captured_params['center_fres'] == True
-    assert captured_params['downward'] == True
     
     # Verify output is flattened
     assert f.ndim == 1
@@ -1938,20 +1930,19 @@ async def test_sweep_full_multiple_ncos(base_crs):
     nsamps = 10
     
     captured_params = {}
-    async def mock_sweep_span(fres, ares, span, npts, ns, **kwargs):
-        captured_params['fres'] = fres.copy()
+    async def mock_sweep(frequencies, ares, nsamps, **kwargs):
+        captured_params['frequencies'] = frequencies.copy()
         captured_params['ares'] = ares.copy()
         
-        # Return mock data (shape: 2048 x npoints)
-        freqs = np.tile(fres[:, np.newaxis], (1, npts))
-        return freqs, np.ones_like(freqs, dtype = complex)
+        # Return mock data with same shape as frequencies
+        return frequencies, np.ones_like(frequencies, dtype = complex)
     
-    crs.sweep_span = mock_sweep_span
+    crs.sweep = mock_sweep
     
     f, z = await crs.sweep_full(amplitude, npoints, nsamps, verbose = False)
     
     # Verify 1024 tones per NCO = 2048 total
-    assert len(captured_params['fres']) == 2048
+    assert captured_params['frequencies'].shape[0] == 2048
     assert len(captured_params['ares']) == 2048
     
     # Verify output is flattened and sorted
@@ -1962,7 +1953,7 @@ async def test_sweep_full_multiple_ncos(base_crs):
 
 @pytest.mark.asyncio
 async def test_sweep_full_frequency_coverage(base_crs):
-    """Test that sweep_full covers the full bandwidth with 1 Hz offset."""
+    """Test that sweep_full covers the full bandwidth with safety margin."""
     crs = base_crs
     nco = 4.0e9
     crs.nco_freqs = {1: nco}
@@ -1972,34 +1963,31 @@ async def test_sweep_full_frequency_coverage(base_crs):
     npoints = 5
     nsamps = 10
     
-    captured_fres = None
-    async def mock_sweep_span(fres, ares, span, npts, ns, **kwargs):
-        nonlocal captured_fres
-        captured_fres = fres.copy()
-        freqs = np.tile(fres[:, np.newaxis], (1, npts))
-        return freqs, np.ones_like(freqs, dtype = complex)
+    captured_freqs = None
+    async def mock_sweep(frequencies, ares, nsamps, **kwargs):
+        nonlocal captured_freqs
+        captured_freqs = frequencies.copy()
+        return frequencies, np.ones_like(frequencies, dtype = complex)
     
-    crs.sweep_span = mock_sweep_span
+    crs.sweep = mock_sweep
     
     f, z = await crs.sweep_full(amplitude, npoints, nsamps, verbose = False)
     
-    # Calculate expected range with 1 Hz offset and tone_bw buffer
-    tone_bw = crs.bw / 1024 + 200
-    expected_min = nco - crs.bw / 2 + 1 + tone_bw
-    expected_max = nco + crs.bw / 2 - 1 - tone_bw
+    # Verify margin is applied (frequencies should be inside bandwidth)
+    margin = crs.bw * 1e-9
+    expected_min = nco - crs.bw / 2 + margin
+    expected_max = nco + crs.bw / 2 - margin
     
-    # Verify fres spans the expected range
-    assert np.isclose(captured_fres.min(), expected_min, rtol = 1e-6)
-    assert np.isclose(captured_fres.max(), expected_max, rtol = 1e-6)
-    
-    # Verify tones are evenly spaced
-    spacing = np.diff(captured_fres)
-    assert np.allclose(spacing, spacing[0], rtol = 1e-10)
+    # Frequencies are created as linspace then split and flipped (downward=True)
+    # After downward flip, [0, -1] is the first element of first chunk (minimum)
+    # and [-1, 0] is the last element of last chunk (maximum)
+    assert np.isclose(captured_freqs[0, -1], expected_min, atol = 1.0)
+    assert np.isclose(captured_freqs[-1, 0], expected_max, atol = 1.0)
 
 
 @pytest.mark.asyncio
 async def test_sweep_full_edge_offset(base_crs):
-    """Test that sweep_full applies 1 Hz offset at band edges."""
+    """Test that sweep_full applies safety margin at band edges."""
     crs = base_crs
     nco = 4.0e9
     crs.nco_freqs = {1: nco}
@@ -2009,30 +1997,32 @@ async def test_sweep_full_edge_offset(base_crs):
     npoints = 5
     nsamps = 10
     
-    captured_fres = None
-    async def mock_sweep_span(fres, ares, span, npts, ns, **kwargs):
-        nonlocal captured_fres
-        captured_fres = fres.copy()
-        freqs = np.tile(fres[:, np.newaxis], (1, npts))
-        return freqs, np.ones_like(freqs, dtype = complex)
+    captured_freqs = None
+    async def mock_sweep(frequencies, ares, nsamps, **kwargs):
+        nonlocal captured_freqs
+        captured_freqs = frequencies.copy()
+        return frequencies, np.ones_like(frequencies, dtype = complex)
     
-    crs.sweep_span = mock_sweep_span
+    crs.sweep = mock_sweep
     
     f, z = await crs.sweep_full(amplitude, npoints, nsamps, verbose = False)
     
-    # Verify offset: frequencies should NOT reach exactly nco ± bw/2
-    tone_bw = crs.bw / 1024 + 200
-    assert captured_fres.min() > nco - crs.bw / 2
-    assert captured_fres.max() < nco + crs.bw / 2
+    # Verify margin: frequencies should NOT reach exactly nco ± bw/2
+    margin = crs.bw * 1e-9
+    assert captured_freqs[:, 0].min() > nco - crs.bw / 2
+    assert captured_freqs[:, 0].max() < nco + crs.bw / 2
     
-    # Verify specific offset calculation (1 Hz + tone_bw)
-    assert np.isclose(captured_fres.min(), nco - crs.bw / 2 + 1 + tone_bw)
-    assert np.isclose(captured_fres.max(), nco + crs.bw / 2 - 1 - tone_bw)
+    # Verify margin is approximately as specified
+    expected_min = nco - crs.bw / 2 + margin
+    expected_max = nco + crs.bw / 2 - margin
+    # After downward flip: [0, -1] is minimum, [-1, 0] is maximum
+    assert np.isclose(captured_freqs[0, -1], expected_min, atol = 1.0)
+    assert np.isclose(captured_freqs[-1, 0], expected_max, atol = 1.0)
 
 
 @pytest.mark.asyncio
 async def test_sweep_full_passes_parameters(base_crs):
-    """Test that sweep_full passes parameters correctly to sweep_span."""
+    """Test that sweep_full passes parameters through to sweep."""
     crs = base_crs
     crs.nco_freqs = {1: 4.0e9}
     crs.bw = 512e6
@@ -2042,17 +2032,14 @@ async def test_sweep_full_passes_parameters(base_crs):
     nsamps = 15
     
     captured_params = {}
-    async def mock_sweep_span(fres, ares, span, npts, ns, **kwargs):
-        captured_params['npoints'] = npts
-        captured_params['nsamps'] = ns
-        captured_params['allow_missing'] = kwargs.get('allow_missing')
+    async def mock_sweep(frequencies, ares, nsamps, **kwargs):
+        captured_params['nsamps'] = nsamps
         captured_params['verbose'] = kwargs.get('verbose')
         captured_params['pbar_description'] = kwargs.get('pbar_description')
         
-        freqs = np.tile(fres[:, np.newaxis], (1, npts))
-        return freqs, np.ones_like(freqs, dtype = complex)
+        return frequencies, np.ones_like(frequencies, dtype = complex)
     
-    crs.sweep_span = mock_sweep_span
+    crs.sweep = mock_sweep
     
     await crs.sweep_full(
         amplitude, npoints, nsamps,
@@ -2060,9 +2047,7 @@ async def test_sweep_full_passes_parameters(base_crs):
     )
     
     # Verify parameters passed through
-    assert captured_params['npoints'] == 7
     assert captured_params['nsamps'] == 15
-    assert captured_params['allow_missing'] == False
     assert captured_params['verbose'] == False
     assert captured_params['pbar_description'] == "Custom Full Sweep"
 
@@ -2100,20 +2085,20 @@ async def test_sweep_full_flattened_and_sorted(base_crs):
     npoints = 5
     nsamps = 10
     
-    # Create unsorted mock data to verify sorting
-    async def mock_sweep_span(fres, ares, span, npts, ns, **kwargs):
+    # Create mock data to verify flattening and sorting
+    async def mock_sweep(frequencies, ares, nsamps, **kwargs):
         # Create 2D arrays (1024 x npoints)
-        # Put higher frequencies in first rows to test sorting
-        freqs = np.tile(fres[:, np.newaxis], (1, npts))
-        # Add variation across npoints
-        freqs = freqs + np.linspace(0, span/2, npts)
+        freqs = frequencies.copy()
+        # Add variation across npoints to create non-trivial sorting case
+        for i in range(freqs.shape[0]):
+            freqs[i, :] = frequencies[i, :] + np.linspace(0, 100, npoints)
         
         # Create corresponding z values
         z_vals = np.arange(freqs.size).reshape(freqs.shape) + 1j
         
         return freqs, z_vals
     
-    crs.sweep_span = mock_sweep_span
+    crs.sweep = mock_sweep
     
     f, z = await crs.sweep_full(amplitude, npoints, nsamps, verbose = False)
     
@@ -2127,7 +2112,7 @@ async def test_sweep_full_flattened_and_sorted(base_crs):
 
 @pytest.mark.asyncio
 async def test_sweep_full_tone_bandwidth_calculation(base_crs):
-    """Test that sweep_full calculates tone_bw correctly."""
+    """Test that sweep_full constructs frequencies with proper spacing."""
     crs = base_crs
     crs.nco_freqs = {1: 4.0e9}
     crs.bw = 512e6
@@ -2136,20 +2121,28 @@ async def test_sweep_full_tone_bandwidth_calculation(base_crs):
     npoints = 5
     nsamps = 10
     
-    captured_span = None
-    async def mock_sweep_span(fres, ares, span, npts, ns, **kwargs):
-        nonlocal captured_span
-        captured_span = span
-        freqs = np.tile(fres[:, np.newaxis], (1, npts))
-        return freqs, np.ones_like(freqs, dtype = complex)
+    captured_frequencies = None
+    async def mock_sweep(frequencies, ares, nsamps, **kwargs):
+        nonlocal captured_frequencies
+        captured_frequencies = frequencies.copy()
+        return frequencies, np.ones_like(frequencies, dtype = complex)
     
-    crs.sweep_span = mock_sweep_span
+    crs.sweep = mock_sweep
     
     f, z = await crs.sweep_full(amplitude, npoints, nsamps, verbose = False)
     
-    # Verify span (tone_bw) calculation: bw / 1024 + 200
-    expected_tone_bw = crs.bw / 1024 + 200
-    assert np.isclose(captured_span, expected_tone_bw)
+    # Verify tone spacing (spacing between consecutive tones)
+    # After downward flip, last column has tones in order (first element of each chunk)
+    tone_spacing = np.diff(captured_frequencies[:, -1])
+    # Frequencies created as linspace(min, max, 1024*npoints), then split into (1024, npoints)
+    # Tone spacing = npoints * step where step = (max-min)/(1024*npoints - 1)
+    margin = crs.bw * 1e-9
+    freq_min = 4.0e9 - crs.bw / 2 + margin
+    freq_max = 4.0e9 + crs.bw / 2 - margin
+    total_points = 1024 * npoints
+    expected_spacing = npoints * (freq_max - freq_min) / (total_points - 1)
+    # Use looser tolerance since we're computing expected value from implementation logic
+    assert np.allclose(tone_spacing, expected_spacing, rtol = 1e-4)
 
 
 @pytest.mark.asyncio
@@ -2163,23 +2156,23 @@ async def test_sweep_full_1024_tones_per_nco(base_crs):
     npoints = 5
     nsamps = 10
     
-    captured_fres = None
-    async def mock_sweep_span(fres, ares, span, npts, ns, **kwargs):
-        nonlocal captured_fres
-        captured_fres = fres.copy()
-        freqs = np.tile(fres[:, np.newaxis], (1, npts))
-        return freqs, np.ones_like(freqs, dtype = complex)
+    captured_frequencies = None
+    async def mock_sweep(frequencies, ares, nsamps, **kwargs):
+        nonlocal captured_frequencies
+        captured_frequencies = frequencies.copy()
+        return frequencies, np.ones_like(frequencies, dtype = complex)
     
-    crs.sweep_span = mock_sweep_span
+    crs.sweep = mock_sweep
     
     f, z = await crs.sweep_full(amplitude, npoints, nsamps, verbose = False)
     
     # 3 NCOs × 1024 tones = 3072 tones
-    assert len(captured_fres) == 3072
+    assert captured_frequencies.shape[0] == 3 * 1024
+    assert captured_frequencies.shape[1] == npoints
     
     # Output should be 3072 tones × npoints flattened
-    assert len(f) == 3072 * npoints
-    assert len(z) == 3072 * npoints
+    assert len(f) == 3 * 1024 * npoints
+    assert len(z) == 3 * 1024 * npoints
 
 
 @pytest.mark.asyncio
@@ -2195,13 +2188,12 @@ async def test_sweep_full_amplitude_conversion(base_crs):
     nsamps = 10
     
     captured_ares = None
-    async def mock_sweep_span(fres, ares, span, npts, ns, **kwargs):
+    async def mock_sweep(frequencies, ares, nsamps, **kwargs):
         nonlocal captured_ares
         captured_ares = ares.copy()
-        freqs = np.tile(fres[:, np.newaxis], (1, npts))
-        return freqs, np.ones_like(freqs, dtype = complex)
+        return frequencies, np.ones_like(frequencies, dtype = complex)
     
-    crs.sweep_span = mock_sweep_span
+    crs.sweep = mock_sweep
     
     f, z = await crs.sweep_full(amplitude, npoints, nsamps, verbose = False)
     
@@ -2221,14 +2213,13 @@ async def test_sweep_full_log_false(base_crs):
     npoints = 5
     nsamps = 10
     
-    captured_log = None
-    async def mock_sweep_span(fres, ares, span, npts, ns, **kwargs):
-        nonlocal captured_log
-        captured_log = kwargs.get('log')
-        freqs = np.tile(fres[:, np.newaxis], (1, npts))
-        return freqs, np.ones_like(freqs, dtype = complex)
+    captured_frequencies = None
+    async def mock_sweep(frequencies, ares, nsamps, **kwargs):
+        nonlocal captured_frequencies
+        captured_frequencies = frequencies.copy()
+        return frequencies, np.ones_like(frequencies, dtype = complex)
     
-    crs.sweep_span = mock_sweep_span
+    crs.sweep = mock_sweep
     
     f, z = await crs.sweep_full(
         amplitude,
@@ -2238,8 +2229,11 @@ async def test_sweep_full_log_false(base_crs):
         verbose = False
     )
     
-    # Verify log parameter was passed correctly
-    assert captured_log == False
+    # Verify tones are linearly spaced
+    spacing = np.diff(captured_frequencies[:, 0])
+    assert np.allclose(
+        spacing, spacing[0], rtol = 1e-10
+        ), "Tones not linearly spaced"
 
 
 @pytest.mark.asyncio
@@ -2253,14 +2247,13 @@ async def test_sweep_full_log_true(base_crs):
     npoints = 5
     nsamps = 10
     
-    captured_log = None
-    async def mock_sweep_span(fres, ares, span, npts, ns, **kwargs):
-        nonlocal captured_log
-        captured_log = kwargs.get('log')
-        freqs = np.tile(fres[:, np.newaxis], (1, npts))
-        return freqs, np.ones_like(freqs, dtype = complex)
+    captured_frequencies = None
+    async def mock_sweep(frequencies, ares, nsamps, **kwargs):
+        nonlocal captured_frequencies
+        captured_frequencies = frequencies.copy()
+        return frequencies, np.ones_like(frequencies, dtype = complex)
     
-    crs.sweep_span = mock_sweep_span
+    crs.sweep = mock_sweep
     
     f, z = await crs.sweep_full(
         amplitude,
@@ -2270,8 +2263,12 @@ async def test_sweep_full_log_true(base_crs):
         verbose = False
     )
     
-    # Verify log parameter was passed correctly
-    assert captured_log == True
+    # Verify tones are logarithmically spaced
+    # Log spacing means constant ratio between consecutive frequencies
+    ratios = captured_frequencies[1:, 0] / captured_frequencies[:-1, 0]
+    assert np.allclose(
+        ratios, ratios[0], rtol = 1e-10
+        ), "Tones not logarithmically spaced"
 
 
 @pytest.mark.asyncio
@@ -2288,14 +2285,13 @@ async def test_sweep_full_tone_spacing_linear(base_crs):
     npoints = 5
     nsamps = 10
     
-    captured_fres = None
-    async def mock_sweep_span(fres, ares, span, npts, ns, **kwargs):
-        nonlocal captured_fres
-        captured_fres = fres.copy()
-        freqs = np.tile(fres[:, np.newaxis], (1, npts))
-        return freqs, np.ones_like(freqs, dtype = complex)
+    captured_frequencies = None
+    async def mock_sweep(frequencies, ares, nsamps, **kwargs):
+        nonlocal captured_frequencies
+        captured_frequencies = frequencies.copy()
+        return frequencies, np.ones_like(frequencies, dtype = complex)
     
-    crs.sweep_span = mock_sweep_span
+    crs.sweep = mock_sweep
     
     f, z = await crs.sweep_full(
         amplitude,
@@ -2306,7 +2302,7 @@ async def test_sweep_full_tone_spacing_linear(base_crs):
     )
     
     # Verify tones are linearly spaced
-    spacing = np.diff(captured_fres)
+    spacing = np.diff(captured_frequencies[:, 0])
     assert np.allclose(
         spacing, spacing[0], rtol = 1e-10
         ), "Tones not linearly spaced"
@@ -2326,14 +2322,13 @@ async def test_sweep_full_tone_spacing_logarithmic(base_crs):
     npoints = 5
     nsamps = 10
     
-    captured_fres = None
-    async def mock_sweep_span(fres, ares, span, npts, ns, **kwargs):
-        nonlocal captured_fres
-        captured_fres = fres.copy()
-        freqs = np.tile(fres[:, np.newaxis], (1, npts))
-        return freqs, np.ones_like(freqs, dtype = complex)
+    captured_frequencies = None
+    async def mock_sweep(frequencies, ares, nsamps, **kwargs):
+        nonlocal captured_frequencies
+        captured_frequencies = frequencies.copy()
+        return frequencies, np.ones_like(frequencies, dtype = complex)
     
-    crs.sweep_span = mock_sweep_span
+    crs.sweep = mock_sweep
     
     f, z = await crs.sweep_full(
         amplitude,
@@ -2345,13 +2340,13 @@ async def test_sweep_full_tone_spacing_logarithmic(base_crs):
     
     # Verify tones are logarithmically spaced
     # Log spacing means constant ratio between consecutive frequencies
-    ratios = captured_fres[1:] / captured_fres[:-1]
+    ratios = captured_frequencies[1:, 0] / captured_frequencies[:-1, 0]
     assert np.allclose(
         ratios, ratios[0], rtol = 1e-10
         ), "Tones not logarithmically spaced"
     
     # Verify it's NOT linearly spaced
-    linear_spacing = np.diff(captured_fres)
+    linear_spacing = np.diff(captured_frequencies[:, 0])
     assert not np.allclose(linear_spacing, linear_spacing[0], rtol = 1e-10), \
         "Tones are linearly spaced, expected logarithmic"
 
@@ -2375,8 +2370,8 @@ async def test_sweep_full_validation_dec_grp_invalid_type(base_crs):
 
 
 @pytest.mark.asyncio
-async def test_sweep_full_passes_dec_grp_to_sweep_span(base_crs):
-    """Test sweep_full passes dec_grp parameter to sweep_span."""
+async def test_sweep_full_passes_dec_grp_to_sweep(base_crs):
+    """Test sweep_full passes dec_grp parameter to sweep."""
     import zarr
     crs = base_crs
     crs.nco_freqs = {1: 4.0e9}
@@ -2391,20 +2386,19 @@ async def test_sweep_full_passes_dec_grp_to_sweep_span(base_crs):
     mock_grp.__class__ = zarr.Group
     
     captured_dec_grp = None
-    async def mock_sweep_span(fres, ares, span, npts, ns, **kwargs):
+    async def mock_sweep(frequencies, ares, nsamps, **kwargs):
         nonlocal captured_dec_grp
         captured_dec_grp = kwargs.get('dec_grp')
-        freqs = np.tile(fres[:, np.newaxis], (1, npts))
-        return freqs, np.ones_like(freqs, dtype = complex)
+        return frequencies, np.ones_like(frequencies, dtype = complex)
     
-    crs.sweep_span = mock_sweep_span
+    crs.sweep = mock_sweep
     
     await crs.sweep_full(
         amplitude, npoints, nsamps, 
         dec_grp = mock_grp, verbose = False
     )
     
-    # Verify dec_grp was passed through to sweep_span
+    # Verify dec_grp was passed through to sweep
     assert captured_dec_grp is mock_grp
 
 

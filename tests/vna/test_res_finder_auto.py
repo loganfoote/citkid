@@ -13,6 +13,7 @@ Tests cover:
 import pytest
 import numpy as np
 import h5py
+import zarr
 import os
 import tempfile
 from unittest.mock import Mock, patch, MagicMock
@@ -302,7 +303,7 @@ class TestAutoResFinderFileIO:
     @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
     def test_save_results(self, mock_update, 
                           synthetic_vna_data, tmp_path):
-        """Test saving results to HDF5 file."""
+        """Test saving results to zarr group."""
         outpath = tmp_path / "results.h5"
         
         finder = AutoResFinder(
@@ -317,21 +318,19 @@ class TestAutoResFinderFileIO:
         # Save
         finder.save_data()
         
-        # Check file was created
-        assert outpath.exists()
+        # Load and verify contents from zarr group
+        grp = zarr.open_group(str(outpath), mode='r')
         
-        # Load and verify contents
-        with h5py.File(outpath, 'r') as hf:
-            # Check fres dataset
-            assert 'fres' in hf
-            fres_loaded = hf['fres'][:]
-            np.testing.assert_array_almost_equal(fres_loaded, finder.fres)
-            
-            # Check parameters are stored as attributes
-            assert 'f_min' in hf.attrs
-            assert 'f_max' in hf.attrs
-            assert 'smoothing' in hf.attrs
-            assert 'height' in hf.attrs
+        # Check fres_auto dataset
+        assert 'fres_auto' in grp
+        fres_loaded = grp['fres_auto'][:]
+        np.testing.assert_array_almost_equal(fres_loaded, finder.fres)
+        
+        # Check parameters are stored as attributes
+        assert 'f_min' in grp.attrs
+        assert 'f_max' in grp.attrs
+        assert 'smoothing' in grp.attrs
+        assert 'height' in grp.attrs
     
     @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
     def test_save_empty_results(self, mock_update, 
@@ -348,10 +347,10 @@ class TestAutoResFinderFileIO:
         finder.fres = []
         finder.save_data()
         
-        # Check file was created with empty dataset
-        with h5py.File(outpath, 'r') as hf:
-            assert 'fres' in hf
-            assert len(hf['fres']) == 0
+        # Check zarr group was created with empty dataset
+        grp = zarr.open_group(str(outpath), mode='r')
+        assert 'fres_auto' in grp
+        assert grp['fres_auto'].shape[0] == 0
 
 
 class TestAutoResFinderEdgeCases:

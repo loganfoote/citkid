@@ -16,8 +16,6 @@ import os
 from .s21_filt import highpass_filter, polynomial_baseline
 from ..qt_compat import Qt as _Qt
 
-
-
 def run_res_finder_auto(f, z, zarr_grp, overwrite = False):
     """
     Run the automatic res finder.
@@ -49,6 +47,29 @@ class SpinBoxEventFilter(QtCore.QObject):
         return False
 
 
+class AutoResFinderWindow(QtWidgets.QMainWindow):
+    """
+    Custom QMainWindow that saves data when window is closed.
+    """
+    def __init__(self, finder=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.finder = finder
+    
+    def closeEvent(self, event):
+        """
+        Handle window close event by saving data.
+        
+        Parameters:
+        event: Qt close event
+        
+        Returns:
+        None
+        """
+        if self.finder is not None:
+            self.finder.save_data()
+        super().closeEvent(event)
+
+
 class AutoResFinder:
     def __init__(self, f, z, zarr_grp, overwrite = True):
         """
@@ -70,7 +91,27 @@ class AutoResFinder:
 
         # Resolve zarr_grp to a zarr group
         if isinstance(zarr_grp, (str, os.PathLike)):
-            self.zarr_group = zarr.open_group(str(zarr_grp), mode = 'a')
+            zarr_path = os.path.expanduser(str(zarr_grp))
+            
+            # Check for .h5 extension
+            if not zarr_path.endswith('.h5'):
+                raise ValueError("Output path must have .h5 extension")
+            
+            # Check if parent directory exists
+            parent_dir = os.path.dirname(zarr_path)
+            if parent_dir and not os.path.isdir(parent_dir):
+                raise FileNotFoundError("Output directory does not exist")
+            
+            # Handle existing files
+            if os.path.isfile(zarr_path):
+                if not overwrite:
+                    raise FileExistsError(f"File {zarr_path} already exists")
+                else:
+                    # Delete existing file so zarr can create the directory
+                    os.remove(zarr_path)
+                    print(f"Warning: File already exists at {zarr_path} and will be overwritten")
+            
+            self.zarr_group = zarr.open_group(zarr_path, mode = 'a')
         else:
             self.zarr_group = zarr_grp
 
@@ -135,7 +176,7 @@ class AutoResFinder:
         Returns:
         None
         """
-        self.win = QtWidgets.QMainWindow()
+        self.win = AutoResFinderWindow(finder=self)
         self.win.setWindowTitle('Auto Resonance Finder - Press H for help')
         self.win.resize(1400, 800)
         
@@ -293,7 +334,7 @@ class AutoResFinder:
         # Buttons
         button_layout = QtWidgets.QHBoxLayout()
         
-        save_button = QtWidgets.QPushButton('Save (S)')
+        save_button = QtWidgets.QPushButton('Save (Ctrl+S)')
         save_button.clicked.connect(self.save_data)
         button_layout.addWidget(save_button)
         
@@ -307,7 +348,7 @@ class AutoResFinder:
         layout.addStretch()
         
         # Setup keyboard shortcuts (use string sequences for portability)
-        self.save_action = QtGui.QShortcut(QtGui.QKeySequence("S"), self.win)
+        self.save_action = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"), self.win)
         self.save_action.activated.connect(self.save_data)
 
         self.help_action = QtGui.QShortcut(QtGui.QKeySequence("H"), self.win)
@@ -365,7 +406,7 @@ class AutoResFinder:
         """
         # Add title
         title = ('<span style="color: #FFF; font-size: 10pt;">'
-                 '<b>Controls:</b> Z/X: Pan | S: Save | H: Help'
+                 '<b>Controls:</b> Z/X: Pan 20% | A/S: Pan 80% | Ctrl+S: Save | H: Help'
                  '</span>')
         self.plot_layout.addLabel(title, col = 0)
         self.plot_layout.nextRow()
@@ -422,12 +463,8 @@ class AutoResFinder:
             float(self.f[0]), float(self.f[-1]), padding = 0.02
         )
         
-        # Setup keyboard shortcuts for panning
-        self.pan_left_action = QtGui.QShortcut(QtGui.QKeySequence("Z"), self.win)
-        self.pan_left_action.activated.connect(self.pan_left)
-
-        self.pan_right_action = QtGui.QShortcut(QtGui.QKeySequence("X"), self.win)
-        self.pan_right_action.activated.connect(self.pan_right)
+        # Setup keyboard shortcuts (after plots are created)
+        self.setup_shortcuts()
         
     def auto_scale_y(self, plot, data):
         """
@@ -764,9 +801,11 @@ class AutoResFinder:
         """
         fres_array = np.array(self.fres, dtype = np.float64)
 
-        if 'fres_auto' in self.zarr_group:
-            del self.zarr_group['fres_auto']
-        self.zarr_group.create_array('fres_auto', data = fres_array)
+        self.zarr_group.create_array(
+            'fres_auto', 
+            data = fres_array, 
+            overwrite = True
+            )
         # Save parameters as group attributes
         for key, val in self.params.items():
             self.zarr_group.attrs[key] = val
@@ -822,8 +861,9 @@ class AutoResFinder:
             "<ul>"
             "<li>Adjust parameters in the right panel to tune resonance detection</li>"
             "<li><b>Z/X:</b> Pan left/right by 20%</li>"
+            "<li><b>A/S:</b> Pan left/right by 80%</li>"
             "<li><b>Mouse Wheel:</b> Zoom in/out</li>"
-            "<li><b>S:</b> Save results</li>"
+            "<li><b>Ctrl+S:</b> Save results</li>"
             "<li><b>H:</b> Toggle this help panel</li>"
             "</ul>"
             "<p><b>Parameters:</b></p>"
@@ -849,6 +889,88 @@ class AutoResFinder:
         _sc = QtGui.QShortcut(QtGui.QKeySequence("H"), dlg)
         _sc.activated.connect(dlg.hide)
         return dlg
+    
+    def setup_shortcuts(self):
+        """
+        Setup keyboard shortcuts for pan and other controls.
+        
+        Parameters:
+        None
+        
+        Returns:
+        None
+        """
+        # Pan shortcuts (20% pan by Z/X, 80% pan by A/S)
+        self.pan_left_action = QtGui.QShortcut(QtGui.QKeySequence("Z"), self.win)
+        self.pan_left_action.activated.connect(self.pan_left)
+        self.pan_right_action = QtGui.QShortcut(QtGui.QKeySequence("X"), self.win)
+        self.pan_right_action.activated.connect(self.pan_right)
+        self.fast_pan_left_action = QtGui.QShortcut(QtGui.QKeySequence("A"), self.win)
+        self.fast_pan_left_action.activated.connect(self.fast_pan_left)
+        self.fast_pan_right_action = QtGui.QShortcut(QtGui.QKeySequence("S"), self.win)
+        self.fast_pan_right_action.activated.connect(self.fast_pan_right)
+    
+    def _pan(self, fraction):
+        """
+        Shift the x-axis by *fraction* of the current view width.
+        
+        Parameters:
+        fraction (float): Fraction of current view width to pan by (positive = right, negative = left)
+        
+        Returns:
+        None
+        """
+        x0, x1 = self.plot_filtered.viewRange()[0]
+        shift = fraction * (x1 - x0)
+        self.plot_filtered.setXRange(x0 + shift, x1 + shift, padding=0)
+    
+    def pan_left(self):
+        """
+        Pan the view to the left by 20% of current width (Z key).
+        
+        Parameters:
+        None
+        
+        Returns:
+        None
+        """
+        self._pan(-0.2)
+    
+    def pan_right(self):
+        """
+        Pan the view to the right by 20% of current width (X key).
+        
+        Parameters:
+        None
+        
+        Returns:
+        None
+        """
+        self._pan(0.2)
+    
+    def fast_pan_left(self):
+        """
+        Pan the view to the left by 80% of current width (A key).
+        
+        Parameters:
+        None
+        
+        Returns:
+        None
+        """
+        self._pan(-0.8)
+    
+    def fast_pan_right(self):
+        """
+        Pan the view to the right by 80% of current width (D key).
+        
+        Parameters:
+        None
+        
+        Returns:
+        None
+        """
+        self._pan(0.8)
         
     def run(self):
         """

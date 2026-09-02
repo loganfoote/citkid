@@ -940,13 +940,15 @@ def test_parser_to_zarr_chunk_size_accuracy(tmp_path):
     assert z.chunks[1] == 1
     assert z.chunks[2] == expected_chunk_N
 
-    # Verify shards: entire time series in one shard (single file)
+    # Verify shards: one shard per chunk along time axis
     assert z.shards is not None
     assert z.shards[0] == 2
     assert z.shards[1] == ntones
     shard_N = z.shards[2]
     assert shard_N % expected_chunk_N == 0
-    assert shard_N >= n_samples
+    # Note: shard_N equals chunk_N, not necessarily the full time series.
+    # This ensures each batch write lands in its own shard file.
+    assert shard_N == expected_chunk_N
 
 
 def test_parser_to_zarr_small_dataset_chunking(tmp_path):
@@ -1180,11 +1182,11 @@ def test_parser_to_zarr_data_continuity(tmp_path):
 
 def test_parser_to_zarr_z_shard_is_single_file(tmp_path):
     """
-    Verify the 'z' array uses a single shard so all time data lands in one
-    file, even when chunk_N does not evenly divide total_samples.
+    Verify the 'z' array uses shards sized to one chunk along the time axis
+    so each batch write lands in its own shard file without overlapping others.
     
     Uses a total_samples value that is deliberately NOT a multiple of chunk_N
-    to ensure shard_N is rounded up correctly.
+    to verify correct shard sizing even with uneven sample distribution.
     """
     import math
     crs_sn = 1
@@ -1193,7 +1195,7 @@ def test_parser_to_zarr_z_shard_is_single_file(tmp_path):
     # Choose n_samples so it's NOT a multiple of the natural chunk_N
     # chunk_N = chunk_size_bytes // (2 * ntones * 4)
     # With chunk_size_mb=0.0001: chunk_N = max(1, 104 // 32) = max(1, 3) = 3
-    # n_samples=10 → 10 % 3 != 0, so shard_N must be rounded up
+    # n_samples=10 → 10 % 3 != 0, shard_N still equals chunk_N (3)
     chunk_size_mb = 0.0001
     n_samples = 10
     dt = 0.001
@@ -1234,13 +1236,13 @@ def test_parser_to_zarr_z_shard_is_single_file(tmp_path):
     chunk_N = z.chunks[2]
     shard_N = z.shards[2]
 
-    # shard_N must be a multiple of chunk_N (zarr v3 requirement)
+    # shard_N must equal chunk_N (each shard covers one chunk)
+    assert shard_N == chunk_N, (
+        f"shard_N={shard_N} should equal chunk_N={chunk_N}"
+    )
+    # shard_N must be a multiple of chunk_N (zarr v3 requirement - trivially true here)
     assert shard_N % chunk_N == 0, (
         f"shard_N={shard_N} is not a multiple of chunk_N={chunk_N}"
-    )
-    # shard_N must cover all samples (single-file goal)
-    assert shard_N >= n_samples, (
-        f"shard_N={shard_N} < n_samples={n_samples}: data spans multiple shards"
     )
     # First two shard dims must match array dims (not inner-chunk dims)
     assert z.shards[0] == 2

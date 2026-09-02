@@ -13,13 +13,21 @@ def get_sxx_reduced(f, sxx, freq):
     Returns:
     sxx_reduced (float): mean value of Sxx at frequencies within 20% of freq. 
     """
-    # Input validation 
+    # Input validation - check freq is scalar
+    if isinstance(freq, (list, tuple, np.ndarray)):
+        raise ValueError("freq must be a positive scalar.")
+    
     f = np.asarray(f, dtype = np.float64) 
     sxx = np.asarray(sxx, dtype = np.float64)
-    freq = float(np.asarray(freq))
+    
+    try:
+        freq = float(np.asarray(freq))
+    except (TypeError, ValueError):
+        raise ValueError("freq must be a positive scalar.")
+    
     if f.shape != sxx.shape:
         raise ValueError("f and sxx must have the same shape.")
-    if not np.isscalar(freq) or freq <= 0:
+    if freq <= 0:
         raise ValueError("freq must be a positive scalar.") 
     
     # Calculate mask
@@ -48,14 +56,22 @@ def get_sfactor(f, spar, sper, freq):
     sfactor (float): mean value of spar - sper at frequencies within 20% of 
         freq. 
     """
-    # Input validation 
+    # Input validation - check freq is scalar
+    if isinstance(freq, (list, tuple, np.ndarray)):
+        raise ValueError("freq must be a positive scalar.")
+    
     f = np.asarray(f, dtype = np.float64) 
     spar = np.asarray(spar, dtype = np.float64)
     sper = np.asarray(sper, dtype = np.float64)
-    freq = float(np.asarray(freq))
+    
+    try:
+        freq = float(np.asarray(freq))
+    except (TypeError, ValueError):
+        raise ValueError("freq must be a positive scalar.")
+    
     if f.shape != spar.shape or f.shape != sper.shape:
         raise ValueError("f, spar, and sper must have the same shape.")
-    if not np.isscalar(freq) or freq <= 0:
+    if freq <= 0:
         raise ValueError("freq must be a positive scalar.") 
     
     # Calculate mask
@@ -84,15 +100,15 @@ def get_sxx_reduced_default_freqs(f, sxx):
     sxx (array-like, float): PSD of x. 
 
     Returns:
-    tuple of float: mean value of Sxx within 20% of each default frequency,
-        in the same order as `_freqs`.
+    dict: mean value of Sxx within 20% of each default frequency,
+        with keys 'sxx_0.1', 'sxx_0.3', etc.
     """
     def _compute(freq):
         try:
             return get_sxx_reduced(f, sxx, freq)
         except ValueError:
             return np.nan
-    return tuple(_compute(freq) for freq in _freqs)
+    return {f'sxx_{freq}': _compute(freq) for freq in _freqs}
 
 def get_sfactor_reduced_default_freqs(f, spar, sper):
     """
@@ -105,12 +121,12 @@ def get_sfactor_reduced_default_freqs(f, spar, sper):
     sper (array-like, float): PSD of perpendicular normalized voltage in dB. 
 
     Returns:
-    tuple of float: mean value of spar - sper within 20% of each default
-        frequency, in the same order as `_freqs`.
+    dict: mean value of spar - sper within 20% of each default
+        frequency, with keys 'sfactor_0.1', 'sfactor_0.3', etc.
     """
     def _compute(freq):
         try:
             return get_sfactor(f, spar, sper, freq)
         except ValueError:
             return np.nan
-    return tuple(_compute(freq) for freq in _freqs)
+    return {f'sfactor_{freq}': _compute(freq) for freq in _freqs}

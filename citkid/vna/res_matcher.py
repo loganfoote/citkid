@@ -800,6 +800,8 @@ class ResMatcher:
         self.plot_overview.showGrid(x=False, y=False)
         self.plot_overview.setMouseEnabled(x=True, y=False)
         self.plot_overview.hideButtons()
+        # Disable wheel zoom on overview plot
+        self.plot_overview.vb.wheelScaleFactor = 0
 
         _stride = max(1, len(self.f1) // 3000)
         self.plot_overview.plot(
@@ -827,6 +829,7 @@ class ResMatcher:
         self._overview_region.sigRegionChanged.connect(
             self._on_overview_region_changed
         )
+        self.plot_overview.scene().sigMouseClicked.connect(self._on_overview_click)
         self._overview_updating = False   # re-entrancy guard
 
         self.plot_widget.nextRow()
@@ -981,6 +984,68 @@ class ResMatcher:
         self._overview_updating = True
         self._overview_region.setRegion([x_min, x_max])
         self._overview_updating = False
+    
+    def _get_fractional_zoom(self, x_min, x_max):
+        """
+        Calculate fractional zoom level from a frequency range.
+        
+        Fractional zoom is defined as (x_max - x_min) / center_freq.
+        This allows maintaining the "zoom" when moving to a new center.
+        
+        Parameters:
+        x_min (float): Left edge of x-range in Hz.
+        x_max (float): Right edge of x-range in Hz.
+        
+        Returns:
+        frac_zoom (float): Fractional zoom level.
+        """
+        center = (x_min + x_max) / 2.0
+        if center == 0:
+            return 1.0
+        return (x_max - x_min) / center
+    
+    def _set_centered_range(self, center_freq, frac_zoom):
+        """
+        Set x-range of main plot centered at center_freq with given fractional zoom.
+        
+        Parameters:
+        center_freq (float): Frequency to center on in Hz.
+        frac_zoom (float): Fractional zoom level to apply.
+        
+        Returns:
+        None
+        """
+        half_span = center_freq * frac_zoom / 2.0
+        new_x_min = center_freq - half_span
+        new_x_max = center_freq + half_span
+        self.plot_mag.setXRange(new_x_min, new_x_max, padding=0)
+    
+    def _on_overview_click(self, event):
+        """
+        Handle clicks on the overview plot to center main plot at clicked frequency.
+        
+        Parameters:
+        event (MouseEvent): Mouse click event.
+        
+        Returns:
+        None
+        """
+        pos = event.scenePos()
+        
+        # Check if click was on the overview plot
+        if not self.plot_overview.sceneBoundingRect().contains(pos):
+            return
+        
+        # Map scene position to view coordinates
+        mouse_point = self.plot_overview.vb.mapSceneToView(pos)
+        clicked_freq = mouse_point.x()
+        
+        # Get current x-range from the main magnitude plot
+        x_min, x_max = self.plot_mag.viewRange()[0]
+        
+        # Calculate fractional zoom and apply it centered on clicked frequency
+        frac_zoom = self._get_fractional_zoom(x_min, x_max)
+        self._set_centered_range(clicked_freq, frac_zoom)
 
     def _make_scatter_handler(self, ds: int):
         """Return a slot that handles scatter clicks for the given dataset."""

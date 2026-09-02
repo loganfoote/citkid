@@ -16,8 +16,7 @@ from ..qt_compat import Qt as _Qt
 
 
 def run_res_finder_manual(
-        f, z, fres_initial, zarr_grp, margin_factor = 0.15,
-        overwrite = False
+        f, z, fres_initial, zarr_grp, margin_factor = 0.15
 ):
     """
     Run the interactive manual resonance finder.
@@ -32,8 +31,6 @@ def run_res_finder_manual(
         list.  The resonances are saved as 'fres_manual' in the group.
     margin_factor (float): Y-axis margin factor for auto-scaling.
         Default is 0.15.
-    overwrite (bool): If False, raise error if 'fres_manual' already exists
-        in the group. Default is False.
         
     Returns:
     fres (np.ndarray): Final list of resonant frequencies.
@@ -45,16 +42,60 @@ def run_res_finder_manual(
     elif isinstance(fres_initial, zarr.Group):
         fres_initial = fres_initial['fres_auto'][:]
     
+    # Resolve zarr_grp to a zarr group to check for existing data
+    if isinstance(zarr_grp, (str, os.PathLike)):
+        zarr_group = zarr.open_group(str(zarr_grp), mode = 'a')
+    else:
+        zarr_group = zarr_grp
+    
+    # Check if fres_manual already exists in zarr
+    if 'fres_manual' in zarr_group:
+        # Show dialog to ask user what to do
+        choice = ResFinder._show_zarr_dialog()
+        if choice == 'load':
+            # Load from zarr, overriding fres_initial
+            fres_initial = zarr_group['fres_manual'][:]
+        elif choice == 'overwrite':
+            # Use fres_initial to overwrite zarr (it will be saved on close)
+            pass
+        else:  # choice == 'cancel'
+            return None
+    
     finder = ResFinder(
-        f, z, fres_initial, zarr_grp, margin_factor, overwrite
+        f, z, fres_initial, zarr_grp, margin_factor
     )
     finder.run()
     return np.array(finder.fres)
 
 
-class ResFinder:
-    def __init__(self, f, z, fres_initial, zarr_grp, margin_factor = 0.15,
-                 overwrite = False):
+
+class ResFinderWindow(pg.GraphicsLayoutWidget):
+    """
+    Custom GraphicsLayoutWidget that saves data when window is closed.
+    """
+    def __init__(self, finder=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.finder = finder
+    
+    def closeEvent(self, event):
+        """
+        Handle window close event by saving data.
+        
+        Parameters:
+        event: Qt close event
+        
+        Returns:
+        None
+        """
+        if self.finder is not None:
+            self.finder.save_data()
+        super().closeEvent(event)
+
+
+class ResFinder(QtCore.QObject):
+    def __init__(
+            self, f, z, fres_initial, zarr_grp, margin_factor = 0.15,
+        ):
         """
         Interactive resonance finder for VNA sweep data.
         
@@ -68,12 +109,11 @@ class ResFinder:
             the group.
         margin_factor (float): Fraction of data range to add as margin
             when auto-scaling y-axis. Default is 0.15 (15% margin).
-        overwrite (bool): If False, raise error if 'fres_manual' already
-            exists in the group. Default is False.
 
         Returns:
         None
         """
+        super().__init__()
         self.f = np.asarray(f, dtype = np.float64)
         self.z = np.asarray(z, dtype = np.complex128)
         self.fres = list(np.asarray(fres_initial, dtype = np.float64))
@@ -84,17 +124,6 @@ class ResFinder:
             self.zarr_group = zarr.open_group(str(zarr_grp), mode = 'a')
         else:
             self.zarr_group = zarr_grp
-
-        # Check if fres already exists
-        if 'fres_manual' in self.zarr_group:
-            if not overwrite:
-                raise FileExistsError(
-                    "'fres_manual' already exists in the zarr group. "
-                    "Set overwrite=True to overwrite."
-                )
-            else:
-                print("Warning: 'fres_manual' already exists in the zarr group "
-                      "and will be overwritten on save.")
 
         # Unwrap phase and remove 3rd order polynomial trend
         unwrapped_phase = np.unwrap(np.angle(self.z))
@@ -121,6 +150,11 @@ class ResFinder:
         self._iq_f_sel = np.array([])
         self._iq_z_sel = np.array([], dtype = np.complex128)
 
+        # Drag selection state (for shift+drag to remove multiple resonances)
+        self._drag_selection_active = False
+        self._drag_start_freq = None
+        self._drag_region_item = None
+
         # Debounce timer for range-change events (pan/zoom)
         self._range_timer = None
 
@@ -130,6 +164,77 @@ class ResFinder:
         # Setup the application
         self.app = pg.mkQApp("Resonance Finder")
         self.setup_ui()
+    
+    @staticmethod
+    def _show_zarr_dialog():
+        """
+        Show dialog when zarr 'fres_manual' already exists.
+        
+        Returns:
+        str: 'overwrite', 'load', or 'cancel'
+        """
+        # Create a simple Qt application if needed
+        app = pg.mkQApp("Resonance Finder")
+        
+        dlg = QtWidgets.QDialog()
+        dlg.setWindowTitle('Existing Data Found')
+        layout = QtWidgets.QVBoxLayout(dlg)
+        
+        label = QtWidgets.QLabel(
+            '<h3>Existing fres_manual Found</h3>'
+            '<p>The zarr group already contains manual resonance data.</p>'
+            '<p>Choose an option:</p>'
+        )
+        label.setTextFormat(_Qt.RichText)
+        layout.addWidget(label)
+        
+        btn_layout = QtWidgets.QVBoxLayout()
+        
+        load_btn = QtWidgets.QPushButton('Load from Zarr')
+        load_btn.setToolTip('Load existing resonance list and continue editing')
+        
+        overwrite_btn = QtWidgets.QPushButton('Overwrite with Initial')
+        overwrite_btn.setToolTip('Replace zarr data with the provided fres_initial')
+        
+        cancel_btn = QtWidgets.QPushButton('Cancel')
+        cancel_btn.setToolTip('Exit without doing anything')
+        
+        btn_layout.addWidget(load_btn)
+        btn_layout.addWidget(overwrite_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+        
+        result = [None]
+        
+        def on_load():
+            result[0] = 'load'
+            dlg.accept()
+        
+        def on_overwrite():
+            # Show confirmation dialog
+            reply = QtWidgets.QMessageBox.question(
+                dlg,
+                'Confirm Overwrite',
+                'Are you sure you want to overwrite the existing fres_manual?\n\n'
+                'This will replace it with the provided fres_initial.',
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No  # Default to No
+            )
+            if reply == QtWidgets.QMessageBox.Yes:
+                result[0] = 'overwrite'
+                dlg.accept()
+            # If No, dialog stays open
+        
+        def on_cancel():
+            result[0] = 'cancel'
+            dlg.reject()
+        
+        load_btn.clicked.connect(on_load)
+        overwrite_btn.clicked.connect(on_overwrite)
+        cancel_btn.clicked.connect(on_cancel)
+        
+        dlg.exec_()
+        return result[0] if result[0] else 'cancel'
         
     def setup_ui(self):
         """
@@ -141,7 +246,8 @@ class ResFinder:
         Returns:
         None
         """
-        self.win = pg.GraphicsLayoutWidget(
+        self.win = ResFinderWindow(
+            finder=self,
             show = True,
             title = "Interactive Resonance Finder"
         )
@@ -154,10 +260,11 @@ class ResFinder:
             '<b>Controls:</b> '
             'Click: Add resonance | '
             'Shift+Click: Remove nearest | '
+            'Shift+Drag: Remove range | '
             'Ctrl+Z: Undo | '
             'Z/X: Pan 20% | '
             'A/S: Pan 80% | '
-            'S: Save | '
+            'Ctrl+S: Save | '
             'Q: Toggle IQ plot'
             '</span>'
         )
@@ -236,6 +343,8 @@ class ResFinder:
         self.plot_overview.showGrid(x = False, y = False)
         self.plot_overview.setMouseEnabled(x = True, y = False)
         self.plot_overview.hideButtons()
+        # Disable wheel zoom on overview plot
+        self.plot_overview.vb.wheelScaleFactor = 0
 
         _stride = max(1, len(self.f) // 3000)
         self.plot_overview.plot(
@@ -330,6 +439,13 @@ class ResFinder:
         self.plot_mag.scene().sigMouseClicked.connect(self.on_click)
         self.plot_iq.scene().sigMouseClicked.connect(self.on_iq_click)
         self.plot_mag.sigRangeChanged.connect(self.on_range_changed)
+        self.plot_overview.scene().sigMouseClicked.connect(self.on_overview_click)
+        
+        # Connect mouse events for drag-to-remove functionality
+        self.plot_mag.scene().sigMouseMoved.connect(self.on_mouse_moved)
+        
+        # Install event filter on the scene to intercept mouse events before ViewBox
+        self.plot_mag.scene().installEventFilter(self)
         
         # Setup keyboard shortcuts
         self.setup_shortcuts()
@@ -344,8 +460,8 @@ class ResFinder:
         Returns:
         None
         """
-        # Save shortcut
-        self.save_action = QtGui.QShortcut(QtGui.QKeySequence("S"), self.win)
+        # Save shortcut (Ctrl+S, not S which is used for pan 80% right)
+        self.save_action = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"), self.win)
         self.save_action.activated.connect(self.save_data)
 
         # Undo shortcut (Ctrl+Z)
@@ -438,6 +554,132 @@ class ResFinder:
                 self.remove_nearest_resonance(nearest_freq)
             else:
                 self.add_resonance(nearest_freq)
+
+    def eventFilter(self, obj, event):
+        """
+        Event filter to intercept mouse events on the scene for drag-to-remove.
+        
+        Allows Shift+Click+Drag to remove all resonances in a frequency range.
+        Consumes mouse events during drag to prevent ViewBox panning.
+        
+        Parameters:
+        obj: Object that received the event (the GraphicsScene)
+        event: Qt event
+        
+        Returns:
+        bool: True if event was handled, False otherwise
+        """
+        # Check if this is a mouse event during a shift+drag operation
+        modifiers = QtWidgets.QApplication.keyboardModifiers()
+        is_shift_held = modifiers & _Qt.ShiftModifier
+        
+        if event.type() == QtCore.QEvent.Type.GraphicsSceneMousePress:
+            if is_shift_held and event.button() == _Qt.LeftButton:
+                # Check if click is on the magnitude plot
+                if self.plot_mag.sceneBoundingRect().contains(event.scenePos()):
+                    # Start drag selection
+                    self._drag_selection_active = True
+                    mouse_point = self.plot_mag.vb.mapSceneToView(event.scenePos())
+                    self._drag_start_freq = mouse_point.x()
+                    return True
+        elif event.type() == QtCore.QEvent.Type.GraphicsSceneMouseMove:
+            if self._drag_selection_active and self._drag_start_freq is not None:
+                # Update visual during drag
+                pos = event.scenePos()
+                if self.plot_mag.sceneBoundingRect().contains(pos):
+                    self.on_mouse_moved(pos)
+                return True
+        elif event.type() == QtCore.QEvent.Type.GraphicsSceneMouseRelease:
+            if self._drag_selection_active and self._drag_start_freq is not None:
+                self._drag_selection_active = False
+                
+                # Get the end position
+                mouse_point = self.plot_mag.vb.mapSceneToView(event.scenePos())
+                end_freq = mouse_point.x()
+                
+                # Calculate range
+                f_min = min(self._drag_start_freq, end_freq)
+                f_max = max(self._drag_start_freq, end_freq)
+                
+                # Remove the visual indicator
+                if self._drag_region_item is not None:
+                    self.plot_mag.removeItem(self._drag_region_item)
+                    self._drag_region_item = None
+                
+                # Remove all resonances in range
+                if f_max > f_min:  # Only if drag had extent
+                    self.remove_resonances_in_range(f_min, f_max)
+                
+                self._drag_start_freq = None
+                return True
+        
+        return False
+    
+    def on_mouse_moved(self, pos):
+        """
+        Handle mouse move event. Update drag selection visual if active.
+        
+        Parameters:
+        pos: Scene position
+        
+        Returns:
+        None
+        """
+        if not self._drag_selection_active or self._drag_start_freq is None:
+            return
+        
+        # Only update if mouse is over the plot
+        if not self.plot_mag.sceneBoundingRect().contains(pos):
+            return
+        
+        mouse_point = self.plot_mag.vb.mapSceneToView(pos)
+        current_freq = mouse_point.x()
+        
+        # Update or create the drag region item
+        f_min = min(self._drag_start_freq, current_freq)
+        f_max = max(self._drag_start_freq, current_freq)
+        
+        if self._drag_region_item is None:
+            # Create a new region item
+            self._drag_region_item = pg.LinearRegionItem(
+                values=[f_min, f_max],
+                brush=pg.mkBrush(255, 100, 100, 50),
+                pen=pg.mkPen('r', width=2),
+                movable=False
+            )
+            self.plot_mag.addItem(self._drag_region_item)
+        else:
+            # Update existing region
+            self._drag_region_item.setRegion([f_min, f_max])
+
+    def remove_resonances_in_range(self, f_min, f_max):
+        """
+        Remove all resonances with frequencies in the given range.
+        
+        Parameters:
+        f_min (float): Minimum frequency in Hz
+        f_max (float): Maximum frequency in Hz
+        
+        Returns:
+        None
+        """
+        if not self.fres:
+            self.log("No resonances to remove.")
+            return
+        
+        # Save state for undo
+        self.undo_stack.append(('remove_range', f_min, f_max, list(self.fres)))
+        
+        # Remove resonances in range
+        removed_count = 0
+        self.fres = [f for f in self.fres if not (f_min <= f <= f_max)]
+        removed_count = len(self.undo_stack[-1][3]) - len(self.fres)
+        
+        if removed_count > 0:
+            self.update_resonance_markers()
+            self.log(f"Removed {removed_count} resonance(s) in range [{f_min/1e9:.3f}, {f_max/1e9:.3f}] GHz")
+        else:
+            self.log(f"No resonances found in range [{f_min/1e9:.3f}, {f_max/1e9:.3f}] GHz")
 
     def _local_df(self, freq):
         """
@@ -970,7 +1212,7 @@ class ResFinder:
 
     def fast_pan_right(self):
         """
-        Pan the view to the right by 80% of current width (D key).
+        Pan the view to the right by 80% of current width (S key).
 
         Parameters:
         None
@@ -979,6 +1221,68 @@ class ResFinder:
         None
         """
         self._pan(0.8)
+    
+    def _get_fractional_zoom(self, x_min, x_max):
+        """
+        Calculate fractional zoom level from a frequency range.
+        
+        Fractional zoom is defined as (x_max - x_min) / center_freq.
+        This allows maintaining the "zoom" when moving to a new center.
+        
+        Parameters:
+        x_min (float): Left edge of x-range in Hz.
+        x_max (float): Right edge of x-range in Hz.
+        
+        Returns:
+        frac_zoom (float): Fractional zoom level.
+        """
+        center = (x_min + x_max) / 2.0
+        if center == 0:
+            return 1.0
+        return (x_max - x_min) / center
+    
+    def _set_centered_range(self, center_freq, frac_zoom):
+        """
+        Set x-range of main plot centered at center_freq with given fractional zoom.
+        
+        Parameters:
+        center_freq (float): Frequency to center on in Hz.
+        frac_zoom (float): Fractional zoom level to apply.
+        
+        Returns:
+        None
+        """
+        half_span = center_freq * frac_zoom / 2.0
+        new_x_min = center_freq - half_span
+        new_x_max = center_freq + half_span
+        self.plot_mag.setXRange(new_x_min, new_x_max, padding=0)
+    
+    def on_overview_click(self, event):
+        """
+        Handle clicks on the overview plot to center main plot at clicked frequency.
+        
+        Parameters:
+        event (MouseEvent): Mouse click event.
+        
+        Returns:
+        None
+        """
+        pos = event.scenePos()
+        
+        # Check if click was on the overview plot
+        if not self.plot_overview.sceneBoundingRect().contains(pos):
+            return
+        
+        # Map scene position to view coordinates
+        mouse_point = self.plot_overview.vb.mapSceneToView(pos)
+        clicked_freq = mouse_point.x()
+        
+        # Get current x-range from the main magnitude plot
+        x_min, x_max = self.plot_mag.viewRange()[0]
+        
+        # Calculate fractional zoom and apply it centered on clicked frequency
+        frac_zoom = self._get_fractional_zoom(x_min, x_max)
+        self._set_centered_range(clicked_freq, frac_zoom)
         
     def save_data(self):
         """
@@ -1054,8 +1358,8 @@ class ResFinder:
             "<li><b>Z:</b> Pan left by 20%</li>"
             "<li><b>X:</b> Pan right by 20%</li>"
             "<li><b>A:</b> Pan left by 80%</li>"
-            "<li><b>D:</b> Pan right by 80%</li>"
-            "<li><b>S:</b> Save resonances to file</li>"
+            "<li><b>S:</b> Pan right by 80%</li>"
+            "<li><b>Ctrl+S:</b> Save resonances to file</li>"
             "<li><b>Ctrl+Z:</b> Undo last add/remove</li>"
             "<li><b>Q:</b> Toggle IQ (I vs Q) plot</li>"
             "<li><b>H:</b> Toggle this help panel</li>"

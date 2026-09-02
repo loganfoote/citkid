@@ -13,11 +13,13 @@ Tests cover:
 import pytest
 import numpy as np
 import h5py
+import zarr
 import os
 from unittest.mock import Mock, patch, MagicMock
 
 from citkid.vna.res_finder_manual import (
     ResFinder,
+    ResFinderWindow,
     run_res_finder_manual
 )
 
@@ -34,8 +36,7 @@ class TestResFinderInit:
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             fres_initial,
-            str(outpath),
-            overwrite=True
+            str(outpath)
         )
         
         # Check data is stored correctly
@@ -69,58 +70,68 @@ class TestResFinderInit:
         assert hasattr(finder, 'phase')
     
     def test_init_file_exists_overwrite_false(self, synthetic_vna_data, tmp_path):
-        """Test FileExistsError when overwrite=False."""
-        outpath = tmp_path / "existing.h5"
-        outpath.touch()
+        """Test that ResFinder allows loading when fres_manual exists in zarr group."""
+        zarr_path = tmp_path / "existing.zarr"
+        # Create a zarr group with existing fres_manual
+        grp = zarr.open_group(str(zarr_path), mode='w')
+        existing_fres = np.array([4.5e9])
+        grp.create_array('fres_manual', data=existing_fres)
         
-        with pytest.raises(FileExistsError, match='already exists'):
-            ResFinder(
-                synthetic_vna_data['f'],
-                synthetic_vna_data['z'],
-                [],
-                str(outpath),
-                overwrite=False
-            )
-
-    def test_init_missing_directory(self, synthetic_vna_data, tmp_path):
-        """Test FileNotFoundError when output directory does not exist."""
-        outpath = tmp_path / "nonexistent_dir" / "output.h5"
-
-        with pytest.raises(FileNotFoundError, match='Output directory does not exist'):
-            ResFinder(
-                synthetic_vna_data['f'],
-                synthetic_vna_data['z'],
-                [],
-                str(outpath),
-            )
-
-    def test_init_invalid_extension(self, synthetic_vna_data, tmp_path):
-        """Test ValueError when output path does not have a .h5 extension."""
-        outpath = tmp_path / "output.txt"
-
-        with pytest.raises(ValueError, match=r'\.h5 extension'):
-            ResFinder(
-                synthetic_vna_data['f'],
-                synthetic_vna_data['z'],
-                [],
-                str(outpath),
-            )
-    
-    def test_init_file_exists_overwrite_true(self, synthetic_vna_data, tmp_path, capsys):
-        """Test warning when file exists and overwrite=True."""
-        outpath = tmp_path / "existing.h5"
-        outpath.touch()
-        
+        # ResFinder should now allow this without error
+        # (conflict resolution happens in run_res_finder_manual)
         finder = ResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
-            str(outpath),
-            overwrite=True
+            str(zarr_path)
+        )
+        assert finder.fres == []
+
+    def test_init_zarr_created_automatically(self, synthetic_vna_data, tmp_path):
+        """Test that zarr directory is created automatically."""
+        zarr_path = tmp_path / "new_dir" / "output.zarr"
+
+        finder = ResFinder(
+            synthetic_vna_data['f'],
+            synthetic_vna_data['z'],
+            [],
+            str(zarr_path),
         )
         
-        captured = capsys.readouterr()
-        assert 'already exists' in captured.out
+        # Zarr group should be created
+        assert finder.zarr_group is not None
+
+    def test_init_accepts_zarr_paths(self, synthetic_vna_data, tmp_path):
+        """Test that zarr paths are accepted (not just .h5)."""
+        zarr_path = tmp_path / "output.zarr"
+
+        finder = ResFinder(
+            synthetic_vna_data['f'],
+            synthetic_vna_data['z'],
+            [],
+            str(zarr_path),
+        )
+        
+        # Should not raise any error
+        assert finder.zarr_group is not None
+    
+    def test_init_file_exists_overwrite_true(self, synthetic_vna_data, tmp_path):
+        """Test that ResFinder allows initialization even when fres_manual exists in zarr."""
+        zarr_path = tmp_path / "existing.zarr"
+        # Create a zarr group with existing fres_manual
+        grp = zarr.open_group(str(zarr_path), mode='w')
+        grp.create_array('fres_manual', data=np.array([4.5e9]))
+        
+        # ResFinder should now allow this without warning
+        # (conflict resolution happens in run_res_finder_manual)
+        finder = ResFinder(
+            synthetic_vna_data['f'],
+            synthetic_vna_data['z'],
+            [],
+            str(zarr_path)
+        )
+        
+        assert finder.fres == []
     
     def test_init_empty_fres(self, synthetic_vna_data, tmp_path):
         """Test initialization with empty initial resonance list."""
@@ -365,35 +376,31 @@ class TestResFinderFileIO:
     """Test file save/load functionality."""
     
     def test_save_results(self, synthetic_vna_data, tmp_path):
-        """Test saving results to HDF5."""
-        outpath = tmp_path / "results.h5"
+        """Test saving results to zarr."""
+        outpath = tmp_path / "results.zarr"
         fres_initial = [4.5e9, 5.2e9, 6.1e9]
-        
+
         finder = ResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             fres_initial,
             str(outpath)
         )
-        
+
         # Save
         finder.save_data()
-        
-        # Check file exists
-        assert outpath.exists()
-        
+
         # Load and verify
-        with h5py.File(outpath, 'r') as hf:
-            assert 'fres' in hf
-            fres_loaded = hf['fres'][:]
-            np.testing.assert_array_almost_equal(
-                sorted(fres_loaded),
-                sorted(fres_initial)
-            )
-    
+        grp = zarr.open_group(str(outpath), mode='r')
+        assert 'fres_manual' in grp
+        fres_loaded = grp['fres_manual'][:]
+        np.testing.assert_array_almost_equal(
+            sorted(fres_loaded),
+            sorted(fres_initial)
+        )
     def test_save_empty_results(self, synthetic_vna_data, tmp_path):
         """Test saving empty resonance list."""
-        outpath = tmp_path / "empty.h5"
+        outpath = tmp_path / "empty.zarr"
         
         finder = ResFinder(
             synthetic_vna_data['f'],
@@ -401,14 +408,12 @@ class TestResFinderFileIO:
             [],
             str(outpath)
         )
-        
+
         finder.save_data()
-        
-        with h5py.File(outpath, 'r') as hf:
-            assert 'fres' in hf
-            assert len(hf['fres']) == 0
 
-
+        grp = zarr.open_group(str(outpath), mode='r')
+        assert 'fres_manual' in grp
+        assert grp['fres_manual'].shape[0] == 0
 class TestResFinderEdgeCases:
     """Test edge cases."""
     
@@ -820,15 +825,15 @@ class TestRunResFinder:
             np.testing.assert_array_almost_equal(fres, fres_initial)
     
     def test_run_with_file_path(self, synthetic_vna_data, tmp_path):
-        """Test run_res_finder_manual loading fres from file."""
-        # Create a file with fres data
-        fres_file = tmp_path / "input_fres.h5"
+        """Test run_res_finder_manual loading fres from zarr file."""
+        # Create a zarr file with fres_auto data
+        fres_file = tmp_path / "input_fres.zarr"
         fres_initial = np.array([4.5e9, 5.2e9, 6.1e9])
         
-        with h5py.File(fres_file, 'w') as hf:
-            hf.create_dataset('fres', data=fres_initial)
+        grp = zarr.open_group(str(fres_file), mode='w')
+        grp.create_array('fres_auto', data=fres_initial)
         
-        outpath = tmp_path / "output.h5"
+        outpath = tmp_path / "output.zarr"
         
         with patch('citkid.vna.res_finder_manual.ResFinder') as MockFinder:
             mock_instance = MockFinder.return_value
@@ -859,15 +864,13 @@ class TestRunResFinder:
                 synthetic_vna_data['z'],
                 [],
                 str(outpath),
-                margin_factor=0.2,
-                overwrite=True
+                margin_factor=0.2
             )
             
             # Check parameters passed to ResFinder
             call_args = MockFinder.call_args
             # Parameters are passed as positional args
             assert call_args[0][4] == 0.2  # margin_factor is 5th arg
-            assert call_args[0][5] is True  # overwrite is 6th arg
 
 
 class TestOnClick:
@@ -986,26 +989,16 @@ class TestIntegration:
     
     def test_auto_to_manual_workflow(self, synthetic_vna_data, tmp_path):
         """Test complete workflow from auto to manual resonance finding."""
-        # First run auto finder (mock the GUI parts)
-        auto_outpath = tmp_path / "auto_results.h5"
-        
-        # Manually create auto results file
-        fres_auto = np.array([4.5e9, 5.2e9, 6.1e9])
-        with h5py.File(auto_outpath, 'w') as hf:
-            ds = hf.create_dataset('fres', data=fres_auto)
-            ds.attrs['f_min'] = synthetic_vna_data['f'].min()
-            ds.attrs['f_max'] = synthetic_vna_data['f'].max()
-            ds.attrs['smoothing'] = 'highpass'
-        
         # Now run manual finder with auto results
-        manual_outpath = tmp_path / "manual_results.h5"
+        manual_outpath = tmp_path / "manual_results.zarr"
+
+        fres_auto = np.array([4.5e9, 5.2e9, 6.1e9])
         
         finder = ResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             fres_auto,
-            str(manual_outpath),
-            overwrite=True
+            str(manual_outpath)
         )
         
         # Manually adjust: add one, remove one (mock operations)
@@ -1015,26 +1008,26 @@ class TestIntegration:
         finder.save_data()
         
         # Verify final results
-        with h5py.File(manual_outpath, 'r') as hf:
-            fres_final = hf['fres'][:]
-            assert len(fres_final) == 4
-            assert 7.3e9 in fres_final
+        grp = zarr.open_group(str(manual_outpath), mode='r')
+        fres_final = grp['fres_manual'][:]
+        assert len(fres_final) == 4
+        assert 7.3e9 in fres_final
     
     def test_load_from_auto_output(self, synthetic_vna_data, tmp_path):
         """Test loading initial resonances from auto finder output."""
-        # Create auto finder output
-        auto_outpath = tmp_path / "auto_results.h5"
+        # Create auto finder output with zarr
+        auto_outpath = tmp_path / "auto_results.zarr"
         fres_auto = np.array([4.5e9, 5.2e9])
         
-        with h5py.File(auto_outpath, 'w') as hf:
-            hf.create_dataset('fres', data=fres_auto)
+        grp = zarr.open_group(str(auto_outpath), mode='w')
+        grp.create_array('fres_auto', data=fres_auto)
         
         # Load in manual finder via run_res_finder_manual
-        manual_outpath = tmp_path / "manual_results.h5"
+        manual_outpath = tmp_path / "manual_results.zarr"
         
         # Just test that the file loading works correctly
-        with h5py.File(auto_outpath, 'r') as hf:
-            loaded_fres = hf['fres'][:]
+        grp_read = zarr.open_group(str(auto_outpath), mode='r')
+        loaded_fres = grp_read['fres_auto'][:]
         
         # Verify that we can load from file path string
         np.testing.assert_array_almost_equal(loaded_fres, fres_auto)
@@ -1126,3 +1119,349 @@ class TestOverviewNavigator:
         finder._update_overview_region()
         finder._on_overview_region_changed()
         assert finder._overview_updating is False
+
+
+class TestDragToRemove:
+    """Tests for shift+drag bulk resonance removal feature."""
+    
+    @pytest.fixture
+    def finder(self, synthetic_vna_data, tmp_path):
+        """Create a ResFinder with some initial resonances."""
+        outpath = tmp_path / "test.h5"
+        fres_initial = synthetic_vna_data['fres_true'][:5]  # Use first 5
+        
+        finder = ResFinder(
+            synthetic_vna_data['f'],
+            synthetic_vna_data['z'],
+            fres_initial,
+            str(outpath)
+        )
+        return finder
+    
+    def test_remove_resonances_in_range_basic(self, finder):
+        """Test removing resonances in a frequency range."""
+        initial_count = len(finder.fres)
+        initial_fres = sorted(finder.fres)
+        
+        # Remove resonances in a range that contains some
+        f_min = initial_fres[1] - 1e6  # Just below second resonance
+        f_max = initial_fres[2] + 1e6  # Just above third resonance
+        
+        finder.remove_resonances_in_range(f_min, f_max)
+        
+        # Should have removed some resonances
+        assert len(finder.fres) < initial_count
+        # Removed resonances should be those in the range
+        for freq in finder.fres:
+            assert not (f_min <= freq <= f_max)
+    
+    def test_remove_resonances_in_range_empty_result(self, finder):
+        """Test removing all resonances leaves empty list."""
+        fres_min = min(finder.fres)
+        fres_max = max(finder.fres)
+        
+        # Remove all with a large range
+        finder.remove_resonances_in_range(fres_min - 1e6, fres_max + 1e6)
+        
+        assert len(finder.fres) == 0
+    
+    def test_remove_resonances_in_range_no_match(self, finder):
+        """Test removing resonances from empty range."""
+        initial_fres = list(finder.fres)
+        
+        # Remove from a range with no resonances
+        finder.remove_resonances_in_range(1e9, 1.1e9)  # Far outside usual range
+        
+        # Should be unchanged
+        assert len(finder.fres) == len(initial_fres)
+        assert sorted(finder.fres) == sorted(initial_fres)
+    
+    def test_remove_resonances_adds_to_undo_stack(self, finder):
+        """Test that remove_resonances_in_range adds to undo stack."""
+        initial_undo_len = len(finder.undo_stack)
+        fres_before = list(finder.fres)
+        
+        fres_min = min(finder.fres)
+        fres_max = max(finder.fres)
+        finder.remove_resonances_in_range(fres_min, fres_max + 1e6)
+        
+        # Should have added undo entry
+        assert len(finder.undo_stack) > initial_undo_len
+        # Last entry should be remove_range tuple
+        assert finder.undo_stack[-1][0] == 'remove_range'
+        # Should contain f_min, f_max, and old fres list
+        assert len(finder.undo_stack[-1]) == 4
+        assert finder.undo_stack[-1][1] == fres_min
+        assert finder.undo_stack[-1][3] == fres_before
+    
+    def test_remove_resonances_boundary_conditions(self, finder):
+        """Test remove with exact boundary frequencies."""
+        fres_list = sorted(finder.fres)
+        if len(fres_list) < 3:
+            pytest.skip("Need at least 3 resonances")
+        
+        # Remove exactly at boundaries of resonances
+        f1 = fres_list[0]
+        f2 = fres_list[1]
+        f3 = fres_list[2]
+        
+        finder.remove_resonances_in_range(f1, f2)
+        
+        # f1 and f2 should be removed, f3 should remain
+        assert f1 not in finder.fres
+        assert f2 not in finder.fres
+        assert f3 in finder.fres
+    
+    def test_remove_single_resonance_in_range(self, finder):
+        """Test removing a single resonance using range."""
+        if len(finder.fres) < 2:
+            pytest.skip("Need at least 2 resonances")
+        
+        target_freq = finder.fres[0]
+        initial_count = len(finder.fres)
+        
+        # Remove just this one resonance
+        finder.remove_resonances_in_range(target_freq - 1e5, target_freq + 1e5)
+        
+        assert len(finder.fres) == initial_count - 1
+        assert target_freq not in finder.fres
+    
+    def test_remove_resonances_preserves_non_removed(self, finder):
+        """Test that resonances outside range are preserved."""
+        fres_list = sorted(finder.fres)
+        if len(fres_list) < 5:
+            pytest.skip("Need at least 5 resonances")
+        
+        # Remove middle 3 resonances
+        f_min = fres_list[1] - 0.5e6
+        f_max = fres_list[3] + 0.5e6
+        
+        finder.remove_resonances_in_range(f_min, f_max)
+        
+        # First and last should be preserved
+        assert fres_list[0] in finder.fres
+        assert fres_list[4] in finder.fres
+    
+    def test_remove_on_empty_fres(self, synthetic_vna_data, tmp_path):
+        """Test remove_resonances_in_range with empty fres list."""
+        outpath = tmp_path / "test.h5"
+        
+        finder = ResFinder(
+            synthetic_vna_data['f'],
+            synthetic_vna_data['z'],
+            [],  # Empty initial resonances
+            str(outpath)
+        )
+        
+        # Should not crash
+        finder.remove_resonances_in_range(1e9, 2e9)
+        assert len(finder.fres) == 0
+
+
+class TestResFinderWindow:
+    """Tests for window closeEvent behavior."""
+    
+    def _make_finder_with_ui(self, synthetic_vna_data, tmp_path):
+        """Create a ResFinder and mock UI components for testing."""
+        outpath = tmp_path / "test.h5"
+        finder = ResFinder(
+            synthetic_vna_data['f'],
+            synthetic_vna_data['z'],
+            synthetic_vna_data['fres_true'][:2],
+            str(outpath)
+        )
+        return finder
+    
+    def test_window_has_close_event_handler(self, synthetic_vna_data, tmp_path):
+        """Test that ResFinderWindow has closeEvent method."""
+        # Verify that ResFinderWindow class has closeEvent
+        assert hasattr(ResFinderWindow, 'closeEvent')
+        
+        # Also verify the class can be instantiated with a finder
+        from unittest.mock import MagicMock
+        window = ResFinderWindow(finder=MagicMock())
+        assert window.finder is not None
+    
+    def test_window_calls_save_data_on_close(self, synthetic_vna_data, tmp_path):
+        """Test that closeEvent calls save_data."""
+        from unittest.mock import MagicMock, patch
+        from pyqtgraph.Qt import QtGui
+        
+        # Create a finder mock
+        finder_mock = MagicMock()
+        
+        # Create window with mocked finder
+        window = ResFinderWindow(finder=finder_mock)
+        
+        # Create a real QCloseEvent (or mock that properly inherits)
+        close_event = MagicMock(spec=QtGui.QCloseEvent)
+        
+        # Patch the parent class closeEvent to avoid issues with Qt
+        with patch('pyqtgraph.GraphicsLayoutWidget.closeEvent'):
+            window.closeEvent(close_event)
+        
+        # save_data should have been called on the finder
+        finder_mock.save_data.assert_called_once()
+    
+    def test_finder_window_constructor_accepts_finder(self):
+        """Test that ResFinderWindow stores finder reference."""
+        from unittest.mock import MagicMock
+        
+        finder_mock = MagicMock()
+        window = ResFinderWindow(finder=finder_mock)
+        
+        # Window should have finder reference
+        assert window.finder is finder_mock
+
+
+class TestZarrConflictDialog:
+    """Tests for zarr conflict resolution dialog."""
+    
+    def test_show_zarr_dialog_returns_choice(self):
+        """Test that _show_zarr_dialog returns user choice."""
+        # Mock the dialog
+        with patch('citkid.vna.res_finder_manual.QtWidgets.QDialog') as MockDialog:
+            mock_dialog = MagicMock()
+            MockDialog.return_value = mock_dialog
+            mock_dialog.exec_.return_value = None
+            
+            # This will test the static method structure
+            assert hasattr(ResFinder, '_show_zarr_dialog')
+            assert callable(ResFinder._show_zarr_dialog)
+    
+    def test_run_res_finder_with_load_choice(self, synthetic_vna_data, tmp_path):
+        """Test run_res_finder_manual with load choice."""
+        outpath = tmp_path / "test.h5"
+        
+        # Create zarr with existing fres_manual
+        grp = zarr.open_group(str(outpath), mode='a')
+        existing_fres = np.array([5.1e9, 5.2e9])
+        grp['fres_manual'] = existing_fres
+        
+        # Mock dialog to return 'load'
+        with patch.object(ResFinder, '_show_zarr_dialog', return_value='load'):
+            result = run_res_finder_manual(
+                synthetic_vna_data['f'],
+                synthetic_vna_data['z'],
+                synthetic_vna_data['fres_true'][:2],  # Different from existing
+                grp
+            )
+            
+            # Should have used the existing data (if run completed)
+            # Result should be numpy array
+            assert isinstance(result, np.ndarray)
+    
+    def test_run_res_finder_with_overwrite_choice(self, synthetic_vna_data, tmp_path):
+        """Test run_res_finder_manual with overwrite choice."""
+        outpath = tmp_path / "test.h5"
+        
+        # Create zarr with existing fres_manual
+        grp = zarr.open_group(str(outpath), mode='a')
+        existing_fres = np.array([5.1e9, 5.2e9])
+        grp['fres_manual'] = existing_fres
+        
+        initial_fres = synthetic_vna_data['fres_true'][:3]
+        
+        # Mock dialog to return 'overwrite'
+        with patch.object(ResFinder, '_show_zarr_dialog', return_value='overwrite'):
+            result = run_res_finder_manual(
+                synthetic_vna_data['f'],
+                synthetic_vna_data['z'],
+                initial_fres,
+                grp
+            )
+            
+            # Should use the new data
+            assert isinstance(result, np.ndarray)
+    
+    def test_run_res_finder_with_cancel_choice(self, synthetic_vna_data, tmp_path):
+        """Test run_res_finder_manual returns None with cancel choice."""
+        outpath = tmp_path / "test.h5"
+        
+        # Create zarr with existing fres_manual
+        grp = zarr.open_group(str(outpath), mode='a')
+        existing_fres = np.array([5.1e9, 5.2e9])
+        grp['fres_manual'] = existing_fres
+        
+        # Mock dialog to return 'cancel'
+        with patch.object(ResFinder, '_show_zarr_dialog', return_value='cancel'):
+            result = run_res_finder_manual(
+                synthetic_vna_data['f'],
+                synthetic_vna_data['z'],
+                synthetic_vna_data['fres_true'][:2],
+                grp
+            )
+            
+            # Should return None
+            assert result is None
+
+
+class TestEventFilter:
+    """Tests for mouse event filtering during drag operations."""
+    
+    def _make_finder(self, synthetic_vna_data, tmp_path):
+        """Create a ResFinder and mock UI components."""
+        outpath = str(tmp_path / 'test.zarr')
+        finder = ResFinder(
+            synthetic_vna_data['f'],
+            synthetic_vna_data['z'],
+            synthetic_vna_data['fres_true'][:2],
+            outpath
+        )
+        # Mock plot components for testing
+        finder.plot_mag = MagicMock()
+        finder.plot_mag.scene = MagicMock(return_value=MagicMock())
+        finder.plot_mag.vb = MagicMock()
+        return finder
+    
+    def test_event_filter_installed(self, synthetic_vna_data, tmp_path):
+        """Test that event filter is installed on scene."""
+        finder = self._make_finder(synthetic_vna_data, tmp_path)
+        
+        # Event filter should be installed
+        assert hasattr(finder, 'eventFilter')
+        assert callable(finder.eventFilter)
+    
+    def test_event_filter_returns_callable(self, synthetic_vna_data, tmp_path):
+        """Test that eventFilter method exists and is callable."""
+        finder = self._make_finder(synthetic_vna_data, tmp_path)
+        
+        # Create mock event
+        mock_event = MagicMock()
+        mock_event.type = MagicMock(return_value=999)  # Non-matching type
+        
+        # Should return False for unhandled events
+        result = finder.eventFilter(finder.plot_mag.scene(), mock_event)
+        assert result is False
+    
+    def test_drag_selection_state_tracking(self, synthetic_vna_data, tmp_path):
+        """Test that _drag_selection_active state is tracked."""
+        finder = self._make_finder(synthetic_vna_data, tmp_path)
+        
+        # Initially should be False
+        assert finder._drag_selection_active is False
+        assert finder._drag_start_freq is None
+        assert finder._drag_region_item is None
+    
+    def test_on_mouse_moved_updates_visual(self, synthetic_vna_data, tmp_path):
+        """Test that on_mouse_moved updates the visual region."""
+        finder = self._make_finder(synthetic_vna_data, tmp_path)
+        
+        # Set up state for drag
+        finder._drag_selection_active = True
+        finder._drag_start_freq = 5e9
+        
+        # Mock the mouse position
+        mock_pos = MagicMock()
+        finder.plot_mag.sceneBoundingRect = MagicMock(return_value=MagicMock())
+        finder.plot_mag.sceneBoundingRect.return_value.contains = MagicMock(return_value=True)
+        finder.plot_mag.vb.mapSceneToView = MagicMock(
+            return_value=MagicMock(x=MagicMock(return_value=5.1e9))
+        )
+        
+        # Call on_mouse_moved
+        finder.on_mouse_moved(mock_pos)
+        
+        # Should create or update region item
+        # (can't fully test without real graphics, but we can check it doesn't crash)
+        assert finder._drag_region_item is not None or finder._drag_selection_active

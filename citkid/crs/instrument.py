@@ -733,8 +733,9 @@ class CRS:
         return f, z
 
     async def sweep_full(
-            self, amplitude, npoints_per_tone, nsamps, log = False,
-            dec_grp = None, verbose = True, pbar_description = 'Sweeping'
+            self, amplitude, npoints_per_tone, nsamps, log = False, 
+            downward = True, dec_grp = None, verbose = True, 
+            pbar_description = 'Sweeping'
             ):
         """
         Performs a frequency sweep over the full bandwidth around the NCO
@@ -746,6 +747,7 @@ class CRS:
         nsamps (int): number of samples to average per point.
         log (bool): If True, uses logarithmic spacing between points. Else,
             uses linear spacing.
+        downward (bool): If True, sweeps frequencies in descending order.
         dec_grp (zarr.Group or None): if provided, writes decimation settings
             to this zarr group.
         verbose (bool): If True, displays a progress bar while sweeping.
@@ -767,25 +769,30 @@ class CRS:
 
         # Create fres and ares arrays
         ncos = self.nco_freqs.values()
-        tone_bw = self.bw / 1024 + 200
         # spacing = tone_bw / npoints
-        func = np.geomspace if log else np.linspace
-        fres = np.concatenate([
-            func(nco - self.bw / 2 + 1 + tone_bw,
-                 nco + self.bw / 2 - 1 - tone_bw,
-                 1024) 
+        func = np.geomspace if log else np.linspace 
+        # Add small margin to avoid numerical errors pushing freqs outside bw
+        margin = self.bw * 1e-9  # 0.000001% margin
+        frequencies = np.concatenate([
+            func(
+                nco - self.bw / 2 + margin,
+                nco + self.bw / 2 - margin,
+                1024 * npoints_per_tone
+            ) 
             for nco in ncos])
+        frequencies = np.array(np.split(frequencies, 1024 * len(ncos)))
+        if downward:
+            frequencies = np.flip(frequencies, axis = 1)
         ch_map = {idx: range(i * 1024, (i + 1) * 1024) 
                   for i, idx in enumerate(self.nco_freqs.keys())}
-        ares = amplitude * np.ones(len(fres))
-        
-        # Sweep
-        f, z = await self.sweep_span(
-            fres, ares, tone_bw, npoints_per_tone, nsamps, ch_map = ch_map, 
-            allow_missing = False, center_fres = True, downward = True, 
-            log = log, dec_grp = dec_grp, verbose = verbose, 
+        ares = amplitude * np.ones(len(frequencies))
+
+        # Sweep and return
+        f, z = await self.sweep(
+            frequencies=frequencies, ares=ares, nsamps=nsamps, ch_map=ch_map,
+            allow_missing = False, dec_grp = dec_grp, verbose = verbose, 
             pbar_description = pbar_description
-            )
+        )
         
         # Flatten and sort
         f, z = f.flatten(), z.flatten()

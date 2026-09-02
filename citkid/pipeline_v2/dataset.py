@@ -6,8 +6,8 @@ import numpy as np
 import yaml
 import zarr
 
-from ..pipeline import default_steps
-from ..pipeline import framework as pf
+from . import default_steps
+from . import framework as pf
 
 
 _CAL_YAML_ALIASES = {
@@ -411,7 +411,7 @@ class DataSet:
                 step_index=step_index,
             )
 
-    def _execute_step(self, step, data_idx=None, save=False, pipeline_scope=None, step_index=None):
+    def _execute_step(self, step, data_idx=None, save=False, pipeline_scope=None, step_index=None, execution_mode='vectorized'):
         """
         Execute a single calibration or analysis step.
 
@@ -424,6 +424,9 @@ class DataSet:
             ``'cal'`` or ``'analysis'``.
         step_index (int or None): Execution index of the step within its
             pipeline scope.
+        execution_mode (str): How to execute vectorized steps. Can be 'vectorized'
+            (default, loads all data at once) or 'per-row' (loops over each
+            data_idx one at a time, using less memory).
 
         Returns:
         dict or None: Failure mapping for per-row steps, or None otherwise.
@@ -435,6 +438,9 @@ class DataSet:
         """
         if not isinstance(step, pf.plStep):
             raise TypeError("step must be a plStep instance")
+        
+        if execution_mode not in ('vectorized', 'per-row'):
+            raise ValueError(f"execution_mode must be 'vectorized' or 'per-row', got '{execution_mode}'")
 
         if step.func_type == "global":
             params, param_is_global = self._collect_params(step, None)
@@ -472,7 +478,7 @@ class DataSet:
             raise ValueError(f"data_idx required for step '{step.name}'")
         rows = np.atleast_1d(np.asarray(data_idx, dtype=np.int32))
 
-        if step.func_type == "vectorized":
+        if step.func_type == "vectorized" and execution_mode == 'vectorized':
             params, param_is_global = self._collect_params(step, rows)
             out = step._run(params, param_is_global)
             for name, value in out.items():
@@ -951,8 +957,6 @@ def _resolve_cal_yaml_path(cal_yaml_path):
     if cal_yaml_path in _CAL_YAML_ALIASES:
         return os.path.join(
             os.path.dirname(__file__),
-            "..",
-            "pipeline",
             "templates",
             _CAL_YAML_ALIASES[cal_yaml_path],
         )

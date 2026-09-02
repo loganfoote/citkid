@@ -10,7 +10,7 @@ from citkid.pipeline_v2.dataset import DataSet
 def pipeline_v2_files(tmp_path):
     cal_custom = tmp_path / "custom_cal_steps.py"
     cal_custom.write_text(
-        "from citkid.pipeline.framework import plStep\n"
+        "from citkid.pipeline_v2.framework import plStep\n"
         "\n"
         "def import_base(base_value):\n"
         "    return 3, base_value\n"
@@ -23,7 +23,7 @@ def pipeline_v2_files(tmp_path):
 
     analysis_custom = tmp_path / "custom_analysis_steps.py"
     analysis_custom.write_text(
-        "from citkid.pipeline.framework import plStep\n"
+        "from citkid.pipeline_v2.framework import plStep\n"
         "\n"
         "def step1(data_idx, base_value_stored):\n"
         "    return base_value_stored + data_idx\n"

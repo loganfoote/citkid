@@ -6,17 +6,20 @@ For each resonator (data_idx), displays:
            a ``|S21|`` waterfall for all sweep indices.
   - Right: GainFitPanel + FitIQPanel driven by the selected sweep index.
 
-One :class:`~citkid.pipeline.analysis.AnalysisRunner` is created per sweep
-index.  Each runner writes its results to a dedicated subgroup of a shared
-zarr file (``sweep_000/``, ``sweep_001/``, …), so all outputs are persisted
-in a single file.
+One :class:`~citkid.pipeline_v2.analysis.AnalysisRunner` is created per sweep
+index.  Each runner manages its own DataSet, storing results in a dedicated
+zarr subgroup (``sweep_000/``, ``sweep_001/``, …).
+
+Unlike pipeline.interactive (which uses runs), pipeline_v2 has a single active
+state per sweep index. Re-running a step automatically invalidates downstream
+outputs.
 
 Usage
 -----
 ::
 
     import zarr
-    from citkid.pipeline.interactive.sweep_fitter import run_sweep_fitter
+    from citkid.pipeline_v2.interactive.sweep_fitter import run_sweep_fitter
 
     def make_custom_steps(sweep_idx):
         # Return list[plStep] that load data for this sweep index.
@@ -47,6 +50,8 @@ D / →       next resonator
 W / ↑       previous sweep index
 S / ↓       next sweep index
 R           auto-scale all plots
+B           mark current sweep as bad
+⇧B          mark all sweeps bad
 1, 2, …     run panel N
 Shift+N     run panel N and all following panels
 """

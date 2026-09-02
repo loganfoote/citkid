@@ -849,7 +849,13 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         ri = self._ri
         self._zg["fres_opt"][ri] = self._fres_work[ri]
         self._zg["qres_opt"][ri] = self._qres_work[ri]
-        self._zg["reject_reason"][ri] = self._reject_reasons.get(ri, "")
+        # Handle reject_reason: read entire array, modify, and write back
+        reason = str(self._reject_reasons.get(ri, ""))
+        reject_arr = self._zg["reject_reason"]
+        reasons_array = np.array(reject_arr[:], dtype=object)
+        reasons_array[ri] = reason
+        # Write back the entire array
+        self._zg["reject_reason"][:] = reasons_array
 
     # ------------------------------------------------------------------
     # Public navigation (also called by key/button handlers)

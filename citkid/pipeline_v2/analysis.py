@@ -5,8 +5,8 @@ import numpy as np
 import yaml
 from tqdm.auto import tqdm
 
-from ..pipeline import default_steps
-from ..pipeline import framework as pf
+from . import default_steps
+from . import framework as pf
 from .dataset import _convert_yaml_to_steps, _read_text_file
 
 
@@ -77,7 +77,7 @@ class AnalysisRunner:
             }
             self.DS.set_analysis_step_names({index: step_dict["task"].name for index, step_dict in enumerate(self.path, start=1)})
 
-    def execute_path(self, data_idx=None, start_from_idx=0, verbose=True, save_override=None):
+    def execute_path(self, data_idx=None, start_from_idx=0, verbose=True, save_override=None, execution_mode='vectorized'):
         """
         Execute the loaded analysis path in order.
 
@@ -89,7 +89,12 @@ class AnalysisRunner:
         verbose (bool): If True, show a progress bar.
         save_override (bool or None): If not None, overrides the YAML ``save``
             flag for every executed step.
+        execution_mode (str): How to execute vectorized steps. Can be 'vectorized'
+            (default, loads all data at once) or 'per-row' (loops over each
+            data_idx one at a time, using less memory).
         """
+        if execution_mode not in ('vectorized', 'per-row'):
+            raise ValueError(f"execution_mode must be 'vectorized' or 'per-row', got '{execution_mode}'")
         path_iter = self.path[start_from_idx:]
         if verbose:
             path_iter = tqdm(
@@ -104,9 +109,9 @@ class AnalysisRunner:
             params = step_dict.get("params", {})
             save = step_dict.get("save", True) if save_override is None else save_override
             step_data_idx = None if step.func_type in ("global", "global-res") else data_idx
-            self.execute_step(step, data_idx=step_data_idx, user_params=params, save=save)
+            self.execute_step(step, data_idx=step_data_idx, user_params=params, save=save, execution_mode=execution_mode)
 
-    def execute_step(self, step, data_idx=None, user_params=None, save=False):
+    def execute_step(self, step, data_idx=None, user_params=None, save=False, execution_mode='vectorized'):
         """
         Execute a single analysis or calibration step.
 
@@ -118,11 +123,17 @@ class AnalysisRunner:
             the step, or the sentinel ``'from_yaml'`` to reuse parameters from
             the loaded analysis YAML.
         save (bool): If True, persist outputs immediately after execution.
+        execution_mode (str): How to execute this step. Can be 'vectorized'
+            (default, loads all data at once) or 'per-row' (loops over each
+            data_idx one at a time). 'per-row' is useful for memory-constrained
+            scenarios where vectorized execution would load too much data.
 
         Raises:
         ValueError: If inputs are missing or step/data_idx constraints are
             violated.
         """
+        if execution_mode not in ('vectorized', 'per-row'):
+            raise ValueError(f"execution_mode must be 'vectorized' or 'per-row', got '{execution_mode}'")
         if user_params == "from_yaml":
             user_params = self._get_yaml_params(step)
         if user_params is None:
@@ -155,6 +166,7 @@ class AnalysisRunner:
             pipeline_scope=pipeline_scope,
             step_index=step_index,
             save=save,
+            execution_mode=execution_mode,
         )
         failures = self.DS._execute_step(
             step,
@@ -162,6 +174,7 @@ class AnalysisRunner:
             save=save,
             pipeline_scope=pipeline_scope,
             step_index=step_index,
+            execution_mode=execution_mode,
         )
         self._last_failures = failures
         if failures:
@@ -193,7 +206,7 @@ class AnalysisRunner:
             return
         self.DS.invalidate_after(pipeline_scope, step_index)
 
-    def _ensure_inputs_exist(self, step, data_idx, pipeline_scope, step_index, save):
+    def _ensure_inputs_exist(self, step, data_idx, pipeline_scope, step_index, save, execution_mode='vectorized'):
         """
         Ensure that every input required by a step is available.
 
@@ -204,6 +217,7 @@ class AnalysisRunner:
         step_index (int or None): Execution index of the step.
         save (bool): Save flag propagated when earlier analysis steps must be
             executed to satisfy dependencies.
+        execution_mode (str): Execution mode to use for prerequisite steps.
 
         Raises:
         ValueError: If an input cannot be loaded or produced.
@@ -221,7 +235,7 @@ class AnalysisRunner:
                 continue
 
             if pipeline_scope == "analysis" and step_index is not None:
-                self._ensure_analysis_param(param_name, step_index, param_scope_data_idx, save=save)
+                self._ensure_analysis_param(param_name, step_index, param_scope_data_idx, save=save, execution_mode=execution_mode)
                 if self._param_available(param_name, param_scope_data_idx):
                     continue
 
@@ -229,7 +243,7 @@ class AnalysisRunner:
                 f"Step '{step.name}' requires parameter '{param_name}', but it is not available"
             )
 
-    def _ensure_analysis_param(self, param_name, before_step_index, data_idx, save):
+    def _ensure_analysis_param(self, param_name, before_step_index, data_idx, save, execution_mode='vectorized'):
         """
         Produce an analysis parameter by re-running earlier analysis steps.
 
@@ -238,6 +252,7 @@ class AnalysisRunner:
         before_step_index (int): First step index that is not allowed to run.
         data_idx (int, array-like, or None): Rows needed for per-row steps.
         save (bool): Save flag to propagate to any executed prerequisite steps.
+        execution_mode (str): Execution mode to use for prerequisite steps.
         """
         producer_idx = None
         for index, step_dict in enumerate(self.path, start=1):
@@ -255,7 +270,7 @@ class AnalysisRunner:
             if self._step_outputs_exist(step, step_data_idx):
                 continue
             params = step_dict.get("params", {})
-            self.execute_step(step, data_idx=step_data_idx, user_params=params, save=save)
+            self.execute_step(step, data_idx=step_data_idx, user_params=params, save=save, execution_mode=execution_mode)
 
     def _step_outputs_exist(self, step, data_idx):
         """
@@ -506,8 +521,6 @@ def _resolve_analysis_yaml_path(analysis_yaml_path):
     if analysis_yaml_path in _ANALYSIS_YAML_ALIASES:
         return os.path.join(
             os.path.dirname(__file__),
-            "..",
-            "pipeline",
             "templates",
             _ANALYSIS_YAML_ALIASES[analysis_yaml_path],
         )

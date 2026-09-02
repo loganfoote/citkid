@@ -1,0 +1,16 @@
+### ----------------------------- ###
+###         Analysis steps        ###
+### ----------------------------- ###
+
+ANALYSIS_STEPS:
+  1 : 
+    task: make_fr_spans 
+    # global step. 
+  2 : 
+    task: fit_gain
+    params:
+      span_mult: 1 
+  3 : 
+    task: get_idx_t
+  4 : 
+    task: get_theta_phase_offset_offres
