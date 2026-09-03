@@ -238,9 +238,11 @@ class GainFitPanel(StepPanel):
         fit_gain_step = next(s for s in self.steps if s.name == 'fit_gain')
         user_params = self.get_params_for_step(fit_gain_step)
         if user_params:
+            pipeline_scope, step_index = self.AR._resolve_step_scope(fit_gain_step)
             self.AR._add_user_params(
-                user_params, fit_gain_step.func_type,
-                self.data_idx, save=True
+                fit_gain_step, user_params,
+                self.data_idx, save=True,
+                pipeline_scope=pipeline_scope, step_index=step_index
             )
         super().save_outputs()
 
