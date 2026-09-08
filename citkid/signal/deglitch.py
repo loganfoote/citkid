@@ -22,7 +22,8 @@ def get_binned_baseline(ts, dt, dtbin):
     """
     tarr = np.arange(len(ts))*dt
     nbins = int(len(ts) * dt/dtbin)
-    result = binned_statistic(tarr, [tarr, ts], statistic='mean', bins=nbins)
+    
+    result = binned_statistic(tarr, [tarr, ts], statistic=np.nanmean, bins=nbins)
     tbin, ts_bin = result.statistic
     ts_baseline = np.interp(tarr, tbin, ts_bin)
     return ts_baseline
@@ -97,5 +98,5 @@ def replace_glitches_with_gaussian_noise(ts, idxs, i0, i1):
     std = np.nanstd(ts_clean)
     noise = np.random.normal(loc=0, scale=std, size=len(idxs_masked))
     ts_clean[idxs_masked] = noise
-    return ts_clean
+    return ts_clean, idxs_masked
     
