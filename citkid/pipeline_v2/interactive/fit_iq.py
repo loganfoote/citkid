@@ -88,6 +88,11 @@ class FitIQPanel(StepPanel):
         self._reset_btn.clicked.connect(self._reset_mask)
         ctrl.addWidget(self._reset_btn)
 
+        self._run_btn = QtWidgets.QPushButton("Run")
+        self._run_btn.setFixedWidth(50)
+        self._run_btn.clicked.connect(self._on_run_clicked)
+        ctrl.addWidget(self._run_btn)
+
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setFixedWidth(55)
         self._run_through_btn.setToolTip("Run this panel and all following panels")
@@ -360,12 +365,7 @@ class FitIQPanel(StepPanel):
             self._build_mask(self._ff_cache)
 
     def _on_save_clicked(self):
-        try:
-            self.save_outputs()
-            self._status_label.setText("Saved ✓")
-        except Exception as exc:
-            self._status_label.setText("Save error ✗")
-            print(f"Save error: {exc}")
+        super()._on_save_clicked()
 
     def _on_step_error(self, step, exc):
         msg = f"'{step.name}' failed: {exc}"
@@ -373,18 +373,11 @@ class FitIQPanel(StepPanel):
         print(msg)
 
     def _on_bad_data_clicked(self):
-        self._status_label.setText("Marking bad…")
-        QtWidgets.QApplication.processEvents()
-        ok = self._write_nan_outputs()
-        if ok:
-            self._status_label.setText("Bad data marked ✓")
-            self.trigger_downstream()
-        else:
-            self._status_label.setText("Bad data failed ✗")
+        super()._on_bad_data_clicked()
 
-    def _nan_outputs(self) -> list:
-        """Return the list of output names to delete when marking data as bad.
-        
-        In pipeline_v2, we delete outputs instead of marking with NaNs.
-        """
-        return ['iq_p0', 'iq_popt', 'iq_nrmse']
+    def _nan_outputs(self) -> dict:
+        return {
+            'iq_p0': np.full(8, np.nan),
+            'iq_popt': np.full(8, np.nan),
+            'iq_nrmse': np.nan,
+        }

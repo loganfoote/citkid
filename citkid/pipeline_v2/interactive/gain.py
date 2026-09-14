@@ -60,6 +60,11 @@ class GainFitPanel(StepPanel):
         self._span_spin.setFixedWidth(80)
         ctrl.addWidget(self._span_spin)
 
+        self._run_btn = QtWidgets.QPushButton("Run")
+        self._run_btn.setFixedWidth(50)
+        self._run_btn.clicked.connect(self._on_run_clicked)
+        ctrl.addWidget(self._run_btn)
+
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setFixedWidth(55)
         self._run_through_btn.setToolTip("Run this panel and all following panels")
@@ -226,25 +231,10 @@ class GainFitPanel(StepPanel):
         self._status_label.setText("—")
 
     def _on_save_clicked(self):
-        try:
-            self.save_outputs()
-            self._status_label.setText("Saved ✓")
-        except Exception as exc:
-            self._status_label.setText("Save error ✗")
-            print(f"Save error: {exc}")
+        super()._on_save_clicked()
 
     def save_outputs(self):
-        """Save step outputs AND the span_mult user param to zarr."""
-        fit_gain_step = next(s for s in self.steps if s.name == 'fit_gain')
-        user_params = self.get_params_for_step(fit_gain_step)
-        if user_params:
-            pipeline_scope, step_index = self.AR._resolve_step_scope(fit_gain_step)
-            self.AR._add_user_params(
-                fit_gain_step, user_params,
-                self.data_idx, save=True,
-                pipeline_scope=pipeline_scope, step_index=step_index
-            )
-        super().save_outputs()
+        return super().save_outputs()
 
     def _on_step_error(self, step, exc):
         msg = f"'{step.name}' failed: {exc}"
@@ -252,18 +242,17 @@ class GainFitPanel(StepPanel):
         print(msg)
 
     def _on_bad_data_clicked(self):
-        self._status_label.setText("Marking bad…")
-        QtWidgets.QApplication.processEvents()
-        ok = self._write_nan_outputs()
-        if ok:
-            self._status_label.setText("Bad data marked ✓")
-            self.trigger_downstream()
-        else:
-            self._status_label.setText("Bad data failed ✗")
+        super()._on_bad_data_clicked()
 
-    def _nan_outputs(self) -> list:
-        """Return the list of output names to delete when marking data as bad.
-        
-        In pipeline_v2, we delete outputs instead of marking with NaNs.
-        """
-        return ['p_amp', 'p_phase', 'gain_mask']
+    def _nan_outputs(self) -> dict:
+        DS = self.AR.DS
+        di = self.data_idx
+        try:
+            fg_len = len(np.asarray(DS.fg[di]))
+        except Exception:
+            fg_len = 1
+        return {
+            'p_amp': np.full(3, np.nan),
+            'p_phase': np.full(2, np.nan),
+            'gain_mask': np.zeros(fg_len, dtype=bool),
+        }

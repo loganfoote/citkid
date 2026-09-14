@@ -27,9 +27,6 @@ _MASK_SHAPE_SOURCES = {
 class AnalysisRunner:
     """
     Runner for executing analysis steps on a pipeline_v2 DataSet.
-
-    This version keeps only one active set of outputs. Re-running an earlier
-    step invalidates downstream products rather than creating new run folders.
     """
 
     def __init__(self, DS, analysis_yaml_path=None, custom_path=None):
@@ -60,6 +57,7 @@ class AnalysisRunner:
         for step in default_steps.default_analysis_steps:
             if step.name not in [s.name for s in self.analysis_steps]:
                 self.analysis_steps.append(step)
+        self._step_state = {}
 
         self.path = []
         self.step_indices = {}
@@ -77,7 +75,14 @@ class AnalysisRunner:
             }
             self.DS.set_analysis_step_names({index: step_dict["task"].name for index, step_dict in enumerate(self.path, start=1)})
 
-    def execute_path(self, data_idx=None, start_from_idx=0, verbose=True, save_override=None, execution_mode='vectorized'):
+    def execute_path(
+        self,
+        data_idx=None,
+        start_from_idx=0,
+        verbose=True,
+        save=True,
+        execution_mode='vectorized',
+    ):
         """
         Execute the loaded analysis path in order.
 
@@ -87,15 +92,16 @@ class AnalysisRunner:
         start_from_idx (int): Zero-based index into ``self.path`` from which to
             begin execution.
         verbose (bool): If True, show a progress bar.
-        save_override (bool or None): If not None, overrides the YAML ``save``
-            flag for every executed step.
+        save (bool): If True, persist each executed step after it finishes.
         execution_mode (str): How to execute vectorized steps. Can be 'vectorized'
             (default, loads all data at once) or 'per-row' (loops over each
             data_idx one at a time, using less memory).
         """
         if execution_mode not in ('vectorized', 'per-row'):
             raise ValueError(f"execution_mode must be 'vectorized' or 'per-row', got '{execution_mode}'")
-        path_iter = self.path[start_from_idx:]
+        path_steps = self.path[start_from_idx:]
+        self._validate_execute_path_scope(path_steps, data_idx)
+        path_iter = path_steps
         if verbose:
             path_iter = tqdm(
                 path_iter,
@@ -107,11 +113,18 @@ class AnalysisRunner:
                 path_iter.set_description(f"Executing step: {step_dict['task'].name}")
             step = step_dict["task"]
             params = step_dict.get("params", {})
-            save = step_dict.get("save", True) if save_override is None else save_override
             step_data_idx = None if step.func_type in ("global", "global-res") else data_idx
             self.execute_step(step, data_idx=step_data_idx, user_params=params, save=save, execution_mode=execution_mode)
 
-    def execute_step(self, step, data_idx=None, user_params=None, save=False, execution_mode='vectorized'):
+    def execute_step(
+        self,
+        step,
+        data_idx=None,
+        user_params=None,
+        save=False,
+        execution_mode='vectorized',
+        allow_global_step_overwrite=False,
+    ):
         """
         Execute a single analysis or calibration step.
 
@@ -127,6 +140,9 @@ class AnalysisRunner:
             (default, loads all data at once) or 'per-row' (loops over each
             data_idx one at a time). 'per-row' is useful for memory-constrained
             scenarios where vectorized execution would load too much data.
+        allow_global_step_overwrite (bool): Must be True to rerun a global or
+            global-res step when that rerun would overwrite its existing
+            outputs or downstream products.
 
         Raises:
         ValueError: If inputs are missing or step/data_idx constraints are
@@ -146,16 +162,29 @@ class AnalysisRunner:
                 f"data_idx must be None for global func_type '{step.func_type}'"
             )
 
-        pipeline_scope, step_index = self._resolve_step_scope(step)
-        self._invalidate_downstream(pipeline_scope, step_index)
-
         user_params = self._expand_none_masks(user_params, step.func_type, data_idx)
+        pipeline_scope, step_index = self._resolve_step_scope(step)
+        self._validate_global_step_overwrite(
+            step,
+            user_params,
+            pipeline_scope,
+            step_index,
+            allow_global_step_overwrite=allow_global_step_overwrite,
+        )
+        invalidation_plan = self._build_invalidation_plan(
+            step,
+            user_params,
+            data_idx,
+            pipeline_scope,
+            step_index,
+        )
+        self._invalidate_memory(invalidation_plan, data_idx)
         if user_params:
             self._add_user_params(
                 step,
                 user_params,
                 data_idx=data_idx,
-                save=save,
+                save=False,
                 pipeline_scope=pipeline_scope,
                 step_index=step_index,
             )
@@ -171,12 +200,21 @@ class AnalysisRunner:
         failures = self.DS._execute_step(
             step,
             data_idx=data_idx,
-            save=save,
+            save=False,
             pipeline_scope=pipeline_scope,
             step_index=step_index,
             execution_mode=execution_mode,
         )
         self._last_failures = failures
+        self._step_state[step.name] = {
+            "user_params": dict(user_params),
+            "data_idx": self._step_rows(step, data_idx),
+            "pipeline_scope": pipeline_scope,
+            "step_index": step_index,
+            "failures": dict(failures or {}),
+        }
+        if save:
+            self.save_step_outputs(step, data_idx=data_idx)
         if failures:
             warnings.warn(
                 f"Step '{step.name}' failed for {len(failures)} row(s): {sorted(failures)}",
@@ -186,25 +224,112 @@ class AnalysisRunner:
 
     def save_step_outputs(self, step, data_idx=None):
         """
-        Persist the latest outputs of a step without re-running it.
+        Persist the latest inputs and outputs of a step without re-running it.
 
         Parameters:
-        step (plStep): Step whose outputs should be written.
-        data_idx (int, array-like, or None): Rows to save for per-row outputs.
+        step (plStep or str): Step or step name to save.
+        data_idx (int, array-like, or None): Rows to save for per-row data.
         """
-        self.DS.save_step_outputs(step, data_idx=data_idx)
+        step = self._resolve_step(step)
+        state = self._step_state.get(step.name)
+        if state is None:
+            raise ValueError(f"Step '{step.name}' has not been executed in this AnalysisRunner")
 
-    def _invalidate_downstream(self, pipeline_scope, step_index):
-        """
-        Delete products from steps that depend on the current execution point.
+        save_rows = state["data_idx"] if data_idx is None else self.DS._normalize_rows(data_idx)
+        plan = self._build_invalidation_plan(
+            step,
+            state["user_params"],
+            save_rows,
+            state["pipeline_scope"],
+            state["step_index"],
+        )
 
-        Parameters:
-        pipeline_scope (str or None): Scope of the step about to run.
-        step_index (int or None): Execution index of the step about to run.
+        self.DS.delete_saved_params(plan["zarr_delete"], data_idx=save_rows)
+        if plan["input_names"]:
+            self.DS.write_params(plan["input_names"], data_idx=save_rows)
+
+        output_rows = self._successful_rows(save_rows, state["failures"])
+        if step.func_type == "global":
+            self.DS.write_params(step.return_names, data_idx=None)
+        elif output_rows is not None and len(output_rows):
+            self.DS.write_params(step.return_names, data_idx=output_rows)
+
+    def _invalidate_memory(self, invalidation_plan, data_idx):
         """
-        if step_index is None or pipeline_scope is None:
-            return
-        self.DS.invalidate_after(pipeline_scope, step_index)
+        Apply in-memory invalidation for the current execution.
+        """
+        self.DS.invalidate_memory_params(
+            invalidation_plan["memory_invalidate"],
+            data_idx=None if invalidation_plan["is_global"] else data_idx,
+        )
+
+    def _build_invalidation_plan(self, step, user_params, data_idx, pipeline_scope, step_index):
+        """
+        Build the save and invalidation plan for a step execution.
+        """
+        input_names = list(user_params.keys())
+        output_names = list(step.return_names)
+        downstream_analysis = self._downstream_analysis_outputs(pipeline_scope, step_index)
+        cal_sources = _ordered_unique(input_names + output_names + downstream_analysis)
+        downstream_cal = self.DS.get_downstream_calibration_params(cal_sources)
+        overwrite_names = _ordered_unique(input_names + output_names)
+        zarr_delete = [name for name in _ordered_unique(downstream_analysis + downstream_cal) if name not in overwrite_names]
+        memory_invalidate = _ordered_unique(output_names + downstream_analysis + downstream_cal)
+        return {
+            "input_names": input_names,
+            "output_names": output_names,
+            "memory_invalidate": memory_invalidate,
+            "zarr_delete": zarr_delete,
+            "is_global": step.func_type in ("global", "global-res"),
+        }
+
+    def _downstream_analysis_outputs(self, pipeline_scope, step_index):
+        """
+        Return analysis outputs invalidated by re-running a step.
+        """
+        if pipeline_scope == "analysis" and step_index is not None:
+            downstream_path = self.path[step_index:]
+        elif pipeline_scope == "cal":
+            downstream_path = self.path
+        else:
+            downstream_path = []
+        outputs = []
+        for step_dict in downstream_path:
+            outputs.extend(step_dict["task"].return_names)
+        return _ordered_unique(outputs)
+
+    def _resolve_step(self, step):
+        """
+        Resolve a step object from a step instance or step name.
+        """
+        if isinstance(step, str):
+            for candidate in self.analysis_steps + self.DS.cal_steps:
+                if candidate.name == step:
+                    return candidate
+            raise ValueError(f"Step '{step}' was not found")
+        return step
+
+    def _successful_rows(self, data_idx, failures):
+        """
+        Return the subset of rows that completed successfully.
+        """
+        if data_idx is None:
+            return None
+        if not failures:
+            return self.DS._normalize_rows(data_idx)
+        rows = self.DS._normalize_rows(data_idx)
+        failed_rows = {int(di) for di in failures.keys()}
+        return np.asarray([int(di) for di in rows if int(di) not in failed_rows], dtype=np.int32)
+
+    def _step_rows(self, step, data_idx):
+        """
+        Return the effective row selection associated with a step execution.
+        """
+        if step.func_type == "global":
+            return None
+        if step.func_type == "global-res":
+            return np.arange(int(self.DS.nrows), dtype=np.int32)
+        return self.DS._normalize_rows(data_idx)
 
     def _ensure_inputs_exist(self, step, data_idx, pipeline_scope, step_index, save, execution_mode='vectorized'):
         """
@@ -235,42 +360,40 @@ class AnalysisRunner:
                 continue
 
             if pipeline_scope == "analysis" and step_index is not None:
-                self._ensure_analysis_param(param_name, step_index, param_scope_data_idx, save=save, execution_mode=execution_mode)
-                if self._param_available(param_name, param_scope_data_idx):
-                    continue
+                self._ensure_analysis_param(param_name, step_index)
 
             raise ValueError(
                 f"Step '{step.name}' requires parameter '{param_name}', but it is not available"
             )
 
-    def _ensure_analysis_param(self, param_name, before_step_index, data_idx, save, execution_mode='vectorized'):
+    def _ensure_analysis_param(self, param_name, before_step_index):
         """
-        Produce an analysis parameter by re-running earlier analysis steps.
+        Validate that an earlier analysis parameter has already been produced.
 
         Parameters:
         param_name (str): Required parameter name.
         before_step_index (int): First step index that is not allowed to run.
-        data_idx (int, array-like, or None): Rows needed for per-row steps.
-        save (bool): Save flag to propagate to any executed prerequisite steps.
-        execution_mode (str): Execution mode to use for prerequisite steps.
+
+        Raises:
+        ValueError: If satisfying the dependency would require rerunning an
+            earlier analysis step.
         """
         producer_idx = None
+        producer_name = None
         for index, step_dict in enumerate(self.path, start=1):
             if index >= before_step_index:
                 break
             if param_name in step_dict["task"].return_names:
                 producer_idx = index
+                producer_name = step_dict["task"].name
                 break
         if producer_idx is None:
             return
-
-        for index, step_dict in enumerate(self.path[:producer_idx], start=1):
-            step = step_dict["task"]
-            step_data_idx = None if step.func_type in ("global", "global-res") else data_idx
-            if self._step_outputs_exist(step, step_data_idx):
-                continue
-            params = step_dict.get("params", {})
-            self.execute_step(step, data_idx=step_data_idx, user_params=params, save=save, execution_mode=execution_mode)
+        raise ValueError(
+            f"Parameter '{param_name}' is produced by earlier analysis step '{producer_name}'. "
+            f"Run that step explicitly, or use execute_path(start_from_idx={producer_idx - 1}) "
+            f"after the required earlier analysis outputs have been created."
+        )
 
     def _step_outputs_exist(self, step, data_idx):
         """
@@ -306,7 +429,7 @@ class AnalysisRunner:
         if meta["global"]:
             return self.DS._has_global(name)
         if data_idx is None:
-            return name in self.DS.root or name in self.DS._per_row_cache
+            return self.DS._parameter_has_any_available_row(name)
         rows = np.atleast_1d(np.asarray(data_idx, dtype=np.int32))
         return self.DS._has_rows(name, rows)
 
@@ -440,6 +563,81 @@ class AnalysisRunner:
             return "cal", self.DS.cal_step_indices[step.name]
         return None, None
 
+    def _validate_execute_path_scope(self, path_steps, data_idx):
+        """
+        Raise when a partial execute_path run would execute a global step.
+        """
+        if self._is_full_dataset_selection(data_idx):
+            return
+
+        for offset, step_dict in enumerate(path_steps):
+            step = step_dict["task"]
+            if step.func_type not in ("global", "global-res"):
+                continue
+            if not self._global_step_would_overwrite(
+                step,
+                step_dict.get("params", {}),
+                *self._resolve_step_scope(step),
+            ):
+                continue
+            suggested_start = self.step_indices.get(step.name, offset + 1)
+            raise ValueError(
+                f"Partial execute_path would execute {step.func_type} step '{step.name}', "
+                f"which can overwrite downstream products for rows outside data_idx. "
+                f"Run the global step for all rows, or rerun with start_from_idx={suggested_start} "
+                f"if that step has already been executed. If you need different values per row, "
+                f"refactor that step to be per-row instead of global."
+            )
+
+    def _validate_global_step_overwrite(
+        self,
+        step,
+        user_params,
+        pipeline_scope,
+        step_index,
+        allow_global_step_overwrite,
+    ):
+        """
+        Raise before rerunning a global or global-res step that would overwrite data.
+        """
+        if step.func_type not in ("global", "global-res") or allow_global_step_overwrite:
+            return
+
+        if not self._global_step_would_overwrite(step, user_params, pipeline_scope, step_index):
+            return
+
+        raise ValueError(
+            f"Re-running {step.func_type} step '{step.name}' would overwrite its existing outputs "
+            f"or downstream products for all rows. Pass allow_global_step_overwrite=True only if "
+            f"you intend to invalidate and overwrite all dependent data."
+        )
+
+    def _global_step_would_overwrite(self, step, user_params, pipeline_scope, step_index):
+        """
+        Return True when running a global or global-res step would overwrite existing data.
+        """
+        plan = self._build_invalidation_plan(
+            step,
+            user_params,
+            None,
+            pipeline_scope,
+            step_index,
+        )
+        affected_names = _ordered_unique(
+            plan["output_names"] + plan["memory_invalidate"] + plan["zarr_delete"]
+        )
+        return any(self._param_available(name, None) for name in affected_names)
+
+    def _is_full_dataset_selection(self, data_idx):
+        """
+        Return True when ``data_idx`` covers every row in the dataset.
+        """
+        if data_idx is None:
+            return True
+        rows = np.unique(self.DS._normalize_rows(data_idx))
+        all_rows = np.arange(int(self.DS.nrows), dtype=np.int32)
+        return len(rows) == len(all_rows) and np.array_equal(rows, all_rows)
+
     def _resolve_analysis_definition(self, analysis_yaml_path, custom_path):
         """
         Resolve the analysis definition from explicit inputs or dataset metadata.
@@ -571,3 +769,17 @@ def _validate_task_idxs(task_idxs):
             "task_idxs must be consecutive integers starting at 1 with no gaps or duplicates"
         )
     return max_idx
+
+
+def _ordered_unique(values):
+    """
+    Return values in first-seen order with duplicates removed.
+    """
+    ordered = []
+    seen = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered

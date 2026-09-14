@@ -89,8 +89,8 @@ class StepPanel(QtWidgets.QWidget):
     Signals:
     downstream_rerun (pyqtSignal(object)): Emitted (with self as payload) when
         trigger_downstream is called after a successful run.
-        InteractiveAnalysisWindow connects to this to cascade re-runs through
-        all panels below this one.
+        InteractiveAnalysisWindow connects to this to clear and mark all
+        downstream panels as needing a re-run.
 
     Parameters:
     AR (AnalysisRunner): The analysis runner whose execute_step will be called.
@@ -125,6 +125,7 @@ class StepPanel(QtWidgets.QWidget):
         self._has_run = False
         self._last_error: Exception | None = None
         self._dirty: bool = False  # True after run_steps succeeds; cleared after save
+        self._needs_run: bool = False  # True when an upstream panel invalidated this panel
         self._autorange_next: bool = True  # auto-scale plots on first update_plots per index
 
         # Resolve plStep objects from the runner
@@ -266,11 +267,33 @@ class StepPanel(QtWidgets.QWidget):
         self._has_run = True
         self._last_error = None
         self._dirty = True
+        self._needs_run = False
         try:
             self.update_plots()
         except Exception as exc:
             print(f"Warning: update_plots() raised in {self.step_names}: {exc}")
         return True
+
+    def run_current(self, save=False):
+        """
+        Run only this panel and mark downstream panels stale.
+
+        Parameters:
+        save (bool): Passed through to run_steps.
+
+        Returns:
+        bool: True when the panel ran successfully.
+        """
+        self.prepare_run()
+        if hasattr(self, "_status_label"):
+            self._status_label.setText("Running…")
+            QtWidgets.QApplication.processEvents()
+        ok = self.run_steps(save=save)
+        if ok:
+            if hasattr(self, "_status_label"):
+                self._status_label.setText("Done ✓")
+            self.trigger_downstream()
+        return ok
 
     def prepare_run(self):
         """
@@ -292,11 +315,11 @@ class StepPanel(QtWidgets.QWidget):
 
     def trigger_downstream(self):
         """
-        Emit downstream_rerun to ask the window to re-run all panels that
-        come after this one.
+        Emit downstream_rerun to ask the window to mark all following panels
+        stale because their outputs were invalidated by this panel.
 
         Call this at the end of a user-triggered action (e.g. button click
-        or parameter change) after run_steps succeeds.
+        after run_steps succeeds.
         """
         self.downstream_rerun.emit(self)
 
@@ -306,6 +329,24 @@ class StepPanel(QtWidgets.QWidget):
         panel to the zarr file. Does not re-run the steps. Raises if any step
         has no cached results yet.
         """
+        for step in self.steps:
+            user_params = self.get_params_for_step(step)
+            if not user_params:
+                continue
+            step_di = (
+                None
+                if step.func_type in ("global", "global-res")
+                else self.data_idx
+            )
+            pipeline_scope, step_index = self.AR._resolve_step_scope(step)
+            self.AR._add_user_params(
+                step,
+                user_params,
+                data_idx=step_di,
+                save=True,
+                pipeline_scope=pipeline_scope,
+                step_index=step_index,
+            )
         for step in self.steps:
             step_di = (
                 None
@@ -317,33 +358,42 @@ class StepPanel(QtWidgets.QWidget):
 
     def _write_nan_outputs(self):
         """
-        In pipeline_v2, this method deletes outputs from this panel's steps
-        rather than writing NaN placeholders.
+        Write placeholder "bad data" outputs for the current row only.
 
-        When downstream invalidation happens automatically on re-run, manually
-        calling this allows a panel to mark its data as bad by deleting outputs.
-
-        Sub-classes should override _nan_outputs to return the list of
-        output names that should be deleted (v2 doesn't use NaN marking).
+        Sub-classes should override _nan_outputs to return the dict of
+        {return_name: bad_value} appropriate for their step(s).
 
         Returns:
         ok (bool): True on success, False if no override is provided or an
             error occurs.
         """
-        output_names = self._nan_outputs()
-        if not output_names:
+        nan_vals = self._nan_outputs()
+        if not nan_vals:
             return False
         try:
             DS = self.AR.DS
-            di = self.data_idx
-            # Delete each output parameter from v2 dataset
-            for name in output_names:
-                try:
-                    DS._delete_param(name)
-                except Exception as exc:
-                    print(f"Warning: failed to delete '{name}': {exc}")
+            di = int(self.data_idx)
+            data_idx_arr = np.atleast_1d(np.asarray([di], dtype=np.int32))
+            for name, value in nan_vals.items():
+                producer = self._find_output_step(name)
+                if producer is None:
+                    continue
+                pipeline_scope, step_index = self.AR._resolve_step_scope(producer)
+                DS.invalidate_memory_params([name], data_idx=data_idx_arr)
+                DS.delete_saved_params([name], data_idx=data_idx_arr)
+                DS._store_param(
+                    name,
+                    [value],
+                    is_global=False,
+                    data_idx=data_idx_arr,
+                    pipeline_scope=pipeline_scope,
+                    step_name=producer.name,
+                    step_index=step_index,
+                    save=False,
+                )
             self._has_run = True
             self._dirty = True
+            self._needs_run = False
             try:
                 self.update_plots()
             except Exception:
@@ -355,16 +405,31 @@ class StepPanel(QtWidgets.QWidget):
 
     def _nan_outputs(self):
         """
-        Return a list of output names to delete when marking data as bad.
+        Return a dict {return_name: bad_value} for each per-row output.
 
-        In v2, this returns parameter names (not NaN arrays like v1).
-        Base implementation returns [] (no-op). Sub-classes should override
-        to list the output names they produce.
+        Base implementation returns {} (no-op). Sub-classes should override
+        this to provide placeholder values of the correct shape and dtype.
 
         Returns:
-        names (list of str): Output parameter names to delete.
+        dict: Mapping of output name to placeholder bad-data value.
         """
-        return []
+        return {}
+
+    def mark_stale(self):
+        """
+        Mark this panel stale after an upstream rerun invalidated its outputs.
+        """
+        self._has_run = False
+        self._dirty = False
+        self._needs_run = True
+        self._last_error = None
+        self._autorange_next = True
+        try:
+            self.clear_plots()
+        except Exception:
+            pass
+        if hasattr(self, "_status_label"):
+            self._status_label.setText("Needs run")
 
     def prefetch_plot_data(self, di):
         """
@@ -436,6 +501,15 @@ class StepPanel(QtWidgets.QWidget):
         """Set a new data index and immediately re-run the panel."""
         self.data_idx = data_idx
         self.run_steps()
+
+    def _find_output_step(self, output_name):
+        """
+        Return the step in this panel that produces output_name.
+        """
+        for step in self.steps:
+            if output_name in step.return_names:
+                return step
+        return None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -544,6 +618,31 @@ class StepPanel(QtWidgets.QWidget):
         )
         print(tb)
 
+    def _on_save_clicked(self):
+        window = self.window()
+        if hasattr(window, '_confirm_stale_downstream_before_save'):
+            if not window._confirm_stale_downstream_before_save(self):
+                return
+        try:
+            self.save_outputs()
+            self._status_label.setText("Saved ✓")
+        except Exception as exc:
+            self._status_label.setText("Save error ✗")
+            print(f"Save error: {exc}")
+
+    def _on_run_clicked(self):
+        self.run_current()
+
+    def _on_bad_data_clicked(self):
+        self._status_label.setText("Marking bad…")
+        QtWidgets.QApplication.processEvents()
+        ok = self._write_nan_outputs()
+        if ok:
+            self._status_label.setText("Bad data marked ✓")
+            self.trigger_downstream()
+        else:
+            self._status_label.setText("Bad data failed ✗")
+
 
 ################################################################################
 # Default panel (fallback for unregistered steps)
@@ -565,6 +664,10 @@ class DefaultStepPanel(StepPanel):
         layout.addWidget(QtWidgets.QLabel(f"<i>{names_str}</i>"))
         layout.addStretch()
 
+        self._run_btn = QtWidgets.QPushButton("Run")
+        self._run_btn.clicked.connect(self._on_run_clicked)
+        layout.addWidget(self._run_btn)
+
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setToolTip("Run this panel and all following panels")
         self._run_through_btn.clicked.connect(lambda: self.run_from_here.emit())
@@ -579,12 +682,7 @@ class DefaultStepPanel(StepPanel):
         layout.addWidget(self._status_label)
 
     def _on_save_clicked(self):
-        try:
-            self.save_outputs()
-            self._status_label.setText("Saved ✓")
-        except Exception as exc:
-            self._status_label.setText("Save error ✗")
-            print(f"Save error: {exc}")
+        super()._on_save_clicked()
 
     def _on_step_error(self, step, exc: Exception):
         msg = f"Error in '{step.name}': {exc}"
@@ -777,7 +875,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         for idx in range(1, 10):
             seq = str(idx)
             _sc = QtGui.QShortcut(QtGui.QKeySequence(seq), self)
-            _sc.activated.connect(lambda _i=idx-1: self._run_through_panel(_i))
+            _sc.activated.connect(lambda _i=idx-1: self._run_panel_by_index(_i))
             _sc_shift = QtGui.QShortcut(QtGui.QKeySequence(f"Shift+{seq}"), self)
             _sc_shift.activated.connect(lambda _i=idx-1: self._run_through_panel(_i))
 
@@ -841,7 +939,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         layout.addSpacing(8)
 
         _hints = QtWidgets.QLabel(
-            "[\u2190/A  \u2192/D] navigate    [R] rescale    [N] run+following"
+            "[\u2190/A  \u2192/D] navigate    [R] rescale    [N] run panel    [\u21e7N] run+following"
         )
         _hints.setStyleSheet("color: palette(mid); font-style: italic;")
         layout.addWidget(_hints)
@@ -908,6 +1006,8 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         A background save would race against ``_on_data_idx_changed`` which
         overwrites the memory cache for the new index.
         """
+        if not self._confirm_stale_downstream_before_leave():
+            return
         for panel in self.panels:
             if not panel._dirty:
                 continue
@@ -952,13 +1052,11 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
 
     def _run_panel_by_index(self, index: int):
-        """Run the panel at position *index* (0-based). Triggers downstream."""
+        """Run only the panel at position *index* (0-based)."""
         if index >= len(self.panels):
             return
         panel = self.panels[index]
-        ok = panel.run_steps()
-        if ok:
-            panel.trigger_downstream()
+        panel.run_current()
 
     def _autoscale_all(self):
         """Auto-range every plot in every panel."""
@@ -991,15 +1089,13 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_panel_rerun(self, source_panel: StepPanel):
-        """Re-run every panel that comes after *source_panel*."""
+        """Mark every panel that comes after *source_panel* as needing a rerun."""
         try:
             src_idx = self.panels.index(source_panel)
         except ValueError:
             return
         for panel in self.panels[src_idx + 1:]:
-            ok = panel.run_steps()
-            if not ok:
-                break
+            panel.mark_stale()
 
     def _auto_initialize_all(self):
         """Initialise every panel in order so upstream data is always ready."""
@@ -1017,6 +1113,23 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         If the next index was fully pre-computed by the background prefetch
         thread, panels skip ``run_steps`` and go straight to ``update_plots``.
         """
+        current_di = self._data_idxs[self._nav_pos] if self._data_idxs else value
+        if value != current_di and not self._confirm_stale_downstream_before_leave():
+            self._idx_spin.blockSignals(True)
+            self._idx_spin.setValue(current_di)
+            self._idx_spin.blockSignals(False)
+            return
+
+        if value != current_di:
+            for panel in self.panels:
+                if not panel._dirty:
+                    continue
+                panel._dirty = False
+                try:
+                    panel.save_outputs()
+                except Exception as exc:
+                    print(f"Warning: save failed for {panel.step_names}: {exc}")
+
         # Sync nav position when spinbox is changed manually
         if value in self._data_idxs:
             self._nav_pos = self._data_idxs.index(value)
@@ -1135,6 +1248,9 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event):
         """Submit any remaining dirty panels, then flush all background saves."""
+        if not self._confirm_stale_downstream_before_leave():
+            event.ignore()
+            return
         for panel in self.panels:
             if not panel._dirty:
                 continue
@@ -1152,6 +1268,54 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         self._save_executor.shutdown(wait=True)
         self._save_executor = None
         super().closeEvent(event)
+
+    def _stale_panels_after(self, source_panel=None):
+        """
+        Return panels whose outputs were invalidated and have not been rerun.
+        """
+        start_index = 0
+        if source_panel is not None:
+            try:
+                start_index = self.panels.index(source_panel) + 1
+            except ValueError:
+                start_index = 0
+        return [panel for panel in self.panels[start_index:] if panel._needs_run]
+
+    def _confirm_stale_downstream_before_save(self, source_panel):
+        """
+        Ask before saving when later panels remain stale.
+        """
+        stale = self._stale_panels_after(source_panel)
+        if not stale:
+            return True
+        names = ", ".join(" + ".join(panel.step_names) for panel in stale)
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Downstream Panels Need Run",
+            "Saving now will keep later panel outputs missing for this data index.\n\n"
+            f"Panels needing a rerun: {names}\n\nContinue saving?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        return reply == QtWidgets.QMessageBox.Yes
+
+    def _confirm_stale_downstream_before_leave(self):
+        """
+        Ask before leaving a data index or closing while panels remain stale.
+        """
+        stale = self._stale_panels_after()
+        if not stale:
+            return True
+        names = ", ".join(" + ".join(panel.step_names) for panel in stale)
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Panels Need Run",
+            "Earlier panel changes invalidated later panel outputs for this data index.\n\n"
+            f"Panels needing a rerun: {names}\n\nLeave anyway?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        return reply == QtWidgets.QMessageBox.Yes
 
 
 ################################################################################

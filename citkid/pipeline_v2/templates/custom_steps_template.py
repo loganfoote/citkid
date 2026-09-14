@@ -3,23 +3,20 @@ import os
 import zarr
 from citkid.pipeline_v2.framework import plStep
 
+main_directory = '/path/to/data/'
+data_path = os.path.join(main_directory, 'example.zarr') 
+root = zarr.open(data_path, mode = 'r')
+
 def load_global_data():
-    d = ''
-    root = zarr.open(d, mode = 'r')
     dt = root['ts_01/dt'][...]
     nrows = root['fres'].shape[0]
     
-    d = ''
-    
-    fres_all = np.load(os.path.join(d, 'fres_init/fres.npy'))
+    fres_all = np.load(os.path.join(main_directory, 'fres_init/fres.npy'))
     fres_all = np.sort(fres_all)
     qres_all = np.ones_like(fres_all) * 8000    
     return fres_all, qres_all, dt, nrows
 
 def load_global_res_data():
-    d = ''
-    root = zarr.open(d, mode = 'r')
-
     fres = np.array(root['fres'])
     ares = np.array(root['ares'])
     qres = np.array(root['qres']) 
@@ -27,33 +24,22 @@ def load_global_res_data():
     return fres, qres, ares, res_idxs 
 
 def load_ft(data_idx):
-    d = ''
-    root = zarr.open(os.path.join(d, 'ts_01'), mode = 'r')
     ft = root['ft'][data_idx] 
     return ft
 
 def load_zt(data_idx):
-    d = ''
-    root = zarr.open(os.path.join(d, 'ts_01'), mode = 'r')
-
     zt = root['z'][:, data_idx, :10_000] 
     zt = zt[0] + 1j * zt[1] 
     zt *= np.array(root['counts_to_s21'][data_idx])[:, np.newaxis]
     return zt
 
 def load_data_f(data_idx):
-    d = ''
-    root = zarr.open(os.path.join(d, 'fine_sweep'), mode = 'r')
-
     ff = np.array(root['f'][data_idx, :])
     zf = np.array(root['z'][data_idx, :])
     idx = np.argsort(ff)
     return ff[idx], zf[idx]
 
 def load_data_g(data_idx):
-    d = ''
-    root = zarr.open(os.path.join(d, 'gain_sweep'), mode = 'r')
-
     fg = np.array(root['f'][data_idx, :])
     zg = np.array(root['z'][data_idx, :])
     idx = np.argsort(fg)

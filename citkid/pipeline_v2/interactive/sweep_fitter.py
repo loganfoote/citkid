@@ -563,7 +563,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
             if not in_zarr:
                 try:
                     AR.execute_path(
-                        data_idx=di, save_override=True, verbose=False
+                        data_idx=di, save=True, verbose=False
                     )
                 except Exception as exc:
                     print(f"Warning: batch init failed for sweep AR: {exc}")
@@ -603,7 +603,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
             try:
                 for AR in ARs:
                     AR.execute_path(
-                        data_idx=next_di, save_override=False, verbose=False
+                        data_idx=next_di, save=False, verbose=False
                     )
                 self._prefetched_idx = next_di
                 self._prefetch_status_changed.emit(f'\u2713 prefetch {next_di}')

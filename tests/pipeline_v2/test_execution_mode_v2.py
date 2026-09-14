@@ -106,7 +106,7 @@ class TestExecutionModeParameter:
         )
         
         # Execute with default (vectorized) - should not raise
-        ar.execute_path(data_idx=0, verbose=False, save_override=True)
+        ar.execute_path(data_idx=np.arange(10), verbose=False, save=True)
 
     def test_execute_path_with_vectorized_mode(self, execution_mode_fixture):
         """execute_path should work with execution_mode='vectorized'."""
@@ -123,8 +123,8 @@ class TestExecutionModeParameter:
         )
         
         # Execute with explicit vectorized mode
-        ar.execute_path(data_idx=0, execution_mode='vectorized', 
-                       verbose=False, save_override=True)
+        ar.execute_path(data_idx=np.arange(10), execution_mode='vectorized', 
+                   verbose=False, save=True)
 
     def test_execute_path_with_per_row_mode(self, execution_mode_fixture):
         """execute_path should work with execution_mode='per-row'."""
@@ -141,8 +141,8 @@ class TestExecutionModeParameter:
         )
         
         # Execute with per-row mode (memory-efficient)
-        ar.execute_path(data_idx=0, execution_mode='per-row', 
-                       verbose=False, save_override=True)
+        ar.execute_path(data_idx=np.arange(10), execution_mode='per-row', 
+                   verbose=False, save=True)
 
     def test_execute_step_accepts_execution_mode(self, execution_mode_fixture):
         """execute_step should accept execution_mode parameter."""
@@ -186,8 +186,8 @@ class TestExecutionModeParameter:
         
         # Invalid execution_mode should raise
         with pytest.raises(ValueError):
-            ar.execute_path(data_idx=0, execution_mode='invalid_mode', 
-                           verbose=False, save_override=True)
+            ar.execute_path(data_idx=np.arange(10), execution_mode='invalid_mode', 
+                           verbose=False, save=True)
 
     def test_vectorized_and_per_row_produce_same_results(self, execution_mode_fixture):
         """Vectorized and per-row execution modes should produce identical results."""
@@ -207,8 +207,8 @@ class TestExecutionModeParameter:
         
         import_step = next(step for step in ds1.cal_steps if step.name == "load_data")
         ar1.execute_step(import_step, save=True)
-        ar1.execute_path(data_idx=0, execution_mode='vectorized', 
-                        verbose=False, save_override=True)
+        ar1.execute_path(data_idx=np.arange(10), execution_mode='vectorized', 
+                verbose=False, save=True)
         
         # Save the result
         result_vec = ds1.final[0]
@@ -228,8 +228,8 @@ class TestExecutionModeParameter:
         
         import_step = next(step for step in ds2.cal_steps if step.name == "load_data")
         ar2.execute_step(import_step, save=True)
-        ar2.execute_path(data_idx=0, execution_mode='per-row', 
-                        verbose=False, save_override=True)
+        ar2.execute_path(data_idx=np.arange(10), execution_mode='per-row', 
+                verbose=False, save=True)
         
         # Results should be identical
         result_per_row = ds2.final[0]
@@ -237,6 +237,83 @@ class TestExecutionModeParameter:
         # Both should exist and be equal
         assert result_vec == result_per_row, \
             f"Results differ: vectorized={result_vec}, per-row={result_per_row}"
+
+    def test_execute_path_partial_rows_allow_first_global_res_run(self, execution_mode_fixture):
+        """A first partial execute_path may run a global-res step if nothing exists yet."""
+        files = execution_mode_fixture
+        ds = DataSet(
+            zarr_path=str(files["zarr_path"]),
+            cal_yaml_path=str(files["cal_yaml"]),
+            custom_path=str(files["cal_custom"]),
+        )
+        ar = AnalysisRunner(
+            ds,
+            analysis_yaml_path=str(files["analysis_yaml"]),
+            custom_path=str(files["analysis_custom"]),
+        )
+
+        ar.execute_path(data_idx=0, verbose=False, save=True)
+
+        assert ds.final[0] == 0
+
+    def test_execute_path_partial_rows_raises_for_global_res_rerun(self, execution_mode_fixture):
+        """Partial execute_path should raise before rerunning an existing global-res step."""
+        files = execution_mode_fixture
+        ds = DataSet(
+            zarr_path=str(files["zarr_path"]),
+            cal_yaml_path=str(files["cal_yaml"]),
+            custom_path=str(files["cal_custom"]),
+        )
+        ar = AnalysisRunner(
+            ds,
+            analysis_yaml_path=str(files["analysis_yaml"]),
+            custom_path=str(files["analysis_custom"]),
+        )
+
+        ar.execute_path(data_idx=0, verbose=False, save=True)
+
+        with pytest.raises(ValueError, match="load_vector"):
+            ar.execute_path(data_idx=1, verbose=False, save=True)
+
+    def test_execute_step_raises_when_partial_rows_need_global_res_prerequisite(self, execution_mode_fixture):
+        """A later step should not silently rerun a missing global-res prerequisite for one row."""
+        files = execution_mode_fixture
+        ds = DataSet(
+            zarr_path=str(files["zarr_path"]),
+            cal_yaml_path=str(files["cal_yaml"]),
+            custom_path=str(files["cal_custom"]),
+        )
+        ar = AnalysisRunner(
+            ds,
+            analysis_yaml_path=str(files["analysis_yaml"]),
+            custom_path=str(files["analysis_custom"]),
+        )
+
+        vec_mult_step = next(step for step in ar.analysis_steps if step.name == "vec_mult")
+        with pytest.raises(ValueError, match="load_vector"):
+            ar.execute_step(vec_mult_step, data_idx=0, save=True)
+
+    def test_execute_step_global_res_rerun_requires_overwrite_flag(self, execution_mode_fixture):
+        """Re-running a global-res step should require explicit overwrite permission."""
+        files = execution_mode_fixture
+        ds = DataSet(
+            zarr_path=str(files["zarr_path"]),
+            cal_yaml_path=str(files["cal_yaml"]),
+            custom_path=str(files["cal_custom"]),
+        )
+        ar = AnalysisRunner(
+            ds,
+            analysis_yaml_path=str(files["analysis_yaml"]),
+            custom_path=str(files["analysis_custom"]),
+        )
+
+        load_vec_step = next(step for step in ar.analysis_steps if step.name == "load_vector")
+        ar.execute_step(load_vec_step, save=True)
+
+        with pytest.raises(ValueError, match="allow_global_step_overwrite"):
+            ar.execute_step(load_vec_step, save=False)
+
+        ar.execute_step(load_vec_step, save=False, allow_global_step_overwrite=True)
 
 
 class TestExecutionModeMemoryConsiderations:
@@ -260,8 +337,8 @@ class TestExecutionModeMemoryConsiderations:
         ar.execute_step(import_step, save=True)
         
         # Per-row mode should not crash even with larger data
-        ar.execute_path(data_idx=0, execution_mode='per-row', 
-                       verbose=False, save_override=True)
+        ar.execute_path(data_idx=np.arange(10), execution_mode='per-row', 
+                   verbose=False, save=True)
         
         # Result should still be available
         assert hasattr(ds, 'final'), "Final result not available after per-row execution"
@@ -284,7 +361,7 @@ class TestExecutionModeMemoryConsiderations:
         ar.execute_step(import_step, save=True)
         
         # Call without execution_mode - should use vectorized by default
-        ar.execute_path(data_idx=0, verbose=False, save_override=True)
+        ar.execute_path(data_idx=np.arange(10), verbose=False, save=True)
         
         # Should complete successfully
         assert True
@@ -311,7 +388,7 @@ class TestExecutionModeBackwardCompatibility:
         ar.execute_step(import_step, save=True)
         
         # Old-style call without execution_mode
-        ar.execute_path(data_idx=0, verbose=False, save_override=True)
+        ar.execute_path(data_idx=np.arange(10), verbose=False, save=True)
 
     def test_execute_step_backward_compatible(self, execution_mode_fixture):
         """execute_step should work without execution_mode parameter."""

@@ -4,7 +4,7 @@ import numpy as np
 ############################### Lazy Attribute #################################
 ################################################################################
 class LazyAttr:
-    def __init__(self, DS, name, run_idx):
+    def __init__(self, DS, name):
         """
         Class to represent a lazily-loaded attribute of a DataSet.
         Provides lazy row-wise indexing that delegates to DataSet for data 
@@ -13,18 +13,14 @@ class LazyAttr:
         Parameters:
         DS (DataSet): The DataSet instance this attribute belongs to.
         name (str): The name of the attribute.
-        run_idx (int): The run index corresponding to the version of the 
-            attribute to load when fetching data.
         """
         # Input validation 
         if not isinstance(name, str):
             raise ValueError("name must be a string")
-        run_idx = int(run_idx)
 
         # store DS and name for later use, and initialize cache
         self.DS = DS
         self.name = name
-        self.run_idx = run_idx
         self._cache = {}        # maps row -> np.ndarray
         self._shape = ()        # computed shape cache
 
@@ -103,15 +99,14 @@ class LazyAttr:
         missing = [r for r in rows if r not in self._cache]
         if missing:
             # Delegate to DataSet to fetch the missing rows
-            fetched_data = self.DS._fetch_rows(
-                self.name, self.run_idx, missing
-                )
+            fetched_data = self.DS._fetch_rows(self.name, missing)
             # Update cache with fetched data
             for r, data in zip(missing, fetched_data):
                 self._cache[r] = data
             # Update shape if first time loading
             if self._shape == () and len(fetched_data) > 0:
-                self._shape = (self.DS.nrows, *fetched_data[0].shape)
+                first_shape = np.asarray(fetched_data[0]).shape
+                self._shape = (self.DS.nrows, *first_shape)
         
         # Retrieve from cache
         out = [self._cache[r] for r in rows]

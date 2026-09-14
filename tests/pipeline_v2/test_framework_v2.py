@@ -247,11 +247,11 @@ class TestLazyAttrInit:
         class MockDS:
             def __init__(self):
                 self.nrows = 10
-            def _fetch_rows(self, name, run_idx, rows):
+            def _fetch_rows(self, name, rows):
                 return np.arange(len(rows))
         
         ds = MockDS()
-        attr = pf.LazyAttr(ds, 'test_attr', 0)
+        attr = pf.LazyAttr(ds, 'test_attr')
         
         assert attr.DS is ds
         assert attr.name == 'test_attr'
@@ -262,11 +262,11 @@ class TestLazyAttrInit:
         class MockDS:
             def __init__(self):
                 self.nrows = 42
-            def _fetch_rows(self, name, run_idx, rows):
+            def _fetch_rows(self, name, rows):
                 return np.zeros(len(rows))
         
         ds = MockDS()
-        attr = pf.LazyAttr(ds, 'test', 0)
+        attr = pf.LazyAttr(ds, 'test')
         assert len(attr) == 42
 
 
@@ -280,7 +280,7 @@ class TestLazyAttrIndexing:
                 self.nrows = 10
                 self.data = {'test_attr': np.arange(10)}
             
-            def _fetch_rows(self, name, run_idx, rows):
+            def _fetch_rows(self, name, rows):
                 if isinstance(rows, int):
                     rows = [rows]
                 return self.data[name][rows]
@@ -289,7 +289,7 @@ class TestLazyAttrIndexing:
 
     def test_getitem_single_index(self, mock_ds):
         """Test indexing with single integer."""
-        attr = pf.LazyAttr(mock_ds, 'test_attr', 0)
+        attr = pf.LazyAttr(mock_ds, 'test_attr')
         result = attr[0]
         assert result == 0
         result = attr[5]
@@ -297,7 +297,7 @@ class TestLazyAttrIndexing:
 
     def test_getitem_negative_index(self, mock_ds):
         """Test indexing with negative integer."""
-        attr = pf.LazyAttr(mock_ds, 'test_attr', 0)
+        attr = pf.LazyAttr(mock_ds, 'test_attr')
         result = attr[-1]
         assert result == 9
         result = attr[-2]
@@ -305,28 +305,49 @@ class TestLazyAttrIndexing:
 
     def test_getitem_slice(self, mock_ds):
         """Test indexing with slice."""
-        attr = pf.LazyAttr(mock_ds, 'test_attr', 0)
+        attr = pf.LazyAttr(mock_ds, 'test_attr')
         result = attr[2:5]
         np.testing.assert_array_equal(result, np.array([2, 3, 4]))
 
     def test_getitem_list(self, mock_ds):
         """Test indexing with list of integers."""
-        attr = pf.LazyAttr(mock_ds, 'test_attr', 0)
+        attr = pf.LazyAttr(mock_ds, 'test_attr')
         result = attr[[0, 2, 4]]
         np.testing.assert_array_equal(result, np.array([0, 2, 4]))
 
     def test_getitem_ndarray(self, mock_ds):
         """Test indexing with numpy array."""
-        attr = pf.LazyAttr(mock_ds, 'test_attr', 0)
+        attr = pf.LazyAttr(mock_ds, 'test_attr')
         indices = np.array([1, 3, 5])
         result = attr[indices]
         np.testing.assert_array_equal(result, np.array([1, 3, 5]))
 
     def test_getitem_out_of_bounds(self, mock_ds):
         """Test that out-of-bounds indexing raises error."""
-        attr = pf.LazyAttr(mock_ds, 'test_attr', 0)
+        attr = pf.LazyAttr(mock_ds, 'test_attr')
         with pytest.raises((IndexError, ValueError)):
             _ = attr[100]
+
+    def test_getitem_uses_cache_for_repeated_rows(self):
+        """Repeated row access should not fetch rows that are already cached."""
+        class MockDS:
+            def __init__(self):
+                self.nrows = 6
+                self.data = {'test_attr': np.arange(6)}
+                self.fetch_calls = []
+
+            def _fetch_rows(self, name, rows):
+                rows = list(rows)
+                self.fetch_calls.append(rows)
+                return self.data[name][rows]
+
+        mock_ds = MockDS()
+        attr = pf.LazyAttr(mock_ds, 'test_attr')
+
+        np.testing.assert_array_equal(attr[[1, 3]], np.array([1, 3]))
+        np.testing.assert_array_equal(attr[[3, 4]], np.array([3, 4]))
+
+        assert mock_ds.fetch_calls == [[1, 3], [4]]
 
 
 class TestLazyAttrSetitem:
@@ -339,7 +360,7 @@ class TestLazyAttrSetitem:
                 self.nrows = 10
                 self._cache = {}
             
-            def _fetch_rows(self, name, run_idx, rows):
+            def _fetch_rows(self, name, rows):
                 if isinstance(rows, int):
                     rows = [rows]
                 if name not in self._cache:
@@ -350,14 +371,14 @@ class TestLazyAttrSetitem:
 
     def test_setitem_single_value(self, mock_ds):
         """Test setting a single value."""
-        attr = pf.LazyAttr(mock_ds, 'test_attr', 0)
+        attr = pf.LazyAttr(mock_ds, 'test_attr')
         attr[0] = 42
         # Value should be in cache
         assert 0 in attr._cache
 
     def test_setitem_slice(self, mock_ds):
         """Test setting a slice."""
-        attr = pf.LazyAttr(mock_ds, 'test_attr', 0)
+        attr = pf.LazyAttr(mock_ds, 'test_attr')
         attr[0:3] = [10, 20, 30]
         # Rows should be in cache
         assert any(i in attr._cache for i in [0, 1, 2])

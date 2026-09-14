@@ -93,6 +93,11 @@ class XCalPanel(StepPanel):
         )
         ctrl.addWidget(self._std_spin)
 
+        self._run_btn = QtWidgets.QPushButton("Run")
+        self._run_btn.setFixedWidth(50)
+        self._run_btn.clicked.connect(self._on_run_clicked)
+        ctrl.addWidget(self._run_btn)
+
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setFixedWidth(55)
         self._run_through_btn.setToolTip("Run this panel and all following panels")
@@ -475,25 +480,10 @@ class XCalPanel(StepPanel):
 
 
     def _on_save_clicked(self):
-        try:
-            self.save_outputs()
-            self._status_label.setText("Saved \u2713")
-        except Exception as exc:
-            self._status_label.setText("Save error \u2717")
-            print(f"Save error: {exc}")
+        super()._on_save_clicked()
 
     def save_outputs(self):
-        """Save step outputs AND user params (offsets, cutoff) to zarr."""
-        for step in self.steps:
-            user_params = self.get_params_for_step(step)
-            if user_params:
-                pipeline_scope, step_index = self.AR._resolve_step_scope(step)
-                self.AR._add_user_params(
-                    step, user_params,
-                    self.data_idx, save=True,
-                    pipeline_scope=pipeline_scope, step_index=step_index
-                )
-        super().save_outputs()
+        return super().save_outputs()
 
     def _on_step_error(self, step, exc):
         msg = f"'{step.name}' failed: {exc}"
@@ -501,14 +491,7 @@ class XCalPanel(StepPanel):
         print(msg)
 
     def _on_bad_data_clicked(self):
-        self._status_label.setText("Marking bad\u2026")
-        QtWidgets.QApplication.processEvents()
-        ok = self._write_nan_outputs()
-        if ok:
-            self._status_label.setText("Bad data marked \u2713")
-            self.trigger_downstream()
-        else:
-            self._status_label.setText("Bad data failed \u2717")
+        super()._on_bad_data_clicked()
 
     def prefetch_plot_data(self, di: int):
         """Pre-compute numpy arrays for *di* in the background prefetch thread."""
@@ -604,9 +587,14 @@ class XCalPanel(StepPanel):
             idx0_base=idx0_base, idx1_base=idx1_base,
         )
 
-    def _nan_outputs(self) -> list:
-        """Return list of parameter names to delete (v2 deletion-based marking)."""
-        return [
-            'xcal_mask',
-            'poly_x',
-        ]
+    def _nan_outputs(self) -> dict:
+        DS = self.AR.DS
+        di = self.data_idx
+        try:
+            ff_len = len(np.asarray(DS.ff[di]))
+        except Exception:
+            ff_len = 1
+        return {
+            'xcal_mask': np.zeros(ff_len, dtype=bool),
+            'poly_x': np.full(4, np.nan),
+        }

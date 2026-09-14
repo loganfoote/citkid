@@ -93,6 +93,11 @@ class CircleFitPanel(StepPanel):
         self._reset_btn.clicked.connect(self._reset_mask)
         ctrl.addWidget(self._reset_btn)
 
+        self._run_btn = QtWidgets.QPushButton("Run")
+        self._run_btn.setFixedWidth(50)
+        self._run_btn.clicked.connect(self._on_run_clicked)
+        ctrl.addWidget(self._run_btn)
+
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setFixedWidth(55)
         self._run_through_btn.setToolTip("Run this panel and all following panels")
@@ -345,25 +350,10 @@ class CircleFitPanel(StepPanel):
     # ------------------------------------------------------------------
     
     def _on_save_clicked(self):
-        try:
-            self.save_outputs()
-            self._status_label.setText("Saved \u2713")
-        except Exception as exc:
-            self._status_label.setText("Save error \u2717")
-            print(f"Save error: {exc}")
+        super()._on_save_clicked()
 
     def save_outputs(self):
-        """Save step outputs AND the ``circ_mask`` user param to zarr."""
-        circ_step = next(s for s in self.steps if s.name == 'fit_iq_circle')
-        user_params = self.get_params_for_step(circ_step)
-        if user_params:
-            pipeline_scope, step_index = self.AR._resolve_step_scope(circ_step)
-            self.AR._add_user_params(
-                circ_step, user_params,
-                self.data_idx, save=True,
-                pipeline_scope=pipeline_scope, step_index=step_index
-            )
-        super().save_outputs()
+        return super().save_outputs()
 
     def _on_step_error(self, step, exc):
         msg = f"'{step.name}' failed: {exc}"
@@ -371,14 +361,7 @@ class CircleFitPanel(StepPanel):
         print(msg)
 
     def _on_bad_data_clicked(self):
-        self._status_label.setText("Marking bad\u2026")
-        QtWidgets.QApplication.processEvents()
-        ok = self._write_nan_outputs()
-        if ok:
-            self._status_label.setText("Bad data marked \u2713")
-            self.trigger_downstream()
-        else:
-            self._status_label.setText("Bad data failed \u2717")
+        super()._on_bad_data_clicked()
 
     def prefetch_plot_data(self, di: int):
         """Pre-compute numpy arrays for *di* in the background prefetch thread."""
@@ -428,11 +411,10 @@ class CircleFitPanel(StepPanel):
             xc=xc, yc=yc, idx_t=idx_t, zt=zt,
         )
 
-    def _nan_outputs(self) -> list:
-        """Return list of parameter names to delete (v2 deletion-based marking)."""
-        return [
-            'circ_origin',
-            'circ_radius',
-            'idx_t',
-            'theta_phase_offset',
-        ]
+    def _nan_outputs(self) -> dict:
+        return {
+            'circ_origin': np.complex128(np.nan + 1j * np.nan),
+            'circ_radius': np.nan,
+            'idx_t': np.int64(0),
+            'theta_phase_offset': np.nan,
+        }
