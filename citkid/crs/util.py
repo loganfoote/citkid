@@ -505,6 +505,38 @@ def write_system_cfg_to_zarr(crs, grp):
     grp.attrs['citkid_version'] = str(crs.citkid_version)
 
 ################################################################################
+############################# Sweep Helpers ####################################
+################################################################################ 
+def piecewise_geomspace(x0, x1, bw, npoints_per_ch, nchs = 1024):
+    """
+    Approximately geometrically spaces values between x0 and 
+    x1, while ensuring that every chunk of bw space has 
+    exactly nchs * npoints_per_ch tones. 
+
+    Parameters:
+    x0 (float): start frequency in Hz.
+    x1 (float): end frequency in Hz.
+    bw (float): bandwidth in Hz.
+    npoints_per_ch (int): number of points per channel.
+    nchs (int): number of channels per bandwidth. 
+
+    Returns:
+    np.ndarray: concatenated array of geometrically spaced values.
+    """
+    n = npoints_per_ch * nchs
+
+    # Linear bin edges
+    edges = np.arange(x0, x1 + bw, bw)
+    edges[-1] = x1   # ensure exact endpoint
+
+    xs = []
+
+    for a, b in zip(edges[:-1], edges[1:]):
+        xs.append(np.geomspace(a, b, n, endpoint=False))
+
+    return np.concatenate(xs)
+
+################################################################################
 ########################### input validation ###################################
 ################################################################################ 
 def _validate_parser_to_zarr_inputs(
