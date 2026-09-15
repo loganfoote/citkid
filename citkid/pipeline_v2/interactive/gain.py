@@ -230,12 +230,6 @@ class GainFitPanel(StepPanel):
             curve.setData([], [])
         self._status_label.setText("—")
 
-    def _on_save_clicked(self):
-        super()._on_save_clicked()
-
-    def save_outputs(self):
-        return super().save_outputs()
-
     def _on_step_error(self, step, exc):
         msg = f"'{step.name}' failed: {exc}"
         self._status_label.setText(msg)

@@ -57,6 +57,7 @@ Shift+N     run panel N and all following panels
 """
 
 import sys
+import threading
 import numpy as np
 import zarr
 import pyqtgraph as pg
@@ -177,12 +178,12 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self._y_cache: dict = {}
 
         # Prefetch state
-        self._prefetch_thread: __import__('threading').Thread | None = None
+        self._prefetch_thread: threading.Thread | None = None
         self._prefetching_idx: int | None = None
         self._prefetched_idx: int | None = None
 
         # Background save state
-        self._save_thread: __import__('threading').Thread | None = None
+        self._save_thread: threading.Thread | None = None
         self._prefetch_status_changed.connect(self._on_prefetch_status)
 
         self.setWindowTitle(title)
@@ -461,8 +462,12 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
     def _set_data_idx(self, new_di: int):
         """Change the active resonator, load/run data, and refresh the scatter."""
+        if not self._confirm_stale_downstream_before_leave():
+            self._data_idx_spin.blockSignals(True)
+            self._data_idx_spin.setValue(self._data_idx)
+            self._data_idx_spin.blockSignals(False)
+            return
         self._save_dirty_panels()  # persist results for the outgoing resonator
-        self._save_all_sweep_data_async(self._data_idx)  # flush in-memory fits to zarr (background)
         self._data_idx = new_di
         self._data_idx_spin.blockSignals(True)
         self._data_idx_spin.setValue(new_di)
@@ -477,6 +482,9 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
             panel.data_idx = new_di
             panel.on_data_idx_changing()
             panel.clear_plots()
+            panel._needs_run = False
+            panel._dirty = False
+            panel._has_run = False
             # Reset status labels when changing data_idx
             if hasattr(panel, '_status_label'):
                 panel._status_label.setText('')
@@ -507,6 +515,9 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
     def _set_sweep_idx(self, new_si: int):
         """Change the active sweep index, swap ARs in panels, and re-run."""
+        if not self._confirm_stale_downstream_before_leave():
+            self._update_sweep_combo_selection()
+            return
         self._save_dirty_panels()  # persist results for the outgoing sweep point
         self._sweep_idx = new_si
         self._update_sweep_combo_selection()
@@ -548,23 +559,9 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         """
         di = self._data_idx
         for AR in self._ARs:
-            # Check zarr directly — not DS.iq_popt, which would silently run
-            # the pipeline in memory without saving, defeating the purpose.
-            in_zarr = False
-            try:
-                root = AR.DS.root
-                for rk in root.group_keys():
-                    if rk.startswith('run') and 'iq_popt' in root[rk]:
-                        if root[rk]['iq_popt']['row_exists'][di]:
-                            in_zarr = True
-                            break
-            except Exception:
-                pass
-            if not in_zarr:
+            if not self._runner_outputs_exist(AR, di):
                 try:
-                    AR.execute_path(
-                        data_idx=di, save=True, verbose=False
-                    )
+                    self._initialize_runner_outputs(AR, di)
                 except Exception as exc:
                     print(f"Warning: batch init failed for sweep AR: {exc}")
 
@@ -581,8 +578,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
     def _prefetch_next(self):
         """
-        Pre-run the full pipeline for every sweep AR at ``data_idx + 1`` on a
-        background daemon thread so that navigating forward feels instant.
+        Pre-compute read-only caches for the next resonator.
         """
         import threading as _threading
         next_di = self._data_idx + 1
@@ -601,10 +597,20 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
         def _worker():
             try:
-                for AR in ARs:
-                    AR.execute_path(
-                        data_idx=next_di, save=False, verbose=False
-                    )
+                self._get_x_array(next_di)
+                self._get_y_array(next_di)
+                if self._sweep_idx is not None:
+                    active_ar = ARs[self._sweep_idx]
+                    for panel in self.panels:
+                        old_ar = panel.AR
+                        old_di = panel.data_idx
+                        try:
+                            panel.AR = active_ar
+                            panel.data_idx = next_di
+                            panel.prefetch_plot_data(next_di)
+                        finally:
+                            panel.AR = old_ar
+                            panel.data_idx = old_di
                 self._prefetched_idx = next_di
                 self._prefetch_status_changed.emit(f'\u2713 prefetch {next_di}')
             except Exception as exc:
@@ -624,54 +630,6 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
                 4000, lambda: self._prefetch_label.setText('')
             )
 
-    def _save_all_sweep_data(self, di: int):
-        """
-        Flush in-memory pipeline results for *di* to zarr for every sweep AR,
-        without re-running any computation.  Only saves a sweep if its
-        ``iq_popt`` row is not already in zarr (i.e. was computed in memory
-        by prefetch or batch-init but never persisted).
-        """
-        for AR in self._ARs:
-            # Skip if already saved to zarr.
-            in_zarr = False
-            try:
-                root = AR.DS.root
-                for rk in root.group_keys():
-                    if rk.startswith('run') and 'iq_popt' in root[rk]:
-                        if root[rk]['iq_popt']['row_exists'][di]:
-                            in_zarr = True
-                            break
-            except Exception:
-                pass
-            if in_zarr:
-                continue
-            # Save each step's cached outputs — no recomputation.
-            for step_dict in AR.path:
-                step = step_dict['task']
-                if step.func_type in ('global', 'global-res'):
-                    continue
-                try:
-                    AR.save_step_outputs(step, data_idx=di)
-                except Exception:
-                    pass  # data not in memory for this step — skip
-
-    def _save_all_sweep_data_async(self, di: int):
-        """
-        Launch ``_save_all_sweep_data`` on a daemon background thread so that
-        navigation is not blocked by zarr I/O.  If a previous save thread is
-        still running it is left to finish on its own (zarr writes are
-        per-row and safe to interleave across different *di* values).
-        """
-        import threading as _threading
-        t = _threading.Thread(
-            target=self._save_all_sweep_data,
-            args=(di,),
-            daemon=True,
-            name=f'save-di-{di}',
-        )
-        self._save_thread = t
-        t.start()
-
     def _save_dirty_panels(self):
         """Save any panels that have unsaved results for the current state."""
         if self._sweep_idx is None:
@@ -685,10 +643,10 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event):
         """Auto-save dirty panels before closing."""
+        if not self._confirm_stale_downstream_before_leave():
+            event.ignore()
+            return
         self._save_dirty_panels()
-        self._save_all_sweep_data(self._data_idx)  # final flush (blocking)
-        if self._save_thread is not None and self._save_thread.is_alive():
-            self._save_thread.join()
         super().closeEvent(event)
 
     def _run_all_panels(self):
@@ -760,9 +718,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
     def _run_panel_by_index(self, index: int):
         if index >= len(self.panels):
             return
-        ok = self.panels[index].run_steps()
-        if ok:
-            self.panels[index].trigger_downstream()
+        self.panels[index].run_current()
 
     def _run_through_panel(self, index: int):
         for panel in self.panels[index:]:
@@ -779,32 +735,23 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self._update_sweep_point(self._sweep_idx)
 
     def _on_panel_rerun(self, source_panel):
-        """Cascade re-runs after source_panel, then refresh the scatter point.
-
-        If a downstream panel fails to run (e.g. because source_panel was
-        marked bad and its outputs are NaN), write NaN outputs for that panel
-        and all subsequent ones so the scatter point is removed cleanly.
-        """
+        """Mark downstream panels stale, then refresh the current sweep point."""
         try:
             src_idx = self.panels.index(source_panel)
         except ValueError:
             return
-        for i, panel in enumerate(self.panels[src_idx + 1:], start=src_idx + 1):
-            panel.prepare_run()
-            ok = panel.run_steps()
-            if not ok:
-                # Upstream data was bad — NaN-ify this and all remaining panels.
-                for p in self.panels[i:]:
-                    p._write_nan_outputs()
-                break
-        self._update_sweep_point(self._sweep_idx)
+        for panel in self.panels[src_idx + 1:]:
+            panel.mark_stale()
+        if self._sweep_idx is not None:
+            self._update_sweep_point(self._sweep_idx)
 
     def _mark_all_bad(self):
         """Mark every panel's outputs as NaN, clear their plots, and refresh scatter."""
         for panel in self.panels:
             panel._write_nan_outputs()
             panel.clear_plots()
-        self._update_sweep_point(self._sweep_idx)
+        if self._sweep_idx is not None:
+            self._update_sweep_point(self._sweep_idx)
 
     def _mark_all_sweeps_bad(self):
         """Mark every panel's outputs as NaN for all sweeps at current data_idx."""
@@ -821,6 +768,116 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         # Invalidate y-cache so scatter refreshes without these points
         self._y_cache.pop(di, None)
         self._update_sweep_scatter()
+
+    def _runner_outputs_exist(self, AR, data_idx: int) -> bool:
+        """
+        Return True when the final analysis-step outputs already exist for data_idx.
+        """
+        if not getattr(AR, 'path', None):
+            return False
+        final_step = AR.path[-1]['task']
+        for name in final_step.return_names:
+            try:
+                attr = getattr(AR.DS, name)
+                value = attr[data_idx]
+                if value is None:
+                    return False
+            except Exception:
+                return False
+        return True
+
+    def _initialize_runner_outputs(self, AR, data_idx: int):
+        """
+        Ensure global-prefix analysis steps exist once, then run the per-row suffix.
+        """
+        start_from_idx = self._global_prefix_length(AR)
+        for step_dict in AR.path[:start_from_idx]:
+            step = step_dict['task']
+            step_data_idx = None if step.func_type == 'global' else data_idx
+            if self._step_outputs_exist(AR, step, data_idx=step_data_idx):
+                continue
+            AR.execute_step(step, data_idx=None, save=True)
+
+        if start_from_idx < len(AR.path):
+            AR.execute_path(data_idx=data_idx, start_from_idx=start_from_idx, save=True, verbose=False)
+
+    def _global_prefix_length(self, AR) -> int:
+        """
+        Return the number of leading analysis steps with global/global-res func_type.
+        """
+        if not getattr(AR, 'path', None):
+            return 0
+        prefix_len = 0
+        for step_dict in AR.path:
+            if step_dict['task'].func_type not in ('global', 'global-res'):
+                break
+            prefix_len += 1
+        return prefix_len
+
+    def _step_outputs_exist(self, AR, step, data_idx):
+        """
+        Return True when every output for step already exists for the requested scope.
+        """
+        for name in step.return_names:
+            try:
+                attr = getattr(AR.DS, name)
+                if step.func_type == 'global':
+                    _ = attr
+                    continue
+                if data_idx is None:
+                    return False
+                _ = attr[data_idx]
+            except Exception:
+                return False
+        return True
+
+    def _stale_panels_after(self, source_panel=None):
+        """
+        Return downstream panels whose outputs were invalidated and not rerun.
+        """
+        start_index = 0
+        if source_panel is not None:
+            try:
+                start_index = self.panels.index(source_panel) + 1
+            except ValueError:
+                start_index = 0
+        return [panel for panel in self.panels[start_index:] if getattr(panel, '_needs_run', False)]
+
+    def _confirm_stale_downstream_before_leave(self):
+        """
+        Ask before leaving the current state while downstream panels remain stale.
+        """
+        stale = self._stale_panels_after()
+        if not stale:
+            return True
+        names = ', '.join(' + '.join(panel.step_names) for panel in stale)
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            'Panels Need Run',
+            'Earlier panel changes invalidated later panel outputs for the current selection.\n\n'
+            f'Panels needing a rerun: {names}\n\nLeave anyway?',
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        return reply == QtWidgets.QMessageBox.Yes
+
+    def _confirm_stale_downstream_before_save(self, source_panel):
+        """
+        Ask before saving when later panels remain stale.
+        """
+        stale = self._stale_panels_after(source_panel)
+        if not stale:
+            return True
+        names = ', '.join(' + '.join(panel.step_names) for panel in stale)
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            'Downstream Panels Need Run',
+            'Saving now will keep later panel outputs missing for the current sweep selection.\n\n'
+            f'Panels needing a rerun: {names}\n\nContinue saving?',
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        return reply == QtWidgets.QMessageBox.Yes
 
     def _autoscale_all(self):
         for panel in self.panels:

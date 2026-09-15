@@ -170,6 +170,30 @@ class TestExecutionModeParameter:
         vec_mult_step = next(step for step in ar.analysis_steps if step.name == "vec_mult")
         ar.execute_step(vec_mult_step, data_idx=0, execution_mode='per-row', save=True)
 
+    def test_execute_step_accepts_execute_per_row(self, execution_mode_fixture):
+        """execute_step should allow vectorized steps to run row-by-row."""
+        files = execution_mode_fixture
+        ds = DataSet(
+            zarr_path=str(files["zarr_path"]),
+            cal_yaml_path=str(files["cal_yaml"]),
+            custom_path=str(files["cal_custom"]),
+        )
+        ar = AnalysisRunner(
+            ds,
+            analysis_yaml_path=str(files["analysis_yaml"]),
+            custom_path=str(files["analysis_custom"]),
+        )
+
+        import_step = next(step for step in ds.cal_steps if step.name == "load_data")
+        ar.execute_step(import_step, save=True)
+        load_vec_step = next(step for step in ar.analysis_steps if step.name == "load_vector")
+        ar.execute_step(load_vec_step, save=True)
+        vec_mult_step = next(step for step in ar.analysis_steps if step.name == "vec_mult")
+
+        ar.execute_step(vec_mult_step, data_idx=[0, 1], execute_per_row=True, save=True)
+
+        np.testing.assert_array_equal(ds.result[[0, 1]], np.array([0, 6]))
+
     def test_execution_mode_invalid_value_raises(self, execution_mode_fixture):
         """execute_path should raise ValueError for invalid execution_mode."""
         files = execution_mode_fixture
@@ -237,6 +261,75 @@ class TestExecutionModeParameter:
         # Both should exist and be equal
         assert result_vec == result_per_row, \
             f"Results differ: vectorized={result_vec}, per-row={result_per_row}"
+
+    def test_execute_path_execute_per_row_runs_complete_row_before_next(self, tmp_path):
+        cal_custom = tmp_path / "custom_cal_steps.py"
+        cal_custom.write_text(
+            "from citkid.pipeline_v2.framework import plStep\n"
+            "\n"
+            "def load_data():\n"
+            "    return 2\n"
+            "\n"
+            "custom_cal_steps = [\n"
+            "    plStep('load_data', load_data, [], ['nrows'], 'global'),\n"
+            "]\n",
+            encoding="utf-8",
+        )
+        analysis_custom = tmp_path / "custom_analysis_steps.py"
+        analysis_custom.write_text(
+            "import numpy as np\n"
+            "from citkid.pipeline_v2.framework import plStep\n"
+            "\n"
+            "call_log = []\n"
+            "\n"
+            "def vec_step(data_idx):\n"
+            "    call_log.append(('vec', int(np.atleast_1d(data_idx)[0])))\n"
+            "    return np.atleast_1d(data_idx) * 10\n"
+            "\n"
+            "def row_step(vec_out, data_idx):\n"
+            "    call_log.append(('row', int(data_idx)))\n"
+            "    return vec_out + data_idx\n"
+            "\n"
+            "custom_analysis_steps = [\n"
+            "    plStep('vec_step', vec_step, ['data_idx'], ['vec_out'], 'vectorized'),\n"
+            "    plStep('row_step', row_step, ['vec_out', 'data_idx'], ['final'], 'per-row'),\n"
+            "]\n",
+            encoding="utf-8",
+        )
+        cal_yaml = tmp_path / "cal.yaml"
+        cal_yaml.write_text(
+            "CAL_STEPS:\n"
+            "  1:\n"
+            "    task: load_data\n",
+            encoding="utf-8",
+        )
+        analysis_yaml = tmp_path / "analysis.yaml"
+        analysis_yaml.write_text(
+            "ANALYSIS_STEPS:\n"
+            "  1:\n"
+            "    task: vec_step\n"
+            "  2:\n"
+            "    task: row_step\n",
+            encoding="utf-8",
+        )
+
+        ds = DataSet(
+            zarr_path=str(tmp_path / "execute_per_row.zarr"),
+            cal_yaml_path=str(cal_yaml),
+            custom_path=str(cal_custom),
+        )
+        ar = AnalysisRunner(
+            ds,
+            analysis_yaml_path=str(analysis_yaml),
+            custom_path=str(analysis_custom),
+        )
+        import_step = next(step for step in ds.cal_steps if step.name == "load_data")
+        ar.execute_step(import_step, save=True)
+
+        ar.execute_path(data_idx=[0, 1], execute_per_row=True, verbose=False, save=True)
+
+        log = ar.analysis_steps[0].func.__globals__['call_log']
+        assert log == [('vec', 0), ('row', 0), ('vec', 1), ('row', 1)]
 
     def test_execute_path_partial_rows_allow_first_global_res_run(self, execution_mode_fixture):
         """A first partial execute_path may run a global-res step if nothing exists yet."""

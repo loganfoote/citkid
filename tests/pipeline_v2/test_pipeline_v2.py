@@ -152,6 +152,146 @@ def test_execute_step_does_not_rerun_earlier_analysis_steps(pipeline_v2_files):
         ar.execute_step(step2, data_idx=0, save=True)
 
 
+def test_dataset_reloads_embedded_cal_definition_and_rejects_mismatch(tmp_path):
+    cal_custom = tmp_path / "custom_cal_steps.py"
+    cal_custom.write_text(
+        "from citkid.pipeline_v2.framework import plStep\n"
+        "\n"
+        "def load_data():\n"
+        "    return 2\n"
+        "\n"
+        "custom_cal_steps = [\n"
+        "    plStep('load_data', load_data, [], ['nrows'], 'global'),\n"
+        "]\n",
+        encoding="utf-8",
+    )
+    cal_yaml = tmp_path / "cal.yaml"
+    cal_yaml.write_text(
+        "CAL_STEPS:\n"
+        "  1:\n"
+        "    task: load_data\n",
+        encoding="utf-8",
+    )
+    zarr_path = tmp_path / "reload_test.zarr"
+
+    ds = DataSet(
+        zarr_path=str(zarr_path),
+        cal_yaml_path=str(cal_yaml),
+        custom_path=str(cal_custom),
+    )
+    assert int(ds.nrows) == 2
+
+    ds_reloaded = DataSet(zarr_path=str(zarr_path))
+    assert int(ds_reloaded.nrows) == 2
+    assert ds_reloaded.cal_yaml_text == ds.cal_yaml_text
+    assert ds_reloaded.cal_custom_source == ds.cal_custom_source
+
+    mismatch_custom = tmp_path / "mismatch_custom_steps.py"
+    mismatch_custom.write_text(
+        "from citkid.pipeline_v2.framework import plStep\n"
+        "\n"
+        "def load_data():\n"
+        "    return 5\n"
+        "\n"
+        "custom_cal_steps = [\n"
+        "    plStep('load_data', load_data, [], ['nrows'], 'global'),\n"
+        "]\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="custom steps"):
+        DataSet(
+            zarr_path=str(zarr_path),
+            cal_yaml_path=str(cal_yaml),
+            custom_path=str(mismatch_custom),
+        )
+
+
+def test_dataset_custom_main_directory_overwrite_applies_to_embedded_source(tmp_path):
+    cal_custom = tmp_path / "custom_cal_steps.py"
+    cal_custom.write_text(
+        "from citkid.pipeline_v2.framework import plStep\n"
+        "main_directory = '/old/raw/path'\n"
+        "\n"
+        "def load_data():\n"
+        "    return 1, main_directory\n"
+        "\n"
+        "custom_cal_steps = [\n"
+        "    plStep('load_data', load_data, [], ['nrows', 'raw_dir'], 'global'),\n"
+        "]\n",
+        encoding="utf-8",
+    )
+    cal_yaml = tmp_path / "cal.yaml"
+    cal_yaml.write_text(
+        "CAL_STEPS:\n"
+        "  1:\n"
+        "    task: load_data\n",
+        encoding="utf-8",
+    )
+    zarr_path = tmp_path / "main_dir_test.zarr"
+
+    DataSet(
+        zarr_path=str(zarr_path),
+        cal_yaml_path=str(cal_yaml),
+        custom_path=str(cal_custom),
+    )
+    ds_reloaded = DataSet(
+        zarr_path=str(zarr_path),
+        custom_main_directory_overwrite="D:/new/raw/path",
+    )
+
+    assert ds_reloaded.raw_dir == "D:/new/raw/path"
+
+
+def test_apply_cal_uses_replacements_without_storing_intermediates(tmp_path):
+    cal_custom = tmp_path / "custom_cal_steps.py"
+    cal_custom.write_text(
+        "from citkid.pipeline_v2.framework import plStep\n"
+        "\n"
+        "def load_data():\n"
+        "    return 3\n"
+        "\n"
+        "def load_zt(data_idx):\n"
+        "    return data_idx + 1\n"
+        "\n"
+        "def calc_xt(zt):\n"
+        "    return zt * 2\n"
+        "\n"
+        "custom_cal_steps = [\n"
+        "    plStep('load_data', load_data, [], ['nrows'], 'global'),\n"
+        "    plStep('load_zt', load_zt, ['data_idx'], ['zt'], 'per-row'),\n"
+        "    plStep('calc_xt', calc_xt, ['zt'], ['xt'], 'vectorized'),\n"
+        "]\n",
+        encoding="utf-8",
+    )
+    cal_yaml = tmp_path / "cal.yaml"
+    cal_yaml.write_text(
+        "CAL_STEPS:\n"
+        "  1:\n"
+        "    task: load_data\n"
+        "  2:\n"
+        "    task: load_zt\n"
+        "  3:\n"
+        "    task: calc_xt\n",
+        encoding="utf-8",
+    )
+
+    ds = DataSet(
+        zarr_path=str(tmp_path / "apply_cal.zarr"),
+        cal_yaml_path=str(cal_yaml),
+        custom_path=str(cal_custom),
+    )
+
+    result = ds.apply_cal(
+        data_indices=[0, 1],
+        outputs=['xt'],
+        replacements={'zt': np.array([10.0, 20.0])},
+    )
+
+    np.testing.assert_array_equal(result['xt'], np.array([20.0, 40.0]))
+    assert 'xt' not in ds._param_meta
+    assert 'zt' not in ds._param_meta
+
+
 @pytest.fixture
 def pipeline_v2_dependency_files(tmp_path):
     cal_custom = tmp_path / "custom_cal_steps.py"

@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime
 
 import numpy as np
@@ -38,6 +39,7 @@ class DataSet:
         custom_path=None,
         zarr_mode="a",
         custom_cal_steps=None,
+        custom_main_directory_overwrite=None,
     ):
         """
         Initialize the dataset and load its calibration definition.
@@ -54,6 +56,9 @@ class DataSet:
             provided.
         custom_cal_steps (list of plStep or None): Custom calibration steps to
             use directly instead of loading them from ``custom_path``.
+        custom_main_directory_overwrite (str or None): Replacement value for a
+            ``main_directory`` assignment inside embedded custom calibration
+            source loaded from zarr metadata.
 
         Raises:
         TypeError: If the supplied path arguments have invalid types.
@@ -63,6 +68,8 @@ class DataSet:
             raise TypeError("custom_path must be a string or None")
         if cal_yaml_path is not None and not isinstance(cal_yaml_path, str):
             raise TypeError("cal_yaml_path must be a string or None")
+        if custom_main_directory_overwrite is not None and not isinstance(custom_main_directory_overwrite, str):
+            raise TypeError("custom_main_directory_overwrite must be a string or None")
 
         if isinstance(zarr_path, zarr.Group):
             self.root = zarr_path
@@ -94,11 +101,13 @@ class DataSet:
             cal_yaml_path=cal_yaml_path,
             custom_path=custom_path,
             custom_cal_steps=custom_cal_steps,
+            custom_main_directory_overwrite=custom_main_directory_overwrite,
         )
         self.cal_yaml_path = cal_def["yaml_path"]
         self.custom_path = cal_def["custom_path"]
         self.cal_yaml_text = cal_def["yaml_text"]
         self.cal_custom_source = cal_def["custom_source"]
+        self.custom_main_directory_overwrite = custom_main_directory_overwrite
 
         self.cal_steps = list(cal_def["custom_steps"])
         for step in default_steps.default_cal_steps:
@@ -175,6 +184,57 @@ class DataSet:
                 downstream.append(target)
                 queue.append(target)
         return downstream
+
+    def apply_cal(self, data_indices, outputs, replacements=None):
+        """
+        Evaluate calibration outputs with temporary input replacements.
+
+        Parameters:
+        data_indices (int, array-like, or None): Rows to evaluate for per-row
+            and vectorized calibration steps.
+        outputs (str or iterable[str]): Calibration outputs to produce.
+        replacements (dict or None): Temporary parameter overrides used in
+            place of the dataset-backed values.
+
+        Returns:
+        dict: Mapping of requested output name to the computed value.
+        """
+        requested_outputs = [outputs] if isinstance(outputs, str) else list(outputs)
+        if not requested_outputs:
+            raise ValueError("outputs must contain at least one calibration output")
+        replacements = {} if replacements is None else dict(replacements)
+
+        rows = self._normalize_rows(data_indices)
+        step_paths = []
+        for output_name in requested_outputs:
+            path = pf.find_pl_path(self.cal_pl, output_name)
+            if path is None:
+                raise ValueError(f"Calibration pipeline cannot produce output '{output_name}'")
+            step_paths.append(path)
+
+        steps = _merge_step_paths(step_paths)
+        local_values = {}
+        replacement_values, replacement_is_global = self._normalize_apply_cal_replacements(replacements, rows)
+
+        for step in steps:
+            if all(name in replacement_values or name in local_values for name in step.return_names):
+                continue
+            step_rows = None if step.func_type in ("global", "global-res") else rows
+            params, param_is_global = self._collect_apply_cal_params(
+                step,
+                step_rows,
+                local_values,
+                replacement_values,
+                replacement_is_global,
+            )
+            out = step._run(params, param_is_global)
+            for name, value in out.items():
+                local_values[name] = value
+
+        return {
+            output_name: replacement_values[output_name] if output_name in replacement_values else local_values[output_name]
+            for output_name in requested_outputs
+        }
 
     def invalidate_memory_params(self, names, data_idx=None):
         """
@@ -424,6 +484,100 @@ class DataSet:
                 pipeline_scope="cal",
                 step_index=step_index,
             )
+
+    def _normalize_apply_cal_replacements(self, replacements, rows):
+        """
+        Normalize replacement values for apply_cal.
+        """
+        values = {}
+        is_global = {}
+        for name, value in replacements.items():
+            replacement_is_global = self._is_known_global_param(name)
+            is_global[name] = replacement_is_global
+            if replacement_is_global:
+                values[name] = value
+                continue
+            if rows is None:
+                raise ValueError(
+                    f"Replacement '{name}' is per-row and requires data_indices"
+                )
+            if len(rows) == 1:
+                values[name] = np.asarray([value]) if not isinstance(value, np.ndarray) else value
+                continue
+            if isinstance(value, np.ndarray) and len(value) == len(rows):
+                values[name] = value
+                continue
+            if isinstance(value, (list, tuple)) and len(value) == len(rows):
+                values[name] = np.asarray(value)
+                continue
+            if not isinstance(value, (list, tuple, np.ndarray)):
+                values[name] = np.asarray([value] * len(rows))
+                continue
+            raise ValueError(
+                f"Replacement '{name}' must provide one value per requested row"
+            )
+        return values, is_global
+
+    def _collect_apply_cal_params(
+        self,
+        step,
+        data_idx,
+        local_values,
+        replacement_values,
+        replacement_is_global,
+    ):
+        """
+        Collect concrete arguments for apply_cal without mutating dataset state.
+        """
+        params = []
+        param_is_global = []
+        for param_name in step.param_names:
+            if param_name == "data_idx":
+                if data_idx is None:
+                    params.append(None)
+                    param_is_global.append(True)
+                else:
+                    params.append(data_idx)
+                    param_is_global.append(False)
+                continue
+
+            if param_name in replacement_values:
+                params.append(replacement_values[param_name])
+                param_is_global.append(replacement_is_global[param_name])
+                continue
+
+            if param_name in local_values:
+                value = local_values[param_name]
+                value_is_global = self._is_known_global_param(param_name)
+                params.append(value)
+                param_is_global.append(value_is_global)
+                continue
+
+            value = getattr(self, param_name)
+            value_is_global = not isinstance(value, pf.LazyAttr)
+            if value_is_global:
+                params.append(value)
+                param_is_global.append(True)
+                continue
+            if data_idx is None:
+                raise ValueError(
+                    f"Global step '{step.name}' cannot consume per-row parameter '{param_name}'"
+                )
+            params.append(value[data_idx])
+            param_is_global.append(False)
+        return params, param_is_global
+
+    def _is_known_global_param(self, name):
+        """
+        Return True when name is known to be produced as a global parameter.
+        """
+        meta = self._param_meta.get(name)
+        if meta is not None:
+            return bool(meta["global"])
+        path = pf.find_pl_path(self.cal_pl, name)
+        if path is not None:
+            return path[-1].func_type == "global"
+        return False
 
     def _execute_step(self, step, data_idx=None, save=False, pipeline_scope=None, step_index=None, execution_mode='vectorized'):
         """
@@ -747,7 +901,7 @@ class DataSet:
             return False
         return bool(np.all(group["row_exists"][rows]))
 
-    def _resolve_cal_definition(self, cal_yaml_path, custom_path, custom_cal_steps):
+    def _resolve_cal_definition(self, cal_yaml_path, custom_path, custom_cal_steps, custom_main_directory_overwrite):
         """
         Resolve the calibration definition from inputs and embedded metadata.
         """
@@ -795,11 +949,14 @@ class DataSet:
             custom_source = _read_text_file(resolved_custom_path)
         elif stored_custom is not None:
             resolved_custom_path = stored_custom_path
-            custom_source = stored_custom
+            custom_source = _overwrite_main_directory_in_source(
+                stored_custom,
+                custom_main_directory_overwrite,
+            )
 
         if stored_yaml is not None and yaml_text != stored_yaml:
             raise ValueError("Provided calibration YAML does not match the dataset definition")
-        if stored_custom is not None and custom_source != stored_custom:
+        if stored_custom is not None and custom_path is not None and custom_source != stored_custom:
             raise ValueError("Provided calibration custom steps do not match the dataset definition")
 
         if stored_yaml is None:
@@ -900,6 +1057,20 @@ def _load_custom_cal_steps_from_source(source):
     return list(namespace.get("custom_cal_steps", []))
 
 
+def _overwrite_main_directory_in_source(source, main_directory_overwrite):
+    """
+    Replace a top-level ``main_directory = ...`` assignment when requested.
+    """
+    if source is None or main_directory_overwrite is None:
+        return source
+
+    pattern = re.compile(r"^(\s*main_directory\s*=\s*).*$", re.MULTILINE)
+    replacement = rf"\1{main_directory_overwrite!r}"
+    if pattern.search(source) is None:
+        return source
+    return pattern.sub(replacement, source, count=1)
+
+
 def _normalize_row_values(value, rows):
     """
     Normalize per-row outputs into one value per requested row.
@@ -987,6 +1158,21 @@ def _build_param_dependency_graph(tree):
         for input_name in input_names:
             graph.setdefault(input_name, set()).update(step.return_names)
     return graph
+
+
+def _merge_step_paths(paths):
+    """
+    Merge multiple step paths into one ordered list without duplicates.
+    """
+    merged = []
+    seen = set()
+    for path in paths:
+        for step in path:
+            if step.name in seen:
+                continue
+            seen.add(step.name)
+            merged.append(step)
+    return merged
 
 
 def _convert_yaml_to_steps(pl_dict, cal_steps, key=None):

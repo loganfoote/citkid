@@ -364,9 +364,6 @@ class FitIQPanel(StepPanel):
         if self._ff_cache is not None:
             self._build_mask(self._ff_cache)
 
-    def _on_save_clicked(self):
-        super()._on_save_clicked()
-
     def _on_step_error(self, step, exc):
         msg = f"'{step.name}' failed: {exc}"
         self._status_label.setText(msg)

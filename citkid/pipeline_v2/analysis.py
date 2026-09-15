@@ -82,6 +82,7 @@ class AnalysisRunner:
         verbose=True,
         save=True,
         execution_mode='vectorized',
+        execute_per_row=False,
     ):
         """
         Execute the loaded analysis path in order.
@@ -96,11 +97,54 @@ class AnalysisRunner:
         execution_mode (str): How to execute vectorized steps. Can be 'vectorized'
             (default, loads all data at once) or 'per-row' (loops over each
             data_idx one at a time, using less memory).
+        execute_per_row (bool): When True, iterate over ``data_idx`` one row at
+            a time and run the full remaining path for each row before moving
+            to the next row.
         """
         if execution_mode not in ('vectorized', 'per-row'):
             raise ValueError(f"execution_mode must be 'vectorized' or 'per-row', got '{execution_mode}'")
         path_steps = self.path[start_from_idx:]
         self._validate_execute_path_scope(path_steps, data_idx)
+        if execute_per_row:
+            rows = self.DS._normalize_rows(data_idx)
+            if rows is None:
+                rows = np.arange(int(self.DS.nrows), dtype=np.int32)
+            row_iter = rows
+            if verbose:
+                row_iter = tqdm(
+                    rows,
+                    leave=False,
+                    bar_format="{desc}: {n_fmt}/{total_fmt}  |{bar}|",
+                )
+            executed_global_steps = set()
+            for row in row_iter:
+                if verbose:
+                    row_iter.set_description(f"Executing row: {int(row)}")
+                for step_dict in path_steps:
+                    step = step_dict["task"]
+                    params = step_dict.get("params", {})
+                    if step.func_type in ("global", "global-res"):
+                        if step.name in executed_global_steps:
+                            continue
+                        self.execute_step(
+                            step,
+                            data_idx=None,
+                            user_params=params,
+                            save=save,
+                            execution_mode=execution_mode,
+                            execute_per_row=execute_per_row,
+                        )
+                        executed_global_steps.add(step.name)
+                        continue
+                    self.execute_step(
+                        step,
+                        data_idx=int(row),
+                        user_params=params,
+                        save=save,
+                        execution_mode=execution_mode,
+                        execute_per_row=execute_per_row,
+                    )
+            return
         path_iter = path_steps
         if verbose:
             path_iter = tqdm(
@@ -114,16 +158,24 @@ class AnalysisRunner:
             step = step_dict["task"]
             params = step_dict.get("params", {})
             step_data_idx = None if step.func_type in ("global", "global-res") else data_idx
-            self.execute_step(step, data_idx=step_data_idx, user_params=params, save=save, execution_mode=execution_mode)
+            self.execute_step(
+                step,
+                data_idx=step_data_idx,
+                user_params=params,
+                save=save,
+                execution_mode=execution_mode,
+                execute_per_row=execute_per_row,
+            )
 
     def execute_step(
         self,
         step,
         data_idx=None,
         user_params=None,
-        save=False,
+        save=True,
         execution_mode='vectorized',
         allow_global_step_overwrite=False,
+        execute_per_row=False,
     ):
         """
         Execute a single analysis or calibration step.
@@ -135,7 +187,8 @@ class AnalysisRunner:
         user_params (dict, None, or 'from_yaml'): Explicit user parameters for
             the step, or the sentinel ``'from_yaml'`` to reuse parameters from
             the loaded analysis YAML.
-        save (bool): If True, persist outputs immediately after execution.
+        save (bool): If True, persist inputs and outputs immediately after
+            execution. Default True.
         execution_mode (str): How to execute this step. Can be 'vectorized'
             (default, loads all data at once) or 'per-row' (loops over each
             data_idx one at a time). 'per-row' is useful for memory-constrained
@@ -143,6 +196,8 @@ class AnalysisRunner:
         allow_global_step_overwrite (bool): Must be True to rerun a global or
             global-res step when that rerun would overwrite its existing
             outputs or downstream products.
+        execute_per_row (bool): When True, force vectorized steps to run one
+            requested row at a time.
 
         Raises:
         ValueError: If inputs are missing or step/data_idx constraints are
@@ -150,6 +205,8 @@ class AnalysisRunner:
         """
         if execution_mode not in ('vectorized', 'per-row'):
             raise ValueError(f"execution_mode must be 'vectorized' or 'per-row', got '{execution_mode}'")
+        if execute_per_row and step.func_type == 'vectorized':
+            execution_mode = 'per-row'
         if user_params == "from_yaml":
             user_params = self._get_yaml_params(step)
         if user_params is None:

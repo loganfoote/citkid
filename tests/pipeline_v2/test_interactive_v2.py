@@ -4,12 +4,14 @@ from unittest.mock import MagicMock, patch
 from pyqtgraph.Qt import QtWidgets
 
 import citkid.pipeline_v2.interactive.core as icore
+import citkid.pipeline_v2.interactive.sweep_fitter as isweep
 from citkid.pipeline_v2.framework import plStep
 from citkid.pipeline_v2.interactive.core import (
     DefaultStepPanel,
     InteractiveAnalysisWindow,
     StepPanel,
 )
+from citkid.pipeline_v2.interactive.sweep_fitter import SweepFitterWindow
 
 
 def _make_step(name, func_type='per-row', return_names=None):
@@ -146,5 +148,140 @@ class TestInteractiveWindowV2:
             win.panels[0]._on_save_clicked()
 
         assert win.AR.save_step_outputs.call_count == 0
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            win.close()
+
+
+class TestSweepFitterWindowV2:
+    def _make_window(self, qt_app, monkeypatch):
+        step1 = _make_step('fit_gain')
+        step2 = _make_step('fit_iq')
+        ars = []
+        for _ in range(2):
+            ar = MagicMock()
+            ar.analysis_steps = [step1, step2]
+            ar.path = [{'task': step1}, {'task': step2}]
+            ar._last_failures = {}
+            ar.execute_step.return_value = None
+            ar.DS = MagicMock()
+            ar.DS.nrows = 2
+            ars.append(ar)
+        monkeypatch.setattr(isweep, 'get_panel_class', lambda _names: _WindowPanel)
+        monkeypatch.setattr(isweep.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
+        return SweepFitterWindow(
+            ars,
+            x_param_name='x',
+            x_name='X',
+            y_func=lambda _ar, _di: None,
+            y_name='Y',
+            start_sweep_idx=0,
+            start_data_idx=0,
+            title='test',
+        )
+
+    def test_run_panel_marks_downstream_stale(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+        win._sweep_idx = 0
+        win._update_sweep_point = MagicMock()
+
+        win._run_panel_by_index(0)
+
+        assert win.panels[0]._has_run is True
+        assert win.panels[1]._needs_run is True
+        assert win.panels[1].clear_calls == 1
+        win._update_sweep_point.assert_called_once_with(0)
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            win.close()
+
+    def test_data_idx_navigation_cancel_keeps_state_when_stale(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+        win.panels[1]._needs_run = True
+
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.No):
+            win._set_data_idx(1)
+
+        assert win._data_idx == 0
+        assert win._data_idx_spin.value() == 0
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            win.close()
+
+    def test_panel_save_cancel_skips_persist_when_downstream_stale(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+        win._sweep_idx = 0
+        win.panels[1]._needs_run = True
+
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.No):
+            win.panels[0]._on_save_clicked()
+
+        assert win._ARs[0].save_step_outputs.call_count == 0
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            win.close()
+
+    def test_prefetch_next_does_not_execute_pipeline(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+        win._sweep_idx = 0
+
+        win._prefetch_next()
+        if win._prefetch_thread is not None:
+            win._prefetch_thread.join(timeout=2)
+
+        assert all(ar.execute_path.call_count == 0 for ar in win._ARs)
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            win.close()
+
+    def test_batch_init_runs_global_prefix_once_then_suffix_per_index(self, qt_app, monkeypatch):
+        global_step = _make_step('global_step', func_type='global', return_names=['g'])
+        per_row_step = _make_step('fit_gain', return_names=['y'])
+        final_step = _make_step('fit_iq', return_names=['z'])
+        ar = MagicMock()
+        ar.analysis_steps = [global_step, per_row_step, final_step]
+        ar.path = [{'task': global_step}, {'task': per_row_step}, {'task': final_step}]
+        ar._last_failures = {}
+        ar.execute_step.return_value = None
+        ar.execute_path.return_value = None
+        ar.DS = MagicMock()
+        ar.DS.nrows = 3
+
+        ars = [ar]
+        monkeypatch.setattr(isweep, 'get_panel_class', lambda _names: _WindowPanel)
+        monkeypatch.setattr(isweep.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
+
+        win = SweepFitterWindow(
+            ars,
+            x_param_name='x',
+            x_name='X',
+            y_func=lambda _ar, _di: None,
+            y_name='Y',
+            start_sweep_idx=0,
+            start_data_idx=0,
+            title='test',
+        )
+
+        global_ready = {'done': False}
+
+        def fake_step_outputs_exist(_ar, step, data_idx):
+            if step.name == 'global_step':
+                return global_ready['done']
+            return False
+
+        def fake_execute_step(step, data_idx=None, save=False, **_kwargs):
+            if step.name == 'global_step':
+                global_ready['done'] = True
+
+        ar.execute_step.side_effect = fake_execute_step
+        win._step_outputs_exist = fake_step_outputs_exist
+        win._runner_outputs_exist = lambda _ar, _di: False
+
+        win._batch_init_all_sweeps()
+        win._data_idx = 1
+        win._batch_init_all_sweeps()
+
+        assert ar.execute_step.call_count == 1
+        ar.execute_step.assert_called_with(global_step, data_idx=None, save=True)
+        assert ar.execute_path.call_count == 2
+        assert ar.execute_path.call_args_list[0].kwargs['start_from_idx'] == 1
+        assert ar.execute_path.call_args_list[0].kwargs['data_idx'] == 0
+        assert ar.execute_path.call_args_list[1].kwargs['start_from_idx'] == 1
+        assert ar.execute_path.call_args_list[1].kwargs['data_idx'] == 1
         with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
             win.close()
