@@ -125,6 +125,16 @@ class ResFinder(QtCore.QObject):
         else:
             self.zarr_group = zarr_grp
 
+        # Load optional saved x-limits from previous runs
+        self._saved_xlims = None
+        try:
+            if 'res_finder_manual_xlims' in self.zarr_group:
+                arr = np.array(self.zarr_group['res_finder_manual_xlims'])
+                if arr.size >= 2:
+                    self._saved_xlims = (float(arr[0]), float(arr[1]))
+        except Exception:
+            self._saved_xlims = None
+
         # Unwrap phase and remove 3rd order polynomial trend
         unwrapped_phase = np.unwrap(np.angle(self.z))
         # Fit 1st order polynomial to remove trend
@@ -297,11 +307,24 @@ class ResFinder(QtCore.QObject):
         
         # Initialize markers and auto-scale
         self.update_resonance_markers()
-        # Start zoomed to the first 10 MHz for a fast initial render;
-        # the overview navigator shows the full range.
+        # Restore saved x-limits if present, otherwise start at beginning (first 10 MHz)
         _f_lo = float(self.f[0])
-        _f_hi = _f_lo + 10e6
-        self.plot_mag.setXRange(_f_lo, _f_hi, padding=0.02)
+        if getattr(self, '_saved_xlims', None) is not None:
+            try:
+                x0, x1 = self._saved_xlims
+                f_min_total = float(self.f[0])
+                f_max_total = float(self.f[-1])
+                x0 = max(f_min_total, min(x0, f_max_total))
+                x1 = max(f_min_total, min(x1, f_max_total))
+                if x1 <= x0:
+                    raise ValueError('invalid saved xlims')
+                self.plot_mag.setXRange(x0, x1, padding=0.02)
+            except Exception:
+                _f_hi = _f_lo + 10e6
+                self.plot_mag.setXRange(_f_lo, _f_hi, padding=0.02)
+        else:
+            _f_hi = _f_lo + 10e6
+            self.plot_mag.setXRange(_f_lo, _f_hi, padding=0.02)
         self._update_curves()
         self.auto_scale_y()
         self._update_overview_region()
@@ -1299,6 +1322,17 @@ class ResFinder(QtCore.QObject):
         if 'fres_manual' in self.zarr_group:
             del self.zarr_group['fres_manual']
         self.zarr_group.create_array('fres_manual', data = fres_array)
+
+        # Save current view x-limits so we can restore exact view next run
+        try:
+            x_min, x_max = self.plot_mag.viewRange()[0]
+            # Overwrite existing key if present
+            if 'res_finder_manual_xlims' in self.zarr_group:
+                del self.zarr_group['res_finder_manual_xlims']
+            self.zarr_group.create_array('res_finder_manual_xlims', data = np.array([x_min, x_max], dtype=np.float64))
+        except Exception:
+            # UI not available; ignore
+            pass
 
         self.log(f"Saved {len(self.fres)} resonances to zarr group")
         

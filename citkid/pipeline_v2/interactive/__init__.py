@@ -1,4 +1,4 @@
-"""citkid.pipeline.interactive — modular, stackable interactive analysis UI.
+"""citkid.pipeline_v2.interactive — modular, stackable interactive analysis UI.
 
 Public API
 ----------

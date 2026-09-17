@@ -118,6 +118,7 @@ def run_res_matcher(
     init_match: str = 'sorted',
     margin_factor: float = 0.15,
     apply_filter: bool = False,
+    DS2_f_offset: float = 0.0,
 ):
     """
     Run the interactive resonance matcher.
@@ -141,6 +142,8 @@ def run_res_matcher(
     apply_filter (bool): If False (default), both dataset filters start as
         'none' so the raw magnitude is shown and startup is fast.  Set True
         to start with the default highpass filter applied.
+    DS2_f_offset (float): Visualization-only frequency offset applied to the
+        DS2 plots and markers. Saved resonance frequencies remain unchanged.
 
     Returns:
     groups (list[MatchGroup]): Final list of match groups.
@@ -153,6 +156,7 @@ def run_res_matcher(
         init_match=init_match,
         margin_factor=margin_factor,
         apply_filter=apply_filter,
+        DS2_f_offset=DS2_f_offset,
     )
     matcher.run()
     return matcher.groups
@@ -160,6 +164,10 @@ def run_res_matcher(
 
 class CustomViewBox(pg.ViewBox):
     """ViewBox that suppresses context menu when Ctrl is held."""
+    
+    def __init__(self, *args, drag_callback=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._drag_callback = drag_callback
     
     def raiseContextMenu(self, ev):
         """Override to check for Ctrl modifier before showing menu."""
@@ -170,6 +178,23 @@ class CustomViewBox(pg.ViewBox):
             return
         # Otherwise, show normal PyQtGraph menu
         super().raiseContextMenu(ev)
+
+    def mouseDragEvent(self, ev, axis=None):
+        """Ctrl+Left-drag shifts the DS2 display offset instead of panning."""
+        if (
+            self._drag_callback is not None
+            and ev.button() == _Qt.LeftButton
+            and QtWidgets.QApplication.keyboardModifiers() & _Qt.ControlModifier
+        ):
+            last_pos = getattr(ev, 'lastScenePos', None)
+            cur_pos = getattr(ev, 'scenePos', None)
+            if callable(last_pos) and callable(cur_pos):
+                x_prev = float(self.mapSceneToView(last_pos()).x())
+                x_cur = float(self.mapSceneToView(cur_pos()).x())
+                self._drag_callback(x_cur - x_prev)
+                ev.accept()
+                return
+        super().mouseDragEvent(ev, axis=axis)
 
 # ---------------------------------------------------------------------------
 # Main class
@@ -188,6 +213,7 @@ class ResMatcher:
         margin_factor: float = 0.15,
         overwrite: bool = False,
         apply_filter: bool = False,
+        DS2_f_offset: float = 0.0,
     ):
         # ---- store raw arrays -----------------------------------------------
         self.f1 = np.asarray(f1, dtype=np.float64)
@@ -216,6 +242,8 @@ class ResMatcher:
                 )
 
         self.margin_factor = margin_factor
+        self.ds2_f_offset = float(DS2_f_offset)
+        self.f2_display = self.f2 + self.ds2_f_offset
         # Ensure new resonance indices don't collide with existing ones
         max_existing_idx = max(
             np.max(self.res_idx1_init) if len(self.res_idx1_init) > 0 else -1,
@@ -237,7 +265,9 @@ class ResMatcher:
             'ambiguous_groups',
         ]
         _load_from_zarr = False
+        # legacy variable removed; kept placeholder for config compatibility
         _max_view_left_initial = None
+        _saved_view_xlims = None
         
         if all(key in self.zarr_group for key in _output_keys):
             # Data exists, show dialog
@@ -246,15 +276,18 @@ class ResMatcher:
                 raise RuntimeError("User cancelled operation")
             elif choice == 'load':
                 _load_from_zarr = True
-                # Load max_view_left if it exists
-                if 'max_view_left' in self.zarr_group:
-                    _max_view_left_initial = float(self.zarr_group['max_view_left'][()])
+                # Load saved x-limits if they exist (new key)
+                if 'res_matcher_xlims' in self.zarr_group:
+                    try:
+                        arr = np.array(self.zarr_group['res_matcher_xlims'])
+                        if arr.size >= 2:
+                            _saved_view_xlims = (float(arr[0]), float(arr[1]))
+                    except Exception:
+                        _saved_view_xlims = None
             elif choice == 'overwrite':
                 # Delete existing data
                 for key in _output_keys:
                     del self.zarr_group[key]
-                if 'max_view_left' in self.zarr_group:
-                    del self.zarr_group['max_view_left']
 
         # ---- phase (linear-trend removed per dataset) -----------------------
         self.mag_db1 = 20.0 * np.log10(np.abs(self.z1))
@@ -314,8 +347,8 @@ class ResMatcher:
         # Track removed resonances: list of (fres, res_idx, dataset)
         self._removed_resonances: List[Tuple[float, int, int]] = []
         
-        # Track highest left edge of window we've looked at
-        self._max_view_left: float = _max_view_left_initial if _max_view_left_initial is not None else float(min(self.f1[0], self.f2[0]))
+        # Optional saved exact x-limits restored at startup
+        self._saved_view_xlims = _saved_view_xlims
 
         # Debounce timers (created lazily)
         self._range_timer = None
@@ -468,18 +501,19 @@ class ResMatcher:
         layout.addWidget(label)
         
         btn_layout = QtWidgets.QVBoxLayout()
-        
-        overwrite_btn = QtWidgets.QPushButton('Overwrite (Start Fresh with Auto-Grouping)')
-        overwrite_btn.setToolTip('Delete existing data and start with automatic matching')
-        
+
         load_btn = QtWidgets.QPushButton('Load from Zarr')
         load_btn.setToolTip('Load existing groups and continue editing')
-        
+
+        overwrite_btn = QtWidgets.QPushButton('Overwrite (Start Fresh with Auto-Grouping)')
+        overwrite_btn.setToolTip('Delete existing data and start with automatic matching')
+
         cancel_btn = QtWidgets.QPushButton('Cancel')
         cancel_btn.setToolTip('Exit without doing anything')
-        
-        btn_layout.addWidget(overwrite_btn)
+
+        # Desired order: Load (top), Overwrite (middle), Cancel (bottom)
         btn_layout.addWidget(load_btn)
+        btn_layout.addWidget(overwrite_btn)
         btn_layout.addWidget(cancel_btn)
         layout.addLayout(btn_layout)
         
@@ -584,13 +618,96 @@ class ResMatcher:
         else:
             return mag_db.copy()
 
+    def _display_freq(self, freq: float, ds: int) -> float:
+        if ds == 2:
+            return float(freq) + self.ds2_f_offset
+        return float(freq)
+
+    def _data_freq_from_display(self, display_freq: float, ds: int) -> float:
+        if ds == 2:
+            return float(display_freq) - self.ds2_f_offset
+        return float(display_freq)
+
+    def _group_display_center_freq(self, group: MatchGroup) -> float:
+        freqs = [f for f, _ in group.entries1]
+        freqs.extend(self._display_freq(f, 2) for f, _ in group.entries2)
+        return float(np.mean(freqs)) if freqs else 0.0
+
+    def _display_window_for_ds(self, ds: int) -> Tuple[float, float]:
+        x_min, x_max = self.plot_mag.viewRange()[0]
+        if ds == 2:
+            return (
+                self._data_freq_from_display(x_min, 2),
+                self._data_freq_from_display(x_max, 2),
+            )
+        return float(x_min), float(x_max)
+
+    def _refresh_ds2_display_cache(self):
+        self.f2_display = self.f2 + self.ds2_f_offset
+
+    def _update_ds2_offset_label(self):
+        if hasattr(self, 'ds2_offset_label'):
+            self.ds2_offset_label.setText(
+                f'DS2 visual offset: {self.ds2_f_offset / 1e3:+.1f} kHz'
+            )
+
+    def _refresh_display_offset_view(self):
+        self._refresh_ds2_display_cache()
+        self._update_ds2_offset_label()
+        if hasattr(self, 'curve_overview_ds2'):
+            stride = max(1, len(self.f2) // 3000)
+            self.curve_overview_ds2.setData(
+                self.f2_display[::stride], self.mag_db2[::stride]
+            )
+            f_lo = float(min(self.f1[0], self.f2_display[0]))
+            f_hi = float(max(self.f1[-1], self.f2_display[-1]))
+            self.plot_overview.setXRange(f_lo, f_hi, padding=0.01)
+        if hasattr(self, 'plot_mag'):
+            self._update_curves()
+            self.update_markers()
+            self.auto_scale_y()
+            self._update_overview_region()
+
+    def _set_ds2_frequency_offset(self, offset_hz: float, *, log_reason: Optional[str] = None):
+        self.ds2_f_offset = float(offset_hz)
+        self._refresh_display_offset_view()
+        if log_reason is not None:
+            self.log(
+                f'{log_reason}: DS2 visual offset = {self.ds2_f_offset / 1e3:+.1f} kHz'
+            )
+
+    def _shift_ds2_frequency_offset(self, delta_hz: float):
+        if delta_hz == 0:
+            return
+        self._set_ds2_frequency_offset(self.ds2_f_offset + float(delta_hz))
+
+    def _auto_align_ds2_offset(self):
+        one_to_one_groups = [
+            g for g in self.groups
+            if len(g.entries1) == 1 and len(g.entries2) == 1
+        ]
+        if not one_to_one_groups:
+            self.log('G: No 1:1 groups available for DS2 auto-align.')
+            return
+
+        x_min, x_max = self.plot_mag.viewRange()[0]
+        x_center = 0.5 * (x_min + x_max)
+        nearest_groups = sorted(
+            one_to_one_groups,
+            key=lambda g: abs(self._group_display_center_freq(g) - x_center),
+        )[:10]
+        shifts = [g.entries1[0][0] - g.entries2[0][0] for g in nearest_groups]
+        new_offset = float(np.mean(shifts))
+        self._set_ds2_frequency_offset(
+            new_offset,
+            log_reason=f'Auto-aligned from {len(nearest_groups)} nearby 1:1 groups',
+        )
+
     # ================================================================ UI setup
 
     def setup_ui(self):
         self.win = QtWidgets.QMainWindow()
-        self.win.setWindowTitle(
-            'Resonance Matcher — E: delete  |  F/D: merge  |  W: unlink  |  Q: ambiguous  |  R: re-match  |  H: help'
-        )
+        self.win.setWindowTitle('Resonance Matcher')
         self.win.resize(1500, 850)
         # Override close event to auto-save
         self.win.closeEvent = self._on_window_close
@@ -621,22 +738,27 @@ class ResMatcher:
         self.setup_shortcuts()
 
         # Initial state (filters already applied in __init__)
-        f_lo = float(min(self.f1[0], self.f2[0]))
+        f_lo = float(min(self.f1[0], self.f2_display[0]))
         
-        # Use saved max_view_left if loading from zarr, otherwise start at beginning
-        if self._max_view_left > f_lo:
-            # Center on saved position with 10 MHz window
-            f_center = self._max_view_left + 5e6
-            f_start = f_center - 5e6
-            f_end = f_center + 5e6
-            f_hi = float(max(self.f1[-1], self.f2[-1]))
-            # Make sure we don't go past the end
-            if f_end > f_hi:
-                f_end = f_hi
-                f_start = max(f_lo, f_end - 10e6)
-            self.plot_mag.setXRange(f_start, f_end, padding=0.02)
+        # Use saved exact x-limits if provided, otherwise fall back to old behaviour
+        if getattr(self, '_saved_view_xlims', None) is not None:
+            try:
+                x0, x1 = self._saved_view_xlims
+                # Clamp to available data range
+                f_min_total = float(min(self.f1[0], self.f2_display[0]))
+                f_max_total = float(max(self.f1[-1], self.f2_display[-1]))
+                x0 = max(f_min_total, min(x0, f_max_total))
+                x1 = max(f_min_total, min(x1, f_max_total))
+                if x1 <= x0:
+                    # fallback to initial 10 MHz window
+                    x0 = f_lo
+                    x1 = f_lo + 10e6
+                self.plot_mag.setXRange(x0, x1, padding=0.02)
+            except Exception:
+                f_hi = f_lo + 10e6
+                self.plot_mag.setXRange(f_lo, f_hi, padding=0.02)
         else:
-            # Start zoomed to first 10 MHz for fast initial render
+            # No saved x-limits: start at the beginning (first 10 MHz)
             f_hi = f_lo + 10e6
             self.plot_mag.setXRange(f_lo, f_hi, padding=0.02)
         self._sync_mag2_geom()
@@ -730,6 +852,10 @@ class ResMatcher:
         self._refresh_active_label()
         layout.addWidget(self.active_ds_label)
 
+        self.ds2_offset_label = QtWidgets.QLabel()
+        self._update_ds2_offset_label()
+        layout.addWidget(self.ds2_offset_label)
+
         self.sel_label = QtWidgets.QLabel('Selected: none')
         layout.addWidget(self.sel_label)
 
@@ -783,7 +909,7 @@ class ResMatcher:
     def setup_plots(self):
         title = (
             '<span style="color:#FFF; font-size:9pt;">'
-            'Z/X: pan 20%  |  A/S: pan 80%  |  E: delete  |  F/D: merge  |  W: unlink  |  Q: ambiguous  |  R: re-match  |  H: help'
+            'Z/X: pan 20%  |  A/S: pan 80%  |  Ctrl+drag: DS2 shift  |  G: auto-align  |  E/F/D/W/Q/R  |  H: help'
             '</span>'
         )
         self.plot_widget.addLabel(title, col=0)
@@ -804,18 +930,18 @@ class ResMatcher:
         self.plot_overview.vb.wheelScaleFactor = 0
 
         _stride = max(1, len(self.f1) // 3000)
-        self.plot_overview.plot(
+        self.curve_overview_ds1 = self.plot_overview.plot(
             self.f1[::_stride], self.mag_db1[::_stride],
             pen=pg.mkPen(color=(100, 180, 255, 120), width=1),
         )
         _stride2 = max(1, len(self.f2) // 3000)
-        self.plot_overview.plot(
-            self.f2[::_stride2], self.mag_db2[::_stride2],
+        self.curve_overview_ds2 = self.plot_overview.plot(
+            self.f2_display[::_stride2], self.mag_db2[::_stride2],
             pen=pg.mkPen(color=(255, 140, 60, 120), width=1),
         )
 
-        f_lo = float(min(self.f1[0], self.f2[0]))
-        f_hi = float(max(self.f1[-1], self.f2[-1]))
+        f_lo = float(min(self.f1[0], self.f2_display[0]))
+        f_hi = float(max(self.f1[-1], self.f2_display[-1]))
         self._overview_region = pg.LinearRegionItem(
             values=[f_lo, f_lo + 10e6],
             brush=pg.mkBrush(255, 255, 255, 30),
@@ -835,7 +961,10 @@ class ResMatcher:
         self.plot_widget.nextRow()
 
         # ---- Magnitude plot (row 2) — dual Y axes -------------------------
-        self.plot_mag = self.plot_widget.addPlot(row=2, col=0, viewBox=CustomViewBox())
+        self.plot_mag = self.plot_widget.addPlot(
+            row=2, col=0,
+            viewBox=CustomViewBox(drag_callback=self._shift_ds2_frequency_offset),
+        )
         self.plot_mag.setLabel('left', '|S21| DS1 (dB)',
                                color=(100, 180, 255))
         self.plot_mag.showGrid(x=True, y=True, alpha=0.3)
@@ -845,7 +974,7 @@ class ResMatcher:
                                color=(255, 140, 60))
 
         # Right-axis ViewBox for DS2 magnitude
-        self._vb_mag2 = CustomViewBox()
+        self._vb_mag2 = CustomViewBox(drag_callback=self._shift_ds2_frequency_offset)
         self.plot_mag.scene().addItem(self._vb_mag2)
         self.plot_mag.getAxis('right').linkToView(self._vb_mag2)
         self._vb_mag2.setXLink(self.plot_mag)
@@ -881,7 +1010,10 @@ class ResMatcher:
         self.plot_widget.nextRow()
 
         # ---- Phase plot (row 3) — dual Y axes -----------------------------
-        self.plot_phase = self.plot_widget.addPlot(row=3, col=0, viewBox=CustomViewBox())
+        self.plot_phase = self.plot_widget.addPlot(
+            row=3, col=0,
+            viewBox=CustomViewBox(drag_callback=self._shift_ds2_frequency_offset),
+        )
         self.plot_phase.setLabel('left', 'Phase DS1 (rad)',
                                   color=(100, 180, 255))
         self.plot_phase.setLabel('bottom', 'Frequency', units='Hz')
@@ -892,7 +1024,7 @@ class ResMatcher:
                                   color=(255, 140, 60))
 
         # Right-axis ViewBox for DS2 phase
-        self._vb_phase2 = CustomViewBox()
+        self._vb_phase2 = CustomViewBox(drag_callback=self._shift_ds2_frequency_offset)
         self.plot_phase.scene().addItem(self._vb_phase2)
         self.plot_phase.getAxis('right').linkToView(self._vb_phase2)
         self._vb_phase2.setXLink(self.plot_phase)
@@ -1101,8 +1233,12 @@ class ResMatcher:
         rematch_btn = QtWidgets.QPushButton('Re-Match (R)')
         rematch_btn.clicked.connect(self.trigger_rematch)
         rematch_btn.setToolTip('Re-match all groups above threshold line (R key)')
+        align_btn = QtWidgets.QPushButton('Auto Align DS2 (G)')
+        align_btn.clicked.connect(self._auto_align_ds2_offset)
+        align_btn.setToolTip('Estimate DS2 visual offset from nearby 1:1 matches (G key)')
         
         toolbar_layout.addWidget(rematch_btn, 3, 0)
+        toolbar_layout.addWidget(align_btn, 3, 1)
         
         toolbar_grp.setLayout(toolbar_layout)
         layout.addWidget(toolbar_grp)
@@ -1113,6 +1249,7 @@ class ResMatcher:
             'X': self.pan_right,
             'A': self.fast_pan_left,
             'S': self.fast_pan_right,
+            'G': self._auto_align_ds2_offset,
             'H': self.show_help,
             'E': self.delete_selected,
             'R': self.trigger_rematch,
@@ -1194,10 +1331,8 @@ class ResMatcher:
         self._update_threshold_position()
         self._check_selection_visibility()
         
-        # Track highest left edge of window we've looked at
-        x_min, x_max = self.plot_mag.viewRange()[0]
-        if x_min > self._max_view_left:
-            self._max_view_left = x_min
+        # No legacy tracking needed; nothing to do here for x-min tracking
+        _ = self.plot_mag.viewRange()
 
     def _visible_slice(self, f_arr, x_min, x_max, pad: float = 0.5):
         span = x_max - x_min
@@ -1210,13 +1345,13 @@ class ResMatcher:
             return
         x_min, x_max = self.plot_mag.viewRange()[0]
         sl1 = self._visible_slice(self.f1, x_min, x_max)
-        sl2 = self._visible_slice(self.f2, x_min, x_max)
+        sl2 = self._visible_slice(self.f2_display, x_min, x_max)
         if sl1.start < sl1.stop:
             self.curve_ds1_mag.setData(self.f1[sl1], self.filtered_mag1[sl1])
             self.curve_ds1_phase.setData(self.f1[sl1], self.phase1[sl1])
         if sl2.start < sl2.stop:
-            self.curve_ds2_mag.setData(self.f2[sl2], self.filtered_mag2[sl2])
-            self.curve_ds2_phase.setData(self.f2[sl2], self.phase2[sl2])
+            self.curve_ds2_mag.setData(self.f2_display[sl2], self.filtered_mag2[sl2])
+            self.curve_ds2_phase.setData(self.f2_display[sl2], self.phase2[sl2])
         # Keep right-side ViewBoxes in geometry sync after data change
         self._sync_mag2_geom()
         self._sync_phase2_geom()
@@ -1226,7 +1361,7 @@ class ResMatcher:
             return
         x_min, x_max = self.plot_mag.viewRange()[0]
         sl1 = self._visible_slice(self.f1, x_min, x_max, pad=0.0)
-        sl2 = self._visible_slice(self.f2, x_min, x_max, pad=0.0)
+        sl2 = self._visible_slice(self.f2_display, x_min, x_max, pad=0.0)
 
         def _yrange(data, sl, upper: bool):
             if sl.start >= sl.stop:
@@ -1284,7 +1419,8 @@ class ResMatcher:
 
         for g in self.groups:
             # Skip groups with no resonances in the visible window
-            all_freqs = [f for f, _ in g.entries1 + g.entries2]
+            all_freqs = [f for f, _ in g.entries1]
+            all_freqs.extend(self._display_freq(f, 2) for f, _ in g.entries2)
             if all_freqs and not any(vis_min <= f <= vis_max for f in all_freqs):
                 continue
             color = _group_color(g.group_id)
@@ -1328,11 +1464,11 @@ class ResMatcher:
                 }
                 spots_ds2_mag.append({
                     **spot,
-                    'pos': (float(self.f2[idx]), float(self.filtered_mag2[idx])),
+                    'pos': (float(self.f2_display[idx]), float(self.filtered_mag2[idx])),
                 })
                 spots_ds2_phase.append({
                     **spot,
-                    'pos': (float(self.f2[idx]), float(self.phase2[idx])),
+                    'pos': (float(self.f2_display[idx]), float(self.phase2[idx])),
                 })
 
         self.scatter_ds1_mag.setData(spots_ds1_mag)
@@ -1361,8 +1497,9 @@ class ResMatcher:
             ph_arr = self.phase1 if dataset == 1 else self.phase2
             
             idx = self._nearest_idx(f_arr, fres)
-            mag_spot = {'pos': (float(f_arr[idx]), float(mag_arr[idx]))}
-            phase_spot = {'pos': (float(f_arr[idx]), float(ph_arr[idx]))}
+            display_arr = self.f2_display if dataset == 2 else f_arr
+            mag_spot = {'pos': (float(display_arr[idx]), float(mag_arr[idx]))}
+            phase_spot = {'pos': (float(display_arr[idx]), float(ph_arr[idx]))}
             
             if dataset == 1:
                 sel_ds1_mag.append(mag_spot)
@@ -1641,7 +1778,7 @@ class ResMatcher:
         if self.plot_mag.sceneBoundingRect().contains(scene_pos):
             # Get position in DS1 (left axis) coordinates
             vb_pos_ds1 = self.plot_mag.vb.mapSceneToView(scene_pos)
-            freq = float(vb_pos_ds1.x())
+            display_freq = float(vb_pos_ds1.x())
             click_y_ds1 = float(vb_pos_ds1.y())
             
             # Get position in DS2 (right axis) coordinates
@@ -1649,8 +1786,10 @@ class ResMatcher:
             click_y_ds2 = float(vb_pos_ds2.y())
             
             # Get data values at this frequency
-            idx1 = self._nearest_idx(self.f1, freq)
-            idx2 = self._nearest_idx(self.f2, freq)
+            freq_ds1 = display_freq
+            freq_ds2 = self._data_freq_from_display(display_freq, 2)
+            idx1 = self._nearest_idx(self.f1, freq_ds1)
+            idx2 = self._nearest_idx(self.f2, freq_ds2)
             data_y_ds1 = float(self.filtered_mag1[idx1])
             data_y_ds2 = float(self.filtered_mag2[idx2])
             
@@ -1659,13 +1798,13 @@ class ResMatcher:
             dist_ds2 = abs(click_y_ds2 - data_y_ds2)
             ds = 1 if dist_ds1 < dist_ds2 else 2
             
-            return (freq, ds)
+            return (freq_ds1 if ds == 1 else freq_ds2, ds)
         
         # Check phase plot
         if self.plot_phase.sceneBoundingRect().contains(scene_pos):
             # Get position in DS1 (left axis) coordinates
             vb_pos_ds1 = self.plot_phase.vb.mapSceneToView(scene_pos)
-            freq = float(vb_pos_ds1.x())
+            display_freq = float(vb_pos_ds1.x())
             click_y_ds1 = float(vb_pos_ds1.y())
             
             # Get position in DS2 (right axis) coordinates
@@ -1673,8 +1812,10 @@ class ResMatcher:
             click_y_ds2 = float(vb_pos_ds2.y())
             
             # Get data values at this frequency
-            idx1 = self._nearest_idx(self.f1, freq)
-            idx2 = self._nearest_idx(self.f2, freq)
+            freq_ds1 = display_freq
+            freq_ds2 = self._data_freq_from_display(display_freq, 2)
+            idx1 = self._nearest_idx(self.f1, freq_ds1)
+            idx2 = self._nearest_idx(self.f2, freq_ds2)
             data_y_ds1 = float(self.phase1[idx1])
             data_y_ds2 = float(self.phase2[idx2])
             
@@ -1683,7 +1824,7 @@ class ResMatcher:
             dist_ds2 = abs(click_y_ds2 - data_y_ds2)
             ds = 1 if dist_ds1 < dist_ds2 else 2
             
-            return (freq, ds)
+            return (freq_ds1 if ds == 1 else freq_ds2, ds)
         
         return None
 
@@ -1831,7 +1972,7 @@ class ResMatcher:
         None
         """
         # Get current visible window
-        x_min, x_max = self.plot_mag.viewRange()[0]
+        x_min, x_max = self._display_window_for_ds(ds)
         
         # Check for removed resonances in the visible window
         visible_removed = [
@@ -1967,7 +2108,8 @@ class ResMatcher:
         
         valid_selections = set()
         for (group_id, dataset, fres) in self._selected_resonances:
-            if vis_min <= fres <= vis_max:
+            display_freq = self._display_freq(fres, dataset)
+            if vis_min <= display_freq <= vis_max:
                 valid_selections.add((group_id, dataset, fres))
         
         if len(valid_selections) != len(self._selected_resonances):
@@ -2558,6 +2700,15 @@ class ResMatcher:
             for fres, ridx in g.entries2:
                 fres2_out.append(fres);  ridx2_out.append(ridx);  gids2.append(out_gid)
 
+        # Determine current view x-limits to save exact position (if UI present)
+        try:
+            x_min, x_max = self.plot_mag.viewRange()[0]
+        except Exception:
+            # UI not initialized or view unavailable — default to beginning window
+            f_lo = float(min(self.f1[0], self.f2[0]))
+            x_min = f_lo
+            x_max = f_lo + 10e6
+
         _to_save = {
             'fres1':            (np.float64, fres1_out),
             'res_idx1':         (np.int64,   ridx1_out),
@@ -2566,7 +2717,8 @@ class ResMatcher:
             'res_idx2':         (np.int64,   ridx2_out),
             'group_ids2':       (np.int64,   gids2),
             'ambiguous_groups': (np.int64,   ambiguous_groups),
-            'max_view_left':    (np.float64, [self._max_view_left]),
+            # New key: save exact x-limits so we can restore the exact view
+            'res_matcher_xlims': (np.float64, [x_min, x_max]),
         }
         for key, (dtype, data) in _to_save.items():
             if key in self.zarr_group:
@@ -2635,6 +2787,7 @@ class ResMatcher:
             '<li><b>Ctrl+Left-click (on a marker):</b> Add resonance to selection (multi-select)</li>'
             '<li><b>Shift+Left-click (empty space):</b> Add resonance to DS1 or DS2 based on Y-position. '
             'The tool determines which dataset by comparing your click Y-coordinate to the actual data values.</li>'
+            '<li><b>Ctrl+Left-drag:</b> Shift the DS2 plot horizontally for visualization only.</li>'
             '<li><b>Ctrl+Right-click:</b> Manually set re-match threshold (yellow line)</li>'
             '<li><b>Right-click:</b> PyQtGraph menu (zoom, export, etc.)</li>'
             '<li><b>Scroll wheel:</b> Zoom in / out</li>'
@@ -2643,6 +2796,7 @@ class ResMatcher:
             '<ul>'
             '<li><b>Z / X:</b> Pan left / right 20%</li>'
             '<li><b>A / S:</b> Pan left / right 80%</li>'
+            '<li><b>G:</b> Auto-align DS2 using the 10 nearest 1:1 groups to the window center</li>'
             '<li><b>E:</b> Delete all selected resonances</li>'
             '<li><b>F:</b> Merge groups (all groups containing selected resonances)</li>'
             '<li><b>D:</b> Merge selected only (unlinks selected from groups, merges into new group)</li>'
@@ -2690,6 +2844,7 @@ class ResMatcher:
             '<li>Dashed marker border = ambiguous group (auto-set for multi-res groups)</li>'
             '<li>White ring(s) = selected resonance(s)</li>'
             '<li>Yellow dashed line = re-match threshold (auto-adjusting)</li>'
+            '<li>DS2 can be horizontally shifted without changing saved frequencies</li>'
             '</ul>'
             '<p><b>Output arrays (zarr):</b></p>'
             '<ul>'

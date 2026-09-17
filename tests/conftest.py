@@ -3,6 +3,38 @@ import os
 os.environ["CRS_EMBEDDED"] = "1"
 os.environ["MPLBACKEND"] = "Agg"
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
+import warnings
+
+# Suppress DeprecationWarning raised intentionally by code scheduled for removal.
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+# Also ignore common third-party deprecation/quality warnings we see in tests
+import importlib
+try:
+    import numpy as _np
+    warnings.filterwarnings("ignore", category=_np.RankWarning)
+except Exception:
+    pass
+
+try:
+    import zarr as _zarr
+    ZDW = getattr(_zarr, 'ZarrDeprecationWarning', None)
+    if ZDW is None:
+        for _sub in ('errors', 'core', 'core.errors'):
+            try:
+                m = importlib.import_module('zarr.' + _sub)
+                ZDW = getattr(m, 'ZarrDeprecationWarning', None)
+                if ZDW:
+                    break
+            except Exception:
+                pass
+    if ZDW:
+        warnings.filterwarnings("ignore", category=ZDW)
+except Exception:
+    pass
+
+# Ignore generic runtime warnings exposed during tests (e.g., coroutine not awaited)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 def pytest_addoption(parser):
     parser.addoption(

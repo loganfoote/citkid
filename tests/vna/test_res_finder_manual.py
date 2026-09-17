@@ -17,6 +17,8 @@ import zarr
 import os
 from unittest.mock import Mock, patch, MagicMock
 
+np.seterr(divide='ignore')
+
 from citkid.vna.res_finder_manual import (
     ResFinder,
     ResFinderWindow,
@@ -146,6 +148,22 @@ class TestResFinderInit:
         
         assert len(finder.fres) == 0
         assert isinstance(finder.fres, list)
+
+    def test_init_loads_saved_xlims_from_zarr(self, synthetic_vna_data, tmp_path):
+        """Saved exact x-limits are loaded for restoration on next launch."""
+        zarr_path = tmp_path / "saved_xlims.zarr"
+        grp = zarr.open_group(str(zarr_path), mode='w')
+        grp.create_array('res_finder_manual_xlims', data=np.array([5.1e9, 5.25e9]))
+
+        with patch('citkid.vna.res_finder_manual.np.polyfit', return_value=np.array([0.0, 0.0])):
+            finder = ResFinder(
+                synthetic_vna_data['f'],
+                synthetic_vna_data['z'],
+                [],
+                str(zarr_path)
+            )
+
+        assert finder._saved_xlims == (5.1e9, 5.25e9)
 
 
 class TestResFinderAddRemove:
@@ -398,6 +416,26 @@ class TestResFinderFileIO:
             sorted(fres_loaded),
             sorted(fres_initial)
         )
+
+    def test_save_results_writes_current_xlims(self, synthetic_vna_data, tmp_path):
+        """Current plot x-limits are persisted for exact restoration."""
+        outpath = tmp_path / "results_xlims.zarr"
+
+        finder = ResFinder(
+            synthetic_vna_data['f'],
+            synthetic_vna_data['z'],
+            [4.5e9],
+            str(outpath)
+        )
+        finder.plot_mag = Mock()
+        finder.plot_mag.viewRange.return_value = [[5.3e9, 5.45e9], [-30, 0]]
+
+        finder.save_data()
+
+        grp = zarr.open_group(str(outpath), mode='r')
+        assert 'res_finder_manual_xlims' in grp
+        assert np.allclose(np.array(grp['res_finder_manual_xlims']), [5.3e9, 5.45e9])
+
     def test_save_empty_results(self, synthetic_vna_data, tmp_path):
         """Test saving empty resonance list."""
         outpath = tmp_path / "empty.zarr"
