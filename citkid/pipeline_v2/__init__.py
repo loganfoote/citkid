@@ -13,5 +13,13 @@ original high-level entry points:
 
 from .dataset import DataSet
 from .analysis import AnalysisRunner
+from .framework import plStep 
+from .interactive import run_ts_analysis, run_iq_analysis
 
-__all__ = ["DataSet", "AnalysisRunner"]
+__all__ = [
+    "DataSet", 
+    "AnalysisRunner", 
+    "plStep",
+    "run_ts_analysis",
+    "run_iq_analysis"
+    ]
