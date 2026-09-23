@@ -292,6 +292,91 @@ def test_apply_cal_uses_replacements_without_storing_intermediates(tmp_path):
     assert 'zt' not in ds._param_meta
 
 
+def test_apply_cal_single_data_idx_accepts_scalar_replacements(tmp_path):
+    cal_custom = tmp_path / "custom_cal_steps.py"
+    cal_custom.write_text(
+        "from citkid.pipeline_v2.framework import plStep\n"
+        "\n"
+        "def load_data():\n"
+        "    return 3\n"
+        "\n"
+        "def calc_xt(zt):\n"
+        "    return zt * 2\n"
+        "\n"
+        "custom_cal_steps = [\n"
+        "    plStep('load_data', load_data, [], ['nrows'], 'global'),\n"
+        "    plStep('calc_xt', calc_xt, ['zt'], ['xt'], 'vectorized'),\n"
+        "]\n",
+        encoding="utf-8",
+    )
+    cal_yaml = tmp_path / "cal.yaml"
+    cal_yaml.write_text(
+        "CAL_STEPS:\n"
+        "  1:\n"
+        "    task: load_data\n"
+        "  2:\n"
+        "    task: calc_xt\n",
+        encoding="utf-8",
+    )
+
+    ds = DataSet(
+        zarr_path=str(tmp_path / "apply_cal_scalar.zarr"),
+        cal_yaml_path=str(cal_yaml),
+        custom_path=str(cal_custom),
+    )
+
+    result = ds.apply_cal(
+        data_indices=1,
+        outputs=['xt'],
+        replacements={'zt': 10.0},
+    )
+
+    assert result['xt'] == 20.0
+
+
+def test_apply_cal_single_data_idx_returns_consistent_multi_output_shapes(tmp_path):
+    cal_custom = tmp_path / "custom_cal_steps.py"
+    cal_custom.write_text(
+        "from citkid.pipeline_v2.framework import plStep\n"
+        "\n"
+        "def load_data():\n"
+        "    return 3\n"
+        "\n"
+        "def calc_outputs(zt):\n"
+        "    return zt, zt * 2\n"
+        "\n"
+        "custom_cal_steps = [\n"
+        "    plStep('load_data', load_data, [], ['nrows'], 'global'),\n"
+        "    plStep('calc_outputs', calc_outputs, ['zt'], ['zt_out', 'xt'], 'vectorized'),\n"
+        "]\n",
+        encoding="utf-8",
+    )
+    cal_yaml = tmp_path / "cal.yaml"
+    cal_yaml.write_text(
+        "CAL_STEPS:\n"
+        "  1:\n"
+        "    task: load_data\n"
+        "  2:\n"
+        "    task: calc_outputs\n",
+        encoding="utf-8",
+    )
+
+    ds = DataSet(
+        zarr_path=str(tmp_path / "apply_cal_multi_output.zarr"),
+        cal_yaml_path=str(cal_yaml),
+        custom_path=str(cal_custom),
+    )
+
+    result = ds.apply_cal(
+        data_indices=1,
+        outputs=['zt_out', 'xt'],
+        replacements={'zt': np.array([10.0, 11.0])},
+    )
+
+    np.testing.assert_array_equal(result['zt_out'], np.array([10.0, 11.0]))
+    np.testing.assert_array_equal(result['xt'], np.array([20.0, 22.0]))
+
+
 @pytest.fixture
 def pipeline_v2_dependency_files(tmp_path):
     cal_custom = tmp_path / "custom_cal_steps.py"

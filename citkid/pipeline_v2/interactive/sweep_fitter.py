@@ -185,6 +185,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         # Background save state
         self._save_thread: threading.Thread | None = None
         self._prefetch_status_changed.connect(self._on_prefetch_status)
+        QtWidgets.QApplication.instance().installEventFilter(self)
 
         self.setWindowTitle(title)
 
@@ -256,10 +257,6 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         sc_r.activated.connect(self._autoscale_all)
         sc_b = QtGui.QShortcut(QtGui.QKeySequence('B'), self)
         sc_b.activated.connect(self._mark_all_bad)
-        sc_b_shift = QtGui.QShortcut(QtGui.QKeySequence('Shift+B'), self)
-        sc_b_shift.activated.connect(self._mark_all_sweeps_bad)
-        sc_a_shift = QtGui.QShortcut(QtGui.QKeySequence('Shift+A'), self)
-        sc_a_shift.activated.connect(self._apply_to_all)
         for idx in range(1, 10):
             _sc = QtGui.QShortcut(QtGui.QKeySequence(str(idx)), self)
             _sc.activated.connect(lambda _i=idx - 1: self._run_panel_by_index(_i))
@@ -341,7 +338,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
         mark_all_sweeps_bad_btn = QtWidgets.QPushButton('Mark All Sweeps Bad')
         mark_all_sweeps_bad_btn.setToolTip(
-            'Mark all sweep indices for the current resonator as bad (⇧B)'
+            'Mark all sweep indices for the current resonator as bad (Shift+B)'
         )
         mark_all_sweeps_bad_btn.clicked.connect(self._mark_all_sweeps_bad)
         layout.addWidget(mark_all_sweeps_bad_btn)
@@ -400,6 +397,24 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
         self._gw = gw
         return gw
+
+    def eventFilter(self, obj, event):
+        if event.type() == QtCore.QEvent.Type.KeyPress and self.isActiveWindow():
+            if self._handle_modified_letter_shortcut(event.key(), event.modifiers()):
+                return True
+        return super().eventFilter(obj, event)
+
+    def _handle_modified_letter_shortcut(self, key, modifiers) -> bool:
+        """Handle shifted letter shortcuts that collide with plain-letter bindings."""
+        if not (modifiers & _Qt.ShiftModifier):
+            return False
+        if key == QtCore.Qt.Key.Key_A:
+            self._apply_to_all()
+            return True
+        if key == QtCore.Qt.Key.Key_B:
+            self._mark_all_sweeps_bad()
+            return True
+        return False
 
     def _add_panel(self, panel):
         if self.panels:
@@ -647,6 +662,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
             event.ignore()
             return
         self._save_dirty_panels()
+        QtWidgets.QApplication.instance().removeEventFilter(self)
         super().closeEvent(event)
 
     def _run_all_panels(self):

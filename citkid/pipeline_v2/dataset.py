@@ -232,7 +232,11 @@ class DataSet:
                 local_values[name] = value
 
         return {
-            output_name: replacement_values[output_name] if output_name in replacement_values else local_values[output_name]
+            output_name: self._finalize_apply_cal_output(
+                output_name,
+                replacement_values[output_name] if output_name in replacement_values else local_values[output_name],
+                rows,
+            )
             for output_name in requested_outputs
         }
 
@@ -502,7 +506,15 @@ class DataSet:
                     f"Replacement '{name}' is per-row and requires data_indices"
                 )
             if len(rows) == 1:
-                values[name] = np.asarray([value]) if not isinstance(value, np.ndarray) else value
+                if isinstance(value, np.ndarray):
+                    if value.ndim > 0 and len(value) == 1:
+                        values[name] = value
+                    else:
+                        values[name] = np.asarray([value])
+                elif isinstance(value, (list, tuple)) and len(value) == 1:
+                    values[name] = np.asarray(value)
+                else:
+                    values[name] = np.asarray([value])
                 continue
             if isinstance(value, np.ndarray) and len(value) == len(rows):
                 values[name] = value
@@ -517,6 +529,24 @@ class DataSet:
                 f"Replacement '{name}' must provide one value per requested row"
             )
         return values, is_global
+
+    def _finalize_apply_cal_output(self, name, value, rows):
+        """
+        Convert internal apply_cal results back to caller-facing shapes.
+        """
+        if self._is_known_global_param(name) or rows is None:
+            return value
+
+        if len(rows) != 1:
+            return value
+
+        if isinstance(value, np.ndarray):
+            if value.ndim > 0 and len(value) == 1:
+                return value[0]
+            return value
+        if isinstance(value, (list, tuple)) and len(value) == 1:
+            return value[0]
+        return value
 
     def _collect_apply_cal_params(
         self,

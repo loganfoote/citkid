@@ -285,3 +285,31 @@ class TestSweepFitterWindowV2:
         assert ar.execute_path.call_args_list[1].kwargs['data_idx'] == 1
         with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
             win.close()
+
+    def test_shift_b_shortcut_marks_all_sweeps_bad(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+        win._mark_all_sweeps_bad = MagicMock()
+
+        handled = win._handle_modified_letter_shortcut(
+            isweep.QtCore.Qt.Key.Key_B,
+            isweep._Qt.ShiftModifier,
+        )
+
+        assert handled is True
+        win._mark_all_sweeps_bad.assert_called_once()
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            win.close()
+
+    def test_shift_a_shortcut_applies_to_all(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+        win._apply_to_all = MagicMock()
+
+        handled = win._handle_modified_letter_shortcut(
+            isweep.QtCore.Qt.Key.Key_A,
+            isweep._Qt.ShiftModifier,
+        )
+
+        assert handled is True
+        win._apply_to_all.assert_called_once()
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            win.close()
