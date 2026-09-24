@@ -181,6 +181,10 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self._prefetch_thread: threading.Thread | None = None
         self._prefetching_idx: int | None = None
         self._prefetched_idx: int | None = None
+        self._init_all_thread: threading.Thread | None = None
+        self._init_all_stop = threading.Event()
+        self._initialized_data_idxs: set[int] = set()
+        self._init_all_current_di: int | None = None
 
         # Background save state
         self._save_thread: threading.Thread | None = None
@@ -509,19 +513,8 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         # Silently run (or load) the full pipeline for every sweep AR at the
         # new data_idx, so the scatter and waterfall are fully populated and
         # the active panels can show results immediately.
-        if self._prefetched_idx == new_di:
-            # Background thread already has results in memory — skip re-run.
-            pass
-        else:
-            # If the prefetch thread is still running for this index, wait.
-            if (self._prefetch_thread is not None
-                    and self._prefetch_thread.is_alive()
-                    and self._prefetching_idx == new_di):
-                while self._prefetch_thread.is_alive():
-                    self._prefetch_thread.join(timeout=0.05)
-                    QtWidgets.QApplication.processEvents()
-            if self._prefetched_idx != new_di:
-                self._batch_init_all_sweeps()
+        if not self._all_sweeps_outputs_exist(new_di):
+            self._ensure_data_idx_initialized(new_di)
         self._update_sweep_combo_items(new_di)
         self._update_sweep_scatter()
         self._update_waterfall()
@@ -573,10 +566,17 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         Pre-populates the y-cache so the scatter is fully drawn on startup.
         """
         di = self._data_idx
+        self._initialize_all_sweeps_for_data_idx(di)
+        self._initialized_data_idxs.add(int(di))
+
+    def _initialize_all_sweeps_for_data_idx(self, data_idx: int):
+        """
+        Silently run or load all pipeline steps for every AR at data_idx.
+        """
         for AR in self._ARs:
-            if not self._runner_outputs_exist(AR, di):
+            if not self._runner_outputs_exist(AR, data_idx):
                 try:
-                    self._initialize_runner_outputs(AR, di)
+                    self._initialize_runner_outputs(AR, data_idx)
                 except Exception as exc:
                     print(f"Warning: batch init failed for sweep AR: {exc}")
 
@@ -585,6 +585,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self._update_sweep_combo_items(self._data_idx)
         self._update_sweep_scatter()
         self._update_waterfall()
+        self._start_background_initialize_remaining()
         QtCore.QTimer.singleShot(200, self._prefetch_next)
 
     # ------------------------------------------------------------------
@@ -661,6 +662,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         if not self._confirm_stale_downstream_before_leave():
             event.ignore()
             return
+        self._init_all_stop.set()
         self._save_dirty_panels()
         QtWidgets.QApplication.instance().removeEventFilter(self)
         super().closeEvent(event)
@@ -802,6 +804,12 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
                 return False
         return True
 
+    def _all_sweeps_outputs_exist(self, data_idx: int) -> bool:
+        """
+        Return True when every sweep runner already has final outputs for data_idx.
+        """
+        return all(self._runner_outputs_exist(AR, data_idx) for AR in self._ARs)
+
     def _initialize_runner_outputs(self, AR, data_idx: int):
         """
         Ensure global-prefix analysis steps exist once, then run the per-row suffix.
@@ -816,6 +824,111 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
         if start_from_idx < len(AR.path):
             AR.execute_path(data_idx=data_idx, start_from_idx=start_from_idx, save=True, verbose=False)
+
+    def _start_background_initialize_remaining(self):
+        """
+        Initialize every remaining data_idx in the background using worker ARs.
+        """
+        if not hasattr(self, '_worker_root'):
+            return
+        if self._init_all_thread is not None and self._init_all_thread.is_alive():
+            return
+
+        remaining = [
+            di for di in range(self._nrows)
+            if di != self._data_idx and not self._all_sweeps_outputs_exist(di)
+        ]
+        if not remaining:
+            return
+
+        self._init_all_stop.clear()
+
+        def _worker():
+            try:
+                worker_ars = self._make_worker_ars()
+                self._initialize_remaining_data_indices(worker_ars, remaining)
+            except Exception as exc:
+                print(f'[init-all] failed: {exc}')
+
+        self._init_all_thread = threading.Thread(
+            target=_worker,
+            daemon=True,
+            name='sweep-fitter-init-all',
+        )
+        self._init_all_thread.start()
+
+    def _make_worker_ars(self):
+        """
+        Build background worker AnalysisRunner instances for each sweep subgroup.
+        """
+        worker_ars = []
+        for i in range(self._n_sweep):
+            group = self._worker_root.require_group(f'sweep_{i:03d}')
+            ds = DataSet(
+                zarr_path=group,
+                cal_yaml_path=self._worker_cal_yaml_path,
+                custom_cal_steps=self._worker_make_custom_steps(i),
+            )
+            ar = AnalysisRunner(ds, analysis_yaml_path=self._worker_analysis_yaml_path)
+            worker_ars.append(ar)
+        return worker_ars
+
+    def _initialize_remaining_data_indices(self, worker_ars, data_indices):
+        """
+        Synchronously initialize remaining resonators for all sweep runners.
+        """
+        for di in data_indices:
+            if self._init_all_stop.is_set():
+                self._init_all_current_di = None
+                return
+            self._init_all_current_di = int(di)
+            for ar in worker_ars:
+                if self._runner_outputs_exist(ar, di):
+                    continue
+                self._initialize_runner_outputs(ar, di)
+            self._initialized_data_idxs.add(int(di))
+        self._init_all_current_di = None
+
+    def _ensure_data_idx_initialized(self, data_idx: int):
+        """
+        Ensure that data_idx has been fully initialized before the user edits it.
+        """
+        di = int(data_idx)
+        if self._all_sweeps_outputs_exist(di):
+            return
+
+        self._init_all_stop.set()
+        dialog = self._make_fitting_dialog(di)
+        dialog.show()
+        QtWidgets.QApplication.processEvents()
+        try:
+            if self._init_all_thread is not None and self._init_all_thread.is_alive():
+                while self._init_all_thread.is_alive():
+                    self._init_all_thread.join(timeout=0.05)
+                    QtWidgets.QApplication.processEvents()
+            self._initialize_all_sweeps_for_data_idx(di)
+            self._initialized_data_idxs.add(di)
+        finally:
+            dialog.close()
+            self._init_all_stop.clear()
+            self._start_background_initialize_remaining()
+
+    def _make_fitting_dialog(self, data_idx: int):
+        """
+        Create a simple modal progress dialog for synchronous row initialization.
+        """
+        dialog = QtWidgets.QProgressDialog(
+            f'Fitting data_idx {data_idx} across all sweeps…',
+            None,
+            0,
+            0,
+            self,
+        )
+        dialog.setWindowTitle('Initializing Sweeps')
+        dialog.setCancelButton(None)
+        dialog.setMinimumDuration(0)
+        dialog.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
+        return dialog
 
     def _global_prefix_length(self, AR) -> int:
         """
@@ -1107,6 +1220,10 @@ def run_sweep_fitter(
         ui_scale=ui_scale,
         plot_scale=plot_scale,
     )
+    win._worker_root = root
+    win._worker_make_custom_steps = make_custom_steps
+    win._worker_cal_yaml_path = cal_yaml_path
+    win._worker_analysis_yaml_path = analysis_yaml_path
     win.show()
     app.exec()
     return win

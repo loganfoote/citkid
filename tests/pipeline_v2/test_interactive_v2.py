@@ -286,6 +286,101 @@ class TestSweepFitterWindowV2:
         with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
             win.close()
 
+    def test_initialize_remaining_data_indices_runs_all_remaining_rows(self, qt_app, monkeypatch):
+        step1 = _make_step('fit_gain')
+        step2 = _make_step('fit_iq')
+        ars = []
+        for _ in range(2):
+            ar = MagicMock()
+            ar.analysis_steps = [step1, step2]
+            ar.path = [{'task': step1}, {'task': step2}]
+            ar._last_failures = {}
+            ar.execute_step.return_value = None
+            ar.execute_path.return_value = None
+            ar.DS = MagicMock()
+            ar.DS.nrows = 3
+            ars.append(ar)
+
+        monkeypatch.setattr(isweep, 'get_panel_class', lambda _names: _WindowPanel)
+        monkeypatch.setattr(isweep.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
+        win = SweepFitterWindow(
+            ars,
+            x_param_name='x',
+            x_name='X',
+            y_func=lambda _ar, _di: None,
+            y_name='Y',
+            start_sweep_idx=0,
+            start_data_idx=0,
+            title='test',
+        )
+
+        worker_ars = [MagicMock(), MagicMock()]
+        for worker_ar in worker_ars:
+            worker_ar.execute_path.return_value = None
+
+        initialized = []
+        win._runner_outputs_exist = lambda _ar, di: False
+        win._initialize_runner_outputs = lambda ar, di: initialized.append((ar, di))
+
+        win._initialize_remaining_data_indices(worker_ars, [1, 2])
+
+        assert initialized == [
+            (worker_ars[0], 1),
+            (worker_ars[1], 1),
+            (worker_ars[0], 2),
+            (worker_ars[1], 2),
+        ]
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            win.close()
+
+    def test_ensure_data_idx_initialized_runs_sync_when_row_not_ready(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+        win._initialized_data_idxs = {0}
+        win._all_sweeps_outputs_exist = lambda _di: False
+        win._start_background_initialize_remaining = MagicMock()
+        win._initialize_all_sweeps_for_data_idx = MagicMock()
+
+        class _DeadThread:
+            def is_alive(self):
+                return False
+
+        win._init_all_thread = _DeadThread()
+
+        win._ensure_data_idx_initialized(1)
+
+        win._initialize_all_sweeps_for_data_idx.assert_called_once_with(1)
+        assert 1 in win._initialized_data_idxs
+        win._start_background_initialize_remaining.assert_called_once()
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            win.close()
+
+    def test_ensure_data_idx_initialized_skips_ready_rows(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+        win._initialized_data_idxs = {0, 1}
+        win._initialize_all_sweeps_for_data_idx = MagicMock()
+
+        win._ensure_data_idx_initialized(1)
+
+        win._initialize_all_sweeps_for_data_idx.assert_not_called()
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            win.close()
+
+    def test_set_data_idx_does_not_trust_prefetch_when_outputs_missing(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+        win._prefetched_idx = 1
+        win._all_sweeps_outputs_exist = lambda di: False if di == 1 else True
+        win._ensure_data_idx_initialized = MagicMock()
+        win._update_sweep_scatter = MagicMock()
+        win._update_waterfall = MagicMock()
+        win._autoscale_all = MagicMock()
+
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            win._set_data_idx(1)
+
+        win._ensure_data_idx_initialized.assert_called_once_with(1)
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            win.close()
+
     def test_shift_b_shortcut_marks_all_sweeps_bad(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch)
         win._mark_all_sweeps_bad = MagicMock()
