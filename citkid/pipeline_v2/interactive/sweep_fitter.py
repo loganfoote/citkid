@@ -928,6 +928,10 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         dialog.setCancelButton(None)
         dialog.setMinimumDuration(0)
         dialog.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
+        flags = dialog.windowFlags()
+        flags &= ~QtCore.Qt.WindowType.WindowCloseButtonHint
+        flags &= ~QtCore.Qt.WindowType.WindowContextHelpButtonHint
+        dialog.setWindowFlags(flags)
         return dialog
 
     def _global_prefix_length(self, AR) -> int:
