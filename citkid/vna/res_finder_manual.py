@@ -163,6 +163,7 @@ class ResFinder(QtCore.QObject):
         # Drag selection state (for shift+drag to remove multiple resonances)
         self._drag_selection_active = False
         self._drag_start_freq = None
+        self._drag_start_scene_pos = None
         self._drag_region_item = None
 
         # Debounce timer for range-change events (pan/zoom)
@@ -600,13 +601,23 @@ class ResFinder(QtCore.QObject):
             if is_shift_held and event.button() == _Qt.LeftButton:
                 # Check if click is on the magnitude plot
                 if self.plot_mag.sceneBoundingRect().contains(event.scenePos()):
-                    # Start drag selection
-                    self._drag_selection_active = True
+                    # Start a pending shift interaction. It only becomes a
+                    # drag selection after the pointer moves enough.
+                    self._drag_selection_active = False
                     mouse_point = self.plot_mag.vb.mapSceneToView(event.scenePos())
                     self._drag_start_freq = mouse_point.x()
-                    return True
+                    self._drag_start_scene_pos = event.scenePos()
+                    return False
         elif event.type() == QtCore.QEvent.Type.GraphicsSceneMouseMove:
-            if self._drag_selection_active and self._drag_start_freq is not None:
+            if self._drag_start_freq is not None and self._drag_start_scene_pos is not None:
+                if not self._drag_selection_active:
+                    distance = self._scene_drag_distance(
+                        self._drag_start_scene_pos,
+                        event.scenePos(),
+                    )
+                    if distance < 4.0:
+                        return False
+                    self._drag_selection_active = True
                 # Update visual during drag
                 pos = event.scenePos()
                 if self.plot_mag.sceneBoundingRect().contains(pos):
@@ -634,9 +645,23 @@ class ResFinder(QtCore.QObject):
                     self.remove_resonances_in_range(f_min, f_max)
                 
                 self._drag_start_freq = None
+                self._drag_start_scene_pos = None
                 return True
+            if self._drag_start_freq is not None:
+                self._drag_start_freq = None
+                self._drag_start_scene_pos = None
+                return False
         
         return False
+
+    @staticmethod
+    def _scene_drag_distance(start_pos, end_pos):
+        """
+        Return the pixel distance between two scene positions.
+        """
+        dx = float(end_pos.x() - start_pos.x())
+        dy = float(end_pos.y() - start_pos.y())
+        return float((dx ** 2 + dy ** 2) ** 0.5)
     
     def on_mouse_moved(self, pos):
         """

@@ -16,9 +16,11 @@ import h5py
 import zarr
 import os
 from unittest.mock import Mock, patch, MagicMock
+from pyqtgraph.Qt import QtCore
 
 np.seterr(divide='ignore')
 
+from citkid.qt_compat import Qt as _Qt
 from citkid.vna.res_finder_manual import (
     ResFinder,
     ResFinderWindow,
@@ -1503,3 +1505,35 @@ class TestEventFilter:
         # Should create or update region item
         # (can't fully test without real graphics, but we can check it doesn't crash)
         assert finder._drag_region_item is not None or finder._drag_selection_active
+
+    def test_shift_click_release_is_not_consumed_as_drag(self, synthetic_vna_data, tmp_path):
+        """Shift+click without movement should not be swallowed by the drag filter."""
+        finder = self._make_finder(synthetic_vna_data, tmp_path)
+
+        start_pos = MagicMock()
+        start_pos.x.return_value = 10.0
+        start_pos.y.return_value = 20.0
+
+        press_event = MagicMock()
+        press_event.type.return_value = QtCore.QEvent.Type.GraphicsSceneMousePress
+        press_event.button.return_value = _Qt.LeftButton
+        press_event.scenePos.return_value = start_pos
+
+        release_event = MagicMock()
+        release_event.type.return_value = QtCore.QEvent.Type.GraphicsSceneMouseRelease
+        release_event.scenePos.return_value = start_pos
+
+        finder.plot_mag.sceneBoundingRect = MagicMock(return_value=MagicMock())
+        finder.plot_mag.sceneBoundingRect.return_value.contains = MagicMock(return_value=True)
+        finder.plot_mag.vb.mapSceneToView = MagicMock(
+            return_value=MagicMock(x=MagicMock(return_value=5e9))
+        )
+
+        with patch('citkid.vna.res_finder_manual.QtWidgets.QApplication.keyboardModifiers', return_value=_Qt.ShiftModifier):
+            press_result = finder.eventFilter(finder.plot_mag.scene(), press_event)
+            release_result = finder.eventFilter(finder.plot_mag.scene(), release_event)
+
+        assert press_result is False
+        assert release_result is False
+        assert finder._drag_selection_active is False
+        assert finder._drag_start_freq is None
