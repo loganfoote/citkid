@@ -39,7 +39,7 @@ class DataSet:
         custom_path=None,
         zarr_mode="a",
         custom_cal_steps=None,
-        custom_main_directory_overwrite=None,
+        custom_main_dir_overwrite=None,
     ):
         """
         Initialize the dataset and load its calibration definition.
@@ -56,8 +56,8 @@ class DataSet:
             provided.
         custom_cal_steps (list of plStep or None): Custom calibration steps to
             use directly instead of loading them from ``custom_path``.
-        custom_main_directory_overwrite (str or None): Replacement value for a
-            ``main_directory`` assignment inside embedded custom calibration
+        custom_main_dir_overwrite (str or None): Replacement value for a
+            ``main_dir`` assignment inside embedded custom calibration
             source loaded from zarr metadata.
 
         Raises:
@@ -68,8 +68,8 @@ class DataSet:
             raise TypeError("custom_path must be a string or None")
         if cal_yaml_path is not None and not isinstance(cal_yaml_path, str):
             raise TypeError("cal_yaml_path must be a string or None")
-        if custom_main_directory_overwrite is not None and not isinstance(custom_main_directory_overwrite, str):
-            raise TypeError("custom_main_directory_overwrite must be a string or None")
+        if custom_main_dir_overwrite is not None and not isinstance(custom_main_dir_overwrite, str):
+            raise TypeError("custom_main_dir_overwrite must be a string or None")
 
         if isinstance(zarr_path, zarr.Group):
             self.root = zarr_path
@@ -101,13 +101,13 @@ class DataSet:
             cal_yaml_path=cal_yaml_path,
             custom_path=custom_path,
             custom_cal_steps=custom_cal_steps,
-            custom_main_directory_overwrite=custom_main_directory_overwrite,
+            custom_main_dir_overwrite=custom_main_dir_overwrite,
         )
         self.cal_yaml_path = cal_def["yaml_path"]
         self.custom_path = cal_def["custom_path"]
         self.cal_yaml_text = cal_def["yaml_text"]
         self.cal_custom_source = cal_def["custom_source"]
-        self.custom_main_directory_overwrite = custom_main_directory_overwrite
+        self.custom_main_dir_overwrite = custom_main_dir_overwrite
 
         self.cal_steps = list(cal_def["custom_steps"])
         for step in default_steps.default_cal_steps:
@@ -931,7 +931,7 @@ class DataSet:
             return False
         return bool(np.all(group["row_exists"][rows]))
 
-    def _resolve_cal_definition(self, cal_yaml_path, custom_path, custom_cal_steps, custom_main_directory_overwrite):
+    def _resolve_cal_definition(self, cal_yaml_path, custom_path, custom_cal_steps, custom_main_dir_overwrite):
         """
         Resolve the calibration definition from inputs and embedded metadata.
         """
@@ -979,9 +979,9 @@ class DataSet:
             custom_source = _read_text_file(resolved_custom_path)
         elif stored_custom is not None:
             resolved_custom_path = stored_custom_path
-            custom_source = _overwrite_main_directory_in_source(
+            custom_source = _overwrite_main_dir_in_source(
                 stored_custom,
-                custom_main_directory_overwrite,
+                custom_main_dir_overwrite,
             )
 
         if stored_yaml is not None and yaml_text != stored_yaml:
@@ -1087,15 +1087,15 @@ def _load_custom_cal_steps_from_source(source):
     return list(namespace.get("custom_cal_steps", []))
 
 
-def _overwrite_main_directory_in_source(source, main_directory_overwrite):
+def _overwrite_main_dir_in_source(source, main_dir_overwrite):
     """
-    Replace a top-level ``main_directory = ...`` assignment when requested.
+    Replace a top-level ``main_dir = ...`` assignment when requested.
     """
-    if source is None or main_directory_overwrite is None:
+    if source is None or main_dir_overwrite is None:
         return source
 
-    pattern = re.compile(r"^(\s*main_directory\s*=\s*).*$", re.MULTILINE)
-    replacement = rf"\1{main_directory_overwrite!r}"
+    pattern = re.compile(r"^(\s*main_dir\s*=\s*).*$", re.MULTILINE)
+    replacement = rf"\1{main_dir_overwrite!r}"
     if pattern.search(source) is None:
         return source
     return pattern.sub(replacement, source, count=1)
