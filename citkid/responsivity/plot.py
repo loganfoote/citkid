@@ -4,7 +4,7 @@ from .funcs import responsivity_int
 
 def plot_responsivity_int(power, x, x_err, popt, p0):
     """
-    Plots the fit and initial guess to responsivity_int
+    Plot the fit and initial guess to responsivity_int
 
     Parameters:
     power (array-like): array of blackbody powers in W

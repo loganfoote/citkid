@@ -2,7 +2,7 @@ from scipy.signal import butter, filtfilt, sosfiltfilt
 
 def bandpass_filter(x, dt, f0, f1, order = 8):
     """
-    Applies a bandpass filter to a timestream.
+    Apply a bandpass filter to a timestream.
 
     Parameters:
     x (np.ndarray, (N,)): Timestream data.
@@ -36,7 +36,7 @@ def bandpass_filter(x, dt, f0, f1, order = 8):
 
 def lowpass_filter(x, dt, f_cutoff, order = 8):
     """
-    Applies a lowpass filter to a timestream.
+    Apply a lowpass filter to a timestream.
 
     Parameters:
     x (np.ndarray, (N,)): Timestream data.
@@ -67,7 +67,7 @@ def lowpass_filter(x, dt, f_cutoff, order = 8):
 
 def highpass_filter(x, dt, f_cutoff, order = 8):
     """
-    Applies a highpass filter to a timestream.
+    Apply a highpass filter to a timestream.
 
     Parameters:
     x (np.ndarray, (N,)): Timestream data.

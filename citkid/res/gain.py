@@ -14,7 +14,7 @@ from ..xcal import gain as xcal_gain
 
 def remove_gain(f, z, p_amp, p_phase):
     """
-    Removes the gain amplitude and phase from complex S21 data, given the raw
+    Remove the gain amplitude and phase from complex S21 data, given the raw
     data
 
     Parameters:
@@ -38,7 +38,7 @@ def remove_gain(f, z, p_amp, p_phase):
 
 def fit_gain(f, z, fr_spans, plotq = False):
     """
-    Fits the amplitude and phase of gain data. Amplitude is fit to a 2nd order.
+    Fit the amplitude and phase of gain data. Amplitude is fit to a 2nd order.
     polynomial and phase is fit to a 1st order polynomial.
 
     Parameters:
@@ -148,7 +148,7 @@ def fit_gain(f, z, fr_spans, plotq = False):
 def fit_and_remove_gain_phase(fgain, zgain, ffine, zfine, frs = [], Qrs = [],
                               plotq = False, legacy_fit = True):
     """
-    Removes the gain-sweep fit parameters from the fine sweep data.
+    Remove the gain-sweep fit parameters from the fine sweep data.
 
     Qrs should be no higher than 10 X Qr of the resonances.
 
@@ -192,12 +192,12 @@ def fit_and_remove_gain_phase(fgain, zgain, ffine, zfine, frs = [], Qrs = [],
   
 def fit_gains(fs, zs, fr_spans, verbose=False):
     """
-    Calls fit_gain() on arrays of frequency and gain data.
+    Call fit_gain() on arrays of frequency and gain data.
     
     Parameters:
-    fs <np.array>: gain frequency arrays
-    zs <np.array>: gain complex S21 arrays
-    fr_spans (list): values are tuples (<float>,<float>) where the first value
+    fs (np.array): gain frequency arrays
+    zs (np.array): gain complex S21 arrays
+    fr_spans (list): values are tuples (float, float) where the first value
         is the resonance frequency and the second is the span. These frequencies
         are removed from the gain data
     verbose (bool): If True, a progress bar is displayed.

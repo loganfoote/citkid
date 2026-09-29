@@ -253,7 +253,7 @@ class CRS:
     async def set_decimation(self, dec_stage, short = None, module_idxs = None,
                              verbose = True):
         """
-        Sets the decimation stage, with optional short mode and module indices. 
+        Set the decimation stage, with optional short mode and module indices. 
         If short and/or module_idxs are not provided, they are determined using 
         self.fres_map. Raises an error if the configuration will drop packets. 
 
@@ -610,7 +610,7 @@ class CRS:
             pbar_description = 'Sweeping'
             ):
         """
-        Performs a frequency sweep where each channel is swept over the same
+        Perform a frequency sweep where each channel is swept over the same
         frequency span, with either linear or logarithmic spacing.
 
         Parameters:
@@ -682,7 +682,7 @@ class CRS:
             pbar_description = 'Sweeping'
             ):
         """
-        Performs a downward frequency sweep where the span around each frequency
+        Perform a downward frequency sweep where the span around each frequency
         is set equal to fres / qres.
 
         Parameters:
@@ -738,7 +738,7 @@ class CRS:
             pbar_description = 'Sweeping'
             ):
         """
-        Performs a frequency sweep over the full bandwidth around the NCO
+        Perform a frequency sweep over the full bandwidth around the NCO
         frequency.
 
         Parameters:
@@ -816,8 +816,8 @@ class CRS:
             verbose = True
     ): 
         """
-        Clears all tones, writes tones using fres and ares, captures a
-        timestream of length ts_time using the parser, and then clears all 
+        Clear all tones, write tones using fres and ares, capture a
+        timestream of length ts_time using the parser, and then clear all 
         tones.
 
         Parameters:
@@ -907,7 +907,7 @@ class CRS:
         verbose = True
     ):
         """
-        Captures a timestream using the parser. Does not change written tones - 
+        Capture a timestream using the parser. Does not change written tones - 
         assumes fres_map and ares_map match the currently written tones.
 
         Note on streaming capabilities: If all modules have less than 129 tones,
@@ -1054,7 +1054,7 @@ async def _set_nco(module, nco_freqs):
 @rfmux.macro(rfmux.ReadoutModule, register=True)
 async def _write_tones(module, nco_freqs, fres_map, ares_map):
         """
-        Writes an array of tones given frequencies and amplitudes.
+        Write an array of tones given frequencies and amplitudes.
 
         Parameters:
         module (rfmux.ReadoutModule): readout module object.
@@ -1104,7 +1104,7 @@ async def _sweep(module, nco_freqs, frequencies_map, ares_map, sweep_f,
                  sweep_z, nsamps = 10, verbose = True,
                  pbar_description = 'Sweeping'):
         """
-        Performs a frequency sweep and returns the complex S21 value at each
+        Perform a frequency sweep and return the complex S21 value at each
         frequency. Performs sweeps over axis 0 of frequencies simultaneously.
 
         Parameters:

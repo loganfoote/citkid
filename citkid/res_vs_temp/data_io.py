@@ -21,7 +21,7 @@ Q_vs_T_tls_labels = [r'$f_0$', r'$F\delta_0$', r'$\delta_z$']
 def make_fit_row_f_vs_T(p0, popt, perr, gamma, plot_path = '',
                             prefix = 'f_vs_T'):
     """
-    Wraps the output of fit_f_vs_T fitting into a pd.Series instance
+    Wrap the output of fit_f_vs_T fitting into a pd.Series instance
 
     Parameters:
     p0 (np.array): fit parameter guess
@@ -50,7 +50,7 @@ def make_fit_row_f_vs_T(p0, popt, perr, gamma, plot_path = '',
 
 def separate_fit_row_f_vs_T(row, prefix = 'f_vs_T'):
     """
-    Performs the inverse function of make_fit_row_f_vs_T.
+    Perform the inverse function of make_fit_row_f_vs_T.
 
     Parameters:
     row (pd.Series): pd.Series object that includes all of the input data
@@ -83,7 +83,7 @@ def separate_fit_row_f_vs_T(row, prefix = 'f_vs_T'):
 def make_fit_row_Q_vs_T(p0, popt, perr, gamma, plot_path = '',
                             prefix = 'Q_vs_T'):
     """
-    Wraps the output of fit_Q_vs_T fitting into a pd.Series instance
+    Wrap the output of fit_Q_vs_T fitting into a pd.Series instance
 
     Parameters:
     p0 (np.array): fit parameter guess
@@ -112,7 +112,7 @@ def make_fit_row_Q_vs_T(p0, popt, perr, gamma, plot_path = '',
 
 def separate_fit_row_Q_vs_T(row, prefix = 'Q_vs_T'):
     """
-    Performs the inverse function of make_fit_row_Q_vs_T.
+    Perform the inverse function of make_fit_row_Q_vs_T.
 
     Parameters:
     row (pd.Series): pd.Series object that includes all of the input data
@@ -148,7 +148,7 @@ def separate_fit_row_Q_vs_T(row, prefix = 'Q_vs_T'):
 def make_fit_row_f_vs_T_qp(p0, popt, perr, gamma, plot_path = '',
                                   prefix = 'f_vs_T_qp'):
     """
-    Wraps the output of fit_f_vs_T_qp fitting into a pd.Series instance.
+    Wrap the output of fit_f_vs_T_qp fitting into a pd.Series instance.
 
     Parameters:
     p0 (np.array): fit parameter guess
@@ -177,7 +177,7 @@ def make_fit_row_f_vs_T_qp(p0, popt, perr, gamma, plot_path = '',
 
 def separate_fit_row_f_vs_T_qp(row, prefix = 'f_vs_T_qp'):
     """
-    Performs the inverse function of make_fit_row_f_vs_T_qp.
+    Perform the inverse function of make_fit_row_f_vs_T_qp.
 
     Parameters:
     row (pd.Series): pd.Series object that includes all of the input data
@@ -210,7 +210,7 @@ def separate_fit_row_f_vs_T_qp(row, prefix = 'f_vs_T_qp'):
 def make_fit_row_Q_vs_T_qp(p0, popt, perr, gamma, plot_path = '',
                                  prefix = 'Q_vs_T_qp'):
     """
-    Wraps the output of fit_Q_vs_T_qp fitting into a pd.Series instance.
+    Wrap the output of fit_Q_vs_T_qp fitting into a pd.Series instance.
 
     Parameters:
     p0 (np.array): fit parameter guess
@@ -239,7 +239,7 @@ def make_fit_row_Q_vs_T_qp(p0, popt, perr, gamma, plot_path = '',
 
 def separate_fit_row_Q_vs_T_qp(row, prefix = 'Q_vs_T_qp'):
     """
-    Performs the inverse function of make_fit_row_Q_vs_T_qp.
+    Perform the inverse function of make_fit_row_Q_vs_T_qp.
 
     Parameters:
     row (pd.Series): pd.Series object that includes all of the input data
@@ -275,7 +275,7 @@ def separate_fit_row_Q_vs_T_qp(row, prefix = 'Q_vs_T_qp'):
 def make_fit_row_f_vs_T_tls(p0, popt, perr, plot_path = '',
                             prefix = 'f_vs_T_tls'):
     """
-    Wraps the output of fit_f_vs_T_tls fitting into a pd.Series instance.
+    Wrap the output of fit_f_vs_T_tls fitting into a pd.Series instance.
 
     Parameters:
     p0 (np.array): fit parameter guess
@@ -302,7 +302,7 @@ def make_fit_row_f_vs_T_tls(p0, popt, perr, plot_path = '',
 
 def separate_fit_row_f_vs_T_tls(row, prefix = 'f_vs_T_tls'):
     """
-    Performs the inverse function of make_fit_row_f_vs_T_tls.
+    Perform the inverse function of make_fit_row_f_vs_T_tls.
 
     Parameters:
     row (pd.Series): pd.Series object that includes all of the input data
@@ -333,7 +333,7 @@ def separate_fit_row_f_vs_T_tls(row, prefix = 'f_vs_T_tls'):
 def make_fit_row_Q_vs_T_tls(p0, popt, perr, plot_path = '',
                             prefix = 'Q_vs_T_tls'):
     """
-    Wraps the output of fit_Q_vs_T_tls fitting into a pd.Series instance.
+    Wrap the output of fit_Q_vs_T_tls fitting into a pd.Series instance.
 
     Parameters:
     p0 (np.array): fit parameter guess
@@ -360,7 +360,7 @@ def make_fit_row_Q_vs_T_tls(p0, popt, perr, plot_path = '',
 
 def separate_fit_row_Q_vs_T_tls(row, prefix = 'Q_vs_T_tls'):
     """
-    Performs the inverse function of make_fit_row_Q_vs_T_tls.
+    Perform the inverse function of make_fit_row_Q_vs_T_tls.
 
     Parameters:
     row (pd.Series): pd.Series object that includes all of the input data

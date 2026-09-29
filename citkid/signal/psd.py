@@ -4,7 +4,7 @@ import pyfftw
 
 def get_psd(x, dt, get_frequencies=False):
     """
-    Calculates the unilateral power spectral density magnitude of a timestream.
+    Calculate the unilateral power spectral density magnitude of a timestream.
 
     Parameters:
     x (np.array, float64): Timeseries data.
@@ -26,7 +26,7 @@ def get_psd(x, dt, get_frequencies=False):
 
 def get_csd(x1, x2, dt):
     """
-    Calculates the unilateral cross spectral density magnitude of two
+    Calculate the unilateral cross spectral density magnitude of two
     timestreams.
 
     Parameters:
@@ -53,7 +53,7 @@ def get_csd(x1, x2, dt):
 def bin_psd(f, data, nbins=500, fmin=3, filter_pt_n=None,
             pt_frequency=1.39296, statistic='mean'):
     """
-    Bins noise data logarithmically. Optionally filters pulse tubes before
+    Bin noise data logarithmically. Optionally filters pulse tubes before
     binning and leaves frequencies below fmin unbinned.
 
     Parameters:

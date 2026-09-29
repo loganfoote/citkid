@@ -7,7 +7,7 @@ h = 6.62607015e-34
 ################################################################################
 def guess_p0_f_vs_T(T, f, Tc_guess = 1.2, gamma = 1):
     """
-    Calculates an initial guess for f_vs_T. Tc_guess must be provided.
+    Calculate an initial guess for f_vs_T. Tc_guess must be provided.
 
     Parameters:
     T (array-like): temperature data in K
@@ -32,7 +32,7 @@ def guess_p0_f_vs_T(T, f, Tc_guess = 1.2, gamma = 1):
 
 def get_bounds_f_vs_T(bounds_qp, bounds_tls):
     """
-    Gets bounds for the fitter for f_vs_T.
+    Get bounds for the fitter for f_vs_T.
 
     Parameters:
     bounds_qp (list): bounds from the QP guessing function
@@ -52,7 +52,7 @@ def get_bounds_f_vs_T(bounds_qp, bounds_tls):
 
 def guess_p0_Q_vs_T(T, Q, f0_guess, Tc_guess = 1.2, gamma = 1):
     """
-    Calculates an initial guess for Q_vs_T. Tc_guess and f0_guess must be
+    Calculate an initial guess for Q_vs_T. Tc_guess and f0_guess must be
     provided.
 
     Parameters:
@@ -81,7 +81,7 @@ def guess_p0_Q_vs_T(T, Q, f0_guess, Tc_guess = 1.2, gamma = 1):
 
 def get_bounds_Q_vs_T(bounds_qp, bounds_tls):
     """
-    Gets bounds for the fitter for Q_vs_T.
+    Get bounds for the fitter for Q_vs_T.
 
     Parameters:
     bounds_qp (list): bounds from the QP guessing function
@@ -107,7 +107,7 @@ def get_bounds_Q_vs_T(bounds_qp, bounds_tls):
 ################################################################################
 def guess_p0_f_vs_T_qp(T, f, Tc_guess = 1.2, gamma = 1):
     """
-    Calculates an initial guess for f_vs_T_qp. Tc_guess must be provided.
+    Calculate an initial guess for f_vs_T_qp. Tc_guess must be provided.
 
     Parameters:
     T (array-like): temperature data in K
@@ -131,7 +131,7 @@ def guess_p0_f_vs_T_qp(T, f, Tc_guess = 1.2, gamma = 1):
 
 def get_bounds_f_vs_T_qp(p0):
     """
-    Gets bounds for the fitter for f_vs_T_qp.
+    Get bounds for the fitter for f_vs_T_qp.
 
     Parameters:
     p0 (list): initial guess parameters
@@ -146,7 +146,7 @@ def get_bounds_f_vs_T_qp(p0):
 
 def guess_p0_Q_vs_T_qp(T, Q, f0_guess, Tc_guess = 1.2, gamma = 1):
     """
-    Calculates an initial guess for Q_vs_T_qp. Tc_guess and f0_guess must be
+    Calculate an initial guess for Q_vs_T_qp. Tc_guess and f0_guess must be
     provided.
 
     Parameters:
@@ -172,7 +172,7 @@ def guess_p0_Q_vs_T_qp(T, Q, f0_guess, Tc_guess = 1.2, gamma = 1):
 
 def get_bounds_Q_vs_T_qp(p0):
     """
-    Gets bounds for the fitter for Q_vs_T_qp.
+    Get bounds for the fitter for Q_vs_T_qp.
 
     Parameters:
     p0 (list): initial guess parameters
@@ -190,7 +190,7 @@ def get_bounds_Q_vs_T_qp(p0):
 ################################################################################
 def guess_p0_f_vs_T_tls(T, f):
     """
-    Calculates an initial guess for f_vs_T_tls.
+    Calculate an initial guess for f_vs_T_tls.
 
     Parameters:
     T (array-like): temperature data in K
@@ -218,7 +218,7 @@ def guess_p0_f_vs_T_tls(T, f):
 
 def get_bounds_f_vs_T_tls(p0):
     """
-    Gets bounds for the fitter for f_vs_T_tls.
+    Get bounds for the fitter for f_vs_T_tls.
 
     Parameters:
     p0 (list): initial guess parameters
@@ -233,7 +233,7 @@ def get_bounds_f_vs_T_tls(p0):
 
 def guess_p0_Q_vs_T_tls(T, Q, f0_guess):
     """
-    Calculates an initial guess for Q_vs_T_tls. f0_guess must be provided.
+    Calculate an initial guess for Q_vs_T_tls. f0_guess must be provided.
 
     Parameters:
     T (array-like): temperature data in K
@@ -258,7 +258,7 @@ def guess_p0_Q_vs_T_tls(T, Q, f0_guess):
 
 def get_bounds_Q_vs_T_tls(p0):
     """
-    Gets bounds for the fitter for Q_vs_T_tls.
+    Get bounds for the fitter for Q_vs_T_tls.
 
     Parameters:
     p0 (list): initial guess parameters

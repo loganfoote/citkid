@@ -28,7 +28,7 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
            plotq = False, plot_factor = 1, overwrite = False, verbose = True,
            catch_exceptions = False):
     """
-    Fits all IQ loops in a target scan
+    Fit all IQ loops in a target scan
 
     Parameters:
     directory (str): directory containing the data for logging
@@ -318,7 +318,7 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
 ################################################################################
 def split_sweep(f, z, npoints):
     """
-    Splits an S21 sweep into subarrays corresponding to each tone
+    Split an S21 sweep into subarrays corresponding to each tone
 
     Parameters:
     f, z (np.array): multi-tone sweep frequency and complex S21 data

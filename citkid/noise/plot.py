@@ -120,7 +120,7 @@ def plot_cal(ffine, zfine, popt_circle, fnoise, znoise, znoise_offres,
 def plot_timestream(dt, theta, theta_clean, dt_offres, theta_offres, x,
                     cr_indices):
     """
-    Plots noise timestreams. If theta is None, plots only the off-resonance
+    Plot noise timestreams. If theta is None, plots only the off-resonance
     theta timestream. If theta_offres is None, plots only the on-resonance
     theta timestream and the on-resonance x timestream, with and without
     deglitching and cosmic ray removal. If neither are None, plots on- and off-
@@ -178,7 +178,7 @@ def plot_timestream(dt, theta, theta_clean, dt_offres, theta_offres, x,
 
 def plot_psd(f_psd, spar, sper, sxx, f_psd_offres, spar_offres, sper_offres):
     """
-    Plots on- and off-resonance psds. Produces one plot of perpendicular and
+    Plot on- and off-resonance psds. Produces one plot of perpendicular and
     parallel noise, and one plot of Sxx, if provided
 
     Parameters:

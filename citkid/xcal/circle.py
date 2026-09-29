@@ -9,7 +9,7 @@ from ..signal.psd import get_psd
 @njit(float64(float64[:], float64[:], float64[:]), cache = True)
 def circle_objective(params, x, y):
     """
-    Objective for circle fitting.
+    Compute the objective for circle fitting.
 
     Parameters:
     params (np.array, float64, (3,)): Circle parameters (A, B, R), where
@@ -26,7 +26,7 @@ def circle_objective(params, x, y):
 
 def fit_iq_circle(z, mask = None):
     """
-    Fits an IQ loop to a circle. The function describing the circle is
+    Fit an IQ loop to a circle. The function describing the circle is
 
        [Re(S21)-A]^2 + [Im(S21)-B]^2 = R^2
 

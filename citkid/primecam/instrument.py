@@ -59,7 +59,7 @@ class RFSOC:
 
     def set_nclo(self, frequency):
         """
-        Sets the LO frequency
+        Set the LO frequency
 
         Parameters:
         frequency (float): in MHz. 1 MHz resolution
@@ -74,7 +74,7 @@ class RFSOC:
 
     def write_vna_comb(self):
         """
-        Writes a rough vna comb of 1000 tones with a 500 MHz bandwidth centered
+        Write a rough vna comb of 1000 tones with a 500 MHz bandwidth centered
         on the LO frequency
         """
         com_num = self.comNumFromStr('writeNewVnaComb')
@@ -87,7 +87,7 @@ class RFSOC:
     def write_targ_comb_from_vna(self, f_filename = False, a_filename = False,
                                  p_filename = False):
         """
-        Writes a target comb from the most recent vna sweep
+        Write a target comb from the most recent vna sweep
 
         Parameters:
         filenames (str or False): Path to save the output files. Must end in
@@ -119,7 +119,7 @@ class RFSOC:
     def write_targ_comb_from_targ(self, f_filename = False, a_filename = False,
                                   p_filename = False):
         """
-        Writes a target comb from the most recent target sweep
+        Write a target comb from the most recent target sweep
 
         Parameters:
         filenames (str or False): Path to save the output files. Must end in
@@ -150,7 +150,7 @@ class RFSOC:
 
     def write_targ_comb_from_custom(self, fres, ares = None, pres = None):
         """
-        Writes a target comb from custom lists. Three custom lists must be
+        Write a target comb from custom lists. Three custom lists must be
         stored in the alcove_commands folder on the board:
            custom_freqs.npy, custom_amps.npy, and custom_phis.npy
 
@@ -174,7 +174,7 @@ class RFSOC:
 
     def vna_sweep(self, filename, npoints = 500, N_accums = 5):
         """
-        Executes a vna sweep using the current tone list
+        Execute a vna sweep using the current tone list
 
         Parameters:
         filename (str or False): Path to save the output file. Must end
@@ -197,7 +197,7 @@ class RFSOC:
 
     def target_sweep(self, filename, npoints = 500, bandwidth = 0.2, N_accums = 5):
         """
-        Executes a target vna sweep of the current comb
+        Execute a target vna sweep of the current comb
 
         Parameters:
         filename (str or False): Path to save the output file. Must end in
@@ -221,7 +221,7 @@ class RFSOC:
 
     def capture_noise(self, seconds):
         """
-        Captures noise data. Sample rate is 488.2 Hz
+        Capture noise data. Sample rate is 488.2 Hz
 
         Parameters:
         seconds (float): capture time in seconds
@@ -241,7 +241,7 @@ class RFSOC:
 
     def capture_save_noise(self, seconds, filename):
         """
-        Captures and saves noise data
+        Capture and save noise data
 
         Parameters:
         seconds (float): capture time in seconds
@@ -256,7 +256,7 @@ class RFSOC:
 
     def find_vna_res(self, filename):
         """
-        Finds resonators from the most recent vna sweep, using the built-in
+        Find resonators from the most recent vna sweep, using the built-in
         algorithm (I would reccomend doing this on your own instead)
 
         Parameters:
@@ -279,7 +279,7 @@ class RFSOC:
     def find_targ_res(self, f_filename = False, a_filename = False,
                       p_filename = False):
         """
-        Finds resonators from the most recent target sweep using the built-in
+        Find resonators from the most recent target sweep using the built-in
         algorithm (I would reccomend doing this on your own instead)
 
         Parameters:
@@ -311,13 +311,13 @@ class RFSOC:
 
     def close_socket(self):
         """
-        Closes the connection to the socket
+        Close the connection to the socket
         """
         self.sock.close()
 
     def get_recent_file(self, file_type):
         """
-        Gets the most recent file name that contains a given string from the
+        Get the most recent file name that contains a given string from the
         tmp directory
 
         Parameters:
@@ -339,7 +339,7 @@ class RFSOC:
 
     def transfer_file(self, file_type, filename):
         """
-        Finds the most recent file of the given type and transfers
+        Find the most recent file of the given type and transfers
         it to out_directory, saved as filename.
 
         Parameters:
@@ -353,7 +353,7 @@ class RFSOC:
 
     def clear_tmp_directory(self):
         """
-        Clears all .npy files form the temporary directory
+        Clear all .npy files form the temporary directory
         """
         files = [f for f in os.listdir(self.tmp_directory) if '.npy' in f]
         for file in files:
@@ -361,7 +361,7 @@ class RFSOC:
 
     def clear_tmp_directory_full(self):
         """
-        Clears all files from the temporary directory
+        Clear all files from the temporary directory
         """
         files = os.listdir(self.tmp_directory)
         for file in files:
@@ -369,7 +369,7 @@ class RFSOC:
 
     def transfer_custom_tone_lists(self):
         """
-        Transfers the custom tone lists from tmp_directory to the board
+        Transfer the custom tone lists from tmp_directory to the board
         """
         # Set up SSH client
         ssh = paramiko.SSHClient()
@@ -395,8 +395,8 @@ class RFSOC:
 
     def make_custom_tone_lists(self, fres, ares = None, pres = None):
         """
-        Creates custom amplitude and phi lists from the give tone list, and
-        saves all three files to the board
+        Create custom amplitude and phi lists from the given tone list, and
+        save all three files to the board
 
         Parameters:
         fres (np.array): Array of custom frequencies in Hz
@@ -420,8 +420,8 @@ class RFSOC:
 
 def separate_iq_data(path):
     """
-    Given a path to IQ data saved by the RFSoC as complex f, z,
-    split the data into float f, i, q and save it
+    Split IQ data saved by the RFSoC as complex f, z into float f, i, q and
+    save it
 
     Parameters:
     path (str): path to the saved data
@@ -445,7 +445,7 @@ class hidePrints:
 
 def capturePacket(sock):
     """
-    Captures a packet from the noise streaming ethernet port
+    Capture a packet from the noise streaming ethernet port
 
     Parameters:
     sock (socket.socket): socket for noise streaming
@@ -462,7 +462,7 @@ def capturePacket(sock):
 
 def getNpackets(sock, N):
     """
-    Captures N packets and converts to I and Q
+    Capture N packets and convert them to I and Q
 
     Parameters:
     sock (socket.socket): socket for noise streaming

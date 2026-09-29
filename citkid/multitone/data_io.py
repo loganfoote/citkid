@@ -10,7 +10,7 @@ import os
 # Need to update docstrings, imports
 def import_iq_noise(directory, file_suffix, noise_index = 0, import_noiseq = True):
     """
-    Imports data from primecam.procedures.take_iq_noise
+    Import data from primecam.procedures.take_iq_noise
 
     Parameters:
     directory (str): directory containing the saved data

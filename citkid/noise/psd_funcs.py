@@ -9,7 +9,7 @@ from numba import jit
 @jit(nopython = True)
 def rolloff(f, tau):
     """
-    Noise rolloff
+    Compute a noise rolloff profile.
 
                          1
            y =  --------------------
@@ -28,7 +28,8 @@ def rolloff(f, tau):
 @jit(nopython = True)
 def white_rolloff(f, a, b, tau):
     """
-    Noise with a flat profile and a single rolloff to a lower flat profile.
+    Compute noise with a flat profile and a single rolloff to a lower flat
+    profile.
 
                          a
            y =  --------------------  +  b
@@ -48,8 +49,8 @@ def white_rolloff(f, a, b, tau):
 @jit(nopython = True)
 def white_rolloff_rd_elect(f, a, b, tau_qp, tau_elect, tau_rd):
     """
-    Noise with a flat profile and a single rolloff to a lower flat profile,
-    plus an electrical rolloff and the resonator ringdown time rolloff
+    Compute noise with a flat profile and a single rolloff to a lower flat
+    profile, plus an electrical rolloff and the resonator ringdown time rolloff
 
            y =  [a * R(tau_qp) * R(tau_rd) + b] * R(tau_elect)
 
@@ -77,7 +78,7 @@ def white_rolloff_rd_elect(f, a, b, tau_qp, tau_elect, tau_rd):
 @jit(nopython = True)
 def one_over_f(f, a, alpha):
     """
-    One over f noise profile
+    Compute a 1/f noise profile.
 
                    /  1  \  alpha
            y =  a | ----- |
@@ -96,7 +97,7 @@ def one_over_f(f, a, alpha):
 @jit(nopython = True)
 def white_1f(f, a, b, alpha):
     """
-    Noise profile of white noise (no rolloff) with 1/f noise
+    Compute a profile of white noise (no rolloff) plus 1/f noise.
 
                    /  1  \  alpha
            y =  a | ----- |        +  b

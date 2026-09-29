@@ -13,7 +13,7 @@ def fit_f_vs_T(T, f, gamma = 1, Tc_guess = 1.2, enforced_alpha = None,
                return_dataframe = False, plotq = False,
                catch_exceptions = False):
     """
-    Fits resonant frequency versus temperature data to f_vs_T.
+    Fit resonant frequency versus temperature data to f_vs_T.
 
     Parameters:
     T (array-like): temperature data in K
@@ -115,7 +115,7 @@ def fit_Q_vs_T(T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
                return_dataframe = False, plotq = False,
                catch_exceptions = False):
     """
-    Fits quality factor versus temperature data to Q_vs_T.
+    Fit quality factor versus temperature data to Q_vs_T.
 
     Parameters:
     T (array-like): temperature data in K
@@ -224,7 +224,7 @@ def fit_f_vs_T_qp(T, f, gamma = 1, Tc_guess = 1.2, f_err = None,
                   return_dataframe = False, plotq = False,
                   catch_exceptions = False):
     """
-    Fits resonant frequency versus temperature data to f_vs_T_qp.
+    Fit resonant frequency versus temperature data to f_vs_T_qp.
 
     Parameters:
     T (array-like): temperature data in K
@@ -322,7 +322,7 @@ def fit_Q_vs_T_qp(T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
                   return_dataframe = False, plotq = False,
                   catch_exceptions = False):
     """
-    Fits quality factor versus temperature data to Q_vs_T_qp.
+    Fit quality factor versus temperature data to Q_vs_T_qp.
 
     Parameters:
     T (array-like): temperature data in K
@@ -425,7 +425,7 @@ def fit_f_vs_T_tls(T, f, f_err = None, guess = None, bounds = None,
                    return_dataframe = False, plotq = False,
                    catch_exceptions = False):
     """
-    Fits resonant frequency versus temperature data to f_vs_T_tls.
+    Fit resonant frequency versus temperature data to f_vs_T_tls.
 
     Parameters:
     T (array-like): temperature data in K
@@ -505,7 +505,7 @@ def fit_Q_vs_T_tls(T, Q, f0_guess, Q_err = None,  guess = None, bounds = None,
                    return_dataframe = False, plotq = False,
                    catch_exceptions = False):
     """
-    Fits resonant frequency versus temperature data to Q_vs_T_tls.
+    Fit resonant frequency versus temperature data to Q_vs_T_tls.
 
     Parameters:
     T (array-like): temperature data in K

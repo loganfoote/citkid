@@ -2,7 +2,7 @@ import numpy as np
 
 def guess_p0_responsivity_int(power, x, guess_nfit = 3):
     """
-    Get's an initial guess for responsivity_int.
+    Get an initial guess for responsivity_int.
     This function works best if there are at least three data points at
     P >> P_0. Otherwise, an alternative initial guess may be required.
 
@@ -35,7 +35,7 @@ def guess_p0_responsivity_int(power, x, guess_nfit = 3):
 
 def get_bounds_responsivity_int(p0):
     """
-    Gets the bounds for responsivity_int given the initial guess
+    Get the bounds for responsivity_int given the initial guess
 
     Parameters:
     p0 (list): initial guess

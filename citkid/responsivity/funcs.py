@@ -3,7 +3,7 @@ from numba import njit, float64
 
 def responsivity(P, R_0, P_0):
     """
-    Calculates the responsivity dx / dP of a KID
+    Calculate the responsivity dx / dP of a KID
 
     Parameters:
     P (float or array-like): power (W)
@@ -22,7 +22,7 @@ responsivity = np.vectorize(responsivity)
 @njit(float64[:](float64[:], float64, float64, float64), cache = True)
 def responsivity_int(P, R_0, P_0, c):
     """
-    Calculates the integrated form of the responsivity. This function describes
+    Calculate the integrated form of the responsivity. This function describes
     the behavior of x versus P.
 
     Parameters:
@@ -44,7 +44,7 @@ def responsivity_int(P, R_0, P_0, c):
 @njit(float64[:](float64[:], float64, float64, float64), cache = True)
 def responsivity_int_for_fitter(P, R_0, P_0, c):
     """
-    Performs the same fucntion as responsivity_int, but with parameters rescaled
+    Perform the same fucntion as responsivity_int, but with parameters rescaled
     for fitting.
 
     Parameter scaling factors:

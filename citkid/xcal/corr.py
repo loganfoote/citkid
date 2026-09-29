@@ -7,7 +7,7 @@ from ..signal.basic_filt import lowpass_filter, highpass_filter
 ################################################################################
 def calc_sig(x):
     """
-    Given timestreams x, calculates normalized variances for each timestream.
+    Calculate the normalized variance of each timestream in x.
 
     Parameters:
     x (array-like, (N, T)): Timestream data with N timestreams of length T.
@@ -20,7 +20,7 @@ def calc_sig(x):
 
 def pca(x, N_comp, sig = None, highpass_params = None):
     """
-    Calculates common-mode components given timestreams and variances. Assumes
+    Calculate common-mode components given timestreams and variances. Assumes
     the individual timestreams are white:
         x_kt = a_kc * A_ct + n_kt
     where a_kc are scaling factors, A_ct are the common components, and n_kt are
@@ -99,7 +99,7 @@ def calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params,
             verbose = True):
     """
     Iteratively find common modes in multiple timestreams. In each iteration,
-    performs a PCA normalized by the variance of the timestreams with the
+    perform a PCA normalized by the variance of the timestreams with the
     common signal removed from the previous iteration.
 
     Parameters:
@@ -166,8 +166,8 @@ def calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params,
 
 def calc_cm_complex(z, theta = None, *calc_cm_params):
     """
-    Given complex timestreams, calculates the complex scaling factors and 
-    common modes for independent real/imaginary components using the iterative 
+    Calculate the complex scaling factors and common modes of complex
+    timestreams for independent real/imaginary components using the iterative 
     common mode algorithm.
 
     Parameters:
@@ -211,7 +211,7 @@ def calc_cm_complex(z, theta = None, *calc_cm_params):
 ################################################################################
 def remove_cm(x, a, A, idx):
     """
-    Removes common modes from a timestream.
+    Remove common modes from a timestream.
     
     Parameters:
     x (array-like, (T,) or (N, T)): Single timestream data of length T, or
@@ -259,7 +259,7 @@ def remove_cm(x, a, A, idx):
 
 def remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta = None):
     """
-    Removes common modes from complex timestreams. Rotates z to the real axis,
+    Remove common modes from complex timestreams. Rotates z to the real axis,
     then undoes the rotation after removing the common modes.
     
     Parameters:

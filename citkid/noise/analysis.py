@@ -214,7 +214,7 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
 def compute_psd_simple(ffine, zfine, fnoise, znoise, dt, deglitch_nstd = 5,
                        offres = False):
     """
-    Computes an approximation of parallel and perpendicular noise PSDs
+    Compute an approximation of parallel and perpendicular noise PSDs
     by rotating the noise data to 0, 0 and returning PSDs of I, Q
 
     Parameters:
@@ -290,7 +290,7 @@ def calibrate_timestreams(
     **cr_kwargs,
 ):
     """
-    Calculates theta and x timestreams given complex IQ noise timestreams.
+    Calculate theta and x timestreams given complex IQ noise timestreams.
     1) calculate theta of the sweep data an noise timestream
     2) flag and remove cosmic rays
     3) deglitch data and perform polynomial fit to get x from theta, if not
@@ -441,7 +441,7 @@ def calibrate_x(ffine, theta_fine, theta_clean, poly_deg = 3,
 
 def deglitch_timestream(x, deglitch_nstd):
     """
-    Replaces points above a certain threshold from data with the mean of the
+    Replace points above a certain threshold from data with the mean of the
     data
 
     Parameters:

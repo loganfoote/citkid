@@ -48,7 +48,7 @@ def guess_p0_nonlinear_iq(f, z):
 
 def _guess_Qr(f, z, z0, phi, amp):
     """
-    Guesses Qr given complex S21 data.
+    Guess Qr given complex S21 data.
 
     Parameters:
     f (np.array): array of frequency data in Hz
@@ -79,7 +79,7 @@ def _guess_Qr(f, z, z0, phi, amp):
 
 def _guess_a(f, z, z0, phi, amp):
     """
-    Guesses the nonlinearity parameter
+    Guess the nonlinearity parameter
 
     Parameters:
     f (np.array): array of frequency data in Hz

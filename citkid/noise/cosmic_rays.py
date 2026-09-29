@@ -85,11 +85,11 @@ def remove_cosmic_rays(theta, A, tsample, cr_nstd = 5, cr_width = 100e-6,
 
 def remove_overlaps(iranges):
     """
-    Given a list of index ranges, return a list where overlapping ranges are
-    concatenated. Overlaps are defined by clearances between ranges equal to
+    Concatenate overlapping ranges in a list of index ranges, and return the
+    new list. Overlaps are defined by clearances between ranges equal to
     the lengths of the ranges
 
-    Parameter:
+    Parameters:
     iranges (list): values (list) are [lower, upper] values
 
     Returns:

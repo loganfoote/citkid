@@ -4,7 +4,7 @@ import matplotlib.ticker as mtick
 
 def plot_ares_opt(a_nls, fcal_indices):
     """
-    Plots the current status of the power optimization procedure
+    Plot the current status of the power optimization procedure
 
     Parameters:
     a_nls (list): each value is an array of the values of the nonlinearity

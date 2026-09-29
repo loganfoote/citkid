@@ -6,7 +6,7 @@ from scipy.interpolate import interp1d
 
 def calc_qc_qi(qr, amp):
     """
-    Calculates Qc and Qi from Qr and amp, where amp = Qr / Qc and
+    Calculate Qc and Qi from Qr and amp, where amp = Qr / Qc and
     1 / Qr = 1 / Qc + 1 / Qi.
 
     Parameters:
@@ -41,8 +41,8 @@ calc_qc_qi = np.vectorize(calc_qc_qi)
 
 def bounds_check(p0, bounds):
     """
-    First flips bounds if they are reversed. Then, if p0 is not strictly within 
-    the bounds, modifies bounds to be 10% lower or higher than p0.
+    Flip bounds if they are reversed. Then, if p0 is not strictly within
+    the bounds, modify bounds to be 10% lower or higher than p0.
 
     Parameters:
     p0 (np.array): initial guesses for all parameters.
@@ -94,8 +94,8 @@ def bounds_check(p0, bounds):
 
 def calc_nrmse(z, z_fit):
     """
-    Given complex S21 data and values of the fit at the same frequencies, 
-    return the normalized root mean square error: 
+    Compute the normalized root mean square error between complex S21 data
+    and values of the fit at the same frequencies:
         nrmse = ||z - z_fit||^2 / ||z||^2. 
 
     Parameters:
@@ -121,7 +121,7 @@ def calc_nrmse(z, z_fit):
            nopython = True, cache = True)
 def cardan(a, b, c, d, largest = True):
     """
-    Analyticaly calculates the largest or smallest real root of a 3rd-order
+    Analytically calculate the largest or smallest real root of a 3rd-order
     polynomial using Cardan's method.
 
     Parameters:
@@ -169,7 +169,7 @@ def cardan(a, b, c, d, largest = True):
 
 def get_peak_fwhm(x, y):
     """
-    Gets the approximate index and fwhm of a peak in (x, y) data using 
+    Get the approximate index and fwhm of a peak in (x, y) data using 
     scipy.signal.find_peaks and scipy.signal.peak_widths. x data must be evenly
     sampled.
 

@@ -14,7 +14,7 @@ def take_iq_noise(rfsoc, fres, ares, qres, fcal_indices, file_suffix,
                   npoints_rough = 300, npoints_gain = 100, npoints_fine = 600,
                   nnoise_timestreams = 1, N_accums = 5):
     """
-    Takes IQ sweeps and noise. The LO frequency must already be set.
+    Take IQ sweeps and noise. The LO frequency must already be set.
 
     Parameters:
     rfsoc (citkid.primecam.instrument.RFSOC): RFSOC instance
@@ -177,7 +177,7 @@ def make_cal_tones(fres, ares, qres, max_n_tones = 1000,
                    resonator_indices = None,
                    new_resonator_indices_start = None):
     '''
-    Adds calibration tones to the given resonator list. Fills in largest spaces
+    Add calibration tones to the given resonator list. Fills in largest spaces
     between resonators, up to max_n_tones. If resonator_indices is provides,
     also creates a new list of resonator indices where the new calibration
     tones are labelled by sequential indices starting at

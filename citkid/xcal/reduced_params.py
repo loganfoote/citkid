@@ -2,7 +2,7 @@ import numpy as np
 
 def get_sxx_reduced(f, sxx, freq):
     """ 
-    Calculates the mean value of the Sxx at frequencies within 20% of the 
+    Calculate the mean value of the Sxx at frequencies within 20% of the 
     given freq. 
 
     Parameters:
@@ -44,7 +44,7 @@ def get_sxx_reduced(f, sxx, freq):
 
 def get_sfactor(f, spar, sper, freq):
     """
-    Gets the difference spar - sper (log-scaled) within 20% of the given freq. 
+    Get the difference spar - sper (log-scaled) within 20% of the given freq. 
 
     Parameters:
     f (array-like, float): frequencies in Hz. 
@@ -92,7 +92,7 @@ def get_sfactor(f, spar, sper, freq):
 _freqs = [0.1, 0.3, 1, 3, 10, 30, 100, 300]
 def get_sxx_reduced_default_freqs(f, sxx):
     """
-    Gets the mean value of Sxx at frequencies within 20% of each of the 
+    Get the mean value of Sxx at frequencies within 20% of each of the 
     default frequencies: 0.1, 0.3, 1, 3, 10, 30, 100, and 300 Hz. 
 
     Parameters:
@@ -112,7 +112,7 @@ def get_sxx_reduced_default_freqs(f, sxx):
 
 def get_sfactor_reduced_default_freqs(f, spar, sper):
     """
-    Gets the mean value of spar - sper at frequencies within 20% of each of 
+    Get the mean value of spar - sper at frequencies within 20% of each of 
     the default frequencies: 0.1, 0.3, 1, 3, 10, 30, 100, and 300 Hz. 
 
     Parameters:

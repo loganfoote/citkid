@@ -61,7 +61,7 @@ def Q_vs_T(T, f0, alpha, Tc, Fdelta0, delta_z, gamma = 1):
 ################################################################################
 def f_vs_T_qp(T, f0, alpha, Tc, gamma = 1):
     """
-    Calculates the resonant frequency shift due to the thermal QP density as a
+    Calculate the resonant frequency shift due to the thermal QP density as a
     function of temperature.
 
     Parameters:
@@ -86,7 +86,7 @@ def f_vs_T_qp(T, f0, alpha, Tc, gamma = 1):
 
 def Q_vs_T_qp(T, f0, alpha, Tc, delta_z, gamma = 1):
     """
-    Calculates the quality factor shift due to the thermal QP density as a
+    Calculate the quality factor shift due to the thermal QP density as a
     function of temperature.
 
     Parameters:
@@ -115,7 +115,7 @@ def Q_vs_T_qp(T, f0, alpha, Tc, delta_z, gamma = 1):
 ################################################################################
 def f_vs_T_tls(T, f0, Fdelta0):
     """
-    Calculates the resonant frequency due to TLSs as a function of temperature.
+    Calculate the resonant frequency due to TLSs as a function of temperature.
 
     Parameters:
     T (float or array-like): temperature in K
@@ -136,7 +136,7 @@ def f_vs_T_tls(T, f0, Fdelta0):
 
 def Q_vs_T_tls(T, f0, Fdelta0, delta_z):
     """
-    Calculates the quality factor shift due to TLSs as a function of
+    Calculate the quality factor shift due to TLSs as a function of
     temperature under the assumption that P_uW << P_crit(T).
 
     Parameters:
@@ -160,7 +160,7 @@ def Q_vs_T_tls(T, f0, Fdelta0, delta_z):
 ################################################################################
 def S1(kT, Delta0, hf0):
     """
-    Calculates S1(T), as defined in Foote thesis Section 2.4.
+    Calculate S1(T), as defined in Foote thesis Section 2.4.
 
     Parameters:
     kT (float or array-like): Boltzmann constant times temperature in J
@@ -178,7 +178,7 @@ def S1(kT, Delta0, hf0):
 
 def S2(kT, Delta0, hf0):
     """
-    Calculates S2(T), as defined in Foote thesis Section 2.4.
+    Calculate S2(T), as defined in Foote thesis Section 2.4.
 
     Parameters:
     kT (float or array-like): Boltzmann constant times temperature in J
@@ -195,7 +195,7 @@ def S2(kT, Delta0, hf0):
 
 def nth_over_N0(kT, Delta0):
     """
-    Calculates
+    Calculate
         nth / N0,
     where nth is the thermal QP density and N0 is the single-spin density of
     states at the Fermi level.

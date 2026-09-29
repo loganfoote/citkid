@@ -183,3 +183,4 @@ notebooks/tmp/
 pytest_run_output.txt
 pytest_run_verbose.txt
 .gitignore.swp
+CLAUDE.md

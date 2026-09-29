@@ -13,7 +13,7 @@ import os
 
 def plot_ares_opt(a_nls, fcal_indices):
     """
-    Plots the current status of the power optimization procedure
+    Plot the current status of the power optimization procedure
 
     Parameters:
     a_nls (list): each value is an array of the values of the nonlinearity
@@ -57,7 +57,7 @@ def plot_ares_opt(a_nls, fcal_indices):
 
 def plot_update_fres(fs, zs, fres, fcal_indices, res_indices, cable_delay, plot_directory):
     """
-    Plots the results of update_fres in batches
+    Plot the results of update_fres in batches
 
     Parameters:
     fs (array-like): fine sweep frequency data in Hz for each resonator in fres

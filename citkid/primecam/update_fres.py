@@ -12,8 +12,8 @@ warnings.warn(
 def update_fres(f, z, npoints, fcal_indices = [], method = 'mins21',
                     cut_other_resonators = False, fres = None, Qres = None):
     """
-    Give a multitone rough sweep dataset, return the updated resonance
-    frequencies
+    Return the updated resonance frequencies, given a multitone rough sweep
+    dataset
 
     Parameters:
     f (np.array): frequency data in Hz
@@ -67,8 +67,8 @@ def update_fres(f, z, npoints, fcal_indices = [], method = 'mins21',
 
 def update_fr_minS21(fi, zi):
     """
-    Give a single resonator rough sweep dataset, return the updated resonance
-    frequency by finding the minimum of |S21| with a linear fit subtracted
+    Return the updated resonance frequency of a single resonator rough sweep
+    dataset by finding the minimum of |S21| with a linear fit subtracted
 
     Parameters:
     fi (np.array): Single resonator frequency data
@@ -85,8 +85,8 @@ def update_fr_minS21(fi, zi):
 
 def update_fr_spacing(fi, zi):
     """
-    Give a single resonator rough sweep dataset, return the updated resonance
-    frequency by finding the max spacing between adjacent IQ points
+    Return the updated resonance frequency of a single resonator rough sweep
+    dataset by finding the max spacing between adjacent IQ points
 
     Parameters:
     fi (np.array): Single resonator frequency data
@@ -105,8 +105,8 @@ def update_fr_spacing(fi, zi):
 
 def update_fr_distance(fi, zi):
     """
-    Give a single resonator rough sweep dataset, return the updated resonance
-    frequency by finding the furthest point from the off-resonance data
+    Return the updated resonance frequency of a single resonator rough sweep
+    dataset by finding the furthest point from the off-resonance data
 
     Parameters:
     fi (np.array): Single resonator frequency data
@@ -123,7 +123,7 @@ def update_fr_distance(fi, zi):
 
 def cut_fine_scan(fi, zi, fres, spans):
     """
-    Cuts resonant frequencies out of a single set of fine scan data
+    Cut resonant frequencies out of a single set of fine scan data
 
     Parameters:
     fi, zi (np.array, np.array): fine scan frequency in Hz and complex S21 data

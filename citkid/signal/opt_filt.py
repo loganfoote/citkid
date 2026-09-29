@@ -58,7 +58,7 @@ def create_opt_filt(a, SJ, nfft):
 
 def apply_opt_filt(s, h):
     """
-    Applies the optimal filter h to the signal timestream s using 
+    Apply the optimal filter h to the signal timestream s using 
     FFT convolution.
 
     Parameters:
@@ -122,7 +122,7 @@ def create_nsd(s, nfft):
 def iterate_of(s, j, start_idx, build_template, get_start_idx,
                N_iter = 10, verbose = True):
     """
-    Minimal iterative procedure for creating an optimal filter template.
+    Create an optimal filter template using a minimal iterative procedure.
 
     Parameters:
     s (np.ndarray, float64, (L,)): Signal timestream for extraction.

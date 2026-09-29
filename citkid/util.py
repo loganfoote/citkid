@@ -82,7 +82,7 @@ def save_fig_to_memory(fig):
 
 def to_scientific_notation(number):
     """
-    Converts a number to scientific notation and returns the value and exponent.
+    Convert a number to scientific notation and return the value and exponent.
 
     Parameters:
     number (float): Number to convert.
@@ -287,7 +287,7 @@ def combine_figs_horz(figs, dpi = 200, rescale_to = 'max'):
 
 def format_str_scientific_with_err(p, perr, for_plotting = True):
     r"""
-    Formats a value and its uncertainty as a string in scientific notation,
+    Format a value and its uncertainty as a string in scientific notation,
     where the values are rounded to the appropriate number of significant
     figures. e.g. (1.54 ± 0.04) X 10^-4
 
@@ -323,7 +323,7 @@ def format_str_scientific_with_err(p, perr, for_plotting = True):
 
 def get_fit_bound_curves(x, popt, perr, model):
     """
-    Gets the best fit model and upper/lower bound curves given
+    Get the best fit model and upper/lower bound curves given
     optimal fit parameters and uncertainties
 
     Parameters:
@@ -358,7 +358,7 @@ def get_fit_bound_curves(x, popt, perr, model):
 
 def run_with_time_bar(fn, duration_s, desc, *args, **kwargs):
     """
-    Runs a function while displaying a time progress bar for the specified 
+    Run a function while displaying a time progress bar for the specified 
     duration.
 
     Parameters:
@@ -457,7 +457,7 @@ def combine_figures_horizontally_legacy(fig1, fig2, dpi = 200):
 
 def save_figure_to_memory_legacy(fig):
     """
-    Saves a matplotlib figure to memory. Use this to easily stitch together
+    Save a matplotlib figure to memory. Use this to easily stitch together
     multiple figures without saving extra files
 
     Parameters:

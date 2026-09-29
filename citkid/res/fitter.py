@@ -108,8 +108,8 @@ def fit_nonlinear_iq(f, z, bounds = None, p0 = None, fr_guess = None,
     return p0, popt, perr, nrmse, figax
 
 def fit_nonlinear_iq_pl(f, z, mask):
-    """"
-    Wrapper for fit_nonlinear_iq to be used as a plStep. See fit_nonlinear_iq 
+    """
+    Wrap fit_nonlinear_iq for use as a plStep. See fit_nonlinear_iq 
     for details.
 
     Parameters:
@@ -129,10 +129,8 @@ def fit_nonlinear_iq_pl(f, z, mask):
 ################################################################################
 def fit_util(p0, bounds, fit_tau, f, z_stacked, z, downward = True):
     """
-    Utility function for fitting IQ loops.
-
-    Given data and initial fit parameters, fits the IQ loop and returns the
-    fit parameters.
+    Fit an IQ loop given data and initial fit parameters, and return the fit
+    parameters.
 
     Parameters:
     p0 (list): fit guess parameters.
@@ -140,7 +138,7 @@ def fit_util(p0, bounds, fit_tau, f, z_stacked, z, downward = True):
     fit_tau (bool): if False, uses given tau instead of fitting.
     f (np.array): frequency data in Hz.
     z_stacked (np.array): stacked complex S21 data.
-    z (np.array) complex S21 data.
+    z (np.array): complex S21 data.
     downward (bool): If True, fits the equation for a downward sweep. If
         False, fits for an upward sweep.
 
@@ -202,7 +200,7 @@ def fit_nonlinear_iq_with_gain(fgain, zgain, ffine, zfine, frs, Qrs,
                                return_dataframe = False, floats_only=False,
                                **kwargs):
     """
-    Fits IQ data with gain amplitudes and phase correction from a gain sweep.
+    Fit IQ data with gain amplitudes and phase correction from a gain sweep.
     Cuts resonant frequencies from the gain sweep in spans of fr / Qr around fr,
     where fr is an item in frs and Qr is a corresponding quality factor in Qrs.
 
@@ -274,7 +272,7 @@ def fit_nonlinear_iq_with_gain(fgain, zgain, ffine, zfine, frs, Qrs,
 
 def fit_iq_circle(z, x0 = None, plotq = False):
     """
-    Fits an IQ loop to a circle. The function describing the circle is
+    Fit an IQ loop to a circle. The function describing the circle is
 
        [Re(S21)-A]^2 + [Im(S21)-B]^2 = R^2
 

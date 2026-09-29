@@ -15,7 +15,7 @@ def save_psd(psd_onres, psd_offres, timestream_onres, timestream_offres,
              cr_indices, theta_range, poly, xcal_data, figs, dt, dt_offres,
              out_directory, plot_directory, prefix = '', iq_fit_row = None):
     """
-    Saves the output of .analysis.compute_psd
+    Save the output of .analysis.compute_psd
     
     Parameters:
     psd_onres (tuple): on-resonance psd data, or None

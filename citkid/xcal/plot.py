@@ -8,7 +8,7 @@ from ..res.funcs import nonlinear_iq
 
 def plot_gain_fit(f, z, mask, p_amp, p_phase):
     """
-    Plots the fit to gain amplitude and phase data.
+    Plot the fit to gain amplitude and phase data.
 
     Parameters:
     f (np.array, float64, (M,)): Full frequency data in Hz.
@@ -72,7 +72,7 @@ def plot_gain_fit(f, z, mask, p_amp, p_phase):
 
 def plot_s21(f, z, zt = None, fg = None, zg = None):
     """
-    Plots complex S21 sweep and optional timestream data in IQ plane and as 
+    Plot complex S21 sweep and optional timestream data in IQ plane and as 
     |S21| vs frequency.
      
     Parameters:
@@ -134,7 +134,7 @@ def plot_s21(f, z, zt = None, fg = None, zg = None):
 
 def plot_circfit(z, origin, radius, zt = None, mask = None):
     """
-    Plots IQ data with a circular fit.
+    Plot IQ data with a circular fit.
 
     Parameters:
     z (np.array, complex128): Complex IQ data.
@@ -193,7 +193,7 @@ def plot_circfit(z, origin, radius, zt = None, mask = None):
 
 def plot_sparper(f, spar, sper, nbins, fmin):
     """
-    Plots binned parallel and perpendicular noise PSDs vs frequency.
+    Plot binned parallel and perpendicular noise PSDs vs frequency.
 
     Parameters:
     f (np.array, float64): Frequency data in Hz.
@@ -237,7 +237,7 @@ def plot_sparper(f, spar, sper, nbins, fmin):
 def plot_xcal(thetaf, xf, zf_cent, xcal_mask, poly_x, thetat = None, 
               zt_cent = None, std_cutoff = None):
     """
-    Plots x vs theta calibration data and IQ data with fit overlayed. 
+    Plot x vs theta calibration data and IQ data with fit overlayed. 
 
     Parameters:
     thetaf (np.array, float64): Fine sweep theta data.
@@ -339,7 +339,7 @@ def plot_xcal(thetaf, xf, zf_cent, xcal_mask, poly_x, thetat = None,
 
 def plot_nonlinear_iq_fit(ff, zf_rmv, popt, mask):
     """
-    Plots nonlinear IQ fit to fine sweep data, in IQ space and as |S21| vs
+    Plot nonlinear IQ fit to fine sweep data, in IQ space and as |S21| vs
     frequency.
     
     Parameters:

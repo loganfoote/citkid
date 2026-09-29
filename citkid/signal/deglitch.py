@@ -8,7 +8,7 @@ from scipy.stats import binned_statistic
 
 def get_binned_baseline(ts, dt, dtbin):
     """
-    Bins a timestream to lower sample rate, then interpolates
+    Bin a timestream to lower sample rate, then interpolate
     back up to the original sample rate to get a measure of the
     baseline.
     
@@ -73,8 +73,8 @@ def find_glitch_idxs(ts, dt, dtbin, nstd, distance, width, nrounds, i0, i1):
 
 def replace_glitches_with_gaussian_noise(ts, idxs, i0, i1):
     """
-    Given a timestream and a list of sample points,
-    replaces the areas around each point with Gaussian noise.
+    Replace the areas around each of a list of sample points in a timestream
+    with Gaussian noise.
     
     Parameters:
     ts (float, array-like): Timestream data.

@@ -3,7 +3,7 @@ import warnings
 
 def remove_gain(f, z, p_amp, p_phase):
     """
-    Removes the gain amplitude and phase from complex S21 data, given the raw
+    Remove the gain amplitude and phase from complex S21 data, given the raw
     data.
 
     Parameters:
@@ -30,7 +30,7 @@ def remove_gain(f, z, p_amp, p_phase):
 
 def get_res_mask(fg, fr_spans):
     """
-    Creates a mask for cutting resonances out of a gain sweep.
+    Create a mask for cutting resonances out of a gain sweep.
 
     Parameters:
     fg (np.array, float64): Gain sweep frequency data in Hz, sorted ascending.
@@ -83,7 +83,7 @@ def get_res_mask(fg, fr_spans):
 
 def fit_gain(f, z, fr_spans, span_mult = 1):
     """
-    Fits the amplitude and phase of gain data. Amplitude is fit to a 2nd order.
+    Fit the amplitude and phase of gain data. Amplitude is fit to a 2nd order.
     polynomial and phase is fit to a 1st order polynomial.
 
     Parameters:
@@ -166,7 +166,7 @@ def fit_gain(f, z, fr_spans, span_mult = 1):
 
 def make_fr_spans(fres_all, qres_all):
     """
-    Makes resonant frequency spans for cutting resonances out of gain data. 
+    Make resonant frequency spans for cutting resonances out of gain data. 
 
     Parameters:
     fres_all (np.array, float64, (M,)): Resonant frequencies in Hz, sorted

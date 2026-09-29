@@ -29,7 +29,7 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
            downward = True, cut_to_qres = False, overwrite = False,
            verbose = True, catch_exceptions = False):
     """
-    Fits all IQ loops in a target sweep
+    Fit all IQ loops in a target sweep
 
     Parameters:
     directory (str): directory containing the data for logging
@@ -378,6 +378,8 @@ def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
 
 def plot_fits_batch(directory, file_suffix, plot_directory):
     """
+    Fit the IQ data in a directory and save plots of the gain-removed fine
+    sweeps with their fits to plot_directory.
 
     Parameters:
     directory (str): directory containing the data to fit
@@ -461,7 +463,7 @@ def plot_fits_batch(directory, file_suffix, plot_directory):
 def make_cal_tones(fres, ares, qres, max_n_tones = 1000,
                    res_indices = None, fcal_power = -55):
     '''
-    Adds calibration tones to the given resonator list. Fills in largest spaces
+    Add calibration tones to the given resonator list. Fills in largest spaces
     between resonators, up to max_n_tones.
 
     Parameters:

@@ -10,7 +10,7 @@ import numpy as np
 def update_ares_pscale(frequency, power_dbm, a_nl, dbm_change_high = 2,
                        dbm_change_low = 2, a_target = 0.5, dbm_max = -50):
     """
-    Updates the tone amplitude list to target the given value of a_nl by scaling
+    Update the tone amplitude list to target the given value of a_nl by scaling
     the output power linearly with a_nl, or scales the power linearly if it
     is outside the scalable range (a_target * 0.001 / 0.5, 0.77).
 
@@ -46,7 +46,7 @@ def update_ares_addonly(f, power_dbm, a_nl, dbm_change_high = 1,
                         dbm_change_low = 1, a_target = 0.5, dbm_max = -50,
                         threshold = 0.2):
     """
-    Updates the amplitude of a tone to within 80% of the target by adding or
+    Update the amplitude of a tone to within 80% of the target by adding or
     subtracting a fixed power in dB.
 
     Parameters:

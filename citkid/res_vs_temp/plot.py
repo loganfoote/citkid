@@ -8,7 +8,7 @@ from matplotlib.ticker import ScalarFormatter
 ################################################################################
 def plot_f_vs_T(T, f, f_err, popt, p0, gamma):
     """
-    Plots the fit and initial guess to f_vs_T.
+    Plot the fit and initial guess to f_vs_T.
 
     Parameters:
     T (array-like): temperature data in K
@@ -52,7 +52,7 @@ def plot_f_vs_T(T, f, f_err, popt, p0, gamma):
 
 def plot_Q_vs_T(T, Q, Q_err, popt, p0, gamma):
     """
-    Plots the fit and initial guess to Q_vs_T.
+    Plot the fit and initial guess to Q_vs_T.
 
     Parameters:
     T (array-like): temperature data in K
@@ -93,7 +93,7 @@ def plot_Q_vs_T(T, Q, Q_err, popt, p0, gamma):
 ################################################################################
 def plot_f_vs_T_qp(T, f, f_err, popt, p0, gamma):
     """
-    Plots the fit and initial guess to f_vs_T_qp.
+    Plot the fit and initial guess to f_vs_T_qp.
 
     Parameters:
     T (array-like): temperature data in K
@@ -137,7 +137,7 @@ def plot_f_vs_T_qp(T, f, f_err, popt, p0, gamma):
 
 def plot_Q_vs_T_qp(T, Q, Q_err, popt, p0, gamma):
     """
-    Plots the fit and initial guess to Q_vs_T_qp.
+    Plot the fit and initial guess to Q_vs_T_qp.
 
     Parameters:
     T (array-like): temperature data in K
@@ -177,7 +177,7 @@ def plot_Q_vs_T_qp(T, Q, Q_err, popt, p0, gamma):
 ################################################################################
 def plot_f_vs_T_tls(T, f, f_err, popt, p0):
     """
-    Plots the fit and initial guess to f_vs_T_tls.
+    Plot the fit and initial guess to f_vs_T_tls.
 
     Parameters:
     T (array-like): temperature data in K
@@ -220,7 +220,7 @@ def plot_f_vs_T_tls(T, f, f_err, popt, p0):
 
 def plot_Q_vs_T_tls(T, Q, Q_err, popt, p0):
     """
-    Plots the fit and initial guess to Q_vs_T_tls.
+    Plot the fit and initial guess to Q_vs_T_tls.
 
     Parameters:
     T (array-like): temperature data in K
@@ -291,7 +291,7 @@ def setup_Q_vs_T():
 
 def log_without_scientific(axis):
     """
-    Turns off scientific notation for a log axis
+    Turn off scientific notation for a log axis
 
     Parameters:
     axis (matplotlib.axis.Xaxis or matplotlib.axis.Yaxis): axis with scaling

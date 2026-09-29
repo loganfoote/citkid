@@ -509,7 +509,7 @@ def write_system_cfg_to_zarr(crs, grp):
 ################################################################################ 
 def piecewise_geomspace(x0, x1, bw, npoints_per_ch, nchs = 1024):
     """
-    Approximately geometrically spaces values between x0 and 
+    Space values approximately geometrically between x0 and
     x1, while ensuring that every chunk of bw space has 
     exactly nchs * npoints_per_ch tones. 
 

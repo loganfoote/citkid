@@ -73,7 +73,7 @@ def get_xcal_mask(ff, theta_f, theta_t, idx0_offset = 3, idx1_offset = 7,
 
 def fit_x_theta(thetat, xf, mask, poly_x_deg):
     """
-    Fits a polynomial to x vs theta data for the fine s21 sweep, using only the
+    Fit a polynomial to x vs theta data for the fine s21 sweep, using only the
     points where mask is True. The resulting polynomial is used for x 
     calibration.
 

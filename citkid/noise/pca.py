@@ -11,7 +11,7 @@ warnings.warn(
 
 def pca(y, n_components = 5):
     """
-    Removes the largest principal components from a noise dataset using single
+    Remove the largest principal components from a noise dataset using single
     value decomposition
 
     Parameters:

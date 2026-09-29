@@ -111,7 +111,7 @@ def write_single_array(root, name, value, dtype = None):
         
 def deep_union(a, b):
     """
-    Returns the union of two dictionaries a and b, both of which
+    Return the union of two dictionaries a and b, both of which
     may have nested sub-dictionaries.
     This function is used for merging dependencies dictionaries
     when writing to DataSet.deps_map.

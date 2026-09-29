@@ -3,7 +3,7 @@ import os
 
 def import_iq_noise(directory, file_suffix, import_noiseq = True):
     """
-    Imports data from primecam.procedures.take_iq_noise
+    Import data from primecam.procedures.take_iq_noise
 
     Parameters:
     directory (str): directory containing the saved data

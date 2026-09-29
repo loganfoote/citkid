@@ -10,7 +10,7 @@ from .util import cardan
 )
 def get_y(y0, a, largest):
     """
-    Calculates the largest or smallest real root of
+    Calculate the largest or smallest real root of
         y0 = y - a / (1 + y^2).
 
     Parameters:
@@ -30,7 +30,7 @@ def get_y(y0, a, largest):
                  float64, float64, float64, float64, boolean), cache = True)
 def nonlinear_iq(f, fr, Qr, amp, phi, a, i0, q0, tau, downward = True):
     r"""
-    Describes the transmission through a nonlinear resonator
+    Compute the transmission through a nonlinear resonator
 
                     (-j*2*pi*f*tau)    /                           (j phi)   \
         (i0+j*q0)*e^                * |1 -        Qr             e^           |
@@ -72,7 +72,7 @@ def nonlinear_iq(f, fr, Qr, amp, phi, a, i0, q0, tau, downward = True):
 @njit(float64(float64[:], float64[:], float64[:]), cache = True)
 def circle_objective(params, x, y):
     """
-    Objective for circle fitting. Legacy code: use 
+    Compute the objective for circle fitting. Legacy code: use 
     citkid.xcal.circle.circle_objective.
 
     Parameters:
@@ -96,8 +96,8 @@ def circle_objective(params, x, y):
 def nonlinear_iq_for_fitter(f, fr, Qr, amp, phi, a, i0, q0, tau,
                             downward = True):
     """
-    Same as nonlinear_iq, but returns stacked real and imaginary components
-    for the fitter. The input data should be scaled as follows
+    Compute nonlinear_iq as stacked real and imaginary components for the
+    fitter. The input data should be scaled as follows
     fr X 100^6
     Qr X 10^-4
     tau * 1e6.
