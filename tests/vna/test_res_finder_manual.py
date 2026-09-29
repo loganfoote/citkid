@@ -1233,7 +1233,39 @@ class TestDragToRemove:
         assert len(finder.undo_stack[-1]) == 4
         assert finder.undo_stack[-1][1] == fres_min
         assert finder.undo_stack[-1][3] == fres_before
-    
+
+    def test_undo_restores_range_removal(self, finder):
+        """Undo after a range removal restores every removed resonance."""
+        fres_before = sorted(finder.fres)
+        f_min = fres_before[1] - 1e6
+        f_max = fres_before[3] + 1e6
+        finder.remove_resonances_in_range(f_min, f_max)
+        assert len(finder.fres) < len(fres_before)
+
+        finder.undo()
+
+        assert sorted(finder.fres) == fres_before
+        assert finder.undo_stack == []
+
+    def test_undo_range_removal_then_earlier_add(self, finder):
+        """Undo works through a range removal followed by an earlier add."""
+        fres_initial = sorted(finder.fres)
+        new_freq = fres_initial[0] + 0.5e6
+        finder.add_resonance(new_freq)
+        finder.remove_resonances_in_range(new_freq - 1e5, new_freq + 1e5)
+        assert new_freq not in finder.fres
+
+        finder.undo()                      # restores new_freq
+        assert new_freq in finder.fres
+        finder.undo()                      # undoes the add
+        assert sorted(finder.fres) == fres_initial
+
+    def test_range_removal_with_no_match_adds_no_undo_entry(self, finder):
+        """A range removal that removes nothing leaves the undo stack alone."""
+        initial_undo_len = len(finder.undo_stack)
+        finder.remove_resonances_in_range(1e9, 1.1e9)
+        assert len(finder.undo_stack) == initial_undo_len
+
     def test_remove_resonances_boundary_conditions(self, finder):
         """Test remove with exact boundary frequencies."""
         fres_list = sorted(finder.fres)

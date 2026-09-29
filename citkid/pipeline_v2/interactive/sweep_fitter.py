@@ -65,7 +65,7 @@ from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
 from ..analysis import AnalysisRunner
 from ..dataset import DataSet
-from ...qt_compat import Qt as _Qt
+from ...qt_compat import Qt as _Qt, fit_window_to_screen, get_qapp
 from . import gain      # noqa: F401 — registers GainFitPanel
 from . import fit_iq    # noqa: F401 — registers FitIQPanel
 from .core import get_panel_class, _SectionHeader
@@ -267,7 +267,9 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
             _sc_s = QtGui.QShortcut(QtGui.QKeySequence(f'Shift+{idx}'), self)
             _sc_s.activated.connect(lambda _i=idx - 1: self._run_through_panel(_i))
 
-        self.resize(round(1400 * ui_scale), round(900 * ui_scale))
+        # Preferred size, shrunk to fit smaller screens, centred
+        fit_window_to_screen(
+            self, frac=0.9, size=(round(1400 * ui_scale), round(900 * ui_scale)))
         QtCore.QTimer.singleShot(0, self._auto_initialize_all)
 
     # ------------------------------------------------------------------
@@ -989,10 +991,10 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
             'Panels Need Run',
             'Earlier panel changes invalidated later panel outputs for the current selection.\n\n'
             f'Panels needing a rerun: {names}\n\nLeave anyway?',
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
         )
-        return reply == QtWidgets.QMessageBox.Yes
+        return reply == QtWidgets.QMessageBox.StandardButton.Yes
 
     def _confirm_stale_downstream_before_save(self, source_panel):
         """
@@ -1007,10 +1009,10 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
             'Downstream Panels Need Run',
             'Saving now will keep later panel outputs missing for the current sweep selection.\n\n'
             f'Panels needing a rerun: {names}\n\nContinue saving?',
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
         )
-        return reply == QtWidgets.QMessageBox.Yes
+        return reply == QtWidgets.QMessageBox.StandardButton.Yes
 
     def _autoscale_all(self):
         for panel in self.panels:
@@ -1208,9 +1210,7 @@ def run_sweep_fitter(
         AR = AnalysisRunner(DS, analysis_yaml_path=analysis_yaml_path)
         ARs.append(AR)
 
-    app = QtWidgets.QApplication.instance()
-    if app is None:
-        app = pg.mkQApp(title)
+    app = get_qapp(title)
 
     win = SweepFitterWindow(
         ARs=ARs,

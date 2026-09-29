@@ -6,7 +6,7 @@ Tests cover:
 - Different smoothing methods (highpass, polynomial, none)
 - Parameter variations (height, width, distance)
 - Frequency range limiting
-- File I/O (save/load, overwrite behavior)
+- File I/O (save, overwrite popup)
 - Edge cases (empty data, no resonances, etc.)
 """
 
@@ -22,8 +22,19 @@ from PyQt5 import QtWidgets
 from citkid.vna.res_finder_auto import (
     AutoResFinder,
     SpinBoxEventFilter,
-    run_res_finder_auto
+    run_res_finder_auto,
 )
+# Real popup function, kept before the autouse fixture patches the module
+from citkid.vna.res_finder_auto import _confirm_overwrite as _real_confirm_overwrite
+
+
+@pytest.fixture(autouse=True)
+def no_unexpected_popup():
+    """Fail a test that opens the overwrite popup without patching it."""
+    def _fail(message):
+        raise AssertionError(f"unexpected overwrite popup: {message}")
+    with patch('citkid.vna.res_finder_auto._confirm_overwrite', side_effect=_fail):
+        yield
 
 
 class TestSpinBoxEventFilter:
@@ -46,7 +57,6 @@ class TestAutoResFinderInit:
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             str(outpath),
-            overwrite=True
         )
         
         # Check data is stored correctly
@@ -64,20 +74,20 @@ class TestAutoResFinderInit:
         assert finder.params['f_max'] == pytest.approx(synthetic_vna_data['f'].max())
         assert finder.params['smoothing'] == 'highpass'
         
-    def test_init_file_exists_overwrite_false(self, synthetic_vna_data, tmp_path):
-        """Test that FileExistsError is raised when overwrite=False."""
+    def test_init_file_exists_cancel(self, synthetic_vna_data, tmp_path):
+        """Choosing Cancel for an existing file raises and keeps the file."""
         outpath = tmp_path / "existing.h5"
-        
-        # Create existing file
         outpath.touch()
-        
-        with pytest.raises(FileExistsError, match='already exists'):
+
+        with patch('citkid.vna.res_finder_auto._confirm_overwrite',
+                   return_value=False) as confirm,              pytest.raises(RuntimeError, match='cancelled'):
             AutoResFinder(
                 synthetic_vna_data['f'],
                 synthetic_vna_data['z'],
                 str(outpath),
-                overwrite=False
             )
+        confirm.assert_called_once()
+        assert outpath.is_file()
 
     def test_init_missing_directory(self, synthetic_vna_data, tmp_path):
         """Test that FileNotFoundError is raised when output directory does not exist."""
@@ -101,22 +111,46 @@ class TestAutoResFinderInit:
                 str(outpath),
             )
     
-    def test_init_file_exists_overwrite_true(self, synthetic_vna_data, tmp_path, capsys):
-        """Test warning message when file exists and overwrite=True."""
+    def test_init_file_exists_overwrite(self, synthetic_vna_data, tmp_path):
+        """Choosing Overwrite for an existing file replaces it with a group."""
         outpath = tmp_path / "existing.h5"
         outpath.touch()
-        
-        finder = AutoResFinder(
-            synthetic_vna_data['f'],
-            synthetic_vna_data['z'],
-            str(outpath),
-            overwrite=True
-        )
-        
-        # Check warning was printed
-        captured = capsys.readouterr()
-        assert 'already exists' in captured.out
-        assert 'overwritten' in captured.out
+
+        with patch('citkid.vna.res_finder_auto._confirm_overwrite',
+                   return_value=True) as confirm:
+            finder = AutoResFinder(
+                synthetic_vna_data['f'],
+                synthetic_vna_data['z'],
+                str(outpath),
+            )
+        confirm.assert_called_once()
+        assert outpath.is_dir()          # now a zarr directory store
+        assert 'fres_auto' not in finder.zarr_group
+
+    @pytest.mark.parametrize('overwrite', [True, False])
+    def test_init_existing_fres_auto(self, synthetic_vna_data, overwrite):
+        """
+        Existing 'fres_auto' is deleted on Overwrite (never loaded) and kept
+        on Cancel.
+        """
+        grp = zarr.group()
+        grp.create_array('fres_auto', data=np.array([4.5e9, 5.0e9]))
+
+        with patch('citkid.vna.res_finder_auto._confirm_overwrite',
+                   return_value=overwrite) as confirm:
+            if overwrite:
+                finder = AutoResFinder(
+                    synthetic_vna_data['f'], synthetic_vna_data['z'], grp)
+            else:
+                with pytest.raises(RuntimeError, match='cancelled'):
+                    AutoResFinder(
+                        synthetic_vna_data['f'], synthetic_vna_data['z'], grp)
+        confirm.assert_called_once()
+        if overwrite:
+            assert 'fres_auto' not in grp
+            assert finder.fres == []
+        else:
+            np.testing.assert_array_equal(grp['fres_auto'][:], [4.5e9, 5.0e9])
 
 
 class TestAutoResFinderSmoothing:
@@ -444,24 +478,22 @@ class TestRunAutoResFinder:
             assert isinstance(fres, np.ndarray)
             np.testing.assert_array_almost_equal(fres, mock_instance.fres)
     
-    @patch('citkid.vna.res_finder_auto.AutoResFinder.run')
-    def test_run_with_overwrite(self, mock_run, synthetic_vna_data, tmp_path):
-        """Test overwrite parameter is passed through."""
+    def test_run_passes_data_and_group(self, synthetic_vna_data, tmp_path):
+        """run_res_finder_auto passes only f, z, and zarr_grp to the finder."""
         outpath = tmp_path / "test.h5"
-        
+
         with patch('citkid.vna.res_finder_auto.AutoResFinder') as MockFinder:
-            mock_instance = MockFinder.return_value
-            mock_instance.fres = []
-            
-            # Test with overwrite=False
+            MockFinder.return_value.fres = []
             run_res_finder_auto(
                 synthetic_vna_data['f'],
                 synthetic_vna_data['z'],
                 str(outpath),
-                overwrite=False
             )
-            
-            # Check that AutoResFinder was called with overwrite=False
-            MockFinder.assert_called_once()
-            call_args = MockFinder.call_args
-            assert call_args[0][3] == False  # 4th positional arg
+        MockFinder.assert_called_once_with(
+            synthetic_vna_data['f'], synthetic_vna_data['z'], str(outpath))
+
+
+def test_confirm_overwrite_builds_and_defaults_to_cancel():
+    """Build the overwrite popup; closing it without a choice cancels."""
+    with patch.object(QtWidgets.QMessageBox, 'exec', create=True, return_value=0),          patch.object(QtWidgets.QMessageBox, 'exec_', create=True, return_value=0):
+        assert _real_confirm_overwrite('Existing data.') is False

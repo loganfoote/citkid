@@ -25,12 +25,15 @@ from unittest.mock import MagicMock, patch
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 
 from citkid.vna.fq_finder import (
+    _DATA_IDX_KEY,
     _db,
     _ensure_zarr_arrays,
+    _read_saved_data_idx,
     _rmv_gain_simple,
     _SpanRegionItem,
     _InteractiveViewBox,
     FqFinderWindow,
+    run_fqfinder,
 )
 
 
@@ -124,51 +127,58 @@ class TestDb:
 # ===========================================================================
 
 class TestEnsureZarrArrays:
-    def test_fresh_creates_all_three_arrays(self):
+    def test_fresh_creates_all_arrays(self):
         zg = _make_zarr()
-        result = _ensure_zarr_arrays(zg, 5, overwrite=False)
+        result = _ensure_zarr_arrays(zg, 5)
         assert result is False
         assert "fres_opt" in zg
         assert "qres_opt" in zg
         assert "reject_reason" in zg
+        assert _DATA_IDX_KEY in zg
 
     def test_fresh_arrays_have_correct_shape(self):
         zg = _make_zarr()
-        _ensure_zarr_arrays(zg, 7, overwrite=False)
+        _ensure_zarr_arrays(zg, 7)
         assert zg["fres_opt"].shape == (7,)
         assert zg["qres_opt"].shape == (7,)
         assert zg["reject_reason"].shape == (7,)
+        assert zg[_DATA_IDX_KEY].shape == (1,)
 
     def test_fresh_float_arrays_filled_with_nan(self):
         zg = _make_zarr()
-        _ensure_zarr_arrays(zg, 4, overwrite=False)
+        _ensure_zarr_arrays(zg, 4)
         assert np.all(np.isnan(zg["fres_opt"][:]))
         assert np.all(np.isnan(zg["qres_opt"][:]))
 
-    def test_existing_overwrite_false_raises(self):
+    def test_fresh_data_idx_is_unset(self):
         zg = _make_zarr()
-        _ensure_zarr_arrays(zg, 3, overwrite=False)
-        with pytest.raises(FileExistsError):
-            _ensure_zarr_arrays(zg, 3, overwrite=False)
+        _ensure_zarr_arrays(zg, 4)
+        assert zg[_DATA_IDX_KEY][0] == -1
 
-    def test_existing_overwrite_true_returns_true(self):
+    def test_existing_returns_true(self):
         zg = _make_zarr()
-        _ensure_zarr_arrays(zg, 3, overwrite=False)
-        result = _ensure_zarr_arrays(zg, 3, overwrite=True)
+        _ensure_zarr_arrays(zg, 3)
+        result = _ensure_zarr_arrays(zg, 3)
         assert result is True
 
-    def test_existing_overwrite_true_preserves_data(self):
+    def test_existing_preserves_data(self):
         zg = _make_zarr()
-        _ensure_zarr_arrays(zg, 3, overwrite=False)
+        _ensure_zarr_arrays(zg, 3)
         zg["fres_opt"][0] = 1.23e9
-        _ensure_zarr_arrays(zg, 3, overwrite=True)
+        _ensure_zarr_arrays(zg, 3)
         assert zg["fres_opt"][0] == pytest.approx(1.23e9)
+
+    def test_existing_wrong_length_raises(self):
+        zg = _make_zarr()
+        _ensure_zarr_arrays(zg, 3)
+        with pytest.raises(ValueError, match="expected"):
+            _ensure_zarr_arrays(zg, 4)
 
     def test_only_one_array_raises_runtime_error(self):
         zg = _make_zarr()
         zg.create_dataset("fres_opt", shape=(3,), dtype=np.float64, fill_value=np.nan)
         with pytest.raises(RuntimeError, match="inconsistent state"):
-            _ensure_zarr_arrays(zg, 3, overwrite=False)
+            _ensure_zarr_arrays(zg, 3)
 
     def test_resume_without_reject_reason_creates_it(self):
         """Legacy zarr group missing reject_reason → created on resume."""
@@ -176,9 +186,10 @@ class TestEnsureZarrArrays:
         zg.create_dataset("fres_opt", shape=(4,), dtype=np.float64, fill_value=np.nan)
         zg.create_dataset("qres_opt", shape=(4,), dtype=np.float64, fill_value=np.nan)
         assert "reject_reason" not in zg
-        _ensure_zarr_arrays(zg, 4, overwrite=True)
+        _ensure_zarr_arrays(zg, 4)
         assert "reject_reason" in zg
         assert zg["reject_reason"].shape == (4,)
+        assert zg[_DATA_IDX_KEY][0] == -1
 
 
 # ===========================================================================
@@ -199,18 +210,18 @@ class TestRmvGainSimple:
 
     def test_output_shape_unchanged(self):
         f, z = self._make_input()
-        out = _rmv_gain_simple(f, z)
+        out = _rmv_gain_simple(z)
         assert out.shape == z.shape
 
     def test_output_is_complex(self):
         f, z = self._make_input()
-        out = _rmv_gain_simple(f, z)
+        out = _rmv_gain_simple(z)
         assert np.iscomplexobj(out)
 
     def test_off_resonance_amplitude_near_one(self):
         """After normalisation the off-resonance edge samples ≈ amplitude 1."""
         f, z = self._make_input(M=2, N=200)
-        out = _rmv_gain_simple(f, z)
+        out = _rmv_gain_simple(z)
         N = max(1, out.shape[1] // 100)
         edge = np.concatenate([out[:, :N], out[:, -N:]], axis=1)
         amp = np.abs(edge)
@@ -219,7 +230,7 @@ class TestRmvGainSimple:
     def test_off_resonance_phase_near_zero(self):
         """After phase rotation the off-resonance mean should be real and positive."""
         f, z = self._make_input(M=2, N=200)
-        out = _rmv_gain_simple(f, z)
+        out = _rmv_gain_simple(z)
         N = max(1, out.shape[1] // 100)
         edge = np.concatenate([out[:, :N], out[:, -N:]], axis=1)
         mean_phase = np.angle(edge.mean(axis=1))
@@ -230,7 +241,7 @@ class TestRmvGainSimple:
         M, N = 2, 50
         f = np.vstack([np.linspace(4e9, 5e9, N)] * M)
         z = np.zeros((M, N), dtype=complex)
-        out = _rmv_gain_simple(f, z)
+        out = _rmv_gain_simple(z)
         assert out.shape == z.shape
         assert np.all(np.isfinite(out))
 
@@ -238,12 +249,12 @@ class TestRmvGainSimple:
         """N=1 edge: should not crash (N=max(1, 1//100)=1)."""
         f = np.array([[4e9]])
         z = np.array([[1.0 + 0.5j]])
-        out = _rmv_gain_simple(f, z)
+        out = _rmv_gain_simple(z)
         assert out.shape == (1, 1)
 
     def test_2d_input(self):
         f, z = self._make_input(M=5, N=150)
-        out = _rmv_gain_simple(f, z)
+        out = _rmv_gain_simple(z)
         assert out.shape == (5, 150)
 
 
@@ -381,13 +392,15 @@ class TestFqFinderWindowInit:
         w.close()
 
     def test_all_cal_tones_no_interactive(self, qapp):
-        """All-cal input: interactive_indices is empty; window closes itself."""
+        """All-cal input: nothing to edit, cal values saved, close is safe."""
         f, z, fres, qres, _ = _make_sweep(M=2)
         res_idxs = np.array([-1, -2])  # both cal
         zg = _make_zarr()
         w = FqFinderWindow(f, z, fres, qres, res_idxs, zg)
         assert w._interactive_indices == []
-        # Window should have called close() – just verify no crash
+        np.testing.assert_allclose(zg["fres_opt"][:], fres)
+        w.close()                       # must not try to save a resonator
+        assert zg[_DATA_IDX_KEY][0] == -1
 
     def test_rmv_gain_simple_applied(self, qapp):
         """With rmv_gain_simple=True the stored z should differ from input."""
@@ -415,21 +428,15 @@ class TestFqFinderWindowInit:
         assert w._reject_reasons == {}
         w.close()
 
-    def test_overwrite_false_raises_if_arrays_exist(self, qapp):
+    def test_existing_arrays_kept_without_load(self, qapp):
+        """Existing data is kept, but input values are shown."""
         f, z, fres, qres, res_idxs = _make_sweep(M=2)
         zg = _make_zarr()
+        _ensure_zarr_arrays(zg, 2)
+        zg["fres_opt"][1] = 1.23e9
         w = FqFinderWindow(f, z, fres, qres, res_idxs, zg)
-        w.close()
-        with pytest.raises(FileExistsError):
-            FqFinderWindow(f, z, fres, qres, res_idxs, zg, overwrite=False)
-
-    def test_overwrite_true_resumes(self, qapp):
-        f, z, fres, qres, res_idxs = _make_sweep(M=2)
-        zg = _make_zarr()
-        _ensure_zarr_arrays(zg, 2, overwrite=False)
-        zg["fres_opt"][0] = 1.23e9
-        w = FqFinderWindow(f, z, fres, qres, res_idxs, zg, overwrite=True)
-        assert zg["fres_opt"][0] == pytest.approx(1.23e9)
+        assert zg["fres_opt"][1] == pytest.approx(1.23e9)
+        assert w._fres_work[1] == pytest.approx(fres[1])
         w.close()
 
     def test_title_set(self, qapp):
@@ -1123,3 +1130,241 @@ class TestFqFinderRoundTrip:
         # After going back, the working value should still be the saved one
         assert zg["fres_opt"][ri0] == pytest.approx(new_f)
         w.close()
+
+
+# ===========================================================================
+# Saved data index and loading saved state
+# ===========================================================================
+
+def test_save_current_writes_data_idx(basic_win):
+    """Save the data index of the resonator on screen whenever saving."""
+    zg = basic_win._zg
+    assert zg[_DATA_IDX_KEY][0] == -1
+    basic_win._go_next()           # saves index 0, then moves to 1
+    assert zg[_DATA_IDX_KEY][0] == 0
+    basic_win._save_current()
+    assert zg[_DATA_IDX_KEY][0] == 1
+
+
+def test_close_saves_data_idx(qapp):
+    f, z, fres, qres, res_idxs = _make_sweep(M=3)
+    zg = _make_zarr()
+    w = FqFinderWindow(f, z, fres, qres, res_idxs, zg, start_idx=2)
+    w.close()
+    assert zg[_DATA_IDX_KEY][0] == 2
+
+
+def test_load_saved_state_restores_values_and_reasons(qapp):
+    """
+    Use saved fres/qres and reasons for saved resonators, and the input
+    values for unsaved resonators and calibration tones.
+    """
+    f, z, fres, qres, _ = _make_sweep(M=4)
+    res_idxs = np.array([-1, 1, 2, 3])     # index 0 is a calibration tone
+    zg = _make_zarr()
+    _ensure_zarr_arrays(zg, 4)
+    zg["fres_opt"][0] = 9.9e9              # cal tone: ignored on load
+    zg["qres_opt"][0] = 1.0
+    zg["fres_opt"][1] = fres[1] + 50e3     # saved and accepted
+    zg["qres_opt"][1] = 2.5e4
+    reasons = np.array(zg["reject_reason"][:], dtype=object)
+    reasons[2] = "bifurcated"              # saved and rejected
+    zg["reject_reason"][:] = reasons       # index 3 never saved
+
+    w = FqFinderWindow(f, z, fres, qres, res_idxs, zg, load_saved=True)
+
+    assert w._fres_work[0] == pytest.approx(fres[0])
+    assert w._fres_work[1] == pytest.approx(fres[1] + 50e3)
+    assert w._qres_work[1] == pytest.approx(2.5e4)
+    assert np.isnan(w._fres_work[2]) and np.isnan(w._qres_work[2])
+    assert w._reject_reasons == {2: "bifurcated"}
+    assert w._fres_work[3] == pytest.approx(fres[3])
+    # Reset (Z) still targets the input values
+    np.testing.assert_array_equal(w._fres_init, fres)
+    w.close()
+
+
+@pytest.mark.parametrize("saved, expected", [
+    (-1, None),     # never saved
+    (1, 1),         # valid interactive index
+    (0, None),      # calibration tone
+    (7, None),      # out of range
+])
+def test_read_saved_data_idx(saved, expected):
+    zg = _make_zarr()
+    _ensure_zarr_arrays(zg, 3)
+    zg[_DATA_IDX_KEY][0] = saved
+    assert _read_saved_data_idx(zg, np.array([-1, 5, 6])) == expected
+
+
+# ===========================================================================
+# run_fqfinder startup dialogs
+# ===========================================================================
+
+def _run_with_dialogs(qapp, zg, choice=None, start_choice=None):
+    """
+    Run ``run_fqfinder`` with the dialogs, window, and event loop patched.
+
+    Parameters:
+    qapp (QApplication): the test application.
+    zg (zarr.Group): output group.
+    choice (str or None): startup dialog result.
+    start_choice (int or None): resume dialog result.
+
+    Returns:
+    window_cls (MagicMock): patched FqFinderWindow; ``call_args.kwargs``
+        holds the arguments passed to it.
+    startup (MagicMock): patched ``_show_startup_dialog``.
+    ask_start (MagicMock): patched ``_ask_start_idx``.
+    """
+    f, z, fres, qres, res_idxs = _make_sweep(M=3)
+    mod = "citkid.vna.fq_finder"
+    with patch(f"{mod}.FqFinderWindow") as window_cls, \
+         patch(f"{mod}._show_startup_dialog", return_value=choice) as startup, \
+         patch(f"{mod}._ask_start_idx", return_value=start_choice) as ask_start, \
+         patch.object(type(qapp), "exec", create=True), \
+         patch.object(type(qapp), "exec_", create=True):
+        run_fqfinder(f, z, fres, qres, res_idxs, zg)
+    return window_cls, startup, ask_start
+
+
+def test_run_fqfinder_no_existing_data_skips_dialogs(qapp):
+    window_cls, startup, ask_start = _run_with_dialogs(qapp, _make_zarr())
+    startup.assert_not_called()
+    ask_start.assert_not_called()
+    kwargs = window_cls.call_args.kwargs
+    assert kwargs["load_saved"] is False
+    assert kwargs["start_idx"] == 0
+
+
+def test_run_fqfinder_cancel_raises(qapp):
+    zg = _make_zarr()
+    _ensure_zarr_arrays(zg, 3)
+    with pytest.raises(RuntimeError, match="cancelled"):
+        _run_with_dialogs(qapp, zg, choice="cancel")
+
+
+def test_run_fqfinder_overwrite_clears_saved_data(qapp):
+    zg = _make_zarr()
+    _ensure_zarr_arrays(zg, 3)
+    zg[_DATA_IDX_KEY][0] = 2
+    window_cls, _, ask_start = _run_with_dialogs(qapp, zg, choice="overwrite")
+    ask_start.assert_not_called()
+    for key in ("fres_opt", "qres_opt", "reject_reason", _DATA_IDX_KEY):
+        assert key not in zg
+    kwargs = window_cls.call_args.kwargs
+    assert kwargs["load_saved"] is False
+    assert kwargs["start_idx"] == 0
+
+
+@pytest.mark.parametrize("start_choice", [2, 0])
+def test_run_fqfinder_load_asks_for_saved_idx(qapp, start_choice):
+    zg = _make_zarr()
+    _ensure_zarr_arrays(zg, 3)
+    zg[_DATA_IDX_KEY][0] = 2
+    window_cls, _, ask_start = _run_with_dialogs(
+        qapp, zg, choice="load", start_choice=start_choice)
+    # _make_sweep gives res_idxs = [1, 2, 3], so data index 2 is resonator 3
+    assert ask_start.call_args.args == (2, 3)
+    kwargs = window_cls.call_args.kwargs
+    assert kwargs["load_saved"] is True
+    assert kwargs["start_idx"] == start_choice
+
+
+def test_run_fqfinder_load_without_saved_idx_starts_at_zero(qapp):
+    zg = _make_zarr()
+    _ensure_zarr_arrays(zg, 3)          # data index left at -1
+    window_cls, _, ask_start = _run_with_dialogs(qapp, zg, choice="load")
+    ask_start.assert_not_called()
+    kwargs = window_cls.call_args.kwargs
+    assert kwargs["load_saved"] is True
+    assert kwargs["start_idx"] == 0
+
+
+def test_startup_dialog_builds_and_defaults_to_cancel(qapp):
+    """Build the startup dialog; closing it without a choice cancels."""
+    from citkid.vna.fq_finder import _show_startup_dialog
+    with patch.object(QtWidgets.QDialog, "exec", create=True, return_value=0), \
+         patch.object(QtWidgets.QDialog, "exec_", create=True, return_value=0):
+        assert _show_startup_dialog() == "cancel"
+
+
+def test_ask_start_idx_builds_and_defaults_to_zero(qapp):
+    """Build the resume dialog; closing it without a choice starts at 0."""
+    from citkid.vna.fq_finder import _ask_start_idx
+    with patch.object(QtWidgets.QMessageBox, "exec", create=True, return_value=0), \
+         patch.object(QtWidgets.QMessageBox, "exec_", create=True, return_value=0):
+        assert _ask_start_idx(5, 42) == 0
+
+
+# ===========================================================================
+# All-calibration input and editing rejected resonators
+# ===========================================================================
+
+def test_run_fqfinder_all_cal_tones_does_not_open_window(qapp):
+    """With no interactive resonators, run_fqfinder returns without showing."""
+    f, z, fres, qres, _ = _make_sweep(M=2)
+    zg = _make_zarr()
+    mod = "citkid.vna.fq_finder"
+    with patch(f"{mod}.FqFinderWindow.show") as show, \
+         patch.object(type(qapp), "exec", create=True) as app_exec, \
+         patch.object(type(qapp), "exec_", create=True) as app_exec_:
+        run_fqfinder(f, z, fres, qres, np.array([-1, -2]), zg)
+    show.assert_not_called()
+    app_exec.assert_not_called()
+    app_exec_.assert_not_called()
+    np.testing.assert_allclose(zg["fres_opt"][:], fres)
+
+
+def _reject(win):
+    """
+    Reject the current resonator of ``win`` with the first preset reason.
+
+    Parameters:
+    win (FqFinderWindow): window to act on.
+
+    Returns:
+    ri (int): data index of the rejected resonator.
+    """
+    ri = win._ri
+    win._reason_combo.setCurrentText(win._REJECT_REASONS[0])
+    assert ri in win._reject_reasons
+    assert np.isnan(win._fres_work[ri]) and np.isnan(win._qres_work[ri])
+    return ri
+
+
+@pytest.mark.parametrize("edit", ["fres_spin", "qres_spin", "shift_click"])
+def test_editing_rejected_resonator_unrejects_it(basic_win, edit):
+    """
+    Editing fres or qres on a rejected resonator clears the rejection, so the
+    saved values and reason stay consistent.
+    """
+    w = basic_win
+    ri = _reject(w)
+    fres0, qres0 = w._fres_init[ri], w._qres_init[ri]
+    if edit == "fres_spin":
+        w._fres_spin.setValue((fres0 + 20e3) * 1e-6)
+    elif edit == "qres_spin":
+        w._qres_spin.setValue(2 * qres0)
+    else:
+        w._on_shift_click_amp(10.0, 0.0)
+
+    assert ri not in w._reject_reasons
+    assert w._reason_combo.currentText() == "not rejected"
+    assert not np.isnan(w._fres_work[ri])
+    assert not np.isnan(w._qres_work[ri])
+
+    w._save_current()
+    assert w._zg["reject_reason"][ri] == ""
+    assert not np.isnan(w._zg["fres_opt"][ri])
+    assert not np.isnan(w._zg["qres_opt"][ri])
+
+
+def test_unreject_restores_pre_rejection_values(basic_win):
+    """The value not being edited comes back from before the rejection."""
+    w = basic_win
+    ri = w._ri
+    w._set_qres(3.3e4)
+    _reject(w)
+    w._fres_spin.setValue((w._fres_init[ri] + 5e3) * 1e-6)
+    assert w._qres_work[ri] == pytest.approx(3.3e4)

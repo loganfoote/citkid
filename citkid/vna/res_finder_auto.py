@@ -14,26 +14,56 @@ from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 from scipy.signal import find_peaks
 import os
 from .s21_filt import highpass_filter, polynomial_baseline
-from ..qt_compat import Qt as _Qt
+from ..qt_compat import Qt as _Qt, fit_window_to_screen, get_qapp
 
-def run_res_finder_auto(f, z, zarr_grp, overwrite = False):
+def run_res_finder_auto(f, z, zarr_grp):
     """
     Run the automatic res finder.
-    
+
+    If data already exists (a file at the ``zarr_grp`` path, or 'fres_auto'
+    in the group), a popup asks whether to overwrite it or cancel. Existing
+    results are never loaded.
+
     Parameters:
     f (np.ndarray): Frequency data in Hz.
     z (np.ndarray): Complex S21 data.
-    out (zarr.Group or str): Zarr group or path to save results.
+    zarr_grp (zarr.Group or str): Zarr group or path to save results.
         The resonances are saved as 'fres_auto' in the group.
-    overwrite (bool): If False, raise error if 'fres_auto' already exists
-        in the group. Default is False.
-        
+
     Returns:
     fres (np.ndarray): Found resonant frequencies.
+
+    Raises:
+    RuntimeError: if the user cancels the overwrite popup.
     """
-    finder = AutoResFinder(f, z, zarr_grp, overwrite)
+    finder = AutoResFinder(f, z, zarr_grp)
     finder.run()
     return np.array(finder.fres)
+
+
+def _confirm_overwrite(message):
+    """
+    Ask whether to overwrite existing data or cancel.
+
+    Parameters:
+    message (str): description of the existing data, shown in the popup.
+
+    Returns:
+    overwrite (bool): True if the user chose Overwrite, False if they chose
+        Cancel or closed the popup.
+    """
+    get_qapp("Auto Res Finder")
+    box = QtWidgets.QMessageBox()
+    box.setWindowTitle('Existing Data Found')
+    box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+    box.setText(message + '\n\nOverwrite it, or cancel?')
+    overwrite_btn = box.addButton(
+        'Overwrite', QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+    cancel_btn = box.addButton(
+        'Cancel', QtWidgets.QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(cancel_btn)
+    (getattr(box, 'exec', None) or box.exec_)()
+    return box.clickedButton() is overwrite_btn
 
 
 class SpinBoxEventFilter(QtCore.QObject):
@@ -41,6 +71,17 @@ class SpinBoxEventFilter(QtCore.QObject):
     Event filter to select all text when spinbox gains focus.
     """
     def eventFilter(self, obj, event):
+        """
+        Select all spinbox text when the watched widget gains focus.
+
+        Parameters:
+        obj (QObject): watched object that received the event.
+        event (QEvent): event delivered to ``obj``.
+
+        Returns:
+        handled (bool): always False, so the event is passed on for normal
+            processing.
+        """
         if event.type() == QtCore.QEvent.Type.FocusIn:
             if hasattr(obj, 'lineEdit'):
                 QtCore.QTimer.singleShot(0, obj.lineEdit().selectAll)
@@ -52,18 +93,24 @@ class AutoResFinderWindow(QtWidgets.QMainWindow):
     Custom QMainWindow that saves data when window is closed.
     """
     def __init__(self, finder=None, *args, **kwargs):
+        """
+        Initialize the main window.
+
+        Parameters:
+        finder (AutoResFinder or None): finder whose ``save_data`` is called
+            when the window closes. If None (default), nothing is saved.
+        *args (tuple): positional arguments passed to ``QMainWindow``.
+        **kwargs (dict): keyword arguments passed to ``QMainWindow``.
+        """
         super().__init__(*args, **kwargs)
         self.finder = finder
     
     def closeEvent(self, event):
         """
         Handle window close event by saving data.
-        
+
         Parameters:
-        event: Qt close event
-        
-        Returns:
-        None
+        event (QCloseEvent): Qt close event.
         """
         if self.finder is not None:
             self.finder.save_data()
@@ -71,20 +118,35 @@ class AutoResFinderWindow(QtWidgets.QMainWindow):
 
 
 class AutoResFinder:
-    def __init__(self, f, z, zarr_grp, overwrite = True):
+    """
+    Interactive GUI for automatically finding resonances in VNA sweep data.
+
+    The magnitude data is smoothed (highpass, polynomial baseline, or none),
+    and dips are found with ``scipy.signal.find_peaks`` using parameters
+    adjustable in the control panel. Results are saved as 'fres_auto' in a
+    zarr group.
+    """
+    def __init__(self, f, z, zarr_grp):
         """
-        Automatic res finder for VNA sweep data.
-        
+        Initialize the automatic res finder for VNA sweep data.
+
+        If a regular file already exists at the ``zarr_grp`` path, or the
+        group already contains 'fres_auto', a popup asks whether to overwrite
+        it or cancel. Overwriting deletes the file or 'fres_auto' right away;
+        existing results are never loaded.
+
         Parameters:
         f (np.ndarray): Frequency data in Hz (1D array).
         z (np.ndarray): Complex S21 data (1D array).
         zarr_grp (zarr.Group or str): Zarr group or path to save results.
-            The resonances are saved as 'fres_auto' in the group.
-        overwrite (bool): If False, raise error if 'fres_auto' already
-            exists in the group. Default is True.
+            The resonances are saved as 'fres_auto' in the group. A path
+            must end in '.h5' and its parent directory must exist.
 
-        Returns:
-        None
+        Raises:
+        ValueError: if ``zarr_grp`` is a path without an '.h5' extension.
+        FileNotFoundError: if the parent directory of the path does not
+            exist.
+        RuntimeError: if the user cancels the overwrite popup.
         """
         self.f = np.asarray(f, dtype = np.float64)
         self.z = np.asarray(z, dtype = np.complex128)
@@ -102,29 +164,22 @@ class AutoResFinder:
             if parent_dir and not os.path.isdir(parent_dir):
                 raise FileNotFoundError("Output directory does not exist")
             
-            # Handle existing files
+            # A regular file at the path blocks the zarr directory store
             if os.path.isfile(zarr_path):
-                if not overwrite:
-                    raise FileExistsError(f"File {zarr_path} already exists")
-                else:
-                    # Delete existing file so zarr can create the directory
-                    os.remove(zarr_path)
-                    print(f"Warning: File already exists at {zarr_path} and will be overwritten")
-            
+                if not _confirm_overwrite(f"A file already exists at\n{zarr_path}"):
+                    raise RuntimeError("User cancelled operation")
+                os.remove(zarr_path)
+
             self.zarr_group = zarr.open_group(zarr_path, mode = 'a')
         else:
             self.zarr_group = zarr_grp
 
-        # Check if fres already exists
+        # Existing results are overwritten (never loaded) if the user agrees
         if 'fres_auto' in self.zarr_group:
-            if not overwrite:
-                raise FileExistsError(
-                    "'fres_auto' already exists in the zarr group. "
-                    "Set overwrite=True to overwrite."
-                )
-            else:
-                print("Warning: 'fres_auto' already exists in the zarr group "
-                      "and will be overwritten on save.")
+            if not _confirm_overwrite(
+                    "The zarr group already contains 'fres_auto'."):
+                raise RuntimeError("User cancelled operation")
+            del self.zarr_group['fres_auto']
         
         # Compute magnitude
         self.mag_db = 20 * np.log10(np.abs(self.z))
@@ -154,7 +209,7 @@ class AutoResFinder:
         self._param_timer = None
 
         # Setup the application
-        self.app = pg.mkQApp("Auto Res Finder")
+        self.app = get_qapp("Auto Res Finder")
         self.setup_ui()
         self.setup_plot()
 
@@ -168,17 +223,12 @@ class AutoResFinder:
         
     def setup_ui(self):
         """
-        Setup the main window and layout.
-
-        Parameters:
-        None
-
-        Returns:
-        None
+        Set up the main window and layout, and show the window.
         """
         self.win = AutoResFinderWindow(finder=self)
         self.win.setWindowTitle('Auto Resonance Finder - Press H for help')
-        self.win.resize(1400, 800)
+        # Preferred size, shrunk to fit smaller screens, centred
+        fit_window_to_screen(self.win, frac=0.9, size=(1400, 800))
         
         # Central widget with splitter
         central = QtWidgets.QWidget()
@@ -208,13 +258,10 @@ class AutoResFinder:
         
     def setup_controls(self, layout):
         """
-        Setup parameter control widgets.
+        Set up parameter control widgets.
 
         Parameters:
         layout (QVBoxLayout): Layout to add controls to.
-
-        Returns:
-        None
         """
         # Title
         title = QtWidgets.QLabel('<b>Peak Finding Parameters</b>')
@@ -357,12 +404,6 @@ class AutoResFinder:
     def update_smoothing_controls(self):
         """
         Show/hide smoothing controls based on selected method.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         method = self.smooth_combo.currentText()
         
@@ -383,26 +424,15 @@ class AutoResFinder:
         
     def on_smoothing_changed(self):
         """
-        Called when smoothing method is changed.
-
-        Parameters:
-        None
-
-        Returns:
-        None
+        Update the smoothing controls and parameters when the smoothing
+        method changes.
         """
         self.update_smoothing_controls()
         self.on_param_changed()
         
     def setup_plot(self):
         """
-        Setup the magnitude plots.
-
-        Parameters:
-        None
-
-        Returns:
-        None
+        Set up the magnitude plots and keyboard shortcuts.
         """
         # Add title
         title = ('<span style="color: #FFF; font-size: 10pt;">'
@@ -472,10 +502,8 @@ class AutoResFinder:
 
         Parameters:
         plot (PlotItem): The plot to scale.
-        data (np.ndarray): The data to scale based on.
-
-        Returns:
-        None
+        data (np.ndarray): The data to scale based on, same length as
+            ``self.f``.
         """
         x_min, x_max = plot.viewRange()[0]
 
@@ -523,12 +551,6 @@ class AutoResFinder:
         Using a 50% pad on each side prevents blank edges during fast
         panning.  pyqtgraph then only renders the visible ~1,000 points
         instead of the full 1e6-point dataset.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         if not hasattr(self, 'plot_filtered'):
             return
@@ -542,16 +564,10 @@ class AutoResFinder:
 
     def on_range_changed(self):
         """
-        Called when the view range changes (pan/zoom).
+        Schedule a plot update when the view range changes (pan/zoom).
 
         Debounced: coalesces rapid-fire events into a single update every
         50 ms so the UI stays responsive during continuous mouse drag.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         if self._range_timer is None:
             self._range_timer = QtCore.QTimer()
@@ -560,20 +576,18 @@ class AutoResFinder:
         self._range_timer.start(50)
 
     def _do_range_update(self):
-        """Actual work triggered by the range debounce timer."""
+        """
+        Redraw the curves and rescale y after the range debounce delay.
+        """
         self._update_curves()
         self.auto_scale_y(self.plot_filtered, self.filtered_mag)
         self.auto_scale_y(self.plot_original, self.mag_db)
         
     def on_param_changed(self):
         """
-        Called when any parameter is changed.
+        Read the parameter controls and schedule a peak-detection update.
 
-        Parameters:
-        None
-
-        Returns:
-        None
+        Debounced: the peak detection runs 300 ms after the last change.
         """
         # Capture the latest spinbox values immediately so rapid changes
         # are not lost while the debounce timer is pending.
@@ -598,7 +612,9 @@ class AutoResFinder:
         self._param_timer.start(300)
 
     def _do_param_update(self):
-        """Actual work triggered by the parameter-change debounce timer."""
+        """
+        Rerun peak detection after the parameter debounce delay.
+        """
         self.win.setCursor(_Qt.WaitCursor)
         QtWidgets.QApplication.processEvents()
         self.update_peaks()
@@ -609,13 +625,11 @@ class AutoResFinder:
         
     def apply_smoothing(self):
         """
-        Apply smoothing to magnitude data.
+        Apply smoothing to magnitude data and store it in
+        ``self.filtered_mag``.
 
-        Parameters:
-        None
-
-        Returns:
-        None
+        The method is set by ``self.params['smoothing']``: 'highpass',
+        'polynomial', or 'none' (copy of the unsmoothed data).
         """
         if self.params['smoothing'] == 'highpass':
             self.filtered_mag = highpass_filter(
@@ -632,11 +646,7 @@ class AutoResFinder:
         """
         Update peak detection and plot.
 
-        Parameters:
-        None
-
-        Returns:
-        None
+        Results are stored in ``self.fres``.
         """
         # Apply smoothing
         self.apply_smoothing()
@@ -693,12 +703,6 @@ class AutoResFinder:
     def update_markers(self):
         """
         Update res markers on plots.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         # Remove old markers from filtered plot
         for marker in self.peak_markers_filtered:
@@ -751,53 +755,12 @@ class AutoResFinder:
             self.plot_original.addItem(marker_original)
             self.peak_markers_original.append(marker_original)
             
-    def pan_left(self):
-        """
-        Pan the view to the left by 20% of current width.
-
-        Parameters:
-        None
-
-        Returns:
-        None
-        """
-        x_range = self.plot_filtered.viewRange()[0]
-        width = x_range[1] - x_range[0]
-        shift = -0.2 * width
-        self.plot_filtered.setXRange(
-            x_range[0] + shift,
-            x_range[1] + shift,
-            padding = 0
-        )
-        
-    def pan_right(self):
-        """
-        Pan the view to the right by 20% of current width.
-
-        Parameters:
-        None
-
-        Returns:
-        None
-        """
-        x_range = self.plot_filtered.viewRange()[0]
-        width = x_range[1] - x_range[0]
-        shift = 0.2 * width
-        self.plot_filtered.setXRange(
-            x_range[0] + shift,
-            x_range[1] + shift,
-            padding = 0
-        )
-        
     def save_data(self):
         """
         Save resonances to zarr group.
 
-        Parameters:
-        None
-
-        Returns:
-        None
+        The resonances are written to 'fres_auto' (overwriting any existing
+        array), and ``self.params`` is saved as group attributes.
         """
         fres_array = np.array(self.fres, dtype = np.float64)
 
@@ -815,12 +778,6 @@ class AutoResFinder:
     def quit_and_save(self):
         """
         Save data and close the application.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         self.save_data()
         self.win.close()
@@ -829,12 +786,6 @@ class AutoResFinder:
     def show_help(self):
         """
         Toggle the help panel on/off.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         if not hasattr(self, '_help_dlg'):
             self._help_dlg = self._build_help_dialog()
@@ -851,7 +802,12 @@ class AutoResFinder:
             dlg.move(_dlg_frame.topLeft())
 
     def _build_help_dialog(self):
-        """Create the floating help dialog (created lazily on first use)."""
+        """
+        Create the floating help dialog (created lazily on first use).
+
+        Returns:
+        dlg (QDialog): help dialog, not yet shown.
+        """
         dlg = QtWidgets.QDialog(self.win)
         dlg.setWindowTitle("Auto Resonance Finder Help (H to close)")
         layout = QtWidgets.QVBoxLayout(dlg)
@@ -892,13 +848,7 @@ class AutoResFinder:
     
     def setup_shortcuts(self):
         """
-        Setup keyboard shortcuts for pan and other controls.
-        
-        Parameters:
-        None
-        
-        Returns:
-        None
+        Set up keyboard shortcuts for panning (Z/X: 20%, A/S: 80%).
         """
         # Pan shortcuts (20% pan by Z/X, 80% pan by A/S)
         self.pan_left_action = QtGui.QShortcut(QtGui.QKeySequence("Z"), self.win)
@@ -915,10 +865,8 @@ class AutoResFinder:
         Shift the x-axis by *fraction* of the current view width.
         
         Parameters:
-        fraction (float): Fraction of current view width to pan by (positive = right, negative = left)
-        
-        Returns:
-        None
+        fraction (float): Fraction of current view width to pan by
+            (positive = right, negative = left).
         """
         x0, x1 = self.plot_filtered.viewRange()[0]
         shift = fraction * (x1 - x0)
@@ -927,60 +875,30 @@ class AutoResFinder:
     def pan_left(self):
         """
         Pan the view to the left by 20% of current width (Z key).
-        
-        Parameters:
-        None
-        
-        Returns:
-        None
         """
         self._pan(-0.2)
     
     def pan_right(self):
         """
         Pan the view to the right by 20% of current width (X key).
-        
-        Parameters:
-        None
-        
-        Returns:
-        None
         """
         self._pan(0.2)
     
     def fast_pan_left(self):
         """
         Pan the view to the left by 80% of current width (A key).
-        
-        Parameters:
-        None
-        
-        Returns:
-        None
         """
         self._pan(-0.8)
     
     def fast_pan_right(self):
         """
-        Pan the view to the right by 80% of current width (D key).
-        
-        Parameters:
-        None
-        
-        Returns:
-        None
+        Pan the view to the right by 80% of current width (S key).
         """
         self._pan(0.8)
         
     def run(self):
         """
         Start the application event loop.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         print("Starting Auto Resonance Finder...")
         print(f"Output: {self.zarr_group.store}")

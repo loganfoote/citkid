@@ -15,9 +15,10 @@ identity when making corrections.
 
 Automatic Re-Matching
 ---------------------
-Shift+click sets a frequency threshold (yellow line). Press T to re-run the
-matching algorithm (sorted or nearest) on all groups above that frequency,
+Ctrl+Right-click sets a frequency threshold (yellow line). Press R to re-run
+the matching algorithm (sorted or nearest) on all groups above that frequency,
 while keeping manually corrected lower-frequency groups unchanged.
+
 Output layout (zarr)
 --------------------
 fres1            float64[N1]  — final DS1 resonance frequencies (Hz)
@@ -43,7 +44,7 @@ import zarr
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 
-from ..qt_compat import Qt as _Qt
+from ..qt_compat import Qt as _Qt, fit_window_to_screen, get_qapp
 from .s21_filt import highpass_filter, polynomial_baseline
 
 
@@ -65,6 +66,16 @@ _GROUP_COLORS: List[Tuple[int, int, int]] = [
 
 
 def _group_color(group_id: int, alpha: int = 220) -> Tuple:
+    """
+    Return the RGBA plot colour for a match group.
+
+    Parameters:
+    group_id (int): match-group ID; colours cycle through ``_GROUP_COLORS``.
+    alpha (int): alpha channel value, 0-255. Default is 220.
+
+    Returns:
+    color (tuple): (r, g, b, alpha) colour tuple.
+    """
     r, g, b = _GROUP_COLORS[group_id % len(_GROUP_COLORS)]
     return (r, g, b, alpha)
 
@@ -89,10 +100,24 @@ class MatchGroup:
     ambiguous: bool = False
 
     def center_freq(self) -> float:
+        """
+        Compute the mean frequency of all DS1 and DS2 entries in the group.
+
+        Returns:
+        center (float): mean resonance frequency in Hz (data coordinates), or
+            0.0 if the group has no entries.
+        """
         freqs = [f for f, _ in self.entries1] + [f for f, _ in self.entries2]
         return float(np.mean(freqs)) if freqs else 0.0
 
     def mapping_str(self) -> str:
+        """
+        Return the group's mapping as an "N1-N2" string.
+
+        Returns:
+        mapping (str): number of DS1 entries and DS2 entries joined by a
+            hyphen, e.g. '1-2'.
+        """
         return f"{len(self.entries1)}-{len(self.entries2)}"
 
 
@@ -100,7 +125,20 @@ class MatchGroup:
 # SpinBox event filter (select-all on focus)
 # ---------------------------------------------------------------------------
 class SpinBoxEventFilter(QtCore.QObject):
+    """
+    Event filter that selects all spin box text when it gains focus.
+    """
     def eventFilter(self, obj, event):
+        """
+        Select all text in the watched widget's line edit on focus-in.
+
+        Parameters:
+        obj (QObject): watched object, typically a spin box.
+        event (QEvent): event delivered to ``obj``.
+
+        Returns:
+        handled (bool): always False, so the event is processed normally.
+        """
         if event.type() == QtCore.QEvent.Type.FocusIn:
             if hasattr(obj, 'lineEdit'):
                 QtCore.QTimer.singleShot(0, obj.lineEdit().selectAll)
@@ -116,9 +154,8 @@ def run_res_matcher(
     zarr_grp,
     new_res_start_idx: int = 2000,
     init_match: str = 'sorted',
-    margin_factor: float = 0.15,
     apply_filter: bool = False,
-    DS2_f_offset: float = 0.0,
+    DS2_f_offset: Optional[float] = None,
 ):
     """
     Run the interactive resonance matcher.
@@ -138,12 +175,14 @@ def run_res_matcher(
     init_match (str): How to build the initial pairing.  'sorted' pairs by
         frequency order; 'nearest' uses median-offset-corrected
         nearest-neighbor.  Default is 'sorted'.
-    margin_factor (float): Y-axis auto-scale margin fraction.  Default 0.15.
     apply_filter (bool): If False (default), both dataset filters start as
         'none' so the raw magnitude is shown and startup is fast.  Set True
         to start with the default highpass filter applied.
-    DS2_f_offset (float): Visualization-only frequency offset applied to the
-        DS2 plots and markers. Saved resonance frequencies remain unchanged.
+    DS2_f_offset (float or None): Visualization-only frequency offset applied
+        to the DS2 plots and markers. Saved resonance frequencies remain
+        unchanged. The current offset is saved with the groups. If None
+        (default), the saved offset is restored when loading existing data,
+        and 0 is used otherwise. A float always overrides the saved offset.
 
     Returns:
     groups (list[MatchGroup]): Final list of match groups.
@@ -154,7 +193,6 @@ def run_res_matcher(
         zarr_grp,
         new_res_start_idx=new_res_start_idx,
         init_match=init_match,
-        margin_factor=margin_factor,
         apply_filter=apply_filter,
         DS2_f_offset=DS2_f_offset,
     )
@@ -163,14 +201,31 @@ def run_res_matcher(
 
 
 class CustomViewBox(pg.ViewBox):
-    """ViewBox that suppresses context menu when Ctrl is held."""
-    
+    """
+    ViewBox that suppresses context menu when Ctrl is held.
+    """
+
     def __init__(self, *args, drag_callback=None, **kwargs):
+        """
+        Initialize the view box.
+
+        Parameters:
+        *args (tuple): positional arguments passed to ``pg.ViewBox``.
+        drag_callback (callable or None): called with the x displacement (in
+            view coordinates) on Ctrl+Left-drag. If None (default), Ctrl-drag
+            pans normally.
+        **kwargs (dict): keyword arguments passed to ``pg.ViewBox``.
+        """
         super().__init__(*args, **kwargs)
         self._drag_callback = drag_callback
-    
+
     def raiseContextMenu(self, ev):
-        """Override to check for Ctrl modifier before showing menu."""
+        """
+        Show the context menu unless Ctrl is held.
+
+        Parameters:
+        ev (MouseClickEvent): mouse event that requested the menu.
+        """
         modifiers = QtWidgets.QApplication.keyboardModifiers()
         if modifiers & _Qt.ControlModifier:
             # Ctrl is held, don't show menu (let our custom handler process it)
@@ -180,7 +235,14 @@ class CustomViewBox(pg.ViewBox):
         super().raiseContextMenu(ev)
 
     def mouseDragEvent(self, ev, axis=None):
-        """Ctrl+Left-drag shifts the DS2 display offset instead of panning."""
+        """
+        Shift the DS2 display offset on Ctrl+Left-drag instead of panning.
+
+        Parameters:
+        ev (MouseDragEvent): mouse drag event.
+        axis (int or None): axis to restrict the default drag to, passed to
+            ``pg.ViewBox.mouseDragEvent``. None (default) means both axes.
+        """
         if (
             self._drag_callback is not None
             and ev.button() == _Qt.LeftButton
@@ -200,6 +262,14 @@ class CustomViewBox(pg.ViewBox):
 # Main class
 # ---------------------------------------------------------------------------
 class ResMatcher:
+    """
+    Interactive GUI for matching resonances between two VNA datasets.
+
+    Attributes:
+    groups (list[MatchGroup]): current match groups, sorted by frequency.
+    zarr_group (zarr.Group): group where results are saved.
+    ds2_f_offset (float): visualization-only DS2 frequency offset in Hz.
+    """
 
     # ------------------------------------------------------------------ init
 
@@ -210,11 +280,43 @@ class ResMatcher:
         zarr_grp,
         new_res_start_idx: int = 2000,
         init_match: str = 'sorted',
-        margin_factor: float = 0.15,
-        overwrite: bool = False,
         apply_filter: bool = False,
-        DS2_f_offset: float = 0.0,
+        DS2_f_offset: Optional[float] = None,
     ):
+        """
+        Initialize the matcher, build the initial groups, and set up the UI.
+
+        If ``zarr_grp`` already contains matcher output, a dialog asks whether
+        to load it, overwrite it, or cancel.
+
+        Parameters:
+        f1 (array-like): frequency array for dataset 1, Hz.
+        z1 (array-like): complex S21 for dataset 1.
+        fres1 (array-like): initial resonance frequencies for dataset 1, Hz.
+        res_idx1 (array-like): unique resonator indices for dataset 1.
+        f2 (array-like): frequency array for dataset 2, Hz.
+        z2 (array-like): complex S21 for dataset 2.
+        fres2 (array-like): initial resonance frequencies for dataset 2, Hz.
+        res_idx2 (array-like): unique resonator indices for dataset 2.
+        zarr_grp (zarr.Group or str): zarr group, or path to one, where
+            results are saved.
+        new_res_start_idx (int): first res_idx value assigned to newly added
+            resonances. The actual start is max(new_res_start_idx,
+            max(existing indices) + 1). Default is 2000.
+        init_match (str): how to build the initial pairing. Can be 'sorted'
+            (default, pair by frequency order) or 'nearest'
+            (median-offset-corrected nearest-neighbor).
+        apply_filter (bool): if True, start both datasets with the highpass
+            filter; if False (default), start with no filter.
+        DS2_f_offset (float or None): visualization-only DS2 frequency offset
+            in Hz. If None (default), the saved offset is restored when
+            loading, else 0 is used. A float overrides the saved offset.
+
+        Raises:
+        ValueError: if ``res_idx1`` or ``res_idx2`` contains duplicates, or
+            ``init_match`` is not 'sorted' or 'nearest'.
+        RuntimeError: if the user cancels the startup dialog.
+        """
         # ---- store raw arrays -----------------------------------------------
         self.f1 = np.asarray(f1, dtype=np.float64)
         self.z1 = np.asarray(z1, dtype=np.complex128)
@@ -241,8 +343,8 @@ class ResMatcher:
                     f"duplicate values. Each resonator must have a unique index."
                 )
 
-        self.margin_factor = margin_factor
-        self.ds2_f_offset = float(DS2_f_offset)
+        # None → restore the saved offset on load (below), else 0
+        self.ds2_f_offset = 0.0 if DS2_f_offset is None else float(DS2_f_offset)
         self.f2_display = self.f2 + self.ds2_f_offset
         # Ensure new resonance indices don't collide with existing ones
         max_existing_idx = max(
@@ -284,6 +386,15 @@ class ResMatcher:
                             _saved_view_xlims = (float(arr[0]), float(arr[1]))
                     except Exception:
                         _saved_view_xlims = None
+                # Restore the saved DS2 display offset unless one was passed
+                if DS2_f_offset is None and 'res_matcher_ds2_f_offset' in self.zarr_group:
+                    try:
+                        arr = np.array(self.zarr_group['res_matcher_ds2_f_offset'])
+                        if arr.size >= 1:
+                            self.ds2_f_offset = float(arr.ravel()[0])
+                            self.f2_display = self.f2 + self.ds2_f_offset
+                    except Exception:
+                        pass
             elif choice == 'overwrite':
                 # Delete existing data
                 for key in _output_keys:
@@ -334,7 +445,6 @@ class ResMatcher:
                 )
 
         # ---- interaction state ----------------------------------------------
-        self.active_dataset: int = 1      # toggled with C
         # Multi-selection: set of (group_id, dataset, fres) tuples
         self._selected_resonances: Set[Tuple[int, int, float]] = set()
         self.undo_stack: list = []
@@ -356,14 +466,20 @@ class ResMatcher:
         self._filter_timer2 = None
 
         # ---- Qt setup -------------------------------------------------------
-        self.app = pg.mkQApp("Resonance Matcher")
+        self.app = get_qapp("Resonance Matcher")
         self.event_filter = SpinBoxEventFilter()
         self.setup_ui()
 
     # ================================================================ init helpers
 
     def _init_sorted(self):
-        """Pair by sorted frequency order; leftovers become unmatched groups."""
+        """
+        Pair by sorted frequency order; leftovers become unmatched groups.
+
+        Returns:
+        groups (list[MatchGroup]): sorted list of initial match groups.
+        gid (int): next available group ID.
+        """
         idx1 = np.argsort(self.fres1_init)
         idx2 = np.argsort(self.fres2_init)
         fres1_s = self.fres1_init[idx1];  ridx1_s = self.res_idx1_init[idx1]
@@ -408,9 +524,6 @@ class ResMatcher:
         A global median frequency offset between datasets is estimated first,
         then greedy nearest-neighbor matching is applied with a threshold of
         3× the median inter-resonance spacing.
-
-        Parameters:
-        None
 
         Returns:
         groups (list[MatchGroup]): Sorted list of initial match groups.
@@ -483,10 +596,11 @@ class ResMatcher:
         Show dialog when zarr data already exists.
         
         Returns:
-        str: 'overwrite', 'load', or 'cancel'
+        choice (str): 'overwrite', 'load', or 'cancel'. 'cancel' is also
+            returned if the dialog is closed without a choice.
         """
         # Create a simple Qt application if needed
-        app = pg.mkQApp("Resonance Matcher")
+        app = get_qapp("Resonance Matcher")
         
         dlg = QtWidgets.QDialog()
         dlg.setWindowTitle('Zarr Data Exists')
@@ -520,25 +634,35 @@ class ResMatcher:
         result = [None]
         
         def on_overwrite():
+            """
+            Confirm overwrite and, if accepted, close with 'overwrite'.
+            """
             # Show confirmation dialog
             reply = QtWidgets.QMessageBox.question(
                 dlg,
                 'Confirm Overwrite',
                 'Are you sure you want to overwrite existing data?\n\n'
                 'This will permanently delete all existing groups and matching data.',
-                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                QtWidgets.QMessageBox.No  # Default to No
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No  # Default to No
             )
-            if reply == QtWidgets.QMessageBox.Yes:
+            if reply == QtWidgets.QMessageBox.StandardButton.Yes:
                 result[0] = 'overwrite'
                 dlg.accept()
             # If No, dialog stays open
         
         def on_load():
+            """
+            Close the dialog with the 'load' choice.
+            """
             result[0] = 'load'
             dlg.accept()
         
         def on_cancel():
+            """
+            Close the dialog with the 'cancel' choice.
+            """
             result[0] = 'cancel'
             dlg.reject()
         
@@ -554,7 +678,8 @@ class ResMatcher:
         Load existing groups from zarr.
         
         Returns:
-        tuple: (groups, next_group_id)
+        groups (list[MatchGroup]): loaded groups, sorted by center frequency.
+        next_group_id (int): next available group ID.
         """
         fres1_out = np.array(self.zarr_group['fres1'])
         res_idx1_out = np.array(self.zarr_group['res_idx1'])
@@ -601,6 +726,12 @@ class ResMatcher:
     # ================================================================ filtering
 
     def _apply_filters(self):
+        """
+        Recompute the filtered magnitude of both datasets.
+
+        Updates ``self.filtered_mag1`` and ``self.filtered_mag2`` from
+        ``self.filter_params1`` and ``self.filter_params2``.
+        """
         self.filtered_mag1 = self._apply_filter(
             self.f1, self.mag_db1, self.filter_params1
         )
@@ -610,6 +741,20 @@ class ResMatcher:
 
     @staticmethod
     def _apply_filter(f, mag_db, params):
+        """
+        Filter a magnitude trace according to the given filter parameters.
+
+        Parameters:
+        f (np.array): frequency data in Hz.
+        mag_db (np.array): magnitude data in dB.
+        params (dict): filter settings with keys 'smoothing' ('highpass',
+            'polynomial', or anything else for no filter), 'highpass_mhz',
+            and 'poly_order'.
+
+        Returns:
+        filtered (np.array): filtered magnitude in dB, or a copy of
+            ``mag_db`` if no filter is selected.
+        """
         method = params['smoothing']
         if method == 'highpass':
             return highpass_filter(f, mag_db, params['highpass_mhz'])
@@ -619,21 +764,77 @@ class ResMatcher:
             return mag_db.copy()
 
     def _display_freq(self, freq: float, ds: int) -> float:
+        """
+        Convert a data frequency to display coordinates.
+
+        Parameters:
+        freq (float): frequency in Hz, data coordinates.
+        ds (int): dataset number (1 or 2). Only DS2 is shifted by
+            ``self.ds2_f_offset``.
+
+        Returns:
+        display_freq (float): frequency in display coordinates, Hz.
+        """
         if ds == 2:
             return float(freq) + self.ds2_f_offset
         return float(freq)
 
     def _data_freq_from_display(self, display_freq: float, ds: int) -> float:
+        """
+        Convert a display frequency to data coordinates.
+
+        Parameters:
+        display_freq (float): frequency in Hz, display coordinates.
+        ds (int): dataset number (1 or 2). Only DS2 is shifted by
+            ``self.ds2_f_offset``.
+
+        Returns:
+        freq (float): frequency in data coordinates, Hz.
+        """
         if ds == 2:
             return float(display_freq) - self.ds2_f_offset
         return float(display_freq)
 
-    def _group_display_center_freq(self, group: MatchGroup) -> float:
-        freqs = [f for f, _ in group.entries1]
-        freqs.extend(self._display_freq(f, 2) for f, _ in group.entries2)
+    def _display_center_freq(self, entries1, entries2) -> float:
+        """
+        Compute the mean display frequency of DS1 and DS2 entries.
+
+        Parameters:
+        entries1 (list): (fres_hz, res_idx) tuples for DS1, in data frequency.
+        entries2 (list): (fres_hz, res_idx) tuples for DS2, in data frequency.
+
+        Returns:
+        center (float): mean frequency in display coordinates (DS2 shifted by
+            ``self.ds2_f_offset``), or 0.0 if both lists are empty.
+        """
+        freqs = [f for f, _ in entries1]
+        freqs.extend(self._display_freq(f, 2) for f, _ in entries2)
         return float(np.mean(freqs)) if freqs else 0.0
 
+    def _group_display_center_freq(self, group: MatchGroup) -> float:
+        """
+        Compute the mean display frequency of a group's entries.
+
+        Parameters:
+        group (MatchGroup): group to evaluate.
+
+        Returns:
+        center (float): mean frequency in display coordinates, or 0.0 if the
+            group is empty.
+        """
+        return self._display_center_freq(group.entries1, group.entries2)
+
     def _display_window_for_ds(self, ds: int) -> Tuple[float, float]:
+        """
+        Return the current plot x-range in a dataset's data coordinates.
+
+        Parameters:
+        ds (int): dataset number (1 or 2).
+
+        Returns:
+        x_min, x_max (float): visible frequency limits in Hz, with the DS2
+            display offset removed if ``ds`` is 2.
+        """
         x_min, x_max = self.plot_mag.viewRange()[0]
         if ds == 2:
             return (
@@ -643,15 +844,28 @@ class ResMatcher:
         return float(x_min), float(x_max)
 
     def _refresh_ds2_display_cache(self):
+        """
+        Recompute ``self.f2_display`` from ``self.f2`` and the DS2 offset.
+        """
         self.f2_display = self.f2 + self.ds2_f_offset
 
     def _update_ds2_offset_label(self):
+        """
+        Update the DS2 visual offset label, if it exists, in kHz.
+        """
         if hasattr(self, 'ds2_offset_label'):
             self.ds2_offset_label.setText(
                 f'DS2 visual offset: {self.ds2_f_offset / 1e3:+.1f} kHz'
             )
 
     def _refresh_display_offset_view(self):
+        """
+        Redraw everything that depends on the DS2 display offset.
+
+        Refreshes the display cache and label, the overview DS2 curve and
+        x-range, and (once the plots exist) the curves, markers, y-scale, and
+        overview region.
+        """
         self._refresh_ds2_display_cache()
         self._update_ds2_offset_label()
         if hasattr(self, 'curve_overview_ds2'):
@@ -669,6 +883,14 @@ class ResMatcher:
             self._update_overview_region()
 
     def _set_ds2_frequency_offset(self, offset_hz: float, *, log_reason: Optional[str] = None):
+        """
+        Set the DS2 display offset and redraw.
+
+        Parameters:
+        offset_hz (float): new DS2 visual offset in Hz.
+        log_reason (str or None): if given, log this reason with the new
+            offset. None (default) logs nothing.
+        """
         self.ds2_f_offset = float(offset_hz)
         self._refresh_display_offset_view()
         if log_reason is not None:
@@ -677,11 +899,25 @@ class ResMatcher:
             )
 
     def _shift_ds2_frequency_offset(self, delta_hz: float):
+        """
+        Shift the DS2 display offset by a relative amount.
+
+        Parameters:
+        delta_hz (float): change in the DS2 visual offset, Hz. Zero does
+            nothing.
+        """
         if delta_hz == 0:
             return
         self._set_ds2_frequency_offset(self.ds2_f_offset + float(delta_hz))
 
     def _auto_align_ds2_offset(self):
+        """
+        Set the DS2 display offset from nearby 1:1 groups.
+
+        The offset is the mean DS1-minus-DS2 frequency difference of the (up
+        to) 10 one-to-one groups closest to the center of the view. Logs a
+        message and does nothing if there are no 1:1 groups.
+        """
         one_to_one_groups = [
             g for g in self.groups
             if len(g.entries1) == 1 and len(g.entries2) == 1
@@ -706,9 +942,17 @@ class ResMatcher:
     # ================================================================ UI setup
 
     def setup_ui(self):
+        """
+        Build and show the main window with plots, toolbar, and controls.
+
+        Also installs keyboard shortcuts, sets the initial x-range (the saved
+        view limits if available, else the first 10 MHz), and draws the
+        initial curves and markers.
+        """
         self.win = QtWidgets.QMainWindow()
         self.win.setWindowTitle('Resonance Matcher')
-        self.win.resize(1500, 850)
+        # Preferred size, shrunk to fit smaller screens, centred
+        fit_window_to_screen(self.win, frac=0.9, size=(1500, 850))
         # Override close event to auto-save
         self.win.closeEvent = self._on_window_close
 
@@ -776,6 +1020,12 @@ class ResMatcher:
     # ---------------------------------------------------------------- controls
 
     def setup_controls(self, layout):
+        """
+        Add the filter controls, status labels, log, and save buttons.
+
+        Parameters:
+        layout (QVBoxLayout): control-panel layout to add the widgets to.
+        """
         # ---- Dataset 1 filter ----------------------------------------------
         ds1_grp = QtWidgets.QGroupBox('Dataset 1 Filter (blue)')
         ds1_form = QtWidgets.QFormLayout()
@@ -848,9 +1098,6 @@ class ResMatcher:
         self._update_filter_visibility(2)
 
         # ---- Status --------------------------------------------------------
-        self.active_ds_label = QtWidgets.QLabel()
-        self._refresh_active_label()
-        layout.addWidget(self.active_ds_label)
 
         self.ds2_offset_label = QtWidgets.QLabel()
         self._update_ds2_offset_label()
@@ -886,6 +1133,12 @@ class ResMatcher:
         layout.addStretch()
 
     def _update_filter_visibility(self, ds: int):
+        """
+        Show only the filter parameter widgets relevant to the chosen method.
+
+        Parameters:
+        ds (int): dataset number; 1 for DS1, anything else for DS2.
+        """
         if ds == 1:
             method = self.smooth_combo1.currentText()
             self.hp_label1.setVisible(method == 'highpass')
@@ -899,14 +1152,17 @@ class ResMatcher:
             self.poly_label2.setVisible(method == 'polynomial')
             self.poly_spin2.setVisible(method == 'polynomial')
 
-    def _refresh_active_label(self):
-        self.active_ds_label.setText(
-            f'<b>Active dataset: DS{self.active_dataset}</b>'
-        )
 
     # ------------------------------------------------------------------ plots
 
     def setup_plots(self):
+        """
+        Create the overview, magnitude, and phase plots and connect signals.
+
+        The magnitude and phase plots have separate right-axis view boxes for
+        DS2, scatter items for resonance and selection markers, and a hidden
+        re-match threshold line.
+        """
         title = (
             '<span style="color:#FFF; font-size:9pt;">'
             'Z/X: pan 20%  |  A/S: pan 80%  |  Ctrl+drag: DS2 shift  |  G: auto-align  |  E/F/D/W/Q/R  |  H: help'
@@ -1075,32 +1331,38 @@ class ResMatcher:
         self.plot_mag.sigRangeChanged.connect(self._on_range_changed)
 
         self.scatter_ds1_mag.sigClicked.connect(
-            self._make_scatter_handler(ds=1)
+            self._make_scatter_handler()
         )
         self.scatter_ds2_mag.sigClicked.connect(
-            self._make_scatter_handler(ds=2)
+            self._make_scatter_handler()
         )
         self.scatter_ds1_phase.sigClicked.connect(
-            self._make_scatter_handler(ds=1)
+            self._make_scatter_handler()
         )
         self.scatter_ds2_phase.sigClicked.connect(
-            self._make_scatter_handler(ds=2)
+            self._make_scatter_handler()
         )
 
     def _sync_mag2_geom(self):
-        """Keep the DS2 magnitude ViewBox geometry in sync with the main one."""
+        """
+        Keep the DS2 magnitude ViewBox geometry in sync with the main one.
+        """
         self._vb_mag2.setGeometry(self.plot_mag.vb.sceneBoundingRect())
         self._vb_mag2.linkedViewChanged(self.plot_mag.vb,
                                         self._vb_mag2.XAxis)
 
     def _sync_phase2_geom(self):
-        """Keep the DS2 phase ViewBox geometry in sync with the main one."""
+        """
+        Keep the DS2 phase ViewBox geometry in sync with the main one.
+        """
         self._vb_phase2.setGeometry(self.plot_phase.vb.sceneBoundingRect())
         self._vb_phase2.linkedViewChanged(self.plot_phase.vb,
                                           self._vb_phase2.XAxis)
 
     def _on_overview_region_changed(self):
-        """Pan/zoom main plot to match the overview region."""
+        """
+        Pan/zoom main plot to match the overview region.
+        """
         if self._overview_updating:
             return
         lo, hi = self._overview_region.getRegion()
@@ -1109,7 +1371,9 @@ class ResMatcher:
         self._overview_updating = False
 
     def _update_overview_region(self):
-        """Move the overview region to match the current main plot view."""
+        """
+        Move the overview region to match the current main plot view.
+        """
         if self._overview_updating:
             return
         x_min, x_max = self.plot_mag.viewRange()[0]
@@ -1120,16 +1384,17 @@ class ResMatcher:
     def _get_fractional_zoom(self, x_min, x_max):
         """
         Calculate fractional zoom level from a frequency range.
-        
+
         Fractional zoom is defined as (x_max - x_min) / center_freq.
         This allows maintaining the "zoom" when moving to a new center.
-        
+
         Parameters:
         x_min (float): Left edge of x-range in Hz.
         x_max (float): Right edge of x-range in Hz.
-        
+
         Returns:
-        frac_zoom (float): Fractional zoom level.
+        frac_zoom (float): Fractional zoom level, or 1.0 if the range is
+            centered at 0.
         """
         center = (x_min + x_max) / 2.0
         if center == 0:
@@ -1143,9 +1408,6 @@ class ResMatcher:
         Parameters:
         center_freq (float): Frequency to center on in Hz.
         frac_zoom (float): Fractional zoom level to apply.
-        
-        Returns:
-        None
         """
         half_span = center_freq * frac_zoom / 2.0
         new_x_min = center_freq - half_span
@@ -1157,10 +1419,7 @@ class ResMatcher:
         Handle clicks on the overview plot to center main plot at clicked frequency.
         
         Parameters:
-        event (MouseEvent): Mouse click event.
-        
-        Returns:
-        None
+        event (MouseClickEvent): Mouse click event.
         """
         pos = event.scenePos()
         
@@ -1179,9 +1438,25 @@ class ResMatcher:
         frac_zoom = self._get_fractional_zoom(x_min, x_max)
         self._set_centered_range(clicked_freq, frac_zoom)
 
-    def _make_scatter_handler(self, ds: int):
-        """Return a slot that handles scatter clicks for the given dataset."""
+    def _make_scatter_handler(self):
+        """
+        Return a slot that handles scatter clicks.
+
+        Each clicked point carries its own group, dataset, and frequency
+        in its data, so one handler works for both datasets.
+
+        Returns:
+        handler (callable): slot for ``sigClicked`` that forwards the clicked
+            points and event to ``self._on_scatter_clicked``.
+        """
         def handler(*args):
+            """
+            Forward a scatter click to ``self._on_scatter_clicked``.
+
+            Parameters:
+            *args (tuple): (scatter, points, ev) for pyqtgraph >= 0.13 or
+                (points, ev) for older versions. Other lengths are ignored.
+            """
             # pyqtgraph ≥0.13: (scatter, points, ev)
             # pyqtgraph  <0.13: (points, ev)
             if len(args) == 3:
@@ -1190,13 +1465,18 @@ class ResMatcher:
                 pts, ev = args
             else:
                 return
-            self._on_scatter_clicked(pts, ev, ds=ds)
+            self._on_scatter_clicked(pts, ev)
         return handler
 
     # ---------------------------------------------------------------- shortcuts
 
     def setup_toolbar(self, layout):
-        """Create toolbar with common operations."""
+        """
+        Create toolbar with common operations.
+
+        Parameters:
+        layout (QVBoxLayout): control-panel layout to add the toolbar to.
+        """
         toolbar_grp = QtWidgets.QGroupBox('Quick Actions')
         toolbar_layout = QtWidgets.QGridLayout()
         
@@ -1232,7 +1512,7 @@ class ResMatcher:
         # Row 4: Re-match and save
         rematch_btn = QtWidgets.QPushButton('Re-Match (R)')
         rematch_btn.clicked.connect(self.trigger_rematch)
-        rematch_btn.setToolTip('Re-match all groups above threshold line (R key)')
+        rematch_btn.setToolTip('Re-match all resonances right of the threshold line (R key)')
         align_btn = QtWidgets.QPushButton('Auto Align DS2 (G)')
         align_btn.clicked.connect(self._auto_align_ds2_offset)
         align_btn.setToolTip('Estimate DS2 visual offset from nearby 1:1 matches (G key)')
@@ -1244,6 +1524,9 @@ class ResMatcher:
         layout.addWidget(toolbar_grp)
 
     def setup_shortcuts(self):
+        """
+        Install the single-key, Ctrl+Z (undo), and Ctrl+S (save) shortcuts.
+        """
         _map = {
             'Z': self.pan_left,
             'X': self.pan_right,
@@ -1271,10 +1554,22 @@ class ResMatcher:
     # ================================================================ filter change
 
     def _on_smoothing_changed(self, ds: int):
+        """
+        Handle a filter-method change: update widget visibility and refilter.
+
+        Parameters:
+        ds (int): dataset number (1 or 2) whose method changed.
+        """
         self._update_filter_visibility(ds)
         self._on_filter_changed(ds)
 
     def _on_filter_changed(self, ds: int):
+        """
+        Read the filter controls and schedule a debounced filter update.
+
+        Parameters:
+        ds (int): dataset number; 1 for DS1, anything else for DS2.
+        """
         if ds == 1:
             self.filter_params1['smoothing'] = self.smooth_combo1.currentText()
             self.filter_params1['highpass_mhz'] = self.hp_spin1.value()
@@ -1298,6 +1593,12 @@ class ResMatcher:
         timer.start(300)
 
     def _do_filter_update(self, ds: int):
+        """
+        Refilter one dataset's magnitude and redraw the plots.
+
+        Parameters:
+        ds (int): dataset number; 1 for DS1, anything else for DS2.
+        """
         self.win.setCursor(_Qt.WaitCursor)
         QtWidgets.QApplication.processEvents()
         if ds == 1:
@@ -1317,6 +1618,9 @@ class ResMatcher:
     # ================================================================ range / curves
 
     def _on_range_changed(self):
+        """
+        Schedule a debounced (50 ms) redraw after the view range changes.
+        """
         if self._range_timer is None:
             self._range_timer = QtCore.QTimer()
             self._range_timer.setSingleShot(True)
@@ -1324,6 +1628,11 @@ class ResMatcher:
         self._range_timer.start(50)
 
     def _do_range_update(self):
+        """
+        Redraw curves, y-scale, markers, overview region, and threshold line.
+
+        Also checks whether the selection is still visible.
+        """
         self._update_curves()
         self.auto_scale_y()
         self.update_markers()
@@ -1335,12 +1644,30 @@ class ResMatcher:
         _ = self.plot_mag.viewRange()
 
     def _visible_slice(self, f_arr, x_min, x_max, pad: float = 0.5):
+        """
+        Return the index slice of a sorted frequency array near a range.
+
+        Parameters:
+        f_arr (np.array): sorted frequency array in Hz.
+        x_min (float): left edge of the range, Hz.
+        x_max (float): right edge of the range, Hz.
+        pad (float): padding on each side as a fraction of the range span.
+            Default is 0.5.
+
+        Returns:
+        sl (slice): indices of ``f_arr`` within the padded range.
+        """
         span = x_max - x_min
         lo = int(np.searchsorted(f_arr, x_min - pad * span, side='left'))
         hi = int(np.searchsorted(f_arr, x_max + pad * span, side='right'))
         return slice(lo, hi)
 
     def _update_curves(self):
+        """
+        Redraw the magnitude and phase curves for the visible range.
+
+        Does nothing if the plots have not been created yet.
+        """
         if not hasattr(self, 'plot_mag'):
             return
         x_min, x_max = self.plot_mag.viewRange()[0]
@@ -1357,13 +1684,36 @@ class ResMatcher:
         self._sync_phase2_geom()
 
     def auto_scale_y(self):
+        """
+        Scale the DS1 and DS2 y axes to the visible data.
+
+        On each plot (magnitude and phase), both axes get the same y span
+        (ymax - ymin), set by the dataset with the larger visible range, so
+        the two curves are drawn at the same scale. DS1 is centered in the
+        upper band (66-83%) of its axis and DS2 in the lower band (17-33%),
+        which keeps the vertical offset between them.
+        """
         if not hasattr(self, 'plot_mag'):
             return
         x_min, x_max = self.plot_mag.viewRange()[0]
         sl1 = self._visible_slice(self.f1, x_min, x_max, pad=0.0)
         sl2 = self._visible_slice(self.f2_display, x_min, x_max, pad=0.0)
 
-        def _yrange(data, sl, upper: bool):
+        def _center_span(data, sl):
+            """
+            Compute the center and span of a data segment.
+
+            Parameters:
+            data (np.array): y data.
+            sl (slice): visible indices of ``data``.
+
+            Returns:
+            if the slice is non-empty:
+                center, span (float): midpoint and max - min of the segment.
+                    A zero span is replaced by max(1% of abs(min), 1.0).
+            else:
+                None
+            """
             if sl.start >= sl.stop:
                 return None
             seg = data[sl]
@@ -1371,18 +1721,36 @@ class ResMatcher:
             span = mx - mn
             if span == 0:
                 span = max(abs(mn) * 0.01, 1.0)
-            if upper:
-                # Data sits in the upper third (66-83%) of the axis.
-                # 100% padding above, 400% below → gradual scaling + visual offset.
-                return mn - 4.0 * span, mx + span
-            else:
-                # Data sits in the lower third (17-33%) of the axis.
-                return mn - span, mx + 4.0 * span
+            return 0.5 * (mn + mx), span
 
-        r1_mag = _yrange(self.filtered_mag1, sl1, upper=True)
-        r2_mag = _yrange(self.filtered_mag2, sl2, upper=False)
-        r1_ph  = _yrange(self.phase1, sl1, upper=True)
-        r2_ph  = _yrange(self.phase2, sl2, upper=False)
+        def _yranges(data1, data2):
+            """
+            Compute y ranges for DS1 and DS2 with a shared span.
+
+            Parameters:
+            data1 (np.array): DS1 y data.
+            data2 (np.array): DS2 y data.
+
+            Returns:
+            r1 (tuple or None): (ymin, ymax) for DS1, or None if no DS1 data
+                is visible.
+            r2 (tuple or None): (ymin, ymax) for DS2, or None if no DS2 data
+                is visible.
+            """
+            cs1 = _center_span(data1, sl1)
+            cs2 = _center_span(data2, sl2)
+            spans = [cs[1] for cs in (cs1, cs2) if cs is not None]
+            if not spans:
+                return None, None
+            # Shared span; each axis covers 6 * span with the data in a
+            # 1-span band: DS1 at 66-83% of its axis, DS2 at 17-33%.
+            span = max(spans)
+            r1 = None if cs1 is None else (cs1[0] - 4.5 * span, cs1[0] + 1.5 * span)
+            r2 = None if cs2 is None else (cs2[0] - 1.5 * span, cs2[0] + 4.5 * span)
+            return r1, r2
+
+        r1_mag, r2_mag = _yranges(self.filtered_mag1, self.filtered_mag2)
+        r1_ph, r2_ph = _yranges(self.phase1, self.phase2)
 
         if r1_mag:
             self.plot_mag.setYRange(*r1_mag, padding=0)
@@ -1396,6 +1764,16 @@ class ResMatcher:
     # ================================================================ markers
 
     def _nearest_idx(self, f_arr, fres: float) -> int:
+        """
+        Return the index of the element of a sorted array closest to fres.
+
+        Parameters:
+        f_arr (np.array): sorted frequency array in Hz.
+        fres (float): target frequency in Hz.
+
+        Returns:
+        idx (int): index of the nearest element, clipped to the array.
+        """
         idx = int(np.searchsorted(f_arr, fres))
         if idx == 0:
             return 0
@@ -1407,6 +1785,13 @@ class ResMatcher:
         return idx - 1
 
     def update_markers(self):
+        """
+        Redraw the resonance markers for groups near the visible range.
+
+        DS1 resonances are filled circles and DS2 resonances open squares,
+        coloured by group; ambiguous groups use dashed outlines. Also redraws
+        the selection rings. Does nothing if the plots do not exist yet.
+        """
         if not hasattr(self, 'plot_mag'):
             return
         x_min, x_max = self.plot_mag.viewRange()[0]
@@ -1480,7 +1865,9 @@ class ResMatcher:
         self._update_selection_ring()
 
     def _update_selection_ring(self):
-        """Draw white rings around all selected resonances."""
+        """
+        Draw white rings around all selected resonances.
+        """
         if not self._selected_resonances:
             self.scatter_sel_ds1_mag.setData([])
             self.scatter_sel_ds2_mag.setData([])
@@ -1514,7 +1901,9 @@ class ResMatcher:
         self.scatter_sel_ds2_phase.setData(sel_ds2_phase)
     
     def _update_selection_label(self):
-        """Update the selection label to show selected resonances."""
+        """
+        Update the selection label to show selected resonances.
+        """
         if not self._selected_resonances:
             self.sel_label.setText('Selected: (none)')
             return
@@ -1554,7 +1943,8 @@ class ResMatcher:
             in the visible window, sorted by distance from new_freq.
         
         Returns:
-        int or str or None: res_idx to reuse (int), 'new', or None for cancel
+        choice (int, str, or None): res_idx to reuse (int), 'new' to create
+            a new res_idx, or None if the user cancelled.
         """
         dlg = QtWidgets.QDialog(self.win)
         dlg.setWindowTitle('Resonance Re-Addition')
@@ -1624,49 +2014,85 @@ class ResMatcher:
     # ================================================================ group helpers
 
     def _find_group(self, group_id: int) -> Optional[MatchGroup]:
+        """
+        Find a group by ID.
+
+        Parameters:
+        group_id (int): group ID to look up.
+
+        Returns:
+        group (MatchGroup or None): matching group, or None if not found.
+        """
         for g in self.groups:
             if g.group_id == group_id:
                 return g
         return None
 
     def _save_undo_state(self):
+        """
+        Push a deep copy of the current groups onto the undo stack.
+
+        The oldest state is dropped once the stack exceeds
+        ``self._max_undo_stack`` entries.
+        """
         self.undo_stack.append(copy.deepcopy(self.groups))
         # Limit undo stack size
         if len(self.undo_stack) > self._max_undo_stack:
             self.undo_stack.pop(0)
 
     def _sort_groups(self):
+        """
+        Sort ``self.groups`` in place by center frequency.
+        """
         self.groups.sort(key=lambda g: g.center_freq())
 
     def _new_group_id(self) -> int:
+        """
+        Allocate a new, unused group ID.
+
+        Returns:
+        gid (int): new group ID.
+        """
         gid = self._next_group_id
         self._next_group_id += 1
         return gid
 
     def _new_res_idx(self) -> int:
+        """
+        Allocate a new resonator index for an added resonance.
+
+        Returns:
+        idx (int): new res_idx.
+        """
         idx = self._next_new_idx
         self._next_new_idx += 1
         return idx
 
     def _remove_empty_groups(self):
+        """
+        Remove groups that have no DS1 or DS2 entries.
+        """
         self.groups = [g for g in self.groups if g.entries1 or g.entries2]
 
     def _sorted_groups(self) -> List[MatchGroup]:
+        """
+        Return the groups sorted by center frequency.
+
+        Returns:
+        groups (list[MatchGroup]): new sorted list; ``self.groups`` is not
+            modified.
+        """
         return sorted(self.groups, key=lambda g: g.center_freq())
 
     # ================================================================ mouse / click
 
-    def _on_scatter_clicked(self, pts, ev, ds: int):
+    def _on_scatter_clicked(self, pts, ev):
         """
         Select clicked scatter point(s). Ctrl+click adds to selection.
 
         Parameters:
         pts (list): List of scatter points under the cursor.
         ev (MouseClickEvent): The mouse click event.
-        ds (int): Dataset number (1 or 2).
-
-        Returns:
-        None
         """
         try:
             button = ev.button()
@@ -1708,6 +2134,8 @@ class ResMatcher:
 
     def _on_scene_clicked(self, ev):
         """
+        Handle a click on the plot scene.
+
         Shift+Left-click on empty space → add resonance to dataset determined by Y-position proximity.
         Ctrl+Right-click → set re-match threshold at clicked frequency.
         Right-click → PyQtGraph context menu.
@@ -1716,9 +2144,6 @@ class ResMatcher:
 
         Parameters:
         ev (MouseClickEvent): The mouse click event from the scene.
-
-        Returns:
-        None
         """
         if self._scatter_just_clicked:
             self._scatter_just_clicked = False
@@ -1732,7 +2157,8 @@ class ResMatcher:
             if modifiers & _Qt.ControlModifier:
                 result = self._scene_pos_to_freq_and_dataset(pos)
                 if result is not None:
-                    freq, _ = result
+                    # Threshold lives in display coordinates, like the line
+                    freq = self._display_freq(*result)
                     self._rematch_freq_threshold = freq
                     self._rematch_line_mag.setPos(freq)
                     self._rematch_line_phase.setPos(freq)
@@ -1771,8 +2197,12 @@ class ResMatcher:
         scene_pos (QPointF): Position in scene coordinates.
 
         Returns:
-        tuple: (freq, dataset) where freq is float in Hz and dataset is 1 or 2,
-               or None if click is outside both plots
+        if the click is inside the magnitude or phase plot:
+            freq (float): clicked frequency in Hz, in the chosen dataset's
+                data coordinates.
+            dataset (int): 1 or 2, whichever dataset's curve is closer in y.
+        else:
+            None
         """
         # Check magnitude plot
         if self.plot_mag.sceneBoundingRect().contains(scene_pos):
@@ -1828,132 +2258,6 @@ class ResMatcher:
         
         return None
 
-    def _show_context_menu(self, screen_pos, click_freq: float):
-        """
-        Build and show a right-click context menu near the clicked frequency.
-
-        Parameters:
-        screen_pos (QPointF): Screen position for the menu.
-        click_freq (float): Frequency in Hz near the click position.
-
-        Returns:
-        None
-        """
-        x_range = self.plot_mag.viewRange()[0]
-        visible = [
-            g for g in self.groups
-            if x_range[0] <= g.center_freq() <= x_range[1]
-        ]
-        candidates = visible if visible else self.groups
-        if not candidates:
-            return
-
-        near = min(candidates, key=lambda g: abs(g.center_freq() - click_freq))
-
-        sorted_gs = self._sorted_groups()
-        try:
-            pos_in_sorted = next(
-                i for i, g in enumerate(sorted_gs)
-                if g.group_id == near.group_id
-            )
-        except StopIteration:
-            pos_in_sorted = None
-
-        menu = QtWidgets.QMenu()
-        menu.addSection(
-            f'Group {near.group_id}  ({near.mapping_str()})'
-            f'{"  [ambiguous]" if near.ambiguous else ""}'
-        )
-
-        act_del1 = menu.addAction('Delete nearest DS1 resonance')
-        act_del2 = menu.addAction('Delete nearest DS2 resonance')
-        menu.addSeparator()
-        act_unlink1 = menu.addAction('Unlink nearest DS1 from group')
-        act_unlink2 = menu.addAction('Unlink nearest DS2 from group')
-        menu.addSeparator()
-        act_merge_l = menu.addAction('Merge group ← left')
-        act_merge_r = menu.addAction('Merge group → right')
-        menu.addSeparator()
-        act_ambig = menu.addAction(
-            'Clear ambiguous flag' if near.ambiguous else 'Flag as ambiguous'
-        )
-
-        act_del1.setEnabled(bool(near.entries1))
-        act_del2.setEnabled(bool(near.entries2))
-        act_unlink1.setEnabled(bool(near.entries1))
-        act_unlink2.setEnabled(bool(near.entries2))
-        act_merge_l.setEnabled(
-            pos_in_sorted is not None and pos_in_sorted > 0
-        )
-        act_merge_r.setEnabled(
-            pos_in_sorted is not None
-            and pos_in_sorted < len(sorted_gs) - 1
-        )
-
-        # Convert to QPoint for exec_
-        if hasattr(screen_pos, 'toPoint'):
-            qp = screen_pos.toPoint()
-        else:
-            qp = QtCore.QPoint(int(screen_pos.x()), int(screen_pos.y()))
-
-        chosen = menu.exec_(qp)
-
-        if chosen is None:
-            return
-
-        if chosen == act_del1 and near.entries1:
-            self._save_undo_state()
-            entry = min(near.entries1, key=lambda e: abs(e[0] - click_freq))
-            near.entries1.remove(entry)
-            # Track removed resonance for smart re-addition
-            self._removed_resonances.append((entry[0], entry[1], 1))
-            self._remove_empty_groups()
-            self._clear_selection_if_gone()
-            self.update_markers()
-            self._last_edit_freq = entry[0]  # Track for auto-threshold
-            self._update_threshold_after_edit(entry[0])
-            self.log(
-                f'Deleted DS1 resonance at {entry[0] / 1e6:.4f} MHz '
-                f'(res_idx={entry[1]}) from group {near.group_id}'
-            )
-
-        elif chosen == act_del2 and near.entries2:
-            self._save_undo_state()
-            entry = min(near.entries2, key=lambda e: abs(e[0] - click_freq))
-            near.entries2.remove(entry)
-            # Track removed resonance for smart re-addition
-            self._removed_resonances.append((entry[0], entry[1], 2))
-            self._remove_empty_groups()
-            self._clear_selection_if_gone()
-            self.update_markers()
-            self._last_edit_freq = entry[0]  # Track for auto-threshold
-            self._update_threshold_after_edit(entry[0])
-            self.log(
-                f'Deleted DS2 resonance at {entry[0] / 1e6:.4f} MHz '
-                f'(res_idx={entry[1]}) from group {near.group_id}'
-            )
-
-        elif chosen == act_unlink1 and near.entries1:
-            entry = min(near.entries1, key=lambda e: abs(e[0] - click_freq))
-            self._do_unlink(near, entry, ds=1)
-
-        elif chosen == act_unlink2 and near.entries2:
-            entry = min(near.entries2, key=lambda e: abs(e[0] - click_freq))
-            self._do_unlink(near, entry, ds=2)
-
-        elif chosen == act_merge_l and pos_in_sorted is not None and pos_in_sorted > 0:
-            left_g = sorted_gs[pos_in_sorted - 1]
-            self._do_merge(left_g.group_id, near.group_id)
-
-        elif chosen == act_merge_r and pos_in_sorted is not None:
-            right_g = sorted_gs[pos_in_sorted + 1]
-            self._do_merge(near.group_id, right_g.group_id)
-
-        elif chosen == act_ambig:
-            self._save_undo_state()
-            near.ambiguous = not near.ambiguous
-            self.update_markers()
-            self.log(f'Group {near.group_id} ambiguous = {near.ambiguous}')
 
     # ================================================================ resonance ops
 
@@ -1967,9 +2271,6 @@ class ResMatcher:
         Parameters:
         freq (float): Frequency in Hz where resonance should be added.
         ds (int): Dataset number (1 or 2).
-        
-        Returns:
-        None
         """
         # Get current visible window
         x_min, x_max = self._display_window_for_ds(ds)
@@ -2013,71 +2314,18 @@ class ResMatcher:
         self.groups.append(g)
         self._sort_groups()
         self.update_markers()
-        self._last_edit_freq = freq  # Track for auto-threshold
-        self._update_threshold_after_edit(freq)
+        self._last_edit_freq = self._display_freq(freq, ds)  # Track for auto-threshold
+        self._update_threshold_after_edit(self._last_edit_freq)
         self.log(
             f'Added DS{ds} resonance at {freq / 1e6:.4f} MHz '
             f'(res_idx={ridx}, group={gid})'
         )
 
-    def _do_unlink(self, g: MatchGroup, entry: tuple, ds: int):
-        self._save_undo_state()
-        if ds == 1:
-            g.entries1.remove(entry)
-        else:
-            g.entries2.remove(entry)
-        new_gid = self._new_group_id()
-        if ds == 1:
-            new_g = MatchGroup(group_id=new_gid, entries1=[entry], entries2=[])
-        else:
-            new_g = MatchGroup(group_id=new_gid, entries1=[], entries2=[entry])
-        self.groups.append(new_g)
-        self._remove_empty_groups()
-        self._sort_groups()
-        self._clear_selection_if_gone()
-        self.update_markers()
-        self._last_edit_freq = entry[0]  # Track for auto-threshold
-        self._update_threshold_after_edit(entry[0])
-        self.log(
-            f'Unlinked DS{ds} at {entry[0] / 1e6:.4f} MHz '
-            f'from group {g.group_id} → new group {new_gid}'
-        )
-
-    def _do_merge(self, gid_a: int, gid_b: int):
-        """
-        Absorb group gid_b into group gid_a.
-
-        Parameters:
-        gid_a (int): Group ID of the target group.
-        gid_b (int): Group ID of the group to merge in.
-
-        Returns:
-        None
-        """
-        self._save_undo_state()
-        ga = self._find_group(gid_a)
-        gb = self._find_group(gid_b)
-        if ga is None or gb is None:
-            return
-        ga.entries1.extend(gb.entries1)
-        ga.entries2.extend(gb.entries2)
-        if gb.ambiguous:
-            ga.ambiguous = True
-        self.groups.remove(gb)
-        self._sort_groups()
-        self._clear_selection_if_gone()
-        self.update_markers()
-        # Track center frequency for auto-threshold
-        all_freqs = [f for f, _ in ga.entries1 + ga.entries2]
-        if all_freqs:
-            self._last_edit_freq = float(np.mean(all_freqs))
-            self._update_threshold_after_edit(self._last_edit_freq)
-        self.log(
-            f'Merged group {gid_b} into {gid_a} → {ga.mapping_str()}'
-        )
 
     def _clear_selection_if_gone(self):
-        """Remove any selected resonances that no longer exist."""
+        """
+        Remove any selected resonances that no longer exist.
+        """
         valid_selections = set()
         for (group_id, dataset, fres) in self._selected_resonances:
             g = self._find_group(group_id)
@@ -2089,14 +2337,18 @@ class ResMatcher:
         self._update_selection_label()
 
     def _clear_selection(self):
+        """
+        Deselect all resonances and update the selection label.
+        """
         self._selected_resonances = set()
         self._update_selection_label()
     
     def _check_selection_visibility(self):
         """
         Remove selected resonances that are out of view.
-        
-        Called when window pans to auto-deselect resonances that scroll off screen.
+
+        Runs when the window pans, to auto-deselect resonances that scroll
+        off screen.
         """
         if not self._selected_resonances:
             return
@@ -2121,10 +2373,6 @@ class ResMatcher:
 
     # ================================================================ keyboard actions
 
-    def toggle_active_dataset(self):
-        self.active_dataset = 2 if self.active_dataset == 1 else 1
-        self._refresh_active_label()
-        self.log(f'Active dataset: DS{self.active_dataset}')
 
     def merge_groups(self):
         """
@@ -2136,12 +2384,6 @@ class ResMatcher:
         Example: groups ((1, 2, 3), (1)) and ((4), (2))
         Select: DS1: 2, 4; DS2: 2
         Result: ((1,2,3,4), (1,2))
-        
-        Parameters:
-        None
-        
-        Returns:
-        None
         """
         if not self._selected_resonances:
             self.log('F: Select resonances first (Ctrl+click for multi-select).')
@@ -2175,16 +2417,23 @@ class ResMatcher:
         self.update_markers()
         
         # Track for auto-threshold
-        all_freqs = [f for f, _ in target_group.entries1 + target_group.entries2]
-        if all_freqs:
-            self._last_edit_freq = float(np.mean(all_freqs))
+        if target_group.entries1 or target_group.entries2:
+            self._last_edit_freq = self._group_display_center_freq(target_group)
             self._update_threshold_after_edit(self._last_edit_freq)
-        
+
+        # The merged groups are gone; keep the selection on the target group
+        self._selected_resonances = {
+            (target_group.group_id, ds, fr)
+            for _, ds, fr in self._selected_resonances
+        }
+        self._clear_selection_if_gone()
+        self.update_markers()
+
         self.log(f'Merged {len(groups_to_merge)} groups → Group {target_group.group_id} ({target_group.mapping_str()})')
 
     def merge_selected_only(self):
         """
-        Merge only selected resonances into new group (W key).
+        Merge only selected resonances into new group (D key).
         
         Unlinks selected resonances from their groups and merges them
         into a single new group. Other resonances from those groups
@@ -2193,15 +2442,9 @@ class ResMatcher:
         Example: groups ((1, 2, 3), (1)) and ((4), (2))
         Select: DS1: 2, 4; DS2: 2
         Result: ((2,4), (2)), ((1,3), (1))
-        
-        Parameters:
-        None
-        
-        Returns:
-        None
         """
         if not self._selected_resonances:
-            self.log('W: Select resonances first (Ctrl+click for multi-select).')
+            self.log('D: Select resonances first (Ctrl+click for multi-select).')
             return
         
         self._save_undo_state()
@@ -2241,27 +2484,29 @@ class ResMatcher:
         self.update_markers()
         
         # Track for auto-threshold
-        all_freqs = [f for f, _ in entries1_to_merge + entries2_to_merge]
-        if all_freqs:
-            self._last_edit_freq = float(np.mean(all_freqs))
+        if entries1_to_merge or entries2_to_merge:
+            self._last_edit_freq = self._display_center_freq(
+                entries1_to_merge, entries2_to_merge
+            )
             self._update_threshold_after_edit(self._last_edit_freq)
-        
+
+        # The selected entries moved to the new group; keep them selected
+        self._selected_resonances = {
+            (new_gid, ds, fr) for _, ds, fr in self._selected_resonances
+        }
+        self._clear_selection_if_gone()
+        self.update_markers()
+
         self.log(f'Merged {len(self._selected_resonances)} selected resonances → Group {new_gid} ({new_group.mapping_str()})')
 
     def unlink_selected(self):
         """
-        Put all selected resonances into their own separate groups (U key).
-        
-        Bound to the U key.
+        Put all selected resonances into their own separate groups (W key).
 
-        Parameters:
-        None
-
-        Returns:
-        None
+        Bound to the W key.
         """
         if not self._selected_resonances:
-            self.log('U: Select resonances first (Ctrl+click for multi-select).')
+            self.log('W: Select resonances first (Ctrl+click for multi-select).')
             return
         
         self._save_undo_state()
@@ -2293,30 +2538,25 @@ class ResMatcher:
         
         self._remove_empty_groups()
         self._sort_groups()
+        n_unlinked = len(self._selected_resonances)  # count before clearing
         self._clear_selection()
         self.update_markers()
-        
-        self.log(f'Unlinked {len(self._selected_resonances)} resonances into separate groups')
+
+        self.log(f'Unlinked {n_unlinked} resonances into separate groups')
 
     def toggle_ambiguous(self):
         """
-        Toggle the ambiguous flag on selected group (B key).
+        Toggle the ambiguous flag on selected group (Q key).
         
         Only works for 1:1 matches. Groups with multiple resonances in
         either dataset are automatically marked ambiguous.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         if not self._selected_resonances:
-            self.log('B: Select a resonance first.')
+            self.log('Q: Select a resonance first.')
             return
         
         if len(self._selected_resonances) > 1:
-            self.log('B: Can only toggle ambiguous on a single group. Select one resonance.')
+            self.log('Q: Can only toggle ambiguous on a single group. Select one resonance.')
             return
         
         group_id, _, _ = next(iter(self._selected_resonances))
@@ -2326,7 +2566,7 @@ class ResMatcher:
         
         # Check if this is a 1:1 match
         if len(g.entries1) != 1 or len(g.entries2) != 1:
-            self.log(f'B: Group {g.group_id} ({g.mapping_str()}) is not 1:1. Ambiguous flag is auto-managed for multi-resonance groups.')
+            self.log(f'Q: Group {g.group_id} ({g.mapping_str()}) is not 1:1. Ambiguous flag is auto-managed for multi-resonance groups.')
             return
         
         self._save_undo_state()
@@ -2335,6 +2575,11 @@ class ResMatcher:
         self.log(f'Group {g.group_id} (1:1) ambiguous = {g.ambiguous}')
 
     def undo(self):
+        """
+        Restore the groups from the most recent undo state (Ctrl+Z).
+
+        Also clears the removed-resonance tracking used for re-addition.
+        """
         if not self.undo_stack:
             self.log('Nothing to undo.')
             return
@@ -2411,18 +2656,12 @@ class ResMatcher:
 
     def delete_selected(self):
         """
-        Delete all selected resonances (S key).
-        
-        Bound to the S key.
-        
-        Parameters:
-        None
-        
-        Returns:
-        None
+        Delete all selected resonances (E key).
+
+        Bound to the E key.
         """
         if not self._selected_resonances:
-            self.log('S: Select resonances first (Ctrl+click for multi-select).')
+            self.log('E: Select resonances first (Ctrl+click for multi-select).')
             return
         
         self._save_undo_state()
@@ -2449,7 +2688,10 @@ class ResMatcher:
         self._remove_empty_groups()
         
         # Track for auto-threshold (use mean of deleted frequencies)
-        all_freqs = [fres for _, _, fres in self._selected_resonances]
+        all_freqs = [
+            self._display_freq(fres, dataset)
+            for _, dataset, fres in self._selected_resonances
+        ]
         if all_freqs:
             self._last_edit_freq = float(np.mean(all_freqs))
             self._update_threshold_after_edit(self._last_edit_freq)
@@ -2460,22 +2702,22 @@ class ResMatcher:
 
     def trigger_rematch(self):
         """
-        Re-run automatic matching on all groups above the threshold frequency.
-        
-        Uses the current init_match method stored in self (defaults to 'sorted').
-        Groups below the threshold are left unchanged. Groups above the threshold
-        are dissolved and re-matched using the same algorithm as initialization.
+        Re-run automatic matching on all resonances above the threshold frequency.
 
-        Bound to the T key.
+        Uses the init_match method stored in ``self._init_match_method``
+        ('sorted' or 'nearest').
+        Each resonance is compared to the threshold by its display frequency
+        (DS2 shifted by ``self.ds2_f_offset``, as drawn), so the split follows
+        the yellow line on screen. Resonances left of the line stay in their
+        groups; resonances right of it are removed from their groups and
+        re-matched using the same algorithm as initialization. A group that
+        straddles the line keeps its left-side entries, group ID, and
+        ambiguous flag.
 
-        Parameters:
-        None
-
-        Returns:
-        None
+        Bound to the R key.
         """
         if self._rematch_freq_threshold is None:
-            self.log('T: Set re-match threshold first (Shift+click).')
+            self.log('R: Set re-match threshold first (Ctrl+Right-click).')
             return
 
         self._save_undo_state()
@@ -2483,25 +2725,31 @@ class ResMatcher:
         QtWidgets.QApplication.processEvents()
 
         thresh = self._rematch_freq_threshold
-        
-        # Separate groups into below-threshold (keep) and above-threshold (rematch)
+
+        # Split each group's entries at the threshold, which is in display
+        # coordinates. Left-side entries stay; right-side entries are pooled.
         groups_keep = []
         entries1_rematch = []
         entries2_rematch = []
-        
+        n_rematch_groups = 0
+
         for g in self.groups:
-            cf = g.center_freq()
-            if cf < thresh:
+            keep1 = [e for e in g.entries1 if self._display_freq(e[0], 1) < thresh]
+            keep2 = [e for e in g.entries2 if self._display_freq(e[0], 2) < thresh]
+            move1 = [e for e in g.entries1 if e not in keep1]
+            move2 = [e for e in g.entries2 if e not in keep2]
+            if move1 or move2:
+                n_rematch_groups += 1
+                entries1_rematch.extend(move1)
+                entries2_rematch.extend(move2)
+                g.entries1, g.entries2 = keep1, keep2
+            if g.entries1 or g.entries2:
                 groups_keep.append(g)
-            else:
-                entries1_rematch.extend(g.entries1)
-                entries2_rematch.extend(g.entries2)
         
-        n_rematch_groups = len(self.groups) - len(groups_keep)
         n_rematch_res = len(entries1_rematch) + len(entries2_rematch)
-        
+
         if not entries1_rematch and not entries2_rematch:
-            self.log(f'T: No groups above {thresh / 1e6:.4f} MHz to re-match.')
+            self.log(f'R: No resonances above {thresh / 1e6:.4f} MHz to re-match.')
             self.win.setCursor(_Qt.ArrowCursor)
             return
         
@@ -2550,9 +2798,19 @@ class ResMatcher:
 
     def _init_sorted_from_arrays(self, fres1, ridx1, fres2, ridx2):
         """
-        Helper: perform sorted matching on provided arrays.
-        
-        Returns (groups, next_gid) but does NOT assign final group IDs.
+        Perform sorted matching on the provided arrays.
+
+        Group IDs start at 0; the caller must assign final group IDs.
+
+        Parameters:
+        fres1 (np.array): DS1 resonance frequencies in Hz.
+        ridx1 (np.array): DS1 resonator indices, same length as ``fres1``.
+        fres2 (np.array): DS2 resonance frequencies in Hz.
+        ridx2 (np.array): DS2 resonator indices, same length as ``fres2``.
+
+        Returns:
+        groups (list[MatchGroup]): match groups sorted by center frequency.
+        gid (int): number of groups created (next local group ID).
         """
         idx1 = np.argsort(fres1)
         idx2 = np.argsort(fres2)
@@ -2593,9 +2851,21 @@ class ResMatcher:
 
     def _init_nearest_from_arrays(self, fres1, ridx1, fres2, ridx2):
         """
-        Helper: perform nearest-neighbor matching on provided arrays.
-        
-        Returns (groups, next_gid) but does NOT assign final group IDs.
+        Perform nearest-neighbor matching on the provided arrays.
+
+        Uses the same median-offset-corrected algorithm as
+        ``_init_nearest``. Group IDs start at 0; the caller must assign final
+        group IDs.
+
+        Parameters:
+        fres1 (np.array): DS1 resonance frequencies in Hz.
+        ridx1 (np.array): DS1 resonator indices, same length as ``fres1``.
+        fres2 (np.array): DS2 resonance frequencies in Hz.
+        ridx2 (np.array): DS2 resonator indices, same length as ``fres2``.
+
+        Returns:
+        groups (list[MatchGroup]): match groups sorted by center frequency.
+        gid (int): number of groups created (next local group ID).
         """
         idx1 = np.argsort(fres1)
         idx2 = np.argsort(fres2)
@@ -2662,14 +2932,40 @@ class ResMatcher:
     # ================================================================ navigation
 
     def _pan(self, fraction: float):
+        """
+        Shift the main plot's x-range by a fraction of its width.
+
+        Parameters:
+        fraction (float): shift as a fraction of the visible span; negative
+            pans left, positive pans right.
+        """
         x0, x1 = self.plot_mag.viewRange()[0]
         shift = fraction * (x1 - x0)
         self.plot_mag.setXRange(x0 + shift, x1 + shift, padding=0)
 
-    def pan_left(self):        self._pan(-0.2)
-    def pan_right(self):       self._pan(0.2)
-    def fast_pan_left(self):   self._pan(-0.8)
-    def fast_pan_right(self):  self._pan(0.8)
+    def pan_left(self):
+        """
+        Pan the view left by 20% (Z key).
+        """
+        self._pan(-0.2)
+
+    def pan_right(self):
+        """
+        Pan the view right by 20% (X key).
+        """
+        self._pan(0.2)
+
+    def fast_pan_left(self):
+        """
+        Pan the view left by 80% (A key).
+        """
+        self._pan(-0.8)
+
+    def fast_pan_right(self):
+        """
+        Pan the view right by 80% (S key).
+        """
+        self._pan(0.8)
 
     # ================================================================ save / quit
 
@@ -2677,9 +2973,14 @@ class ResMatcher:
         """
         Save groups to the zarr group.
 
-        If `compact_on_save` is True, group IDs written to disk are remapped
+        Also saves the current view x-limits and the DS2 display offset. If
+        ``compact_on_save`` is True, group IDs written to disk are remapped
         to a dense 0..N-1 range based on the sorted groups order. This does
-        not mutate `self.groups` in memory.
+        not mutate ``self.groups`` in memory.
+
+        Parameters:
+        compact_on_save (bool): if True (default), remap saved group IDs to
+            0..N-1 in frequency order; if False, save the in-memory IDs.
         """
         fres1_out, ridx1_out, gids1 = [], [], []
         fres2_out, ridx2_out, gids2 = [], [], []
@@ -2719,6 +3020,8 @@ class ResMatcher:
             'ambiguous_groups': (np.int64,   ambiguous_groups),
             # New key: save exact x-limits so we can restore the exact view
             'res_matcher_xlims': (np.float64, [x_min, x_max]),
+            # Display-only DS2 offset; fres2 above stays in real frequencies
+            'res_matcher_ds2_f_offset': (np.float64, [self.ds2_f_offset]),
         }
         for key, (dtype, data) in _to_save.items():
             if key in self.zarr_group:
@@ -2732,6 +3035,9 @@ class ResMatcher:
         )
 
     def quit_and_save(self):
+        """
+        Save the data, close the window, and quit the Qt application.
+        """
         self.save_data()
         self.win.close()
         self.app.quit()
@@ -2742,9 +3048,6 @@ class ResMatcher:
         
         Parameters:
         event (QCloseEvent): The close event.
-        
-        Returns:
-        None
         """
         self.save_data()
         event.accept()
@@ -2752,6 +3055,14 @@ class ResMatcher:
     # ================================================================ logging
 
     def log(self, message: str):
+        """
+        Append a message to the log panel and scroll to the bottom.
+
+        Does nothing if the log panel has not been created yet.
+
+        Parameters:
+        message (str): text to append.
+        """
         if not hasattr(self, 'log_text'):
             return
         self.log_text.append(message)
@@ -2762,6 +3073,9 @@ class ResMatcher:
     # ================================================================ help
 
     def show_help(self):
+        """
+        Toggle the help dialog, building it on first use (H key).
+        """
         if not hasattr(self, '_help_dlg'):
             self._help_dlg = self._build_help_dialog()
         if self._help_dlg.isVisible():
@@ -2776,7 +3090,13 @@ class ResMatcher:
             dlg.move(fr.topLeft())
 
     def _build_help_dialog(self):
-        dlg = QtWidgets.QDialog(self.win)
+        """
+        Build the help dialog listing mouse and keyboard controls.
+
+        Returns:
+        dlg (QDialog): help dialog, not yet shown.
+        """
+        dlg =QtWidgets.QDialog(self.win)
         dlg.setWindowTitle('Resonance Matcher Help  (H to close)')
         layout = QtWidgets.QVBoxLayout(dlg)
         lbl = QtWidgets.QLabel(
@@ -2811,7 +3131,7 @@ class ResMatcher:
             '<ul>'
             '<li>Click a resonance to select it (white ring)</li>'
             '<li>Ctrl+click other resonances to add to selection (multiple white rings)</li>'
-            '<li>Use F/W/S/U keys to operate on all selected resonances at once</li>'
+            '<li>Use E/F/D/W keys to operate on all selected resonances at once</li>'
             '<li>Example: Select 3 resonances in DS1 and 2 in DS2, press F to merge into one group</li>'
             '</ul>'
             '<p><b>Merge Modes:</b></p>'
@@ -2824,7 +3144,7 @@ class ResMatcher:
             '<p><b>Ambiguous Flag:</b></p>'
             '<ul>'
             '<li>Automatically set to True for groups with multiple resonances in either dataset</li>'
-            '<li>B key only toggles flag for 1:1 matches (where you are uncertain about pairing)</li>'
+            '<li>Q key only toggles flag for 1:1 matches (where you are uncertain about pairing)</li>'
             '<li>Groups with (1:many), (many:1), or (many:many) are always ambiguous</li>'
             '</ul>'
             '<p><b>Auto-Adjusting Threshold:</b></p>'
@@ -2834,8 +3154,8 @@ class ResMatcher:
             '<li><b>After edits:</b> Moves to right of edit and stays at that frequency</li>'
             '<li><b>When panning:</b> If pinned-frequency scrolls out of view, snaps to right edge again</li>'
             '<li><b>Selected resonances:</b> Auto-deselected when panned out of view</li>'
-            '<li>Press <b>R</b> to re-match all groups above line</li>'
-            '<li><b>Shift+click</b> to manually set position (stays fixed at that frequency)</li>'
+            '<li>Press <b>R</b> to re-match all resonances right of the line</li>'
+            '<li><b>Ctrl+Right-click</b> to manually set position (stays fixed at that frequency)</li>'
             '</ul>'
             '<p><b>Visual encoding:</b></p>'
             '<ul>'
@@ -2853,7 +3173,7 @@ class ResMatcher:
             '<li>ambiguous_groups</li>'
             '</ul>'
             '<p>To query group g: <code>fres1[group_ids1 == g]</code></p>'
-            '<p><b>Workflow:</b> Ctrl+click to multi-select → F/W/S/U → Close window to save</p>'
+            '<p><b>Workflow:</b> Ctrl+click to multi-select → E/F/D/W → Close window to save</p>'
         )
         lbl.setTextFormat(_Qt.RichText)
         lbl.setWordWrap(True)
@@ -2875,12 +3195,14 @@ class ResMatcher:
     # ================================================================ run
 
     def run(self):
-        n1 = sum(len(g.entries1) for g in self.groups)
+        """
+        Log startup info and start the Qt event loop (blocks until quit).
+        """
+        n1 =sum(len(g.entries1) for g in self.groups)
         n2 = sum(len(g.entries2) for g in self.groups)
         self.log('Resonance Matcher ready.')
         self.log(
             f'Groups: {len(self.groups)}  |  DS1: {n1}  |  DS2: {n2}'
         )
-        self.log(f'Active dataset: DS{self.active_dataset}  (C to toggle)')
         self.log("Press 'H' for help.")
         self.app.exec()

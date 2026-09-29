@@ -12,7 +12,7 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 import os
 
-from ..qt_compat import Qt as _Qt
+from ..qt_compat import Qt as _Qt, fit_window_to_screen, get_qapp
 
 
 def run_res_finder_manual(
@@ -33,7 +33,10 @@ def run_res_finder_manual(
         Default is 0.15.
         
     Returns:
-    fres (np.ndarray): Final list of resonant frequencies.
+    if the user cancels the existing-data dialog:
+        None
+    else:
+        fres (np.ndarray): Final list of resonant frequencies.
     """
     # Handle loading fres from zarr group or path if provided
     if isinstance(fres_initial, (str, os.PathLike)):
@@ -74,6 +77,17 @@ class ResFinderWindow(pg.GraphicsLayoutWidget):
     Custom GraphicsLayoutWidget that saves data when window is closed.
     """
     def __init__(self, finder=None, *args, **kwargs):
+        """
+        Initialize the window.
+
+        Parameters:
+        finder (ResFinder or None): Finder whose ``save_data`` is called
+            when the window closes. If None, nothing is saved on close.
+        *args (tuple): Positional arguments passed to
+            ``pg.GraphicsLayoutWidget``.
+        **kwargs (dict): Keyword arguments passed to
+            ``pg.GraphicsLayoutWidget``.
+        """
         super().__init__(*args, **kwargs)
         self.finder = finder
     
@@ -82,10 +96,7 @@ class ResFinderWindow(pg.GraphicsLayoutWidget):
         Handle window close event by saving data.
         
         Parameters:
-        event: Qt close event
-        
-        Returns:
-        None
+        event (QCloseEvent): Qt close event.
         """
         if self.finder is not None:
             self.finder.save_data()
@@ -93,11 +104,15 @@ class ResFinderWindow(pg.GraphicsLayoutWidget):
 
 
 class ResFinder(QtCore.QObject):
+    """
+    Interactive pyqtgraph GUI for manually adding and removing resonances
+    in VNA sweep data, saving the result to a zarr group.
+    """
     def __init__(
             self, f, z, fres_initial, zarr_grp, margin_factor = 0.15,
         ):
         """
-        Interactive resonance finder for VNA sweep data.
+        Initialize the interactive resonance finder for VNA sweep data.
         
         Parameters:
         f (np.ndarray): Frequency data in Hz (1D array).
@@ -109,9 +124,6 @@ class ResFinder(QtCore.QObject):
             the group.
         margin_factor (float): Fraction of data range to add as margin
             when auto-scaling y-axis. Default is 0.15 (15% margin).
-
-        Returns:
-        None
         """
         super().__init__()
         self.f = np.asarray(f, dtype = np.float64)
@@ -173,7 +185,7 @@ class ResFinder(QtCore.QObject):
         self._overview_updating = False
 
         # Setup the application
-        self.app = pg.mkQApp("Resonance Finder")
+        self.app = get_qapp("Resonance Finder")
         self.setup_ui()
     
     @staticmethod
@@ -182,10 +194,12 @@ class ResFinder(QtCore.QObject):
         Show dialog when zarr 'fres_manual' already exists.
         
         Returns:
-        str: 'overwrite', 'load', or 'cancel'
+        choice (str): 'load' (continue editing the saved list),
+            'overwrite' (replace it with ``fres_initial``), or 'cancel'
+            (also returned if the dialog is closed without a choice).
         """
         # Create a simple Qt application if needed
-        app = pg.mkQApp("Resonance Finder")
+        app = get_qapp("Resonance Finder")
         
         dlg = QtWidgets.QDialog()
         dlg.setWindowTitle('Existing Data Found')
@@ -218,25 +232,36 @@ class ResFinder(QtCore.QObject):
         result = [None]
         
         def on_load():
+            """
+            Record the 'load' choice and accept the dialog.
+            """
             result[0] = 'load'
             dlg.accept()
         
         def on_overwrite():
+            """
+            Ask for confirmation, then record the 'overwrite' choice and
+            accept the dialog. If the user declines, the dialog stays open.
+            """
             # Show confirmation dialog
             reply = QtWidgets.QMessageBox.question(
                 dlg,
                 'Confirm Overwrite',
                 'Are you sure you want to overwrite the existing fres_manual?\n\n'
                 'This will replace it with the provided fres_initial.',
-                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                QtWidgets.QMessageBox.No  # Default to No
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No  # Default to No
             )
-            if reply == QtWidgets.QMessageBox.Yes:
+            if reply == QtWidgets.QMessageBox.StandardButton.Yes:
                 result[0] = 'overwrite'
                 dlg.accept()
             # If No, dialog stays open
         
         def on_cancel():
+            """
+            Record the 'cancel' choice and reject the dialog.
+            """
             result[0] = 'cancel'
             dlg.reject()
         
@@ -249,20 +274,15 @@ class ResFinder(QtCore.QObject):
         
     def setup_ui(self):
         """
-        Setup the main window and layout.
-
-        Parameters:
-        None
-
-        Returns:
-        None
+        Set up the main window and layout.
         """
         self.win = ResFinderWindow(
             finder=self,
             show = True,
             title = "Interactive Resonance Finder"
         )
-        self.win.resize(1400, 800)
+        # Preferred size, shrunk to fit smaller screens, centred
+        fit_window_to_screen(self.win, frac=0.9, size=(1400, 800))
         self.win.setWindowTitle('Resonance Finder - Press H for help')
         
         # Add title with instructions
@@ -336,9 +356,6 @@ class ResFinder(QtCore.QObject):
 
         Parameters:
         message (str): Message to display in the log.
-
-        Returns:
-        None
         """
         if not hasattr(self, 'log_text'):
             return  # UI not initialized
@@ -350,13 +367,7 @@ class ResFinder(QtCore.QObject):
         
     def setup_plots(self):
         """
-        Setup the magnitude and phase plots stacked vertically.
-
-        Parameters:
-        None
-
-        Returns:
-        None
+        Set up the magnitude and phase plots stacked vertically.
         """
         # ---- Overview navigator (row 1) ------------------------------------
         self.plot_overview = self.win.addPlot(row = 1, col = 0)
@@ -476,13 +487,7 @@ class ResFinder(QtCore.QObject):
         
     def setup_shortcuts(self):
         """
-        Setup keyboard shortcuts.
-
-        Parameters:
-        None
-
-        Returns:
-        None
+        Set up keyboard shortcuts.
         """
         # Save shortcut (Ctrl+S, not S which is used for pan 80% right)
         self.save_action = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"), self.win)
@@ -518,9 +523,6 @@ class ResFinder(QtCore.QObject):
 
         Parameters:
         event (MouseEvent): Mouse click event.
-
-        Returns:
-        None
         """
         # Get the position in the magnitude plot
         pos = event.scenePos()
@@ -554,9 +556,6 @@ class ResFinder(QtCore.QObject):
 
         Parameters:
         event (MouseEvent): Mouse click event.
-
-        Returns:
-        None
         """
         if not self.iq_visible:
             return
@@ -581,17 +580,18 @@ class ResFinder(QtCore.QObject):
 
     def eventFilter(self, obj, event):
         """
-        Event filter to intercept mouse events on the scene for drag-to-remove.
+        Intercept mouse events on the scene for drag-to-remove.
         
         Allows Shift+Click+Drag to remove all resonances in a frequency range.
         Consumes mouse events during drag to prevent ViewBox panning.
         
         Parameters:
-        obj: Object that received the event (the GraphicsScene)
-        event: Qt event
-        
+        obj (QObject): Object that received the event (the GraphicsScene).
+        event (QEvent): Qt event.
+
         Returns:
-        bool: True if event was handled, False otherwise
+        handled (bool): True if the event was consumed (drag in progress),
+            False to let it propagate.
         """
         # Check if this is a mouse event during a shift+drag operation
         modifiers = QtWidgets.QApplication.keyboardModifiers()
@@ -658,6 +658,13 @@ class ResFinder(QtCore.QObject):
     def _scene_drag_distance(start_pos, end_pos):
         """
         Return the pixel distance between two scene positions.
+
+        Parameters:
+        start_pos (QPointF): Starting scene position.
+        end_pos (QPointF): Ending scene position.
+
+        Returns:
+        distance (float): Euclidean distance in scene pixels.
         """
         dx = float(end_pos.x() - start_pos.x())
         dy = float(end_pos.y() - start_pos.y())
@@ -668,10 +675,7 @@ class ResFinder(QtCore.QObject):
         Handle mouse move event. Update drag selection visual if active.
         
         Parameters:
-        pos: Scene position
-        
-        Returns:
-        None
+        pos (QPointF): Scene position of the mouse.
         """
         if not self._drag_selection_active or self._drag_start_freq is None:
             return
@@ -707,23 +711,19 @@ class ResFinder(QtCore.QObject):
         Parameters:
         f_min (float): Minimum frequency in Hz
         f_max (float): Maximum frequency in Hz
-        
-        Returns:
-        None
         """
         if not self.fres:
             self.log("No resonances to remove.")
             return
         
-        # Save state for undo
-        self.undo_stack.append(('remove_range', f_min, f_max, list(self.fres)))
-        
         # Remove resonances in range
-        removed_count = 0
+        fres_before = list(self.fres)
         self.fres = [f for f in self.fres if not (f_min <= f <= f_max)]
-        removed_count = len(self.undo_stack[-1][3]) - len(self.fres)
-        
+        removed_count = len(fres_before) - len(self.fres)
+
         if removed_count > 0:
+            # Save the previous list so undo can restore it
+            self.undo_stack.append(('remove_range', f_min, f_max, fres_before))
             self.update_resonance_markers()
             self.log(f"Removed {removed_count} resonance(s) in range [{f_min/1e9:.3f}, {f_max/1e9:.3f}] GHz")
         else:
@@ -731,7 +731,7 @@ class ResFinder(QtCore.QObject):
 
     def _local_df(self, freq):
         """
-        Return the local data-point spacing in self.f nearest to freq.
+        Return the local data-point spacing in ``self.f`` nearest to freq.
 
         Parameters:
         freq (float): Frequency in Hz.
@@ -747,7 +747,7 @@ class ResFinder(QtCore.QObject):
 
     def _interpolate_z(self, freq):
         """
-        Linearly interpolate self.z at freq between bracketing samples.
+        Linearly interpolate ``self.z`` at freq between bracketing samples.
 
         Parameters:
         freq (float): Frequency in Hz.
@@ -774,9 +774,6 @@ class ResFinder(QtCore.QObject):
 
         Parameters:
         freq (float): Frequency in Hz to add as a resonance.
-
-        Returns:
-        None
         """
         if self.fres:
             distances = [abs(freq - f) for f in self.fres]
@@ -805,9 +802,6 @@ class ResFinder(QtCore.QObject):
 
         Parameters:
         freq (float): Frequency in Hz near the resonance to remove.
-
-        Returns:
-        None
         """
         if not self.fres:
             return
@@ -852,20 +846,29 @@ class ResFinder(QtCore.QObject):
         self.log(msg)        
     def undo(self):
         """
-        Undo the last add or remove operation.
-
-        Parameters:
-        None
-
-        Returns:
-        None
+        Undo the last add, remove, or range-remove operation.
         """
         if not self.undo_stack:
             self.log("Nothing to undo.")
             return
-        
-        action, freq = self.undo_stack.pop()
-        
+
+        entry = self.undo_stack.pop()
+        action = entry[0]
+
+        if action == 'remove_range':
+            # Undo a range removal by restoring the saved resonance list
+            _, f_min, f_max, fres_before = entry
+            n_restored = len(fres_before) - len(self.fres)
+            self.fres = list(fres_before)
+            self.update_resonance_markers()
+            self.log(
+                f"Undid range remove of {n_restored} resonance(s) in "
+                f"[{f_min/1e9:.3f}, {f_max/1e9:.3f}] GHz. "
+                f"Total: {len(self.fres)}"
+            )
+            return
+
+        freq = entry[1]
         if action == 'add':
             # Undo an add by removing
             if freq in self.fres:
@@ -885,12 +888,6 @@ class ResFinder(QtCore.QObject):
     def update_resonance_markers(self):
         """
         Update the vertical lines marking resonances.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         if not hasattr(self, 'mag_markers'):
             return  # UI not initialized
@@ -949,16 +946,10 @@ class ResFinder(QtCore.QObject):
 
     def on_range_changed(self):
         """
-        Called when the view range changes (pan/zoom).
+        Schedule a plot update when the view range changes (pan/zoom).
 
         Debounced: coalesces rapid-fire events (e.g. continuous mouse drag)
         into a single update every 50 ms so the UI stays responsive.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         if self._range_timer is None:
             self._range_timer = QtCore.QTimer()
@@ -967,7 +958,9 @@ class ResFinder(QtCore.QObject):
         self._range_timer.start(50)  # ms
 
     def _do_range_update(self):
-        """Actual work triggered by the debounce timer."""
+        """
+        Redraw and rescale the plots after the range debounce delay.
+        """
         self._update_curves()
         self.auto_scale_y()
         self._update_overview_region()
@@ -975,7 +968,9 @@ class ResFinder(QtCore.QObject):
             self.update_iq_plot()
 
     def _on_overview_region_changed(self):
-        """Pan/zoom the main plot to match the dragged overview region."""
+        """
+        Pan/zoom the main plot to match the dragged overview region.
+        """
         if self._overview_updating:
             return
         lo, hi = self._overview_region.getRegion()
@@ -984,7 +979,9 @@ class ResFinder(QtCore.QObject):
         self._overview_updating = False
 
     def _update_overview_region(self):
-        """Move the overview region to reflect the current main plot view."""
+        """
+        Move the overview region to reflect the current main plot view.
+        """
         if self._overview_updating:
             return
         x_min, x_max = self.plot_mag.viewRange()[0]
@@ -999,12 +996,6 @@ class ResFinder(QtCore.QObject):
         Using a 50% pad on each side prevents blank edges during fast panning.
         pyqtgraph then only has to render the visible ~1,000 points instead
         of the full 300,000-point dataset.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         if not hasattr(self, 'plot_mag'):
             return
@@ -1019,12 +1010,6 @@ class ResFinder(QtCore.QObject):
     def toggle_iq(self):
         """
         Toggle the IQ plot visibility.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         self.iq_visible = not self.iq_visible
         if self.iq_visible:
@@ -1045,12 +1030,6 @@ class ResFinder(QtCore.QObject):
         Also highlights the corresponding data segment on the mag and phase
         plots in a contrasting colour, and shows interpolated fres positions
         as markers on the IQ plot.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         if not hasattr(self, 'plot_iq'):
             return
@@ -1107,7 +1086,7 @@ class ResFinder(QtCore.QObject):
         x_max (float): Right edge of visible range in Hz.
 
         Returns:
-        sl (slice): Slice into self.f / self.mag_db / self.phase.
+        sl (slice): Slice into ``self.f`` / ``self.mag_db`` / ``self.phase``.
         """
         lo = int(np.searchsorted(self.f, x_min, side='left'))
         hi = int(np.searchsorted(self.f, x_max, side='right'))
@@ -1116,12 +1095,6 @@ class ResFinder(QtCore.QObject):
     def auto_scale_y(self):
         """
         Auto-scale y-axis based on the visible x-range.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         if not hasattr(self, 'plot_mag'):
             return  # UI not initialized
@@ -1217,7 +1190,13 @@ class ResFinder(QtCore.QObject):
         self.min_phase_range = max(med_phase * 0.5, float(min_phase))
         
     def _pan(self, fraction):
-        """Shift the x-axis by *fraction* of the current view width."""
+        """
+        Shift the x-axis by ``fraction`` of the current view width.
+
+        Parameters:
+        fraction (float): Fraction of the view width to shift by. Positive
+            pans right, negative pans left.
+        """
         x0, x1 = self.plot_mag.viewRange()[0]
         shift = fraction * (x1 - x0)
         self.plot_mag.setXRange(x0 + shift, x1 + shift, padding=0)
@@ -1225,48 +1204,24 @@ class ResFinder(QtCore.QObject):
     def pan_left(self):
         """
         Pan the view to the left by 20% of current width (Z key).
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         self._pan(-0.2)
 
     def pan_right(self):
         """
         Pan the view to the right by 20% of current width (X key).
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         self._pan(0.2)
 
     def fast_pan_left(self):
         """
         Pan the view to the left by 80% of current width (A key).
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         self._pan(-0.8)
 
     def fast_pan_right(self):
         """
         Pan the view to the right by 80% of current width (S key).
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         self._pan(0.8)
     
@@ -1291,14 +1246,12 @@ class ResFinder(QtCore.QObject):
     
     def _set_centered_range(self, center_freq, frac_zoom):
         """
-        Set x-range of main plot centered at center_freq with given fractional zoom.
+        Set x-range of main plot centered at center_freq with given
+        fractional zoom.
         
         Parameters:
         center_freq (float): Frequency to center on in Hz.
         frac_zoom (float): Fractional zoom level to apply.
-        
-        Returns:
-        None
         """
         half_span = center_freq * frac_zoom / 2.0
         new_x_min = center_freq - half_span
@@ -1307,13 +1260,11 @@ class ResFinder(QtCore.QObject):
     
     def on_overview_click(self, event):
         """
-        Handle clicks on the overview plot to center main plot at clicked frequency.
+        Handle clicks on the overview plot to center main plot at clicked
+        frequency.
         
         Parameters:
         event (MouseEvent): Mouse click event.
-        
-        Returns:
-        None
         """
         pos = event.scenePos()
         
@@ -1335,12 +1286,6 @@ class ResFinder(QtCore.QObject):
     def save_data(self):
         """
         Save the current resonance list to zarr group.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         fres_array = np.array(self.fres, dtype = np.float64)
 
@@ -1364,12 +1309,6 @@ class ResFinder(QtCore.QObject):
     def quit_and_save(self):
         """
         Save data and close the application.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         self.save_data()
         self.app.quit()
@@ -1377,12 +1316,6 @@ class ResFinder(QtCore.QObject):
     def show_help(self):
         """
         Toggle the help panel on/off.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         if not hasattr(self, '_help_dlg'):
             self._help_dlg = self._build_help_dialog()
@@ -1399,7 +1332,12 @@ class ResFinder(QtCore.QObject):
             dlg.move(_dlg_frame.topLeft())
 
     def _build_help_dialog(self):
-        """Create the floating help dialog (created lazily on first use)."""
+        """
+        Create the floating help dialog (created lazily on first use).
+
+        Returns:
+        dlg (QDialog): Help dialog, parented to ``self.win``.
+        """
         dlg = QtWidgets.QDialog(self.win)
         dlg.setWindowTitle("Resonance Finder Help (H to close)")
         layout = QtWidgets.QVBoxLayout(dlg)
@@ -1441,12 +1379,6 @@ class ResFinder(QtCore.QObject):
     def run(self):
         """
         Start the application event loop.
-
-        Parameters:
-        None
-
-        Returns:
-        None
         """
         self.log("Starting Resonance Finder...")
         self.log(f"Initial resonances: {len(self.fres)}")

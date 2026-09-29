@@ -112,7 +112,6 @@ def matcher(simple_data, tmp_path):
             sd['f'], sd['z1'], sd['fres1'], sd['res_idx1'],
             sd['f'], sd['z2'], sd['fres2'], sd['res_idx2'],
             grp_path,
-            overwrite=True,
         )
     return matcher_obj
 
@@ -296,6 +295,7 @@ class TestSavedViewXlims:
         matcher.groups = [MatchGroup(0, [(4.2e9, 10)], [(4.21e9, 10)])]
         matcher.f1 = np.array([4.0e9, 6.0e9])
         matcher.f2 = np.array([4.1e9, 6.1e9])
+        matcher.ds2_f_offset = 0.0
         matcher.log = Mock()
         matcher._sorted_groups = lambda: matcher.groups
         matcher.plot_mag = Mock()
@@ -352,7 +352,7 @@ class TestResMatcherCoreInit:
             matcher_obj = ResMatcher(
                 sd['f'], sd['z1'], fres1, ridx1,
                 sd['f'], sd['z2'], sd['fres2'], sd['res_idx2'],
-                grp, overwrite=True,
+                grp,
             )
         assert '1-0' in [group.mapping_str() for group in matcher_obj.groups]
 
@@ -366,7 +366,7 @@ class TestResMatcherCoreInit:
             matcher_obj = ResMatcher(
                 sd['f'], sd['z1'], sd['fres1'], sd['res_idx1'],
                 sd['f'], sd['z2'], fres2, ridx2,
-                grp, overwrite=True,
+                grp,
             )
         assert '0-1' in [group.mapping_str() for group in matcher_obj.groups]
 
@@ -378,7 +378,7 @@ class TestResMatcherCoreInit:
             matcher_obj = ResMatcher(
                 sd['f'], sd['z1'], sd['fres1'], sd['res_idx1'],
                 sd['f'], sd['z2'], sd['fres2'], sd['res_idx2'],
-                grp, overwrite=True, init_match='nearest',
+                grp, init_match='nearest',
             )
         assert all(group.mapping_str() == '1-1' for group in matcher_obj.groups)
 
@@ -391,7 +391,7 @@ class TestResMatcherCoreInit:
                 ResMatcher(
                     sd['f'], sd['z1'], sd['fres1'], sd['res_idx1'],
                     sd['f'], sd['z2'], sd['fres2'], sd['res_idx2'],
-                    grp, overwrite=True, init_match='bad',
+                    grp, init_match='bad',
                 )
 
 
@@ -432,7 +432,7 @@ class TestDs2DisplayOffsetBehavior:
             matcher_obj = ResMatcher(
                 sd['f'], sd['z1'], sd['fres1'], sd['res_idx1'],
                 sd['f'], sd['z2'], sd['fres2'], sd['res_idx2'],
-                grp, overwrite=True, DS2_f_offset=1.5e6,
+                grp, DS2_f_offset=1.5e6,
             )
         assert matcher_obj.ds2_f_offset == 1.5e6
         assert np.allclose(matcher_obj.f2_display, matcher_obj.f2 + 1.5e6)
@@ -471,30 +471,6 @@ class TestResMatcherDirectOperations:
         matcher.update_markers = Mock()
         matcher.add_resonance(7.9e9, ds=1)
         assert len(matcher.groups) == before + 1
-
-    def test_do_unlink_moves_entry_to_new_group(self, matcher):
-        _prepare_headless_matcher(matcher)
-        matcher.log = Mock()
-        matcher.update_markers = Mock()
-        matcher._clear_selection_if_gone = Mock()
-        group = matcher.groups[0]
-        entry = group.entries1[0]
-        before = len(matcher.groups)
-        matcher._do_unlink(group, entry, ds=1)
-        assert len(matcher.groups) == before + 1
-        assert entry not in group.entries1
-
-    def test_do_merge_combines_entries_and_removes_group(self, matcher):
-        _prepare_headless_matcher(matcher)
-        matcher.log = Mock()
-        matcher.update_markers = Mock()
-        matcher._clear_selection_if_gone = Mock()
-        group_a = matcher.groups[0]
-        group_b = matcher.groups[1]
-        before = len(matcher.groups)
-        matcher._do_merge(group_a.group_id, group_b.group_id)
-        assert len(matcher.groups) == before - 1
-        assert matcher._find_group(group_b.group_id) is None
 
     def test_merge_groups_uses_current_selection_model(self, matcher):
         _prepare_headless_matcher(matcher)
@@ -943,3 +919,280 @@ class TestInitialViewXlims:
 
         assert saved_xlims[0] == 5.2e9
         assert saved_xlims[1] == 5.31e9
+
+
+################################################################################
+# Re-match threshold with a DS2 display offset
+################################################################################
+
+DS2_OFFSET = 20e6
+
+
+def _ctrl_right_click_event():
+    """
+    Build a mock Ctrl+Right-click scene event.
+
+    Returns:
+    ev (Mock): event whose button, modifiers, and scenePos mimic pyqtgraph.
+    """
+    ev = Mock()
+    ev.scenePos.return_value = QtCore.QPointF(0.0, 0.0)
+    ev.modifiers.return_value = QtCore.Qt.ControlModifier
+    ev.button.return_value = QtCore.Qt.RightButton
+    return ev
+
+
+@pytest.mark.parametrize('ds', [1, 2])
+def test_ctrl_right_click_sets_threshold_at_clicked_display_freq(matcher, ds):
+    """
+    Place the threshold line where the user clicked, whichever dataset is
+    nearest the click.
+    """
+    _prepare_headless_matcher(matcher)
+    matcher.log = Mock()
+    matcher.ds2_f_offset = DS2_OFFSET
+    click_display = 5.3e9
+    ds1_y = float(matcher.filtered_mag1[
+        matcher._nearest_idx(matcher.f1, click_display)])
+    ds2_y = float(matcher.filtered_mag2[
+        matcher._nearest_idx(matcher.f2, click_display - DS2_OFFSET)])
+    # Put the click exactly on the chosen dataset's curve, far from the other
+    click_y1 = ds1_y if ds == 1 else ds1_y + 100.0
+    click_y2 = ds2_y if ds == 2 else ds2_y + 100.0
+    matcher.plot_mag.sceneBoundingRect.return_value.contains.return_value = True
+    matcher.plot_mag.vb.mapSceneToView.return_value = QtCore.QPointF(
+        click_display, click_y1)
+    matcher._vb_mag2.mapSceneToView.return_value = QtCore.QPointF(
+        click_display, click_y2)
+
+    matcher._on_scene_clicked(_ctrl_right_click_event())
+
+    assert matcher._rematch_freq_threshold == pytest.approx(click_display)
+    matcher._rematch_line_mag.setPos.assert_called_with(
+        pytest.approx(click_display))
+
+
+def test_rematch_splits_groups_by_display_center(matcher):
+    """
+    Re-match groups whose display center is right of the line, even when
+    their data-frequency center is left of it.
+    """
+    _prepare_headless_matcher(matcher)
+    matcher.log = Mock()
+    matcher.win = Mock()
+    matcher.update_markers = Mock()
+    matcher.ds2_f_offset = DS2_OFFSET
+    # DS2 data sits DS2_OFFSET below its DS1 partner, so pairs line up on screen
+    below = MatchGroup(group_id=100, entries1=[(4.5e9, 1)],
+                       entries2=[(4.5e9 - DS2_OFFSET, 1)])
+    above = MatchGroup(group_id=101, entries1=[(5.0e9, 2)],
+                       entries2=[(5.0e9 - DS2_OFFSET, 2)])
+    matcher.groups = [below, above]
+    # Between the data center (4.99 GHz) and display center (5.0 GHz) of above
+    matcher._rematch_freq_threshold = 4.995e9
+    matcher._init_match_method = 'sorted'
+
+    with patch.object(matcher, '_init_sorted_from_arrays',
+                      return_value=([], 0)) as init_sorted:
+        matcher.trigger_rematch()
+
+    fres1, _, fres2, _ = init_sorted.call_args.args
+    assert list(fres1) == [5.0e9]
+    assert list(fres2) == [5.0e9 - DS2_OFFSET]
+    assert matcher.groups == [below]
+
+
+def test_rematch_leaves_entries_shifted_left_of_line(matcher):
+    """
+    Keep a DS2 resonance that the display offset moved left of the line, and
+    re-match its former DS1 partner with the next DS2 resonance to the right.
+    """
+    _prepare_headless_matcher(matcher)
+    matcher.log = Mock()
+    matcher.win = Mock()
+    matcher.update_markers = Mock()
+    pair = MatchGroup(group_id=100, entries1=[(5.0e9, 1)],
+                      entries2=[(5.0e9, 1)])
+    lone2 = MatchGroup(group_id=101, entries1=[], entries2=[(5.2e9, 2)])
+    matcher.groups = [pair, lone2]
+    matcher._rematch_freq_threshold = 4.995e9
+    matcher._init_match_method = 'sorted'
+    # Shift DS2 left so its first resonance is drawn at 4.99 GHz
+    matcher.ds2_f_offset = -10e6
+
+    matcher.trigger_rematch()
+
+    kept = next(g for g in matcher.groups if g.group_id == 100)
+    assert kept.entries1 == []
+    assert kept.entries2 == [(5.0e9, 1)]
+    new = [g for g in matcher.groups if g.group_id not in (100, 101)]
+    assert len(new) == 1
+    assert new[0].entries1 == [(5.0e9, 1)]
+    assert new[0].entries2 == [(5.2e9, 2)]
+
+
+def test_delete_ds2_moves_threshold_in_display_coords(matcher):
+    """
+    Move the auto-threshold past the deleted DS2 resonance's display position.
+    """
+    _prepare_headless_matcher(matcher)
+    matcher.log = Mock()
+    matcher.update_markers = Mock()
+    matcher.ds2_f_offset = DS2_OFFSET
+    matcher.groups = [MatchGroup(group_id=100, entries1=[],
+                                 entries2=[(5.0e9, 7)])]
+    matcher._selected_resonances = {(100, 2, 5.0e9)}
+    matcher._rematch_freq_threshold = 4.0e9
+
+    matcher.delete_selected()
+
+    assert matcher._rematch_freq_threshold == pytest.approx(
+        (5.0e9 + DS2_OFFSET) * 1.001)
+
+
+################################################################################
+# Shared y scale for DS1 and DS2
+################################################################################
+
+def test_auto_scale_y_uses_shared_span_and_keeps_offset(matcher):
+    """
+    Give both y axes the same span, set by the larger dataset range, with DS1
+    centered in the upper band and DS2 in the lower band.
+    """
+    _prepare_headless_matcher(matcher)
+    matcher._vb_mag2 = Mock()
+    matcher._vb_phase2 = Mock()
+    n1, n2 = len(matcher.f1), len(matcher.f2)
+    matcher.filtered_mag1 = np.linspace(-1.0, 1.0, n1)    # span 2, center 0
+    matcher.filtered_mag2 = np.linspace(10.0, 30.0, n2)   # span 20, center 20
+    matcher.phase1 = np.linspace(0.0, 6.0, n1)            # span 6, center 3
+    matcher.phase2 = np.linspace(-0.5, 0.5, n2)           # span 1, center 0
+
+    matcher.auto_scale_y()
+
+    def yrange(axis):
+        args = axis.setYRange.call_args.args
+        return args[0], args[1]
+
+    for ax1, ax2, (c1, c2, span) in [
+        (matcher.plot_mag, matcher._vb_mag2, (0.0, 20.0, 20.0)),
+        (matcher.plot_phase, matcher._vb_phase2, (3.0, 0.0, 6.0)),
+    ]:
+        lo1, hi1 = yrange(ax1)
+        lo2, hi2 = yrange(ax2)
+        assert hi1 - lo1 == pytest.approx(6.0 * span)
+        assert hi2 - lo2 == pytest.approx(6.0 * span)
+        # DS1 center at 75% of its axis, DS2 center at 25% of its axis
+        assert (c1 - lo1) / (hi1 - lo1) == pytest.approx(0.75)
+        assert (c2 - lo2) / (hi2 - lo2) == pytest.approx(0.25)
+
+
+################################################################################
+# DS2 display offset persistence
+################################################################################
+
+def _reopen_matcher(simple_data, grp_path, choice, **kwargs):
+    """
+    Construct a ResMatcher on existing zarr data with a fixed startup choice.
+
+    Parameters:
+    simple_data (dict): sweep data from the ``simple_data`` fixture.
+    grp_path (str): path to the zarr group written by a previous matcher.
+    choice (str): startup dialog result, 'load' or 'overwrite'.
+    **kwargs: other keyword arguments for ResMatcher.
+
+    Returns:
+    matcher_obj (ResMatcher): matcher built without opening a window.
+    """
+    sd = simple_data
+    with patch.object(ResMatcher, 'setup_ui'), \
+         patch.object(ResMatcher, 'run'), \
+         patch.object(ResMatcher, '_show_startup_dialog', return_value=choice):
+        return ResMatcher(
+            sd['f'], sd['z1'], sd['fres1'], sd['res_idx1'],
+            sd['f'], sd['z2'], sd['fres2'], sd['res_idx2'],
+            grp_path, **kwargs,
+        )
+
+
+@pytest.mark.parametrize('choice, passed, expected', [
+    ('load', None, 3.0e6),        # saved offset restored
+    ('load', 1.0e6, 1.0e6),       # explicit offset overrides saved one
+    ('overwrite', None, 0.0),     # fresh start ignores saved offset
+])
+def test_ds2_offset_saved_and_restored(matcher, simple_data, tmp_path,
+                                       choice, passed, expected):
+    """
+    Save the DS2 display offset and restore it only on load without an
+    explicit offset.
+    """
+    matcher._set_ds2_frequency_offset(3.0e6)
+    matcher.save_data()
+    assert np.array(matcher.zarr_group['res_matcher_ds2_f_offset'])[0] == 3.0e6
+
+    reopened = _reopen_matcher(simple_data, str(tmp_path / 'out.zarr'),
+                               choice, DS2_f_offset=passed)
+
+    assert reopened.ds2_f_offset == expected
+    assert np.allclose(reopened.f2_display, reopened.f2 + expected)
+
+
+################################################################################
+# Selection bookkeeping after unlink and merge
+################################################################################
+
+def _headless_with_groups(matcher):
+    """
+    Prepare a headless matcher with two 1:1 groups and both DS1 entries selected.
+
+    Parameters:
+    matcher (ResMatcher): matcher from the ``matcher`` fixture.
+
+    Returns:
+    matcher (ResMatcher): the same matcher, ready for keyboard actions.
+    """
+    _prepare_headless_matcher(matcher)
+    matcher.log = Mock()
+    matcher.update_markers = Mock()
+    matcher.groups = [
+        MatchGroup(group_id=100, entries1=[(5.0e9, 1)], entries2=[(5.0e9, 1)]),
+        MatchGroup(group_id=101, entries1=[(5.1e9, 2)], entries2=[(5.1e9, 2)]),
+    ]
+    matcher._selected_resonances = {(100, 1, 5.0e9), (101, 1, 5.1e9)}
+    return matcher
+
+
+def _selection_is_valid(matcher):
+    """
+    Check that every selected resonance exists in the group it points at.
+
+    Parameters:
+    matcher (ResMatcher): matcher to check.
+
+    Returns:
+    valid (bool): True if every selection tuple matches a group entry.
+    """
+    for gid, ds, fres in matcher._selected_resonances:
+        g = matcher._find_group(gid)
+        entries = [] if g is None else (g.entries1 if ds == 1 else g.entries2)
+        if not any(e[0] == fres for e in entries):
+            return False
+    return True
+
+
+def test_unlink_logs_number_unlinked(matcher):
+    m = _headless_with_groups(matcher)
+    m.unlink_selected()
+    m.log.assert_called_with('Unlinked 2 resonances into separate groups')
+
+
+@pytest.mark.parametrize('action', ['merge_groups', 'merge_selected_only'])
+def test_merge_keeps_selection_valid(matcher, action):
+    """After F or D, the selection points at the resulting group."""
+    m = _headless_with_groups(matcher)
+    getattr(m, action)()
+    assert len(m._selected_resonances) == 2
+    assert _selection_is_valid(m)
+    # A follow-up action sees the selection (it is not silently skipped)
+    m.unlink_selected()
+    m.log.assert_called_with('Unlinked 2 resonances into separate groups')

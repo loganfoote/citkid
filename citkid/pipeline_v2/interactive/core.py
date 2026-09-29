@@ -21,7 +21,7 @@ from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 import threading
 
 from ..analysis import AnalysisRunner
-from ...qt_compat import Qt as _Qt
+from ...qt_compat import Qt as _Qt, fit_window_to_screen, get_qapp
 from ...signal.iq import density_subsample as _density_subsample
 
 
@@ -879,7 +879,9 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             _sc_shift = QtGui.QShortcut(QtGui.QKeySequence(f"Shift+{seq}"), self)
             _sc_shift.activated.connect(lambda _i=idx-1: self._run_through_panel(_i))
 
-        self.resize(round(1200 * ui_scale), round(900 * ui_scale))
+        # Preferred size, shrunk to fit smaller screens, centred
+        fit_window_to_screen(
+            self, frac=0.9, size=(round(1200 * ui_scale), round(900 * ui_scale)))
         # Initialise panels in order once the event loop is running so that
         # the window is fully laid out and panels are initialised sequentially
         # (guaranteeing upstream data is ready before downstream panels run).
@@ -1294,10 +1296,10 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             "Downstream Panels Need Run",
             "Saving now will keep later panel outputs missing for this data index.\n\n"
             f"Panels needing a rerun: {names}\n\nContinue saving?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
         )
-        return reply == QtWidgets.QMessageBox.Yes
+        return reply == QtWidgets.QMessageBox.StandardButton.Yes
 
     def _confirm_stale_downstream_before_leave(self):
         """
@@ -1312,10 +1314,10 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             "Panels Need Run",
             "Earlier panel changes invalidated later panel outputs for this data index.\n\n"
             f"Panels needing a rerun: {names}\n\nLeave anyway?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
         )
-        return reply == QtWidgets.QMessageBox.Yes
+        return reply == QtWidgets.QMessageBox.StandardButton.Yes
 
 
 ################################################################################
@@ -1354,9 +1356,7 @@ def run_interactive(
     Returns:
     win (InteractiveAnalysisWindow): The created (and already shown) window.
     """
-    app = QtWidgets.QApplication.instance()
-    if app is None:
-        app = pg.mkQApp(title)
+    app = get_qapp(title)
 
     # Default: one panel per step, derived from AR.path when available
     if panels is None:
