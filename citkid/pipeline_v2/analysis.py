@@ -7,7 +7,12 @@ from tqdm.auto import tqdm
 
 from . import default_steps
 from . import framework as pf
-from .dataset import _convert_yaml_to_steps, _read_text_file
+from .dataset import (
+    _convert_yaml_to_steps,
+    _custom_sources_match,
+    _overwrite_main_dir_in_source,
+    _read_text_file,
+)
 
 
 _ANALYSIS_YAML_ALIASES = {
@@ -38,8 +43,13 @@ class AnalysisRunner:
             pipeline.
         analysis_yaml_path (str or None): Path or alias for the analysis YAML.
             When None, an embedded analysis definition is used if present.
+            On first use, the YAML contents (not the path) are embedded in
+            the dataset.
         custom_path (str or None): Path to the Python file defining
-            ``custom_analysis_steps``.
+            ``custom_analysis_steps``. When None, embedded custom step source
+            is used if present. On first use, the file contents (not the
+            path) are embedded in the dataset. The top-level ``main_dir``
+            assignment is replaced by ``DS.custom_main_dir_overwrite`` if set.
 
         Raises:
         ValueError: If the supplied analysis definition is invalid or conflicts
@@ -279,6 +289,26 @@ class AnalysisRunner:
                 stacklevel=2,
             )
 
+    def release_rows(self, data_idx):
+        """
+        Drop cached per-row values for rows that are finished.
+
+        Use this in long batch loops so memory doesn't grow with the number
+        of rows processed. Saved values are reloaded from zarr if accessed
+        again. Outputs of global-res steps are kept, since those steps produce
+        every row at once.
+
+        Parameters:
+        data_idx (int or array-like): Rows to drop from memory.
+        """
+        keep = [
+            name
+            for step_dict in self.path
+            if step_dict["task"].func_type == "global-res"
+            for name in step_dict["task"].return_names
+        ]
+        self.DS.release_rows(data_idx, keep=keep)
+
     def save_step_outputs(self, step, data_idx=None):
         """
         Persist the latest inputs and outputs of a step without re-running it.
@@ -480,9 +510,9 @@ class AnalysisRunner:
         Returns:
         bool: True if the parameter is available.
         """
-        if name not in self.DS._param_meta:
+        meta = self.DS._param_meta.get(name) or self.DS._refresh_param_meta(name)
+        if meta is None:
             return False
-        meta = self.DS._param_meta[name]
         if meta["global"]:
             return self.DS._has_global(name)
         if data_idx is None:
@@ -699,24 +729,29 @@ class AnalysisRunner:
         """
         Resolve the analysis definition from explicit inputs or dataset metadata.
 
+        Only the contents are embedded, not file paths. The dataset's
+        ``custom_main_dir_overwrite`` is applied to the top-level ``main_dir``
+        assignment of the custom source before it is executed.
+
         Parameters:
         analysis_yaml_path (str or None): Requested analysis YAML path or
             alias.
         custom_path (str or None): Requested custom analysis step file.
 
         Returns:
-        dict: Normalized definition containing paths, YAML text, and custom
-            source code.
+        dict: Definition with keys ``yaml_path`` (path read this session, or
+            None if embedded), ``custom_path`` (same), ``yaml_text`` and
+            ``custom_source`` (source that is executed, after the
+            ``main_dir`` overwrite).
 
         Raises:
         ValueError: If the supplied definition conflicts with the dataset's
-            embedded definition.
+            embedded definition. Differences only in the ``main_dir`` value
+            are allowed.
         """
         metadata = self.DS._read_metadata()
         stored_yaml = metadata.get("analysis_yaml")
         stored_custom = metadata.get("analysis_custom_source")
-        stored_yaml_path = metadata.get("analysis_yaml_path")
-        stored_custom_path = metadata.get("analysis_custom_path")
 
         yaml_path = None
         yaml_text = None
@@ -727,7 +762,6 @@ class AnalysisRunner:
             yaml_path = _resolve_analysis_yaml_path(analysis_yaml_path)
             yaml_text = _read_text_file(yaml_path)
         elif stored_yaml is not None:
-            yaml_path = stored_yaml_path
             yaml_text = stored_yaml
 
         if custom_path is not None:
@@ -736,21 +770,20 @@ class AnalysisRunner:
             resolved_custom_path = os.path.abspath(custom_path)
             custom_source = _read_text_file(resolved_custom_path)
         elif stored_custom is not None:
-            resolved_custom_path = stored_custom_path
             custom_source = stored_custom
 
         if stored_yaml is not None and yaml_text is not None and yaml_text != stored_yaml:
             raise ValueError("Provided analysis YAML does not match the dataset definition")
-        if stored_custom is not None and custom_source != stored_custom:
+        if stored_custom is not None and not _custom_sources_match(custom_source, stored_custom):
             raise ValueError("Provided analysis custom steps do not match the dataset definition")
 
         if yaml_text is not None:
-            self.DS.register_analysis_definition(
-                yaml_text,
-                custom_source,
-                analysis_yaml_path=os.path.abspath(yaml_path) if yaml_path else None,
-                analysis_custom_path=resolved_custom_path,
-            )
+            self.DS.register_analysis_definition(yaml_text, custom_source)
+
+        custom_source = _overwrite_main_dir_in_source(
+            custom_source,
+            self.DS.custom_main_dir_overwrite,
+        )
 
         return {
             "yaml_path": os.path.abspath(yaml_path) if yaml_path else None,

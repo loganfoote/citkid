@@ -3,15 +3,17 @@ import os
 import zarr
 from citkid.pipeline_v2.framework import plStep
 
-main_directory = '/path/to/data/'
-data_path = os.path.join(main_directory, 'example.zarr') 
+# main_dir must be the only hard-coded path. It can be replaced with
+# DataSet(..., custom_main_dir_overwrite=...) after the data is moved.
+main_dir = '/path/to/data/'
+data_path = os.path.join(main_dir, 'example.zarr')
 root = zarr.open(data_path, mode = 'r')
 
 def load_global_data():
     dt = root['ts_01/dt'][...]
     nrows = root['fres'].shape[0]
     
-    fres_all = np.load(os.path.join(main_directory, 'fres_init/fres.npy'))
+    fres_all = np.load(os.path.join(main_dir, 'fres_init/fres.npy'))
     fres_all = np.sort(fres_all)
     qres_all = np.ones_like(fres_all) * 8000    
     return fres_all, qres_all, dt, nrows

@@ -184,3 +184,4 @@ pytest_run_output.txt
 pytest_run_verbose.txt
 .gitignore.swp
 CLAUDE.md
+PIPELINE_V2_CONTEXT.md

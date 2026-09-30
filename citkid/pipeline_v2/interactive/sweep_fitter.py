@@ -25,13 +25,6 @@ Usage
         # Return list[plStep] that load data for this sweep index.
         ...
 
-    def y_func(AR, data_idx):
-        # Return a scalar y value from a fitted AR, or None if not yet available.
-        try:
-            return float(AR.DS.iq_popt[data_idx][4])  # e.g. nonlinearity a
-        except Exception:
-            return None
-
     run_sweep_fitter(
         make_custom_steps=make_custom_steps,
         cal_yaml_path='iq',
@@ -41,6 +34,7 @@ Usage
         x_param_name='ares',
         x_name='Power (dBm)',
         y_param_name='a',
+        data_idxs=[0, 3, 7],  # optional subset of resonators; None = all
     )
 
 Keyboard shortcuts
@@ -64,12 +58,15 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
 from ..analysis import AnalysisRunner
-from ..dataset import DataSet
+from ..dataset import DataSet, _io_lock_for, _retry_io
 from ...qt_compat import Qt as _Qt, fit_window_to_screen, get_qapp
 from . import gain      # noqa: F401 — registers GainFitPanel
 from . import fit_iq    # noqa: F401 — registers FitIQPanel
 from .core import get_panel_class, _SectionHeader
 
+
+# Attribute on the state group holding viewed / pre-fitted rows.
+_STATE_ATTR = 'sweep_fitter'
 
 # Panel grouping matching iq_analysis_template.yaml
 _IQ_PANELS = [
@@ -134,11 +131,28 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         ``None`` if the result is not yet available.
     y_name (str): Label for the y-axis of the sweep plot.
     start_sweep_idx (int): Initial sweep index. Default 0.
-    start_data_idx (int): Initial resonator index (data_idx). Default 0.
+    start_idx (int or None): Position in ``data_idxs`` to start at (not a
+        ``data_idx``), clamped to the valid range. None (default) starts at
+        the first entry of ``data_idxs`` that hasn't been viewed yet (see
+        ``state_group``), or at position 0 if all have been viewed or there
+        is no saved state.
+    data_idxs (list of int or None): Ordered data indices to review.
+        Navigation, prefetching and background fitting only visit these rows.
+        None (default) uses every row, ``0 .. nrows - 1``.
     title (str): Window title. Default 'Sweep Fitter'.
     ui_scale (float): Font and widget size multiplier. Default 1.0.
     plot_scale (float): Plot area height multiplier. Default 1.0.
     parent (QWidget or None): Parent widget.
+    state_group (zarr.Group or None): Group whose ``sweep_fitter`` attribute
+        stores session state, so a later session can resume: the data
+        indices the user has viewed (left by navigating away, or open when
+        the window was closed) and the rows already pre-fitted (including
+        failed fits, which are not retried). None (default) keeps state in
+        memory only. Delete ``state_group.attrs['sweep_fitter']`` to reset.
+
+    Raises:
+    ValueError: If ``data_idxs`` is empty or contains indices outside
+        ``0 .. nrows - 1``.
     """
 
     def __init__(
@@ -149,12 +163,19 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         y_func,
         y_name,
         start_sweep_idx=0,
-        start_data_idx=0,
+        start_idx=None,
+        data_idxs=None,
         title="Sweep Fitter",
         ui_scale=1.0,
         plot_scale=1.0,
         parent=None,
+        state_group=None,
     ):
+        """
+        Build the window, toolbar, sweep plots and IQ panels.
+
+        See the class docstring for parameter descriptions.
+        """
         super().__init__(parent)
         self._ARs = list(ARs)
         self._x_param_name = x_param_name
@@ -166,12 +187,42 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self._n_sweep = len(self._ARs)
 
         self._sweep_idx: int | None = None  # nothing selected until user clicks
-        self._data_idx = int(start_data_idx)
 
         try:
             self._nrows = int(self._ARs[0].DS.nrows)
         except Exception:
             self._nrows = 1
+
+        # Ordered rows to review; navigation moves by position in this list.
+        if data_idxs is None:
+            self._data_idxs = list(range(self._nrows))
+        else:
+            self._data_idxs = [int(di) for di in np.atleast_1d(data_idxs)]
+        if not self._data_idxs:
+            raise ValueError('data_idxs must contain at least one data index')
+        bad = [di for di in self._data_idxs if not 0 <= di < self._nrows]
+        if bad:
+            raise ValueError(
+                f'data_idxs must be in 0 .. {self._nrows - 1}; got {bad}'
+            )
+
+        # Persistent session state (viewed and pre-fitted rows).
+        self._state_group = state_group
+        self._state_lock = threading.Lock()
+        state = self._load_state()
+        self._viewed_data_idxs: set[int] = set(state.get('viewed_data_idxs', []))
+        # Rows already attempted for every sweep (fitted, loaded, or failed).
+        # They are not fitted again automatically; the user can rerun panels.
+        self._initialized_data_idxs: set[int] = set(state.get('prefit_attempted', []))
+
+        if start_idx is None:
+            unviewed = [
+                pos for pos, di in enumerate(self._data_idxs)
+                if di not in self._viewed_data_idxs
+            ]
+            start_idx = unviewed[0] if unviewed else 0
+        self._nav_pos = max(0, min(int(start_idx), len(self._data_idxs) - 1))
+        self._data_idx = self._data_idxs[self._nav_pos]
 
         # x and y value caches: {data_idx: np.ndarray of shape (n_sweep,)}
         self._x_cache: dict = {}
@@ -183,8 +234,8 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self._prefetched_idx: int | None = None
         self._init_all_thread: threading.Thread | None = None
         self._init_all_stop = threading.Event()
-        self._initialized_data_idxs: set[int] = set()
         self._init_all_current_di: int | None = None
+        self._worker_ars = None  # built once by the background thread
 
         # Background save state
         self._save_thread: threading.Thread | None = None
@@ -302,8 +353,8 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
         layout.addWidget(QtWidgets.QLabel('data_idx:'))
         self._data_idx_spin = QtWidgets.QSpinBox()
-        self._data_idx_spin.setMinimum(0)
-        self._data_idx_spin.setMaximum(max(self._nrows - 1, 0))
+        self._data_idx_spin.setMinimum(min(self._data_idxs))
+        self._data_idx_spin.setMaximum(max(self._data_idxs))
         self._data_idx_spin.setValue(self._data_idx)
         self._data_idx_spin.valueChanged.connect(self._on_data_idx_spin_changed)
         layout.addWidget(self._data_idx_spin)
@@ -433,11 +484,77 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self.panels.append(panel)
 
     # ------------------------------------------------------------------
+    # Persistent session state
+    # ------------------------------------------------------------------
+
+    def _load_state(self) -> dict:
+        """
+        Read saved session state from ``state_group``.
+
+        Returns:
+        state (dict): Keys ``viewed_data_idxs`` and ``prefit_attempted``
+            (lists of int). Empty if there is no state group or saved state.
+        """
+        if self._state_group is None:
+            return {}
+        try:
+            with _io_lock_for(self._state_group):
+                return dict(self._state_group.attrs.get(_STATE_ATTR, {}))
+        except Exception as exc:
+            print(f'Warning: could not read sweep fitter state: {exc}')
+            return {}
+
+    def _save_state(self):
+        """
+        Write the viewed and pre-fitted rows to ``state_group``.
+
+        Safe to call from the UI thread and the background worker.
+        """
+        if self._state_group is None:
+            return
+        with self._state_lock:
+            state = {
+                'viewed_data_idxs': sorted(self._viewed_data_idxs),
+                'prefit_attempted': sorted(self._initialized_data_idxs),
+            }
+            try:
+                with _io_lock_for(self._state_group):
+                    _retry_io(self._state_group.attrs.__setitem__, _STATE_ATTR, state)
+            except Exception as exc:
+                print(f'Warning: could not save sweep fitter state: {exc}')
+
+    def _mark_viewed(self, data_idx: int):
+        """
+        Record that the user has viewed a data index, and save the state.
+
+        Parameters:
+        data_idx (int): Data index the user is leaving or closing.
+        """
+        with self._state_lock:
+            if int(data_idx) in self._viewed_data_idxs:
+                return
+            self._viewed_data_idxs.add(int(data_idx))
+        self._save_state()
+
+    def _mark_attempted(self, data_idx: int):
+        """
+        Record that a row has been pre-fitted for every sweep, and save it.
+
+        Parameters:
+        data_idx (int): Row that was fitted, loaded, or failed.
+        """
+        with self._state_lock:
+            if int(data_idx) in self._initialized_data_idxs:
+                return
+            self._initialized_data_idxs.add(int(data_idx))
+        self._save_state()
+
+    # ------------------------------------------------------------------
     # Label helpers
     # ------------------------------------------------------------------
 
     def _update_res_label(self):
-        self._res_label.setText(f'{self._data_idx + 1} / {self._nrows}')
+        self._res_label.setText(f'{self._nav_pos + 1} / {len(self._data_idxs)}')
 
     def _update_sweep_combo_items(self, data_idx: int):
         """Repopulate every combo item text with the x value for *data_idx*."""
@@ -461,7 +578,14 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
 
     def _advance_resonator(self, delta: int):
-        new_di = max(0, min(self._nrows - 1, self._data_idx + delta))
+        """
+        Move ``delta`` positions through ``data_idxs``, clamped to its ends.
+
+        Parameters:
+        delta (int): Number of positions to move (negative moves back).
+        """
+        new_pos = max(0, min(len(self._data_idxs) - 1, self._nav_pos + delta))
+        new_di = self._data_idxs[new_pos]
         if new_di != self._data_idx:
             self._set_data_idx(new_di)
 
@@ -474,8 +598,28 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
             self._set_sweep_idx(new_si)
 
     def _on_data_idx_spin_changed(self, value: int):
+        """
+        Jump to the data index typed or stepped to in the spin box.
+
+        Values not in ``data_idxs`` snap to the nearest member in the
+        direction of the change, so the arrows skip rows outside the subset.
+
+        Parameters:
+        value (int): New spin box value.
+        """
+        if value not in self._data_idxs:
+            if value > self._data_idx:
+                candidates = [di for di in self._data_idxs if di >= value]
+                value = min(candidates) if candidates else self._data_idx
+            else:
+                candidates = [di for di in self._data_idxs if di <= value]
+                value = max(candidates) if candidates else self._data_idx
         if value != self._data_idx:
             self._set_data_idx(value)
+        else:
+            self._data_idx_spin.blockSignals(True)
+            self._data_idx_spin.setValue(self._data_idx)
+            self._data_idx_spin.blockSignals(False)
 
     def _on_sweep_combo_changed(self, value: int):
         if value != self._sweep_idx:
@@ -489,7 +633,9 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
             self._data_idx_spin.blockSignals(False)
             return
         self._save_dirty_panels()  # persist results for the outgoing resonator
+        self._mark_viewed(self._data_idx)
         self._data_idx = new_di
+        self._nav_pos = self._data_idxs.index(new_di)
         self._data_idx_spin.blockSignals(True)
         self._data_idx_spin.setValue(new_di)
         self._data_idx_spin.blockSignals(False)
@@ -515,8 +661,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         # Silently run (or load) the full pipeline for every sweep AR at the
         # new data_idx, so the scatter and waterfall are fully populated and
         # the active panels can show results immediately.
-        if not self._all_sweeps_outputs_exist(new_di):
-            self._ensure_data_idx_initialized(new_di)
+        self._ensure_data_idx_initialized(new_di)
         self._update_sweep_combo_items(new_di)
         self._update_sweep_scatter()
         self._update_waterfall()
@@ -569,7 +714,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         """
         di = self._data_idx
         self._initialize_all_sweeps_for_data_idx(di)
-        self._initialized_data_idxs.add(int(di))
+        self._mark_attempted(int(di))
 
     def _initialize_all_sweeps_for_data_idx(self, data_idx: int):
         """
@@ -599,9 +744,10 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         Pre-compute read-only caches for the next resonator.
         """
         import threading as _threading
-        next_di = self._data_idx + 1
-        if next_di >= self._nrows:
+        next_pos = self._nav_pos + 1
+        if next_pos >= len(self._data_idxs):
             return
+        next_di = self._data_idxs[next_pos]
         if next_di == self._prefetched_idx:
             return
         if (self._prefetch_thread is not None
@@ -660,14 +806,47 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
                     print(f"Auto-save failed for {panel.step_names}: {exc}")
 
     def closeEvent(self, event):
-        """Auto-save dirty panels before closing."""
+        """
+        Save, record the open data index as viewed, and consolidate storage.
+
+        The background worker is stopped first (it finishes at most its
+        current fit), so nothing writes while buffered rows are merged into
+        the sharded arrays.
+
+        Parameters:
+        event (QCloseEvent): Close event.
+        """
         if not self._confirm_stale_downstream_before_leave():
             event.ignore()
             return
         self._init_all_stop.set()
         self._save_dirty_panels()
+        self._mark_viewed(self._data_idx)
+
+        dialog = self._make_busy_dialog('Finishing background fit and saving…', 'Closing')
+        dialog.show()
+        QtWidgets.QApplication.processEvents()
+        try:
+            if self._init_all_thread is not None:
+                while self._init_all_thread.is_alive():
+                    self._init_all_thread.join(timeout=0.05)
+                    QtWidgets.QApplication.processEvents()
+            self._consolidate_storage()
+        finally:
+            dialog.close()
         QtWidgets.QApplication.instance().removeEventFilter(self)
         super().closeEvent(event)
+
+    def _consolidate_storage(self):
+        """
+        Merge buffered rows into the sharded zarr arrays for every sweep.
+        """
+        for si, AR in enumerate(self._ARs):
+            try:
+                AR.DS.consolidate_storage()
+            except Exception as exc:
+                print(f'Warning: consolidating storage for sweep_idx={si} failed: {exc}. '
+                      'Call DS.consolidate_storage() to retry.')
 
     def _run_all_panels(self):
         for panel in self.panels:
@@ -806,6 +985,27 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
                 return False
         return True
 
+    def _saved_output_rows(self, AR):
+        """
+        Return which rows have the final analysis-step outputs saved.
+
+        Parameters:
+        AR (AnalysisRunner): Runner for one sweep index.
+
+        Returns:
+        mask (np.ndarray or None): Boolean array of length ``nrows``, or None
+            if it can't be determined (callers then check rows one at a
+            time).
+        """
+        try:
+            final_step = AR.path[-1]['task']
+            masks = [AR.DS.saved_row_mask(name) for name in final_step.return_names]
+        except Exception:
+            return None
+        if not masks or not all(isinstance(mask, np.ndarray) for mask in masks):
+            return None
+        return np.logical_and.reduce(masks)
+
     def _all_sweeps_outputs_exist(self, data_idx: int) -> bool:
         """
         Return True when every sweep runner already has final outputs for data_idx.
@@ -829,28 +1029,36 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
     def _start_background_initialize_remaining(self):
         """
-        Initialize every remaining data_idx in the background using worker ARs.
+        Initialize every unattempted entry of ``data_idxs`` in the background
+        using worker ARs.
+
+        Rows after the current position are done first (in navigation order),
+        then rows before it. Whether outputs already exist is checked in the
+        worker thread, so the UI isn't blocked scanning zarr.
         """
         if not hasattr(self, '_worker_root'):
             return
         if self._init_all_thread is not None and self._init_all_thread.is_alive():
             return
 
-        remaining = [
-            di for di in range(self._nrows)
-            if di != self._data_idx and not self._all_sweeps_outputs_exist(di)
-        ]
+        pos = self._nav_pos
+        ordered = self._data_idxs[pos + 1:] + self._data_idxs[:pos]
+        remaining = [di for di in ordered if di not in self._initialized_data_idxs]
         if not remaining:
             return
 
         self._init_all_stop.clear()
 
         def _worker():
+            """
+            Build the worker runners once, then fit the remaining rows.
+            """
             try:
-                worker_ars = self._make_worker_ars()
-                self._initialize_remaining_data_indices(worker_ars, remaining)
+                if self._worker_ars is None:
+                    self._worker_ars = self._make_worker_ars()
+                self._initialize_remaining_data_indices(self._worker_ars, remaining)
             except Exception as exc:
-                print(f'[init-all] failed: {exc}')
+                print(f'[init-all] stopped: {type(exc).__name__}: {exc}')
 
         self._init_all_thread = threading.Thread(
             target=_worker,
@@ -870,6 +1078,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
                 zarr_path=group,
                 cal_yaml_path=self._worker_cal_yaml_path,
                 custom_cal_steps=self._worker_make_custom_steps(i),
+                write_buffer=True,
             )
             ar = AnalysisRunner(ds, analysis_yaml_path=self._worker_analysis_yaml_path)
             worker_ars.append(ar)
@@ -878,25 +1087,61 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
     def _initialize_remaining_data_indices(self, worker_ars, data_indices):
         """
         Synchronously initialize remaining resonators for all sweep runners.
+
+        A failure for one (row, sweep) is printed and skipped rather than
+        stopping the loop. The stop flag is checked before each sweep, so a
+        stop request waits for at most one fit. A row is marked attempted only
+        once every sweep has been tried, and its cached per-row data is then
+        released so memory doesn't grow over the session.
+
+        Parameters:
+        worker_ars (list of AnalysisRunner): One worker runner per sweep.
+        data_indices (list of int): Rows to initialize, in order.
         """
+        # One zarr read per sweep says which rows are already fitted.
+        done_masks = [self._saved_output_rows(ar) for ar in worker_ars]
         for di in data_indices:
-            if self._init_all_stop.is_set():
-                self._init_all_current_di = None
-                return
-            self._init_all_current_di = int(di)
-            for ar in worker_ars:
-                if self._runner_outputs_exist(ar, di):
+            di = int(di)
+            if di in self._initialized_data_idxs:
+                continue
+            self._init_all_current_di = di
+            for si, ar in enumerate(worker_ars):
+                if self._init_all_stop.is_set():
+                    self._init_all_current_di = None
+                    return
+                done = done_masks[si]
+                if done is not None and done[di]:
                     continue
-                self._initialize_runner_outputs(ar, di)
-            self._initialized_data_idxs.add(int(di))
+                if done is None and self._runner_outputs_exist(ar, di):
+                    continue
+                try:
+                    self._initialize_runner_outputs(ar, di)
+                except Exception as exc:
+                    print(f'[init-all] data_idx={di}, sweep_idx={si} failed: '
+                          f'{type(exc).__name__}: {exc}')
+            self._mark_attempted(di)
+            for ar in worker_ars:
+                try:
+                    ar.release_rows(di)
+                except Exception:
+                    pass
         self._init_all_current_di = None
 
     def _ensure_data_idx_initialized(self, data_idx: int):
         """
         Ensure that data_idx has been fully initialized before the user edits it.
+
+        Rows that were already attempted (including ones whose fits failed)
+        are not fitted again, so revisiting a bad resonator doesn't block.
+
+        Parameters:
+        data_idx (int): Row to initialize.
         """
         di = int(data_idx)
+        if di in self._initialized_data_idxs:
+            return
         if self._all_sweeps_outputs_exist(di):
+            self._mark_attempted(di)
             return
 
         self._init_all_stop.set()
@@ -909,7 +1154,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
                     self._init_all_thread.join(timeout=0.05)
                     QtWidgets.QApplication.processEvents()
             self._initialize_all_sweeps_for_data_idx(di)
-            self._initialized_data_idxs.add(di)
+            self._mark_attempted(di)
         finally:
             dialog.close()
             self._init_all_stop.clear()
@@ -918,15 +1163,30 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
     def _make_fitting_dialog(self, data_idx: int):
         """
         Create a simple modal progress dialog for synchronous row initialization.
+
+        Parameters:
+        data_idx (int): Row being fitted.
+
+        Returns:
+        dialog (QProgressDialog): The dialog, not yet shown.
         """
-        dialog = QtWidgets.QProgressDialog(
-            f'Fitting data_idx {data_idx} across all sweeps…',
-            None,
-            0,
-            0,
-            self,
+        return self._make_busy_dialog(
+            f'Fitting data_idx {data_idx} across all sweeps…', 'Initializing Sweeps'
         )
-        dialog.setWindowTitle('Initializing Sweeps')
+
+    def _make_busy_dialog(self, text: str, title: str):
+        """
+        Create a modal busy dialog with no cancel or close button.
+
+        Parameters:
+        text (str): Message shown in the dialog.
+        title (str): Window title.
+
+        Returns:
+        dialog (QProgressDialog): The dialog, not yet shown.
+        """
+        dialog = QtWidgets.QProgressDialog(text, None, 0, 0, self)
+        dialog.setWindowTitle(title)
         dialog.setCancelButton(None)
         dialog.setMinimumDuration(0)
         dialog.setWindowModality(QtCore.Qt.WindowModality.ApplicationModal)
@@ -1139,7 +1399,8 @@ def run_sweep_fitter(
     x_name,
     y_param_name,
     start_sweep_idx=0,
-    start_data_idx=0,
+    start_idx=None,
+    data_idxs=None,
     title="Sweep Fitter",
     ui_scale=1.0,
     plot_scale=1.0,
@@ -1170,13 +1431,29 @@ def run_sweep_fitter(
         Must be one of ``['fr', 'Qr', 'amp', 'phi', 'a', 'Qc', 'Qi']``.
         ``Qc = Qr / amp`` and ``Qi = 1 / (1/Qr - 1/Qc)``.
     start_sweep_idx (int): Initial sweep index. Default 0.
-    start_data_idx (int): Initial resonator index (data_idx). Default 0.
+    start_idx (int or None): Position in ``data_idxs`` to start at (not a
+        ``data_idx``). None (default) resumes at the first entry of
+        ``data_idxs`` not viewed in an earlier session. A data index counts
+        as viewed once the user navigates away from it or closes the window
+        with it open.
+    data_idxs (list of int or None): Ordered data indices to review and fit.
+        Only these rows are visited and fitted in the background. None
+        (default) uses every row.
     title (str): Window title. Default ``'Sweep Fitter'``.
     ui_scale (float): Font and widget size multiplier. Default 1.0.
     plot_scale (float): Plot area height multiplier. Default 1.0.
 
     Returns:
     win (SweepFitterWindow): The created (and already shown) window.
+
+    Notes:
+    Session state (viewed and pre-fitted rows) is stored in
+    ``root.attrs['sweep_fitter']``; delete that attribute to start over.
+    Results are written to a fast unsharded buffer during the session and
+    merged into the sharded arrays when the window closes. If Python
+    crashes first, the data is still readable, and the next session merges
+    it on close (or call ``DS.consolidate_storage()`` on each sweep's
+    DataSet).
     """
     _DIRECT = {'fr': 0, 'Qr': 1, 'amp': 2, 'phi': 3, 'a': 4}
     _VALID = list(_DIRECT) + ['Qc', 'Qi']
@@ -1206,6 +1483,7 @@ def run_sweep_fitter(
             zarr_path=group,
             cal_yaml_path=cal_yaml_path,
             custom_cal_steps=make_custom_steps(i),
+            write_buffer=True,
         )
         AR = AnalysisRunner(DS, analysis_yaml_path=analysis_yaml_path)
         ARs.append(AR)
@@ -1219,10 +1497,12 @@ def run_sweep_fitter(
         y_func=y_func,
         y_name=y_name,
         start_sweep_idx=start_sweep_idx,
-        start_data_idx=start_data_idx,
+        start_idx=start_idx,
+        data_idxs=data_idxs,
         title=title,
         ui_scale=ui_scale,
         plot_scale=plot_scale,
+        state_group=root,
     )
     win._worker_root = root
     win._worker_make_custom_steps = make_custom_steps

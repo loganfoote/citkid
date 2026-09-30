@@ -1,5 +1,8 @@
+import threading
+
 import numpy as np
 import pytest
+import zarr
 from unittest.mock import MagicMock, patch
 from pyqtgraph.Qt import QtWidgets
 
@@ -153,7 +156,23 @@ class TestInteractiveWindowV2:
 
 
 class TestSweepFitterWindowV2:
-    def _make_window(self, qt_app, monkeypatch):
+    def _make_window(self, qt_app, monkeypatch, nrows=2, data_idxs=None, start_idx=0,
+                     state_group=None):
+        """
+        Build a SweepFitterWindow over two mock sweep runners.
+
+        Parameters:
+        qt_app (QApplication): Qt application fixture.
+        monkeypatch (pytest.MonkeyPatch): Fixture used to stub panels/timers.
+        nrows (int): Number of rows reported by each mock dataset.
+        data_idxs (list of int or None): Subset passed to the window.
+        start_idx (int or None): Starting position in ``data_idxs``; None
+            resumes from ``state_group``.
+        state_group (zarr.Group or None): Group for persistent state.
+
+        Returns:
+        win (SweepFitterWindow): The window.
+        """
         step1 = _make_step('fit_gain')
         step2 = _make_step('fit_iq')
         ars = []
@@ -164,7 +183,7 @@ class TestSweepFitterWindowV2:
             ar._last_failures = {}
             ar.execute_step.return_value = None
             ar.DS = MagicMock()
-            ar.DS.nrows = 2
+            ar.DS.nrows = nrows
             ars.append(ar)
         monkeypatch.setattr(isweep, 'get_panel_class', lambda _names: _WindowPanel)
         monkeypatch.setattr(isweep.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
@@ -175,9 +194,278 @@ class TestSweepFitterWindowV2:
             y_func=lambda _ar, _di: None,
             y_name='Y',
             start_sweep_idx=0,
-            start_data_idx=0,
+            start_idx=start_idx,
+            data_idxs=data_idxs,
             title='test',
+            state_group=state_group,
         )
+
+    @staticmethod
+    def _stub_refresh(win):
+        """
+        Replace plot refresh and row initialization with no-op mocks.
+
+        Parameters:
+        win (SweepFitterWindow): Window to stub.
+        """
+        for name in (
+            '_update_sweep_combo_items', '_update_sweep_scatter',
+            '_update_waterfall', '_autoscale_all', '_ensure_data_idx_initialized',
+        ):
+            setattr(win, name, MagicMock())
+        win._all_sweeps_outputs_exist = lambda _di: True
+
+    @staticmethod
+    def _close(win):
+        """
+        Close the window, accepting any confirmation prompt.
+
+        Parameters:
+        win (SweepFitterWindow): Window to close.
+        """
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            win.close()
+
+    def test_default_data_idxs_covers_all_rows(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch, nrows=3)
+
+        assert win._data_idxs == [0, 1, 2]
+        assert win._data_idx == 0
+        assert win._res_label.text() == '1 / 3'
+        self._close(win)
+
+    def test_data_idxs_subset_navigation(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch, nrows=6, data_idxs=[4, 1, 3], start_idx=1)
+        self._stub_refresh(win)
+
+        assert win._data_idx == 1
+        assert win._res_label.text() == '2 / 3'
+        assert (win._data_idx_spin.minimum(), win._data_idx_spin.maximum()) == (1, 4)
+
+        win._advance_resonator(+1)
+        assert (win._data_idx, win._nav_pos) == (3, 2)
+        assert win._res_label.text() == '3 / 3'
+
+        win._advance_resonator(+1)
+        assert win._data_idx == 3
+
+        win._advance_resonator(-5)
+        assert (win._data_idx, win._nav_pos) == (4, 0)
+        assert win._data_idx_spin.value() == 4
+        self._close(win)
+
+    @pytest.mark.parametrize(
+        'spin_value, expected',
+        [(2, 3), (4, 4), (0, 1), (5, 1)],
+    )
+    def test_spin_box_snaps_to_subset(self, qt_app, monkeypatch, spin_value, expected):
+        win = self._make_window(qt_app, monkeypatch, nrows=6, data_idxs=[1, 3, 4])
+        self._stub_refresh(win)
+        win._data_idx_spin.setMaximum(5)
+        win._data_idx_spin.setMinimum(0)
+
+        win._data_idx_spin.setValue(spin_value)
+
+        assert win._data_idx == expected
+        assert win._data_idx_spin.value() == expected
+        self._close(win)
+
+    def test_prefetch_uses_next_subset_index(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch, nrows=6, data_idxs=[5, 2])
+        win._get_x_array = MagicMock()
+        win._get_y_array = MagicMock()
+
+        win._prefetch_next()
+        win._prefetch_thread.join(timeout=2)
+
+        win._get_x_array.assert_called_once_with(2)
+        self._close(win)
+
+    def test_background_init_only_visits_subset(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch, nrows=6, data_idxs=[5, 2, 0])
+        win._worker_root = MagicMock()
+        win._all_sweeps_outputs_exist = lambda _di: False
+        win._make_worker_ars = MagicMock(return_value=[])
+        visited = []
+        win._initialize_remaining_data_indices = lambda _ars, dis: visited.extend(dis)
+
+        win._start_background_initialize_remaining()
+        win._init_all_thread.join(timeout=2)
+
+        assert visited == [2, 0]
+        self._close(win)
+
+    @pytest.mark.parametrize('data_idxs', [[], [0, 2], [-1]])
+    def test_invalid_data_idxs_raise(self, qt_app, monkeypatch, data_idxs):
+        with pytest.raises(ValueError, match='data_idxs'):
+            self._make_window(qt_app, monkeypatch, nrows=2, data_idxs=data_idxs)
+
+    def test_background_init_continues_after_failed_fit(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch, nrows=3)
+        worker_ars = [MagicMock(), MagicMock()]
+        attempted = []
+
+        def fake_init(ar, di):
+            attempted.append((worker_ars.index(ar), di))
+            if (worker_ars.index(ar), di) == (0, 1):
+                raise PermissionError('locked')
+
+        win._runner_outputs_exist = lambda _ar, _di: False
+        win._initialize_runner_outputs = fake_init
+
+        win._initialize_remaining_data_indices(worker_ars, [1, 2])
+
+        assert attempted == [(0, 1), (1, 1), (0, 2), (1, 2)]
+        assert {1, 2} <= win._initialized_data_idxs
+        worker_ars[0].release_rows.assert_any_call(1)
+        self._close(win)
+
+    def test_background_init_stops_between_sweeps(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch, nrows=3)
+        worker_ars = [MagicMock(), MagicMock()]
+        attempted = []
+
+        def fake_init(ar, di):
+            attempted.append((worker_ars.index(ar), di))
+            win._init_all_stop.set()
+
+        win._runner_outputs_exist = lambda _ar, _di: False
+        win._initialize_runner_outputs = fake_init
+
+        win._initialize_remaining_data_indices(worker_ars, [1, 2])
+
+        assert attempted == [(0, 1)]
+        assert 1 not in win._initialized_data_idxs
+        self._close(win)
+
+    def test_attempted_rows_are_not_refit(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch, nrows=4)
+        win._initialized_data_idxs = {0, 2}
+        win._all_sweeps_outputs_exist = lambda _di: False
+        win._initialize_all_sweeps_for_data_idx = MagicMock()
+
+        win._ensure_data_idx_initialized(2)
+        win._initialize_all_sweeps_for_data_idx.assert_not_called()
+
+        win._worker_root = MagicMock()
+        win._make_worker_ars = MagicMock(return_value=[])
+        visited = []
+        win._initialize_remaining_data_indices = lambda _ars, dis: visited.extend(dis)
+        win._start_background_initialize_remaining()
+        win._init_all_thread.join(timeout=2)
+
+        assert visited == [1, 3]
+        self._close(win)
+
+    def test_background_order_starts_after_current_position(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch, nrows=6, data_idxs=[5, 4, 3, 2, 1], start_idx=2)
+        win._worker_root = MagicMock()
+        win._make_worker_ars = MagicMock(return_value=[])
+        visited = []
+        win._initialize_remaining_data_indices = lambda _ars, dis: visited.extend(dis)
+
+        win._start_background_initialize_remaining()
+        win._init_all_thread.join(timeout=2)
+
+        assert visited == [2, 1, 5, 4]
+        self._close(win)
+
+    def test_resume_starts_at_first_unviewed_index(self, qt_app, monkeypatch, tmp_path):
+        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+
+        # Session 1 reviews a subset and closes on data_idx 3.
+        win = self._make_window(qt_app, monkeypatch, nrows=6, data_idxs=[0, 1, 3, 4, 5],
+                                start_idx=None, state_group=state_group)
+        self._stub_refresh(win)
+        assert win._data_idx == 0
+        win._advance_resonator(+1)
+        win._advance_resonator(+1)
+        assert win._data_idx == 3
+        self._close(win)
+        assert state_group.attrs['sweep_fitter']['viewed_data_idxs'] == [0, 1, 3]
+
+        # Session 2 over all rows starts at 2, the first row never viewed.
+        win = self._make_window(qt_app, monkeypatch, nrows=6, start_idx=None,
+                                state_group=state_group)
+        assert win._data_idx == 2
+        assert win._res_label.text() == '3 / 6'
+        self._close(win)
+
+    def test_resume_with_everything_viewed_or_explicit_start(self, qt_app, monkeypatch, tmp_path):
+        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+        state_group.attrs['sweep_fitter'] = {'viewed_data_idxs': [0, 1, 2], 'prefit_attempted': [1]}
+
+        win = self._make_window(qt_app, monkeypatch, nrows=3, start_idx=None, state_group=state_group)
+        assert win._data_idx == 0
+        assert win._initialized_data_idxs == {1}
+        self._close(win)
+
+        win = self._make_window(qt_app, monkeypatch, nrows=3, start_idx=2, state_group=state_group)
+        assert win._data_idx == 2
+        self._close(win)
+
+    def test_attempted_rows_are_saved(self, qt_app, monkeypatch, tmp_path):
+        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+        win = self._make_window(qt_app, monkeypatch, nrows=4, state_group=state_group)
+        win._runner_outputs_exist = lambda _ar, _di: False
+        win._initialize_runner_outputs = lambda _ar, _di: None
+
+        win._initialize_remaining_data_indices([MagicMock()], [2, 3])
+
+        assert state_group.attrs['sweep_fitter']['prefit_attempted'] == [2, 3]
+        self._close(win)
+
+    def test_close_waits_for_worker_and_consolidates(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch, nrows=3)
+        release = threading.Event()
+        win._init_all_thread = threading.Thread(target=release.wait, daemon=True)
+        win._init_all_thread.start()
+        order = []
+        win._consolidate_storage = lambda: order.append(win._init_all_thread.is_alive())
+        threading.Timer(0.2, release.set).start()
+
+        self._close(win)
+
+        assert win._init_all_stop.is_set()
+        assert order == [False]
+
+    def test_consolidate_storage_runs_for_every_sweep(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch, nrows=3)
+
+        self._close(win)
+
+        for ar in win._ARs:
+            ar.DS.consolidate_storage.assert_called_once()
+
+    def test_worker_skips_rows_saved_in_one_mask_read(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch, nrows=4)
+        worker_ars = [MagicMock(), MagicMock()]
+        for ar, done_rows in zip(worker_ars, ([1, 2], [2])):
+            mask = np.zeros(4, dtype=bool)
+            mask[done_rows] = True
+            ar.path = [{'task': _make_step('fit_iq', return_names=['z'])}]
+            ar.DS.saved_row_mask.return_value = mask
+        win._runner_outputs_exist = MagicMock(side_effect=AssertionError('should use the mask'))
+        fitted = []
+        win._initialize_runner_outputs = lambda ar, di: fitted.append((worker_ars.index(ar), di))
+
+        win._initialize_remaining_data_indices(worker_ars, [1, 2, 3])
+
+        assert fitted == [(1, 1), (0, 3), (1, 3)]
+        self._close(win)
+
+    def test_worker_ars_are_built_once(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch, nrows=3)
+        win._worker_root = MagicMock()
+        win._make_worker_ars = MagicMock(return_value=['ar'])
+        win._initialize_remaining_data_indices = lambda _ars, _dis: None
+
+        for _ in range(2):
+            win._start_background_initialize_remaining()
+            win._init_all_thread.join(timeout=2)
+
+        win._make_worker_ars.assert_called_once()
+        self._close(win)
 
     def test_run_panel_marks_downstream_stale(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch)
@@ -253,7 +541,7 @@ class TestSweepFitterWindowV2:
             y_func=lambda _ar, _di: None,
             y_name='Y',
             start_sweep_idx=0,
-            start_data_idx=0,
+            start_idx=0,
             title='test',
         )
 
@@ -310,7 +598,7 @@ class TestSweepFitterWindowV2:
             y_func=lambda _ar, _di: None,
             y_name='Y',
             start_sweep_idx=0,
-            start_data_idx=0,
+            start_idx=0,
             title='test',
         )
 
