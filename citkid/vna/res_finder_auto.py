@@ -777,11 +777,12 @@ class AutoResFinder:
         
     def quit_and_save(self):
         """
-        Save data and close the application.
+        Close the window, which saves the data and ends the event loop.
+
+        This does exactly what the window's X button does: ``closeEvent``
+        saves (once), and closing the last window ends ``app.exec()``.
         """
-        self.save_data()
         self.win.close()
-        self.app.quit()
         
     def show_help(self):
         """

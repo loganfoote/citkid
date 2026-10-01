@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import zarr
 from unittest.mock import MagicMock, patch
-from pyqtgraph.Qt import QtWidgets
+from pyqtgraph.Qt import QtGui, QtWidgets
 
 import citkid.pipeline_v2.interactive.core as icore
 import citkid.pipeline_v2.interactive.sweep_fitter as isweep
@@ -154,10 +154,96 @@ class TestInteractiveWindowV2:
         with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
             win.close()
 
+    @pytest.mark.parametrize('key, method', [('2', '_run_through_panel'), ('Shift+2', '_run_panel_by_index')])
+    def test_number_shortcuts(self, qt_app, monkeypatch, key, method):
+        win = self._make_window(qt_app, monkeypatch)
+        win._run_through_panel = MagicMock()
+        win._run_panel_by_index = MagicMock()
+        target = QtGui.QKeySequence(key)
+        (shortcut,) = [sc for sc in win.findChildren(QtGui.QShortcut) if sc.key() == target]
+
+        shortcut.activated.emit()
+
+        getattr(win, method).assert_called_once_with(1)
+        other = '_run_panel_by_index' if method == '_run_through_panel' else '_run_through_panel'
+        getattr(win, other).assert_not_called()
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            win.close()
+
+    def test_no_run_all_button(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+
+        assert 'Run All' not in [btn.text() for btn in win.findChildren(QtWidgets.QPushButton)]
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            win.close()
+
+    def test_toolbar_hints_wrap_instead_of_widening_window(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+
+        _assert_hints_wrap(win)
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            win.close()
+
+    def test_height_fits_panels_up_to_screen(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+
+        _assert_height_fits_content(qt_app, win, win._scroll, width=1200)
+        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+            win.close()
+
+
+def _assert_height_fits_content(qt_app, win, scroll, width):
+    """
+    Assert a window opens tall enough to avoid scrolling, up to the screen.
+
+    First checks the window as built (short mock panels: no scrollbar), then
+    makes every panel taller than the screen and refits: the height is
+    capped at the screen and the panels scroll.
+
+    Parameters:
+    qt_app (QApplication): Qt application fixture.
+    win (QMainWindow): Window with a ``_content_height`` method.
+    scroll (QScrollArea): The window's panel scroll area.
+    width (int): Preferred width passed when refitting.
+    """
+    from citkid.qt_compat import TITLE_BAR_MARGIN, available_screen_geometry
+    max_height = available_screen_geometry().height() - TITLE_BAR_MARGIN
+
+    win.show()
+    qt_app.processEvents()
+    assert win.height() == min(win._content_height(), max_height)
+    assert not scroll.verticalScrollBar().isVisible()
+
+    for panel in win.panels:
+        panel.setMinimumHeight(max_height)
+    qt_app.processEvents()  # let the parent layouts pick up the new minimum
+    win._fit_to_screen(width)
+    qt_app.processEvents()
+    assert win.height() == max_height
+    assert scroll.verticalScrollBar().isVisible()
+
+
+def _assert_hints_wrap(win):
+    """
+    Assert the shortcut-hints label wraps, so it doesn't set the window width.
+
+    Parameters:
+    win (QMainWindow): Window whose central layout's first item is the
+        toolbar.
+    """
+    toolbar = win.centralWidget().layout().itemAt(0).widget()
+    (hints,) = [
+        label for label in toolbar.findChildren(QtWidgets.QLabel)
+        if 'run+following' in label.text()
+    ]
+    assert hints.wordWrap()
+    full_width = QtGui.QFontMetrics(hints.font()).horizontalAdvance(hints.text())
+    assert hints.minimumSizeHint().width() < full_width / 2
+
 
 class TestSweepFitterWindowV2:
     def _make_window(self, qt_app, monkeypatch, nrows=2, data_idxs=None, start_idx=0,
-                     state_group=None):
+                     state_group=None, xy_fit=None):
         """
         Build a SweepFitterWindow over two mock sweep runners.
 
@@ -169,6 +255,7 @@ class TestSweepFitterWindowV2:
         start_idx (int or None): Starting position in ``data_idxs``; None
             resumes from ``state_group``.
         state_group (zarr.Group or None): Group for persistent state.
+        xy_fit (SweepXYFit or None): Optional y vs x fit.
 
         Returns:
         win (SweepFitterWindow): The window.
@@ -198,7 +285,36 @@ class TestSweepFitterWindowV2:
             data_idxs=data_idxs,
             title='test',
             state_group=state_group,
+            xy_fit=xy_fit,
         )
+
+    @staticmethod
+    def _line_fit(group=None, fail=False):
+        """
+        Build a linear SweepXYFit that counts its calls.
+
+        Parameters:
+        group (zarr.Group or None): Group to save fits to.
+        fail (bool): If True, the fit raises.
+
+        Returns:
+        xy_fit (SweepXYFit): The fit.
+        calls (list): One entry per fit call.
+        """
+        calls = []
+
+        def fit(x, y):
+            calls.append((x.copy(), y.copy()))
+            if fail:
+                raise RuntimeError('bad fit')
+            return tuple(np.polyfit(x, y, 1))
+
+        xy_fit = isweep.SweepXYFit(
+            fit=fit, output_names=['slope', 'intercept'],
+            model=lambda xs, slope, intercept: slope * xs + intercept,
+            name='line', group=group,
+        )
+        return xy_fit, calls
 
     @staticmethod
     def _stub_refresh(win):
@@ -454,6 +570,167 @@ class TestSweepFitterWindowV2:
         assert fitted == [(1, 1), (0, 3), (1, 3)]
         self._close(win)
 
+    @pytest.mark.parametrize('key, method', [('2', '_run_through_panel'), ('Shift+2', '_run_panel_by_index')])
+    def test_number_shortcuts(self, qt_app, monkeypatch, key, method):
+        win = self._make_window(qt_app, monkeypatch)
+        win._run_through_panel = MagicMock()
+        win._run_panel_by_index = MagicMock()
+        target = QtGui.QKeySequence(key)
+        (shortcut,) = [sc for sc in win.findChildren(QtGui.QShortcut) if sc.key() == target]
+
+        shortcut.activated.emit()
+
+        getattr(win, method).assert_called_once_with(1)
+        other = '_run_panel_by_index' if method == '_run_through_panel' else '_run_through_panel'
+        getattr(win, other).assert_not_called()
+        self._close(win)
+
+    def test_no_run_all_button(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+
+        assert 'Run All' not in [btn.text() for btn in win.findChildren(QtWidgets.QPushButton)]
+        self._close(win)
+
+    def test_toolbar_hints_wrap_instead_of_widening_window(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+
+        _assert_hints_wrap(win)
+        self._close(win)
+
+    def test_height_fits_panels_up_to_screen(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+
+        _assert_height_fits_content(qt_app, win, win._right_scroll, width=1400)
+        self._close(win)
+
+    def test_xy_fit_on_scatter_refresh_and_refit_only_on_change(self, qt_app, monkeypatch):
+        xy_fit, calls = self._line_fit()
+        win = self._make_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit)
+        win._x_cache[0] = np.array([1.0, 2.0])
+        win._y_cache[0] = np.array([3.0, 5.0])
+
+        win._update_sweep_scatter()
+
+        assert len(calls) == 1
+        _, _, outputs = win._xy_store.load(0)
+        np.testing.assert_allclose([float(o) for o in outputs], [2.0, 1.0])
+        xs, ys = win._xy_fit_curve.getData()
+        np.testing.assert_allclose(ys, 2.0 * xs + 1.0)
+        assert 'line: slope = 2, intercept = 1' in win._plot_sweep.titleLabel.text
+
+        win._update_sweep_scatter()
+        assert len(calls) == 1
+
+        win._y_cache[0] = np.array([3.0, 7.0])
+        win._update_sweep_scatter()
+        assert len(calls) == 2
+        assert float(win._xy_store.load(0)[2][0]) == pytest.approx(4.0)
+        self._close(win)
+
+    def test_xy_fit_failure_is_shown_and_saved(self, qt_app, monkeypatch):
+        xy_fit, _ = self._line_fit(fail=True)
+        win = self._make_window(qt_app, monkeypatch, xy_fit=xy_fit)
+        win._x_cache[0] = np.array([1.0, 2.0])
+        win._y_cache[0] = np.array([3.0, 5.0])
+
+        win._update_sweep_scatter()
+
+        assert 'fit failed (RuntimeError: bad fit)' in win._plot_sweep.titleLabel.text
+        assert win._apply_status_label.text() == 'xy fit failed'
+        assert win._xy_store.has_fit(0)
+        assert win._xy_fit_curve.getData()[0] is None or len(win._xy_fit_curve.getData()[0]) == 0
+        self._close(win)
+
+    def test_xy_fit_in_background_after_each_row(self, qt_app, monkeypatch):
+        xy_fit, _ = self._line_fit()
+        win = self._make_window(qt_app, monkeypatch, nrows=4, xy_fit=xy_fit)
+        worker_ars = [MagicMock(), MagicMock()]
+        win._x_of = lambda ar, di: float(worker_ars.index(ar) + 1)
+        win._y_of = lambda ar, di: 2.0 * (worker_ars.index(ar) + 1) + di
+        win._runner_outputs_exist = lambda _ar, _di: False
+        prefit = []
+        win._initialize_runner_outputs = lambda ar, di: prefit.append(di)
+        win._initialized_data_idxs = {3}   # pre-fitted in an earlier session
+
+        win._initialize_remaining_data_indices(worker_ars, [1, 2, 3])
+
+        assert prefit == [1, 1, 2, 2]
+        assert list(np.flatnonzero(win._xy_store.fitted_rows())) == [1, 2, 3]
+        for di in (1, 2, 3):
+            slope, intercept = win._xy_store.load(di)[2]
+            assert float(slope) == pytest.approx(2.0)
+            assert float(intercept) == pytest.approx(di)
+        self._close(win)
+
+    def test_background_revisits_attempted_rows_without_xy_fit(self, qt_app, monkeypatch):
+        xy_fit, _ = self._line_fit()
+        win = self._make_window(qt_app, monkeypatch, nrows=4, xy_fit=xy_fit)
+        win._initialized_data_idxs = {0, 1, 2, 3}
+        x = np.array([1.0, 2.0])
+        win._xy_store.save(2, x, x, xy_fit.run(x, x))
+        win._worker_root = MagicMock()
+        win._make_worker_ars = MagicMock(return_value=[])
+        visited = []
+        win._initialize_remaining_data_indices = lambda _ars, dis: visited.extend(dis)
+
+        win._start_background_initialize_remaining()
+        win._init_all_thread.join(timeout=2)
+
+        assert visited == [1, 3]
+        self._close(win)
+
+    @pytest.mark.parametrize('overwrite', [True, False])
+    def test_xy_fit_definition_mismatch_asks(self, qt_app, monkeypatch, overwrite):
+        group = zarr.open_group(zarr.storage.MemoryStore(), mode='w')
+        old = isweep.SweepXYFit(fit=lambda x, y: y.mean(), output_names=['mean'],
+                                model=lambda xs, m: xs, name='mean', group=group)
+        x = np.array([1.0, 2.0])
+        isweep.SweepXYFitStore(group, old, 2, 2).save(0, x, x, old.run(x, x))
+        asked = []
+        monkeypatch.setattr(isweep, '_confirm_overwrite_xy_fit',
+                            lambda message: asked.append(message) or overwrite)
+        xy_fit, _ = self._line_fit(group=group)
+
+        if overwrite:
+            win = self._make_window(qt_app, monkeypatch, xy_fit=xy_fit)
+            assert 'mean' not in group
+            assert not win._xy_store.has_fit(0)
+            self._close(win)
+        else:
+            with pytest.raises(RuntimeError, match='User cancelled operation'):
+                self._make_window(qt_app, monkeypatch, xy_fit=xy_fit)
+        assert len(asked) == 1 and "'mean'" in asked[0]
+
+    def test_sweep_plot_range_ignores_fit_curve(self, qt_app, monkeypatch):
+        xy_fit = isweep.SweepXYFit(
+            fit=lambda x, y: (1.0,), output_names=['k'],
+            model=lambda xs, k: 1e6 * np.sin(xs),   # far outside the data
+            name='wild',
+        )
+        win = self._make_window(qt_app, monkeypatch, xy_fit=xy_fit)
+        win._x_cache[0] = np.array([1.0, 2.0])
+        win._y_cache[0] = np.array([3.0, 5.0])
+        win._update_sweep_scatter()
+        assert np.nanmax(np.abs(win._xy_fit_curve.getData()[1])) > 1e5
+
+        win._plot_sweep.autoRange()
+
+        y_min, y_max = win._plot_sweep.viewRange()[1]
+        assert y_min > 0 and y_max < 10
+        self._close(win)
+
+    def test_xy_fit_defaults_to_state_group(self, qt_app, monkeypatch, tmp_path):
+        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+        xy_fit, _ = self._line_fit()
+        win = self._make_window(qt_app, monkeypatch, state_group=state_group, xy_fit=xy_fit)
+        win._x_cache[0] = np.array([1.0, 2.0])
+        win._y_cache[0] = np.array([3.0, 5.0])
+
+        win._update_sweep_scatter()
+
+        assert 'slope' in state_group['xy_fit']
+        self._close(win)
+
     def test_worker_ars_are_built_once(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch, nrows=3)
         win._worker_root = MagicMock()
@@ -668,6 +945,72 @@ class TestSweepFitterWindowV2:
         win._ensure_data_idx_initialized.assert_called_once_with(1)
         with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
             win.close()
+
+    @pytest.mark.parametrize('key, called, not_called', [
+        ('Key_B', '_mark_bad_above', '_mark_all_sweeps_bad'),
+        ('Key_A', None, '_apply_to_all'),
+    ])
+    def test_ctrl_shift_shortcuts(self, qt_app, monkeypatch, key, called, not_called):
+        win = self._make_window(qt_app, monkeypatch)
+        for name in ('_mark_bad_above', '_mark_all_sweeps_bad', '_apply_to_all'):
+            setattr(win, name, MagicMock())
+
+        handled = win._handle_modified_letter_shortcut(
+            getattr(isweep.QtCore.Qt.Key, key),
+            isweep._Qt.ShiftModifier | isweep._Qt.ControlModifier,
+        )
+
+        assert handled is (called is not None)
+        if called:
+            getattr(win, called).assert_called_once()
+        getattr(win, not_called).assert_not_called()
+        self._close(win)
+
+    @pytest.mark.parametrize('x, selected, expected', [
+        ([3.0, 1.0, 2.0], 2, [0, 2]),          # selected plus larger x
+        ([3.0, 1.0, 2.0], 0, [0]),             # nothing larger
+        ([3.0, 1.0, 2.0], 1, [0, 1, 2]),       # everything at or above
+        ([np.nan, 1.0, 2.0], 1, [1, 2]),       # unknown x is left alone
+        ([1.0, np.nan, 2.0], 1, [1]),          # selected x unknown: only it
+    ])
+    def test_mark_bad_above_selects_points(self, qt_app, monkeypatch, x, selected, expected):
+        win = self._make_window(qt_app, monkeypatch)
+        win._n_sweep = len(x)
+        win._sweep_idx = selected
+        win._get_x_array = lambda _di: np.asarray(x)
+        win._mark_sweeps_bad = MagicMock()
+
+        win._mark_bad_above()
+
+        win._mark_sweeps_bad.assert_called_once_with(expected)
+        assert win._apply_status_label.text() == f'Marked {len(expected)} sweep(s) bad'
+        self._close(win)
+
+    def test_mark_bad_above_needs_a_selection(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+        win._sweep_idx = None
+        win._mark_sweeps_bad = MagicMock()
+
+        win._mark_bad_above()
+
+        win._mark_sweeps_bad.assert_not_called()
+        assert 'Select a sweep point' in win._apply_status_label.text()
+        self._close(win)
+
+    def test_mark_sweeps_bad_writes_only_chosen_sweeps(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+        written = []
+        for panel in win.panels:
+            panel._write_nan_outputs = lambda p=panel: written.append(win._ARs.index(p.AR))
+        original_ar = win.panels[0].AR
+        win._update_sweep_scatter = MagicMock()
+
+        win._mark_sweeps_bad([1])
+
+        assert written == [1] * len(win.panels)
+        assert all(panel.AR is original_ar for panel in win.panels)
+        win._update_sweep_scatter.assert_called_once()
+        self._close(win)
 
     def test_shift_b_shortcut_marks_all_sweeps_bad(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch)

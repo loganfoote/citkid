@@ -343,9 +343,18 @@ class plStep:
                     params_i.append(p)
                 # execute function 
                 results_i = self.func(*params_i)
-                # collect results 
+                # collect results
                 if not isinstance(results_i, tuple):
                     results_i = (results_i,)
+                # Check every call: otherwise a wrong count (e.g. a dict taken
+                # as one output) leaves the other outputs silently empty.
+                if len(results_i) != len(self.return_names):
+                    raise ValueError(
+                        f"Step '{self.name}' returned {len(results_i)} output(s) "
+                        f"but has {len(self.return_names)} return names "
+                        f"{self.return_names}. Return a tuple in return_names "
+                        f"order."
+                    )
                 for r, v in enumerate(results_i):
                     results[r].append(v) 
             results = tuple([np.array(r) for r in results])

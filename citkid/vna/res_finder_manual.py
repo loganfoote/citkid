@@ -1308,10 +1308,14 @@ class ResFinder(QtCore.QObject):
         
     def quit_and_save(self):
         """
-        Save data and close the application.
+        Close the window, which saves the data and ends the event loop.
+
+        This does exactly what the window's X button does: ``closeEvent``
+        saves, and closing the last window ends ``app.exec()``. (Calling
+        ``app.quit()`` without closing the window left it on screen with no
+        event loop, so it froze.)
         """
-        self.save_data()
-        self.app.quit()
+        self.win.close()
         
     def show_help(self):
         """

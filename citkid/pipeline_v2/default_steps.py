@@ -5,7 +5,36 @@ from ..xcal import gain, circle, xcal
 from ..res import fitter as res_fitter
 from ..signal import psd
 from ..xcal import reduced_params
- 
+
+
+def _dict_outputs_in_freq_order(func, prefix):
+    """
+    Adapt a reduced-parameter function that returns a dict to plStep outputs.
+
+    ``reduced_params.get_*_reduced_default_freqs`` return a dict keyed
+    ``'{prefix}_{freq}'``, but a plStep needs a tuple in ``return_names``
+    order. A dict would be taken as a single output.
+
+    Parameters:
+    func (callable): Function returning a dict keyed by
+        ``f'{prefix}_{freq}'`` for each freq in ``reduced_params._freqs``.
+    prefix (str): Key prefix, 'sxx' or 'sfactor'.
+
+    Returns:
+    wrapped (callable): Function with the same arguments, returning a tuple of
+        the values in ``reduced_params._freqs`` order.
+    """
+    def wrapped(*args):
+        """
+        Call ``func`` and return its values as a tuple in frequency order.
+        """
+        result = func(*args)
+        return tuple(result[f'{prefix}_{freq}'] for freq in reduced_params._freqs)
+    wrapped.__name__ = func.__name__
+    wrapped.__module__ = func.__module__
+    return wrapped
+
+
 ############################## Default cal steps ###############################
 # name, function, input parameter names, output parameter names, 
 # save, func_vectorized
@@ -55,12 +84,14 @@ default_cal_steps =\
    ['xt', 'dt'],
    ['f_sxx', 'sxx'], 'per-row'),
 
-   ('get_sxx_reduced', reduced_params.get_sxx_reduced_default_freqs,
+   ('get_sxx_reduced',
+    _dict_outputs_in_freq_order(reduced_params.get_sxx_reduced_default_freqs, 'sxx'),
     ['f_sxx', 'sxx'], 
     [f'sxx_{_freq}'.replace('.', 'p') for _freq in reduced_params._freqs], 
     'per-row'),
 
-   ('get_sfactor_reduced', reduced_params.get_sfactor_reduced_default_freqs,
+   ('get_sfactor_reduced',
+    _dict_outputs_in_freq_order(reduced_params.get_sfactor_reduced_default_freqs, 'sfactor'),
     ['f_sparper', 'spar', 'sper'], 
     [f'sfactor_{_freq}'.replace('.', 'p') for _freq in reduced_params._freqs], 
     'per-row')

@@ -203,9 +203,40 @@ def test_get_qapp_creates_app_with_mkqapp():
     sentinel = object()
     with patch.object(qt_compat._QtWidgets.QApplication, 'instance',
                       return_value=None), \
-         patch.object(qt_compat._pg, 'mkQApp', return_value=sentinel) as mk:
+         patch.object(qt_compat._pg, 'mkQApp', return_value=sentinel) as mk, \
+         patch.object(qt_compat, '_use_system_ui_font') as use_font:
         assert qt_compat.get_qapp('My GUI') is sentinel
     mk.assert_called_once_with('My GUI')
+    use_font.assert_called_once_with(sentinel)
+
+
+def test_use_system_ui_font_sets_app_font(qapp):
+    """A known system UI font replaces the app default font."""
+    from citkid import qt_compat
+    original = qapp.font()
+    try:
+        with patch.object(qt_compat, '_windows_message_font', return_value=('Arial', 9.0)):
+            qt_compat._use_system_ui_font(qapp)
+        assert qapp.font().family() == 'Arial'
+        assert qapp.font().pointSizeF() == 9.0
+
+        with patch.object(qt_compat, '_windows_message_font', return_value=(None, None)):
+            qt_compat._use_system_ui_font(qapp)
+        assert qapp.font().family() == 'Arial'   # unknown: left unchanged
+    finally:
+        qapp.setFont(original)
+
+
+def test_windows_message_font_is_plausible():
+    """On Windows the message font is a real family at a normal UI size."""
+    import sys
+    from citkid import qt_compat
+    family, point_size = qt_compat._windows_message_font()
+    if sys.platform != 'win32':
+        assert (family, point_size) == (None, None)
+        return
+    assert family
+    assert 6 <= point_size <= 16
 
 
 @pytest.mark.parametrize('screen, warns', [
@@ -242,3 +273,42 @@ def test_fit_window_to_screen(qapp, size, expected):
     assert win.x() == (1000 - expected[0]) // 2
     assert win.y() == (800 - expected[1]) // 2
     win.close()
+
+
+@pytest.mark.parametrize('size, expected', [
+    ((600, 700), (600, 700)),     # tall content fits within the full height
+    ((600, 900), (600, 760)),     # capped at screen height minus the margin
+])
+def test_fit_window_to_screen_height_margin(qapp, size, expected):
+    """With height_margin, the height may use the whole screen minus it."""
+    from pyqtgraph.Qt import QtCore, QtWidgets
+    from citkid import qt_compat
+    win = QtWidgets.QWidget()
+    with patch.object(qt_compat, 'available_screen_geometry',
+                      return_value=QtCore.QRect(0, 0, 1000, 800)):
+        result = qt_compat.fit_window_to_screen(win, frac=0.8, size=size, height_margin=40)
+    assert result == expected
+    # The frame (title bar included) is centred inside the screen.
+    assert win.y() == (800 - expected[1] - 40) // 2
+    win.close()
+
+
+def test_scroll_area_content_height(qapp):
+    """The needed height is the content's minimum height plus the frame."""
+    from pyqtgraph.Qt import QtWidgets
+    from citkid import qt_compat
+    scroll = QtWidgets.QScrollArea()
+    assert qt_compat.scroll_area_content_height(scroll) == 0
+
+    content = QtWidgets.QWidget()
+    layout = QtWidgets.QVBoxLayout(content)
+    for height in (150, 250):
+        child = QtWidgets.QWidget()
+        child.setMinimumHeight(height)
+        layout.addWidget(child)
+    scroll.setWidget(content)
+
+    expected = content.minimumSizeHint().height() + 2 * scroll.frameWidth()
+    assert qt_compat.scroll_area_content_height(scroll) == expected
+    assert expected >= 400
+    scroll.close()

@@ -194,3 +194,32 @@ class TestDefaultStepsDocumentation:
             # __str__ should be more verbose than __repr__
             assert len(str_str) >= len(repr(s)), \
                 f"{s.name} str should be at least as long as repr"
+
+
+@pytest.mark.parametrize("step_name, prefix, n_inputs", [
+    ("get_sxx_reduced", "sxx", 2),
+    ("get_sfactor_reduced", "sfactor", 3),
+])
+def test_reduced_steps_return_one_value_per_frequency(step_name, prefix, n_inputs):
+    """Each reduced-parameter output holds one float per row, in frequency order."""
+    import numpy as np
+    from citkid.xcal import reduced_params
+
+    step = next(s for s in default_cal_steps if s.name == step_name)
+    f = np.linspace(0.01, 500, 50000)
+    rows = [1e-16 * (1 + 1 / f), 2e-16 * (1 + 1 / f)]
+    if n_inputs == 2:
+        params = [np.array([f, f]), np.array(rows)]
+        expected = [reduced_params.get_sxx_reduced_default_freqs(f, r) for r in rows]
+    else:
+        params = [np.array([f, f]), np.array(rows), np.array([r / 2 for r in rows])]
+        expected = [reduced_params.get_sfactor_reduced_default_freqs(f, r, r / 2) for r in rows]
+
+    out = step._run(params, [False] * n_inputs)
+
+    assert list(out) == [f"{prefix}_{freq}".replace(".", "p") for freq in reduced_params._freqs]
+    for freq in reduced_params._freqs:
+        values = out[f"{prefix}_{freq}".replace(".", "p")]
+        assert values.shape == (2,)
+        assert values.dtype == np.float64
+        np.testing.assert_allclose(values, [e[f"{prefix}_{freq}"] for e in expected])

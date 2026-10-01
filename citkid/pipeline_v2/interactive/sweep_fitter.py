@@ -46,8 +46,9 @@ S / ↓       next sweep index
 R           auto-scale all plots
 B           mark current sweep as bad
 ⇧B          mark all sweeps bad
-1, 2, …     run panel N
-Shift+N     run panel N and all following panels
+Ctrl+⇧B     mark the selected sweep point and all points with larger x bad
+1, 2, …     run panel N and all following panels (same as its "Run +")
+Shift+N     run panel N only
 """
 
 import sys
@@ -59,10 +60,24 @@ from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
 from ..analysis import AnalysisRunner
 from ..dataset import DataSet, _io_lock_for, _retry_io
-from ...qt_compat import Qt as _Qt, fit_window_to_screen, get_qapp
+from ..sweep_xy_fit import SweepXYFit, SweepXYFitStore  # noqa: F401 (SweepXYFit re-exported)
+from ...qt_compat import (
+    TITLE_BAR_MARGIN,
+    Qt as _Qt,
+    fit_window_to_screen,
+    get_qapp,
+    scroll_area_content_height,
+    scroll_area_min_width,
+    vbox_height_for_width,
+)
 from . import gain      # noqa: F401 — registers GainFitPanel
 from . import fit_iq    # noqa: F401 — registers FitIQPanel
-from .core import get_panel_class, _SectionHeader
+from .core import (
+    _SectionHeader,
+    get_panel_class,
+    scale_plot_fonts,
+    widget_font_stylesheet,
+)
 
 
 # Attribute on the state group holding viewed / pre-fitted rows.
@@ -82,6 +97,30 @@ _VIRIDIS_STOPS = [
     (0.75, (94, 201,  98)),
     (1.00, (253, 231,  37)),
 ]
+
+
+def _confirm_overwrite_xy_fit(message):
+    """
+    Ask whether to overwrite saved xy fits from a different fit definition.
+
+    Parameters:
+    message (str): Description of the saved fits, shown in the popup.
+
+    Returns:
+    overwrite (bool): True if the user chose Overwrite, False if they chose
+        Cancel or closed the popup.
+    """
+    box = QtWidgets.QMessageBox()
+    box.setWindowTitle('Existing XY Fits Found')
+    box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+    box.setText(message + '\n\nOverwrite them with the new fit, or cancel?')
+    overwrite_btn = box.addButton(
+        'Overwrite', QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+    cancel_btn = box.addButton(
+        'Cancel', QtWidgets.QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(cancel_btn)
+    (getattr(box, 'exec', None) or box.exec_)()
+    return box.clickedButton() is overwrite_btn
 
 
 def _viridis_rgb(t):
@@ -149,10 +188,19 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         the window was closed) and the rows already pre-fitted (including
         failed fits, which are not retried). None (default) keeps state in
         memory only. Delete ``state_group.attrs['sweep_fitter']`` to reset.
+    xy_fit (SweepXYFit or None): Optional fit of the sweep plot's y vs x
+        data, one per resonator. Each resonator is fitted once its sweeps
+        are pre-fitted, and again whenever its plotted x or y data changes.
+        The fitted curve is drawn on the sweep plot and the outputs shown in
+        its title. Fits are saved to ``xy_fit.group``, or to
+        ``state_group/xy_fit`` if that is None (in memory if there is no
+        state group either). None (default) disables fitting.
 
     Raises:
     ValueError: If ``data_idxs`` is empty or contains indices outside
         ``0 .. nrows - 1``.
+    RuntimeError: If the xy fit group holds fits from a different fit
+        definition and the user cancels the overwrite popup.
     """
 
     def __init__(
@@ -170,6 +218,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         plot_scale=1.0,
         parent=None,
         state_group=None,
+        xy_fit=None,
     ):
         """
         Build the window, toolbar, sweep plots and IQ panels.
@@ -215,6 +264,21 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         # They are not fitted again automatically; the user can rerun panels.
         self._initialized_data_idxs: set[int] = set(state.get('prefit_attempted', []))
 
+        # Optional y vs x fit, one per resonator
+        self._xy_fit = xy_fit
+        self._xy_store = None
+        if xy_fit is not None:
+            group = xy_fit.group
+            if group is None:
+                group = (state_group.require_group('xy_fit') if state_group is not None
+                         else zarr.open_group(zarr.storage.MemoryStore(), mode='w'))
+            store = SweepXYFitStore(group, xy_fit, self._nrows, self._n_sweep)
+            if not store.matches_definition():
+                if not _confirm_overwrite_xy_fit(store.describe_existing()):
+                    raise RuntimeError('User cancelled operation')
+                store.clear()
+            self._xy_store = store
+
         if start_idx is None:
             unviewed = [
                 pos for pos, di in enumerate(self._data_idxs)
@@ -255,6 +319,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         outer.addWidget(splitter, 1)
+        self._splitter = splitter
 
         splitter.addWidget(self._build_sweep_plots())
 
@@ -271,9 +336,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         splitter.setSizes([480, 720])
 
         # Apply font scaling
-        if ui_scale != 1.0:
-            base_pt = round(10 * ui_scale)
-            central.setStyleSheet(f"* {{ font-size: {base_pt}pt; }}")
+        central.setStyleSheet(widget_font_stylesheet(ui_scale))
 
         # Build GainFitPanel + FitIQPanel — use ARs[0] as placeholder until
         # the user selects a sweep point by clicking the scatter.
@@ -312,26 +375,107 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         sc_r.activated.connect(self._autoscale_all)
         sc_b = QtGui.QShortcut(QtGui.QKeySequence('B'), self)
         sc_b.activated.connect(self._mark_all_bad)
+        # N: run panel N and all following ("Run +"). Shift+N: panel N only.
         for idx in range(1, 10):
             _sc = QtGui.QShortcut(QtGui.QKeySequence(str(idx)), self)
-            _sc.activated.connect(lambda _i=idx - 1: self._run_panel_by_index(_i))
+            _sc.activated.connect(lambda _i=idx - 1: self._run_through_panel(_i))
             _sc_s = QtGui.QShortcut(QtGui.QKeySequence(f'Shift+{idx}'), self)
-            _sc_s.activated.connect(lambda _i=idx - 1: self._run_through_panel(_i))
+            _sc_s.activated.connect(lambda _i=idx - 1: self._run_panel_by_index(_i))
 
-        # Preferred size, shrunk to fit smaller screens, centred
-        fit_window_to_screen(
-            self, frac=0.9, size=(round(1400 * ui_scale), round(900 * ui_scale)))
+        self._fit_to_screen(round(1400 * ui_scale))
         QtCore.QTimer.singleShot(0, self._auto_initialize_all)
+
+    def _fit_to_screen(self, width: int):
+        """
+        Size the window to show every panel without scrolling, and center it.
+
+        The width is set first, since the word-wrapped toolbar hints make the
+        needed height depend on it. The splitter then gives the panels 60% of
+        the width, or at least the width they need to avoid a horizontal
+        scrollbar, with the plots taking the rest. The height is capped at
+        the screen height, beyond which the panels scroll.
+
+        Parameters:
+        width (int): Preferred width in logical pixels (shrunk to fit the
+            screen).
+        """
+        # Apply styles and fonts, and the layout's minimum size, before
+        # measuring; otherwise a hidden window measures text at the wrong
+        # font and width.
+        self.ensurePolished()
+        self.layout().activate()
+        fit_window_to_screen(self, frac=0.9, size=(width, 1), height_margin=TITLE_BAR_MARGIN)
+        self._splitter.setSizes(self._splitter_sizes())
+        fit_window_to_screen(self, frac=0.9, size=(self.width(), self._content_height()),
+                             height_margin=TITLE_BAR_MARGIN)
+
+    def _splitter_sizes(self) -> list:
+        """
+        Return [plots, panels] splitter widths for the window's current width.
+
+        Returns:
+        sizes (list of int): Widths in logical pixels. The panels get 60% of
+            the space, or at least the width they need to avoid a horizontal
+            scrollbar, but never so much that the plots drop below their
+            minimum width.
+        """
+        margins = self.centralWidget().layout().contentsMargins()
+        total = (self.width() - margins.left() - margins.right()
+                 - self._splitter.handleWidth())
+        # The splitter honours an explicit minimum width as well as the hint.
+        plots_min = max(self._gw.minimumSizeHint().width(), self._gw.minimumWidth())
+        panels = max(round(0.6 * total), scroll_area_min_width(self._right_scroll))
+        panels = min(panels, total - plots_min)
+        return [total - panels, panels]
+
+    def _content_height(self) -> int:
+        """
+        Return the window height that shows every panel without scrolling,
+        at the window's current width.
+
+        The sweep plots on the left stretch to any height, so only their
+        minimum height counts.
+
+        Returns:
+        height (int): Height of the toolbar (wrapped at the current width)
+            plus the taller of the full panel stack and the plots' minimum
+            height, in logical pixels.
+        """
+        splitter_height = max(
+            scroll_area_content_height(self._right_scroll, width=self._splitter_sizes()[1]),
+            max(self._gw.minimumSizeHint().height(), self._gw.minimumHeight()),
+        )
+        return vbox_height_for_width(
+            self.centralWidget().layout(), self.width(),
+            {self._splitter: splitter_height},
+        )
 
     # ------------------------------------------------------------------
     # Build helpers
     # ------------------------------------------------------------------
 
     def _build_toolbar(self) -> QtWidgets.QWidget:
+        """
+        Build the two-row toolbar.
+
+        Row 1 holds navigation, sweep selection and status labels. Row 2
+        holds the shortcut hints and the batch-action buttons. The hints
+        label word-wraps, so the toolbar never forces the window wider than
+        the screen.
+
+        Returns:
+        w (QWidget): The toolbar widget.
+        """
         w = QtWidgets.QWidget()
-        layout = QtWidgets.QHBoxLayout(w)
-        layout.setContentsMargins(4, 2, 4, 2)
+        rows = QtWidgets.QVBoxLayout(w)
+        rows.setContentsMargins(4, 2, 4, 2)
+        rows.setSpacing(2)
+        layout = QtWidgets.QHBoxLayout()
         layout.setSpacing(8)
+        row2 = QtWidgets.QHBoxLayout()
+        row2.setSpacing(8)
+        rows.addLayout(layout)
+        rows.addLayout(row2)
 
         # Resonator navigation
         self._res_prev_btn = QtWidgets.QPushButton('◀')
@@ -371,34 +515,39 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self._sweep_combo.currentIndexChanged.connect(self._on_sweep_combo_changed)
         layout.addWidget(self._sweep_combo)
 
-        layout.addSpacing(16)
-
-        hints = QtWidgets.QLabel(
-            '[A/D] resonator   [W/S] sweep   [R] rescale   [B] mark bad'
-            '   [⇧B] mark all bad   [N] run panel   [⇧N] run+   [⇧A] apply to all'
-        )
-        hints.setStyleSheet('color: palette(mid); font-style: italic;')
-        layout.addWidget(hints)
-
         layout.addStretch()
 
-        run_all_btn = QtWidgets.QPushButton('Run All')
-        run_all_btn.clicked.connect(self._run_all)
-        layout.addWidget(run_all_btn)
+        # Row 2: word-wrapping shortcut hints, then batch actions
+        hints = QtWidgets.QLabel(
+            '[A/D] resonator   [W/S] sweep   [R] rescale   [B] mark bad'
+            '   [⇧B] mark all bad   [Ctrl+⇧B] mark bad above   [N] run+following'
+            '   [⇧N] run panel only   [⇧A] apply to all'
+        )
+        hints.setWordWrap(True)
+        hints.setStyleSheet('color: palette(mid); font-style: italic;')
+        row2.addWidget(hints, 1)
 
         apply_all_btn = QtWidgets.QPushButton('Apply to All')
         apply_all_btn.setToolTip(
             'Apply current panel settings to every dataset in the active sweep and save'
         )
         apply_all_btn.clicked.connect(self._apply_to_all)
-        layout.addWidget(apply_all_btn)
+        row2.addWidget(apply_all_btn)
 
         mark_all_sweeps_bad_btn = QtWidgets.QPushButton('Mark All Sweeps Bad')
         mark_all_sweeps_bad_btn.setToolTip(
             'Mark all sweep indices for the current resonator as bad (Shift+B)'
         )
         mark_all_sweeps_bad_btn.clicked.connect(self._mark_all_sweeps_bad)
-        layout.addWidget(mark_all_sweeps_bad_btn)
+        row2.addWidget(mark_all_sweeps_bad_btn)
+
+        mark_bad_above_btn = QtWidgets.QPushButton('Mark Bad Above')
+        mark_bad_above_btn.setToolTip(
+            'Mark the selected sweep point and every point with a larger x '
+            f'({self._x_name}) as bad for the current resonator (Ctrl+Shift+B)'
+        )
+        mark_bad_above_btn.clicked.connect(self._mark_bad_above)
+        row2.addWidget(mark_bad_above_btn)
 
         self._apply_status_label = QtWidgets.QLabel('')
         self._apply_status_label.setMinimumWidth(120)
@@ -445,12 +594,23 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         )
         self._plot_sweep.addItem(self._selected_marker)
 
+        # Optional fitted y(x) curve. ignoreBounds keeps it out of
+        # auto-ranging, so the axes follow the data even if the fit
+        # extrapolates far outside it.
+        self._xy_fit_curve = None
+        if self._xy_fit is not None:
+            self._xy_fit_curve = pg.PlotDataItem(
+                [], [], pen=pg.mkPen('w', width=1.5, style=_Qt.DashLine))
+            self._plot_sweep.addItem(self._xy_fit_curve, ignoreBounds=True)
+
         # Bottom: |S21| waterfall
         self._plot_waterfall = gw.addPlot(row=1, col=0, title='|S21| Waterfall')
         self._plot_waterfall.setLabel('left', '|S21| + offset (dB)')
         self._plot_waterfall.setLabel('bottom', 'Frequency (Hz)')
         self._plot_waterfall.showGrid(x=True, y=True, alpha=0.3)
         self._waterfall_curves: list = []
+
+        scale_plot_fonts(self._ui_scale, self._plot_sweep, self._plot_waterfall)
 
         self._gw = gw
         return gw
@@ -462,8 +622,25 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         return super().eventFilter(obj, event)
 
     def _handle_modified_letter_shortcut(self, key, modifiers) -> bool:
-        """Handle shifted letter shortcuts that collide with plain-letter bindings."""
-        if not (modifiers & _Qt.ShiftModifier):
+        """
+        Handle shifted letter shortcuts that collide with plain-letter bindings.
+
+        Ctrl+Shift+B marks the selected sweep point and all points above it
+        bad. Shift+A and Shift+B fire only without Ctrl.
+
+        Parameters:
+        key (int): Qt key code.
+        modifiers (Qt.KeyboardModifiers): Modifiers held with the key.
+
+        Returns:
+        handled (bool): True if the key press was handled.
+        """
+        shift = bool(modifiers & _Qt.ShiftModifier)
+        ctrl = bool(modifiers & _Qt.ControlModifier)
+        if shift and ctrl and key == QtCore.Qt.Key.Key_B:
+            self._mark_bad_above()
+            return True
+        if not shift or ctrl:
             return False
         if key == QtCore.Qt.Key.Key_A:
             self._apply_to_all()
@@ -856,9 +1033,6 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         # Refresh the scatter point for the current sweep index after running
         self._update_sweep_point(self._sweep_idx)
 
-    def _run_all(self):
-        self._run_through_panel(0)
-
     def _apply_to_all(self):
         """
         Apply the current panel settings to every sweep index for the current
@@ -954,16 +1128,47 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
     def _mark_all_sweeps_bad(self):
         """Mark every panel's outputs as NaN for all sweeps at current data_idx."""
+        self._mark_sweeps_bad(range(self._n_sweep))
+
+    def _mark_bad_above(self):
+        """
+        Mark the selected sweep point and every point with a larger x as bad.
+
+        Uses the x values on the sweep scatter for the current data_idx.
+        Points whose x is unavailable are left alone. Does nothing (and says
+        so in the status label) if no sweep point is selected.
+        """
+        if self._sweep_idx is None:
+            self._apply_status_label.setText('Select a sweep point first')
+            return
+        x = self._get_x_array(self._data_idx)
+        x_sel = x[self._sweep_idx]
+        sweep_idxs = [
+            si for si in range(self._n_sweep)
+            if si == self._sweep_idx or (np.isfinite(x[si]) and x[si] > x_sel)
+        ]
+        self._mark_sweeps_bad(sweep_idxs)
+        for panel in self.panels:
+            panel.clear_plots()
+        self._apply_status_label.setText(f'Marked {len(sweep_idxs)} sweep(s) bad')
+
+    def _mark_sweeps_bad(self, sweep_idxs):
+        """
+        Mark every panel's outputs as NaN for some sweeps at the current data_idx.
+
+        Parameters:
+        sweep_idxs (iterable of int): Sweep indices to mark bad.
+        """
         di = self._data_idx
-        for si in range(self._n_sweep):
+        old_AR = self.panels[0].AR
+        for si in sweep_idxs:
             AR = self._ARs[si]
-            old_AR = self.panels[0].AR
             for panel in self.panels:
                 panel.AR = AR
             for panel in self.panels:
                 panel._write_nan_outputs()
-            for panel in self.panels:
-                panel.AR = old_AR
+        for panel in self.panels:
+            panel.AR = old_AR
         # Invalidate y-cache so scatter refreshes without these points
         self._y_cache.pop(di, None)
         self._update_sweep_scatter()
@@ -1043,7 +1248,14 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
         pos = self._nav_pos
         ordered = self._data_idxs[pos + 1:] + self._data_idxs[:pos]
-        remaining = [di for di in ordered if di not in self._initialized_data_idxs]
+        # Also revisit pre-fitted rows that still lack an xy fit (e.g. the
+        # fit was added or overwritten after they were pre-fitted).
+        xy_fitted = self._xy_store.fitted_rows() if self._xy_store is not None else None
+        remaining = [
+            di for di in ordered
+            if di not in self._initialized_data_idxs
+            or (xy_fitted is not None and not xy_fitted[di])
+        ]
         if not remaining:
             return
 
@@ -1091,8 +1303,10 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         A failure for one (row, sweep) is printed and skipped rather than
         stopping the loop. The stop flag is checked before each sweep, so a
         stop request waits for at most one fit. A row is marked attempted only
-        once every sweep has been tried, and its cached per-row data is then
-        released so memory doesn't grow over the session.
+        once every sweep has been tried. Then its xy fit (if any) is computed
+        and saved, and its cached per-row data is released so memory doesn't
+        grow over the session. Rows attempted in an earlier session only get
+        the xy fit, if they lack one.
 
         Parameters:
         worker_ars (list of AnalysisRunner): One worker runner per sweep.
@@ -1100,9 +1314,15 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         """
         # One zarr read per sweep says which rows are already fitted.
         done_masks = [self._saved_output_rows(ar) for ar in worker_ars]
+        xy_fitted = self._xy_store.fitted_rows() if self._xy_store is not None else None
         for di in data_indices:
             di = int(di)
             if di in self._initialized_data_idxs:
+                # Pre-fitted in an earlier session; it may still need an xy fit.
+                if xy_fitted is not None and not xy_fitted[di]:
+                    if self._init_all_stop.is_set():
+                        return
+                    self._fit_xy_in_background(worker_ars, di)
                 continue
             self._init_all_current_di = di
             for si, ar in enumerate(worker_ars):
@@ -1120,6 +1340,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
                     print(f'[init-all] data_idx={di}, sweep_idx={si} failed: '
                           f'{type(exc).__name__}: {exc}')
             self._mark_attempted(di)
+            self._fit_xy_in_background(worker_ars, di)
             for ar in worker_ars:
                 try:
                     ar.release_rows(di)
@@ -1286,8 +1507,22 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
     def _get_x_value(self, sweep_idx: int, data_idx: int):
         """Return the x value for (sweep_idx, data_idx), or None on failure."""
+        return self._x_of(self._ARs[sweep_idx], data_idx)
+
+    def _x_of(self, AR, data_idx: int):
+        """
+        Return the sweep-plot x value of one runner at a data index.
+
+        Parameters:
+        AR (AnalysisRunner): Runner for one sweep index (UI or worker).
+        data_idx (int): Resonator index.
+
+        Returns:
+        x (float or None): ``AR.DS.<x_param_name>[data_idx]``, or None if it
+            is unavailable or not finite.
+        """
         try:
-            attr = getattr(self._ARs[sweep_idx].DS, self._x_param_name)
+            attr = getattr(AR.DS, self._x_param_name)
             val = float(attr[data_idx])
             return None if not np.isfinite(val) else val
         except Exception:
@@ -1306,8 +1541,21 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
     def _get_y_value(self, sweep_idx: int, data_idx: int) -> float:
         """Return the y value for (sweep_idx, data_idx), or NaN on failure."""
+        return self._y_of(self._ARs[sweep_idx], data_idx)
+
+    def _y_of(self, AR, data_idx: int) -> float:
+        """
+        Return the sweep-plot y value of one runner at a data index.
+
+        Parameters:
+        AR (AnalysisRunner): Runner for one sweep index (UI or worker).
+        data_idx (int): Resonator index.
+
+        Returns:
+        y (float): ``y_func(AR, data_idx)``, or NaN if it is unavailable.
+        """
         try:
-            val = self._y_func(self._ARs[sweep_idx], data_idx)
+            val = self._y_func(AR, data_idx)
             return np.nan if val is None else float(val)
         except Exception:
             return np.nan
@@ -1348,6 +1596,86 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
             else:
                 si_item.setData([xi], [yi], data=[i])
         self._update_selected_marker()
+        self._refresh_xy_fit()
+
+    # ------------------------------------------------------------------
+    # Optional y vs x fit
+    # ------------------------------------------------------------------
+
+    def _refresh_xy_fit(self):
+        """
+        Fit the current resonator's sweep plot data if it changed, and draw it.
+
+        The saved fit is reused when its inputs match the plotted x and y
+        exactly. The outputs (or the failure) are shown in the plot title.
+        """
+        if self._xy_fit is None:
+            return
+        di = self._data_idx
+        x = self._get_x_array(di).copy()
+        y = self._get_y_array(di).copy()
+        outputs, error = self._fit_and_save_xy(di, x, y)
+        xs, ys = self._xy_fit.curve(x, outputs)
+        self._xy_fit_curve.setData([] if xs is None else xs, [] if ys is None else ys)
+        if error is not None:
+            detail = f'fit failed ({error})'
+            self._apply_status_label.setText('xy fit failed')
+        elif outputs is None:
+            detail = 'no fit'
+        else:
+            detail = self._xy_fit.describe(outputs)
+        self._plot_sweep.setTitle(f'Sweep  |  {self._xy_fit.name}: {detail}')
+
+    def _fit_and_save_xy(self, data_idx: int, x, y):
+        """
+        Fit one resonator's sweep data and save it, unless the saved fit used
+        the same inputs.
+
+        Safe to call from the UI thread and the background worker.
+
+        Parameters:
+        data_idx (int): Resonator index.
+        x (np.ndarray): x value of each sweep index (NaN if unavailable).
+        y (np.ndarray): y value of each sweep index (NaN if unavailable).
+
+        Returns:
+        outputs (list of np.ndarray or None): Fit outputs, or None if the fit
+            failed or there were too few points.
+        error (str or None): Error message if the fit raised, else None.
+        """
+        store = self._xy_store
+        if store.is_current(data_idx, x, y):
+            return store.load(data_idx)[2], None
+        try:
+            outputs, error = self._xy_fit.run(x, y), None
+        except Exception as exc:
+            outputs, error = None, f'{type(exc).__name__}: {exc}'
+        store.save(data_idx, x, y, outputs)
+        return outputs, error
+
+    def _fit_xy_in_background(self, worker_ars, data_idx: int):
+        """
+        Fit and save one resonator's sweep data from the worker runners.
+
+        Parameters:
+        worker_ars (list of AnalysisRunner): One worker runner per sweep.
+        data_idx (int): Resonator index whose sweeps are all pre-fitted.
+        """
+        if self._xy_fit is None:
+            return
+        x = np.full(len(worker_ars), np.nan)
+        for si, ar in enumerate(worker_ars):
+            value = self._x_of(ar, data_idx)
+            if value is not None:
+                x[si] = value
+        y = np.array([self._y_of(ar, data_idx) for ar in worker_ars])
+        try:
+            _, error = self._fit_and_save_xy(data_idx, x, y)
+            if error is not None:
+                print(f'[init-all] xy fit for data_idx={data_idx} failed: {error}')
+        except Exception as exc:
+            print(f'[init-all] saving xy fit for data_idx={data_idx} failed: '
+                  f'{type(exc).__name__}: {exc}')
 
     def _update_selected_marker(self):
         """Draw a white ring around the currently selected sweep point."""
@@ -1404,6 +1732,7 @@ def run_sweep_fitter(
     title="Sweep Fitter",
     ui_scale=1.0,
     plot_scale=1.0,
+    xy_fit=None,
 ):
     """
     Build one DataSet + AnalysisRunner per sweep index, then launch the
@@ -1442,9 +1771,20 @@ def run_sweep_fitter(
     title (str): Window title. Default ``'Sweep Fitter'``.
     ui_scale (float): Font and widget size multiplier. Default 1.0.
     plot_scale (float): Plot area height multiplier. Default 1.0.
+    xy_fit (SweepXYFit or None): Optional fit of the sweep plot's
+        ``y_param_name`` vs x data, one per resonator. Each resonator is
+        fitted once all its sweeps are pre-fitted in the background, and
+        again whenever its plotted data changes. Fits are saved to
+        ``xy_fit.group``, or ``root/xy_fit`` if that is None. None (default)
+        disables fitting.
 
     Returns:
     win (SweepFitterWindow): The created (and already shown) window.
+
+    Raises:
+    ValueError: If ``y_param_name`` is not a supported fit parameter.
+    RuntimeError: If saved xy fits come from a different fit definition
+        and the user cancels the overwrite popup.
 
     Notes:
     Session state (viewed and pre-fitted rows) is stored in
@@ -1503,6 +1843,7 @@ def run_sweep_fitter(
         ui_scale=ui_scale,
         plot_scale=plot_scale,
         state_group=root,
+        xy_fit=xy_fit,
     )
     win._worker_root = root
     win._worker_make_custom_steps = make_custom_steps

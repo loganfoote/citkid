@@ -439,3 +439,16 @@ class TestCheckPlTreeStructure:
             pf.check_pl_tree_structure(tree)
         except Exception:
             pass
+
+
+@pytest.mark.parametrize("func", [
+    lambda x: {"a": x, "b": x},     # a dict is a single output
+    lambda x: (x, x, x),            # too many outputs
+    lambda x: x,                    # too few outputs
+])
+def test_per_row_step_with_wrong_output_count_raises(func):
+    """A per-row step must return exactly one value per return name."""
+    step = pf.plStep("bad", func, ["x"], ["a", "b"], "per-row")
+
+    with pytest.raises(ValueError, match="returned .* output"):
+        step._run([np.array([1.0, 2.0])], [False])

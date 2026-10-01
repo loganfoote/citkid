@@ -3036,11 +3036,12 @@ class ResMatcher:
 
     def quit_and_save(self):
         """
-        Save the data, close the window, and quit the Qt application.
+        Close the window, which saves the data and ends the event loop.
+
+        This does exactly what the window's X button does: the close handler
+        saves (once), and closing the last window ends ``app.exec()``.
         """
-        self.save_data()
         self.win.close()
-        self.app.quit()
 
     def _on_window_close(self, event):
         """

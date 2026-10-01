@@ -91,11 +91,14 @@ class AnalysisRunner:
         start_from_idx=0,
         verbose=True,
         save=True,
-        execution_mode='vectorized',
-        execute_per_row=False,
+        vectorize=True,
+        path_per_row=False,
     ):
         """
         Execute the loaded analysis path in order.
+
+        By default each step runs on all requested rows before the next step
+        starts. ``vectorize`` and ``path_per_row`` trade speed for memory.
 
         Parameters:
         data_idx (int, array-like, or None): Rows to process for per-row and
@@ -104,18 +107,19 @@ class AnalysisRunner:
             begin execution.
         verbose (bool): If True, show a progress bar.
         save (bool): If True, persist each executed step after it finishes.
-        execution_mode (str): How to execute vectorized steps. Can be 'vectorized'
-            (default, loads all data at once) or 'per-row' (loops over each
-            data_idx one at a time, using less memory).
-        execute_per_row (bool): When True, iterate over ``data_idx`` one row at
-            a time and run the full remaining path for each row before moving
-            to the next row.
+        vectorize (bool): If True (default), steps with ``func_type``
+            'vectorized' run on all requested rows in one call. If False, they
+            run one row at a time, which uses less memory and records a failing
+            row instead of failing the whole call. Steps with ``func_type``
+            'per-row' always run one row at a time, and global steps run once.
+        path_per_row (bool): If True, run the full remaining path for one row
+            before starting the next, instead of running each step on every
+            row first. Global and global-res steps still run once. Implies
+            ``vectorize=False``. Default False.
         """
-        if execution_mode not in ('vectorized', 'per-row'):
-            raise ValueError(f"execution_mode must be 'vectorized' or 'per-row', got '{execution_mode}'")
         path_steps = self.path[start_from_idx:]
         self._validate_execute_path_scope(path_steps, data_idx)
-        if execute_per_row:
+        if path_per_row:
             rows = self.DS._normalize_rows(data_idx)
             if rows is None:
                 rows = np.arange(int(self.DS.nrows), dtype=np.int32)
@@ -141,8 +145,7 @@ class AnalysisRunner:
                             data_idx=None,
                             user_params=params,
                             save=save,
-                            execution_mode=execution_mode,
-                            execute_per_row=execute_per_row,
+                            vectorize=False,
                         )
                         executed_global_steps.add(step.name)
                         continue
@@ -151,8 +154,7 @@ class AnalysisRunner:
                         data_idx=int(row),
                         user_params=params,
                         save=save,
-                        execution_mode=execution_mode,
-                        execute_per_row=execute_per_row,
+                        vectorize=False,
                     )
             return
         path_iter = path_steps
@@ -173,8 +175,7 @@ class AnalysisRunner:
                 data_idx=step_data_idx,
                 user_params=params,
                 save=save,
-                execution_mode=execution_mode,
-                execute_per_row=execute_per_row,
+                vectorize=vectorize,
             )
 
     def execute_step(
@@ -183,9 +184,8 @@ class AnalysisRunner:
         data_idx=None,
         user_params=None,
         save=True,
-        execution_mode='vectorized',
+        vectorize=True,
         allow_global_step_overwrite=False,
-        execute_per_row=False,
     ):
         """
         Execute a single analysis or calibration step.
@@ -199,24 +199,19 @@ class AnalysisRunner:
             the loaded analysis YAML.
         save (bool): If True, persist inputs and outputs immediately after
             execution. Default True.
-        execution_mode (str): How to execute this step. Can be 'vectorized'
-            (default, loads all data at once) or 'per-row' (loops over each
-            data_idx one at a time). 'per-row' is useful for memory-constrained
-            scenarios where vectorized execution would load too much data.
+        vectorize (bool): If True (default), a step with ``func_type``
+            'vectorized' runs on all requested rows in one call. If False, it
+            runs one row at a time, which uses less memory and records a
+            failing row instead of failing the whole call. Ignored for other
+            ``func_type`` values.
         allow_global_step_overwrite (bool): Must be True to rerun a global or
             global-res step when that rerun would overwrite its existing
             outputs or downstream products.
-        execute_per_row (bool): When True, force vectorized steps to run one
-            requested row at a time.
 
         Raises:
         ValueError: If inputs are missing or step/data_idx constraints are
             violated.
         """
-        if execution_mode not in ('vectorized', 'per-row'):
-            raise ValueError(f"execution_mode must be 'vectorized' or 'per-row', got '{execution_mode}'")
-        if execute_per_row and step.func_type == 'vectorized':
-            execution_mode = 'per-row'
         if user_params == "from_yaml":
             user_params = self._get_yaml_params(step)
         if user_params is None:
@@ -261,8 +256,6 @@ class AnalysisRunner:
             data_idx=data_idx,
             pipeline_scope=pipeline_scope,
             step_index=step_index,
-            save=save,
-            execution_mode=execution_mode,
         )
         failures = self.DS._execute_step(
             step,
@@ -270,7 +263,7 @@ class AnalysisRunner:
             save=False,
             pipeline_scope=pipeline_scope,
             step_index=step_index,
-            execution_mode=execution_mode,
+            vectorize=vectorize,
         )
         self._last_failures = failures
         self._step_state[step.name] = {
@@ -418,18 +411,18 @@ class AnalysisRunner:
             return np.arange(int(self.DS.nrows), dtype=np.int32)
         return self.DS._normalize_rows(data_idx)
 
-    def _ensure_inputs_exist(self, step, data_idx, pipeline_scope, step_index, save, execution_mode='vectorized'):
+    def _ensure_inputs_exist(self, step, data_idx, pipeline_scope, step_index):
         """
         Ensure that every input required by a step is available.
+
+        Calibration inputs are produced on demand. Missing analysis inputs
+        raise, since earlier analysis steps are never rerun implicitly.
 
         Parameters:
         step (plStep): Step whose inputs should be validated.
         data_idx (int, array-like, or None): Rows being processed.
         pipeline_scope (str or None): Scope of the step being executed.
         step_index (int or None): Execution index of the step.
-        save (bool): Save flag propagated when earlier analysis steps must be
-            executed to satisfy dependencies.
-        execution_mode (str): Execution mode to use for prerequisite steps.
 
         Raises:
         ValueError: If an input cannot be loaded or produced.

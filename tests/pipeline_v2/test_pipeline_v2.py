@@ -1068,3 +1068,42 @@ def test_non_contiguous_rows_of_2d_parameter(tmp_path, write_buffer):
     assert list(np.flatnonzero(group["row_exists"][...])) == list(rows)
     np.testing.assert_array_equal(group["data"][list(rows)], values)
     assert not np.any(group["data"][2])
+
+
+def test_write_params_produces_unloaded_calibration_params(tmp_path):
+    ds = _make_io_dataset(tmp_path, nrows=6)
+    assert "x" not in ds._per_row_cache  # never accessed
+
+    ds.write_params(["x"], data_idx=[0, 2])
+    ds.write_params(["nrows"])
+    ds.write_params(["g"], data_idx=[4])
+
+    root = ds.root
+    assert list(np.flatnonzero(root["x"]["row_exists"][...])) == [0, 2]
+    np.testing.assert_array_equal(root["x"]["data"][[0, 2]], [0.0, 2.0])
+    assert int(root["nrows"]["data"][...]) == 6
+    assert root["x"].attrs["pipeline_scope"] == "cal"
+    assert float(root["g"]["data"][4]) == 40.0
+
+
+def test_write_params_without_rows_saves_every_calibration_row(tmp_path):
+    ds = _make_io_dataset(tmp_path, nrows=5)
+
+    ds.write_params(["x"])
+
+    assert bool(np.all(ds.root["x"]["row_exists"][...]))
+    np.testing.assert_array_equal(ds.root["x"]["data"][...], np.arange(5.0))
+
+
+def test_write_params_loads_saved_analysis_rows(tmp_path):
+    ds = _make_io_dataset(tmp_path)
+    _save_rows(ds, "p", [1, 2])
+    reopened = DataSet(zarr_path=ds.root)
+
+    reopened.write_params(["p"], data_idx=[1])  # not in memory: loaded from zarr
+
+    np.testing.assert_array_equal(ds.root["p"]["data"][[1, 2]], [1.0, 2.0])
+    with pytest.raises(ValueError, match="cannot be produced"):
+        reopened.write_params(["p"], data_idx=[5])
+    with pytest.raises(ValueError, match="not available to save"):
+        reopened.write_params(["unknown"])

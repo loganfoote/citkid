@@ -21,6 +21,7 @@ from PyQt5 import QtWidgets
 
 from citkid.vna.res_finder_auto import (
     AutoResFinder,
+    AutoResFinderWindow,
     SpinBoxEventFilter,
     run_res_finder_auto,
 )
@@ -497,3 +498,31 @@ def test_confirm_overwrite_builds_and_defaults_to_cancel():
     """Build the overwrite popup; closing it without a choice cancels."""
     with patch.object(QtWidgets.QMessageBox, 'exec', create=True, return_value=0),          patch.object(QtWidgets.QMessageBox, 'exec_', create=True, return_value=0):
         assert _real_confirm_overwrite('Existing data.') is False
+
+
+class TestAutoResFinderQuit:
+    """Save & Quit must behave exactly like closing the window."""
+
+    @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
+    def test_quit_and_save_closes_window_and_saves_once(self, mock_update,
+                                                        synthetic_vna_data, tmp_path):
+        outpath = tmp_path / "quit.h5"
+        finder = AutoResFinder(
+            synthetic_vna_data['f'],
+            synthetic_vna_data['z'],
+            str(outpath),
+        )
+        finder.fres = [4.5e9, 5.2e9]
+        # conftest patches setup_ui out; attach the real window class.
+        finder.win = AutoResFinderWindow(finder=finder)
+        finder.win.show()
+
+        with patch.object(finder, 'save_data', wraps=finder.save_data) as save, \
+                patch.object(finder.app, 'quit') as app_quit:
+            finder.quit_and_save()
+
+        assert not finder.win.isVisible()
+        save.assert_called_once()
+        app_quit.assert_not_called()
+        grp = zarr.open_group(str(outpath), mode='r')
+        np.testing.assert_array_almost_equal(grp['fres_auto'][:], [4.5e9, 5.2e9])

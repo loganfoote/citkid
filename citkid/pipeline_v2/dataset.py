@@ -389,17 +389,46 @@ class DataSet:
 
     def write_params(self, names, data_idx=None):
         """
-        Persist parameters that already exist in memory.
+        Save parameters to zarr, producing them first if needed.
+
+        Values that aren't in memory are loaded from zarr, and calibration
+        parameters that aren't saved either are produced by running the
+        calibration path, so you don't need to access a parameter before
+        saving it.
+
+        Parameters:
+        names (iterable of str): Parameters to save.
+        data_idx (int, array-like, or None): Rows to save for per-row
+            parameters (ignored for global ones). None saves every row of a
+            calibration parameter, or every row in memory of an analysis
+            parameter (which can't be recomputed).
+
+        Raises:
+        ValueError: If a parameter is unknown, or requested rows of it are
+            neither in memory, in zarr, nor producible by the calibration
+            path.
         """
         rows = self._normalize_rows(data_idx)
         for name in names:
-            if name not in self._param_meta:
+            calibratable = pf.find_pl_path(self.cal_pl, name) is not None
+            meta = self._param_meta.get(name)
+            if meta is None and calibratable:
+                meta = self._infer_param_meta(name)
+            if meta is None:
+                meta = self._refresh_param_meta(name)
+            if meta is None:
                 raise ValueError(f"Parameter '{name}' is not available to save")
-            meta = self._param_meta[name]
             if meta["global"]:
+                if name not in self._global_cache:
+                    self._get_global(name)  # loads from zarr or runs the cal path
                 self._write_global_param(name)
-            else:
-                self._write_per_row_param(name, data_idx=rows)
+                continue
+            write_rows = rows
+            if write_rows is None and calibratable:
+                write_rows = np.arange(int(self.nrows), dtype=np.int32)
+            if write_rows is not None:
+                self._fetch_rows(name, write_rows)  # load or produce missing rows
+            self._write_per_row_param(name, data_idx=write_rows)
 
     def __getattr__(self, name):
         """
@@ -858,15 +887,26 @@ class DataSet:
             return path[-1].func_type == "global"
         return False
 
-    def _execute_step(self, step, data_idx=None, save=False, pipeline_scope=None, step_index=None, execution_mode='vectorized'):
+    def _execute_step(self, step, data_idx=None, save=False, pipeline_scope=None, step_index=None, vectorize=True):
         """
         Execute a single calibration or analysis step.
+
+        Parameters:
+        step (plStep): Step to execute.
+        data_idx (array-like or None): Rows for per-row and vectorized steps.
+        save (bool): If True, write outputs to zarr.
+        pipeline_scope (str or None): 'cal' or 'analysis', stored as metadata.
+        step_index (int or None): Execution index, stored as metadata.
+        vectorize (bool): If True (default), a 'vectorized' step runs on all
+            rows in one call. If False, it runs one row at a time like a
+            'per-row' step, recording failing rows instead of raising.
+
+        Returns:
+        failures (dict or None): Error message by row for row-at-a-time
+            execution, or None for global and vectorized calls.
         """
         if not isinstance(step, pf.plStep):
             raise TypeError("step must be a plStep instance")
-
-        if execution_mode not in ('vectorized', 'per-row'):
-            raise ValueError(f"execution_mode must be 'vectorized' or 'per-row', got '{execution_mode}'")
 
         if step.func_type == "global":
             params, param_is_global = self._collect_params(step, None)
@@ -904,7 +944,7 @@ class DataSet:
             raise ValueError(f"data_idx required for step '{step.name}'")
         rows = self._normalize_rows(data_idx)
 
-        if step.func_type == "vectorized" and execution_mode == 'vectorized':
+        if step.func_type == "vectorized" and vectorize:
             params, param_is_global = self._collect_params(step, rows)
             out = step._run(params, param_is_global)
             for name, value in out.items():

@@ -21,7 +21,14 @@ from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 import threading
 
 from ..analysis import AnalysisRunner
-from ...qt_compat import Qt as _Qt, fit_window_to_screen, get_qapp
+from ...qt_compat import (
+    TITLE_BAR_MARGIN,
+    Qt as _Qt,
+    fit_window_to_screen,
+    get_qapp,
+    scroll_area_content_height,
+    vbox_height_for_width,
+)
 from ...signal.iq import density_subsample as _density_subsample
 
 
@@ -73,6 +80,53 @@ def get_panel_class(step_names):
     if len(step_names) >= 1 and (step_names[0],) in _PANEL_REGISTRY:
         return _PANEL_REGISTRY[(step_names[0],)]
     return DefaultStepPanel
+
+
+################################################################################
+# Fonts
+################################################################################
+
+# Base font sizes in points at ui_scale = 1. Fonts are always set explicitly,
+# so text size depends only on ui_scale, not on the system default font.
+WIDGET_FONT_PT = 10
+TICK_FONT_PT = 9
+LABEL_FONT_PT = 11
+
+
+def widget_font_stylesheet(ui_scale):
+    """
+    Return a stylesheet that sets the font size of every widget.
+
+    Parameters:
+    ui_scale (float): Font size multiplier.
+
+    Returns:
+    stylesheet (str): ``'* { font-size: Npt; }'`` with
+        N = ``WIDGET_FONT_PT * ui_scale`` (at least 6).
+    """
+    return f"* {{ font-size: {max(6, round(WIDGET_FONT_PT * ui_scale))}pt; }}"
+
+
+def scale_plot_fonts(ui_scale, *plot_items):
+    """
+    Set tick, axis-label and title fonts of pyqtgraph plots from ui_scale.
+
+    Plot text isn't affected by widget stylesheets, so it is set here.
+
+    Parameters:
+    ui_scale (float): Font size multiplier.
+    *plot_items (pg.PlotItem): Plots to style.
+    """
+    tick_font = QtGui.QFont()
+    tick_font.setPointSize(max(6, round(TICK_FONT_PT * ui_scale)))
+    label_font = QtGui.QFont()
+    label_font.setPointSize(max(7, round(LABEL_FONT_PT * ui_scale)))
+    for plot in plot_items:
+        for ax_name in ('bottom', 'left', 'top', 'right'):
+            ax = plot.getAxis(ax_name)
+            ax.setStyle(tickFont=tick_font)
+            ax.label.setFont(label_font)
+        plot.titleLabel.item.setFont(label_font)
 
 
 ################################################################################
@@ -200,22 +254,11 @@ class StepPanel(QtWidgets.QWidget):
         of the supplied pyqtgraph PlotItem objects.
 
         Call at the end of setup_ui after all plots have been created.
-        No-op when ui_scale == 1.0.
+
+        Parameters:
+        *plot_items (pg.PlotItem): Plots to style.
         """
-        if self.ui_scale == 1.0:
-            return
-        tick_pt  = max(6, round(9  * self.ui_scale))
-        label_pt = max(7, round(11 * self.ui_scale))
-        tick_font  = QtGui.QFont()
-        tick_font.setPointSize(tick_pt)
-        label_font = QtGui.QFont()
-        label_font.setPointSize(label_pt)
-        for plot in plot_items:
-            for ax_name in ('bottom', 'left', 'top', 'right'):
-                ax = plot.getAxis(ax_name)
-                ax.setStyle(tickFont=tick_font)
-                ax.label.setFont(label_font)
-            plot.titleLabel.item.setFont(label_font)
+        scale_plot_fonts(self.ui_scale, *plot_items)
 
     # ------------------------------------------------------------------
     # Core execution
@@ -829,7 +872,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         outer.setContentsMargins(4, 4, 4, 4)
         outer.setSpacing(4)
 
-        # Toolbar: data_idx selector + navigation + "Run All" button
+        # Toolbar: data_idx selector + navigation
         outer.addWidget(self._build_toolbar(start_di))
 
         # Scrollable panel area
@@ -841,11 +884,10 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         self._panel_layout.setSpacing(6)
         scroll.setWidget(self._container)
         outer.addWidget(scroll)
+        self._scroll = scroll
 
         # Apply font scaling via stylesheet
-        if ui_scale != 1.0:
-            base_pt = round(10 * ui_scale)
-            central.setStyleSheet(f"* {{ font-size: {base_pt}pt; }}")
+        central.setStyleSheet(widget_font_stylesheet(ui_scale))
 
         # Build panels
         self.panels: list[StepPanel] = []
@@ -871,17 +913,16 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         _sc_r = QtGui.QShortcut(QtGui.QKeySequence("R"), self)
         _sc_r.activated.connect(self._autoscale_all)
 
-        # Number keys 1-9: run panel and all following (1-indexed)
+        # Number keys 1-9: run panel N and all following ("Run +", 1-indexed).
+        # Shift+N: run panel N only.
         for idx in range(1, 10):
             seq = str(idx)
             _sc = QtGui.QShortcut(QtGui.QKeySequence(seq), self)
-            _sc.activated.connect(lambda _i=idx-1: self._run_panel_by_index(_i))
+            _sc.activated.connect(lambda _i=idx-1: self._run_through_panel(_i))
             _sc_shift = QtGui.QShortcut(QtGui.QKeySequence(f"Shift+{seq}"), self)
-            _sc_shift.activated.connect(lambda _i=idx-1: self._run_through_panel(_i))
+            _sc_shift.activated.connect(lambda _i=idx-1: self._run_panel_by_index(_i))
 
-        # Preferred size, shrunk to fit smaller screens, centred
-        fit_window_to_screen(
-            self, frac=0.9, size=(round(1200 * ui_scale), round(900 * ui_scale)))
+        self._fit_to_screen(round(1200 * ui_scale))
         # Initialise panels in order once the event loop is running so that
         # the window is fully laid out and panels are initialised sequentially
         # (guaranteeing upstream data is ready before downstream panels run).
@@ -890,8 +931,54 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
     # Build helpers
     # ------------------------------------------------------------------
 
+    def _fit_to_screen(self, width: int):
+        """
+        Size the window to show every panel without scrolling, and center it.
+
+        The width is set first, since word-wrapped toolbar text makes the
+        needed height depend on it. The height is capped at the screen height,
+        beyond which the panels scroll.
+
+        Parameters:
+        width (int): Preferred width in logical pixels (shrunk to fit the
+            screen).
+        """
+        # Apply styles and fonts, and the layout's minimum size, before
+        # measuring; otherwise a hidden window measures text at the wrong
+        # font and width.
+        self.ensurePolished()
+        self.layout().activate()
+        fit_window_to_screen(self, frac=0.9, size=(width, 1), height_margin=TITLE_BAR_MARGIN)
+        fit_window_to_screen(self, frac=0.9, size=(self.width(), self._content_height()),
+                             height_margin=TITLE_BAR_MARGIN)
+
+    def _scroll_width(self) -> int:
+        """
+        Return the width the panel scroll area gets at the current window width.
+
+        Returns:
+        width (int): Window width minus the central layout's margins, in
+            logical pixels.
+        """
+        margins = self.centralWidget().layout().contentsMargins()
+        return self.width() - margins.left() - margins.right()
+
+    def _content_height(self) -> int:
+        """
+        Return the window height that shows every panel without scrolling,
+        at the window's current width.
+
+        Returns:
+        height (int): Height of the toolbar (wrapped at the current width)
+            plus the full height of the panels, in logical pixels.
+        """
+        return vbox_height_for_width(
+            self.centralWidget().layout(), self.width(),
+            {self._scroll: scroll_area_content_height(self._scroll, width=self._scroll_width())},
+        )
+
     def _build_toolbar(self, data_idx) -> QtWidgets.QWidget:
-        """Build the top toolbar with navigation, a ``data_idx`` spinbox, and Run All."""
+        """Build the top toolbar with navigation and a ``data_idx`` spinbox."""
         w = QtWidgets.QWidget()
         layout = QtWidgets.QHBoxLayout(w)
         layout.setContentsMargins(4, 2, 4, 2)
@@ -941,12 +1028,13 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         layout.addSpacing(8)
 
         _hints = QtWidgets.QLabel(
-            "[\u2190/A  \u2192/D] navigate    [R] rescale    [N] run panel    [\u21e7N] run+following"
+            "[\u2190/A  \u2192/D] navigate    [R] rescale    [N] run+following    [\u21e7N] run panel only"
         )
+        # Word wrap lets the hints shrink so the toolbar never forces the
+        # window wider than the screen.
+        _hints.setWordWrap(True)
         _hints.setStyleSheet("color: palette(mid); font-style: italic;")
-        layout.addWidget(_hints)
-
-        layout.addStretch()
+        layout.addWidget(_hints, 1)
 
         self._prefetch_label = QtWidgets.QLabel("")
         self._prefetch_label.setMinimumWidth(110)
@@ -959,10 +1047,6 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         self._save_label.setMinimumWidth(90)
         self._save_label.setToolTip("Background save status")
         layout.addWidget(self._save_label)
-
-        run_all_btn = QtWidgets.QPushButton("Run All")
-        run_all_btn.clicked.connect(self.run_all)
-        layout.addWidget(run_all_btn)
 
         return w
 
@@ -1169,17 +1253,6 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
 
         # Kick off prefetch of the next index in the navigation sequence.
         QtCore.QTimer.singleShot(200, self._prefetch_next)
-
-    # ------------------------------------------------------------------
-    # Public
-    # ------------------------------------------------------------------
-
-    def run_all(self):
-        """Run all panels from top to bottom, stopping on the first failure."""
-        for panel in self.panels:
-            ok = panel.run_steps()
-            if not ok:
-                break
 
     # ------------------------------------------------------------------
     # Prefetch

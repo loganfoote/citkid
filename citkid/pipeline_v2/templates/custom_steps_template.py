@@ -10,23 +10,22 @@ data_path = os.path.join(main_dir, 'example.zarr')
 root = zarr.open(data_path, mode = 'r')
 
 def load_global_data():
-    dt = root['ts_01/dt'][...]
+    dt = root['ts_00/dt'][...]
     nrows = root['fres'].shape[0]
-    
-    fres_all = np.load(os.path.join(main_dir, 'fres_init/fres.npy'))
-    fres_all = np.sort(fres_all)
-    qres_all = np.ones_like(fres_all) * 8000    
+
+    fres_all = root['fres_all'][...]
+    qres_all = np.ones_like(fres_all) * 6000    
     return fres_all, qres_all, dt, nrows
 
 def load_global_res_data():
-    fres = np.array(root['fres'])
-    ares = np.array(root['ares'])
-    qres = np.array(root['qres']) 
-    res_idxs = np.array(root['res_idxs']) 
+    fres = root['fres'][...]
+    ares = root['ares'][...]
+    qres = root['qres'][...]
+    res_idxs = root['res_idxs'][...]
     return fres, qres, ares, res_idxs 
 
 def load_ft(data_idx):
-    ft = root['ft'][data_idx] 
+    ft = root['ts_00/fres'][data_idx] 
     return ft
 
 def load_zt(data_idx):

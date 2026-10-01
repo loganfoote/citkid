@@ -58,7 +58,7 @@ from . import fit_iq    # noqa: F401
 from . import circ      # noqa: F401
 from . import xcal      # noqa: F401
 
-from .sweep_fitter import SweepFitterWindow, run_sweep_fitter
+from .sweep_fitter import SweepFitterWindow, SweepXYFit, run_sweep_fitter
 
 # Pipeline-specific assemblers
 from .iq_analysis import run_iq_analysis  # noqa: F401
@@ -84,4 +84,5 @@ __all__ = [
     "run_gain_only_analysis",
     "run_ts_analysis",
     "run_sweep_fitter",
+    "SweepXYFit",
 ]

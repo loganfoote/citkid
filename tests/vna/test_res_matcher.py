@@ -1196,3 +1196,21 @@ def test_merge_keeps_selection_valid(matcher, action):
     # A follow-up action sees the selection (it is not silently skipped)
     m.unlink_selected()
     m.log.assert_called_with('Unlinked 2 resonances into separate groups')
+
+
+class TestResMatcherQuit:
+    """Save & Quit must behave exactly like closing the window."""
+
+    def test_quit_and_save_closes_window_and_saves_once(self, matcher):
+        # Same close-handler wiring as ResMatcher.setup_ui.
+        matcher.win = QtWidgets.QMainWindow()
+        matcher.win.closeEvent = matcher._on_window_close
+        matcher.win.show()
+
+        with patch.object(matcher, 'save_data') as save, \
+                patch.object(QtWidgets.QApplication, 'quit') as app_quit:
+            matcher.quit_and_save()
+
+        assert not matcher.win.isVisible()
+        save.assert_called_once()
+        app_quit.assert_not_called()

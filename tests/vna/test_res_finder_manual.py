@@ -1569,3 +1569,29 @@ class TestEventFilter:
         assert release_result is False
         assert finder._drag_selection_active is False
         assert finder._drag_start_freq is None
+
+
+class TestResFinderQuit:
+    """Quit and Save must behave exactly like closing the window."""
+
+    def test_quit_and_save_closes_window_and_saves_once(self, synthetic_vna_data, tmp_path):
+        outpath = tmp_path / "quit.zarr"
+        finder = ResFinder(
+            synthetic_vna_data['f'],
+            synthetic_vna_data['z'],
+            [4.5e9, 5.2e9],
+            str(outpath),
+        )
+        # conftest patches setup_ui out; attach the real window class.
+        finder.win = ResFinderWindow(finder=finder)
+        finder.win.show()
+
+        with patch.object(finder, 'save_data', wraps=finder.save_data) as save, \
+                patch.object(finder.app, 'quit') as app_quit:
+            finder.quit_and_save()
+
+        assert not finder.win.isVisible()
+        save.assert_called_once()
+        app_quit.assert_not_called()
+        grp = zarr.open_group(str(outpath), mode='r')
+        np.testing.assert_array_almost_equal(sorted(grp['fres_manual'][:]), [4.5e9, 5.2e9])
