@@ -1107,3 +1107,40 @@ def test_write_params_loads_saved_analysis_rows(tmp_path):
         reopened.write_params(["p"], data_idx=[5])
     with pytest.raises(ValueError, match="not available to save"):
         reopened.write_params(["unknown"])
+
+
+def test_copy_of_embedded_dataset_shares_data_not_memory(tmp_path):
+    ds = _make_io_dataset(tmp_path)
+    _save_rows(ds, "p", [1, 2])
+    ds.write_buffer = True
+    ds.custom_main_dir_overwrite = None
+
+    copy = ds.copy()
+
+    assert copy is not ds
+    assert copy.root.path == ds.root.path
+    assert copy.write_buffer is True
+    assert copy.p[2] == 2.0                      # stored data is shared
+    assert copy._per_row_cache is not ds._per_row_cache
+    _save_rows(copy, "p", [3])
+    assert ds._has_rows("p", [3])                # and writes go to the same store
+
+
+def test_copy_of_dataset_built_from_custom_cal_steps(tmp_path):
+    from citkid.pipeline_v2.framework import plStep
+
+    cal_yaml = tmp_path / "cal.yaml"
+    cal_yaml.write_text(
+        "CAL_STEPS:\n  1:\n    task: load_n\n  2:\n    task: load_x\n", encoding="utf-8")
+    steps = [
+        plStep("load_n", lambda: 4, [], ["nrows"], "global"),
+        plStep("load_x", lambda data_idx: data_idx * 3.0, ["data_idx"], ["x"], "per-row"),
+    ]
+    root = zarr.open_group(str(tmp_path / "steps.zarr"), mode="w")
+    ds = DataSet(zarr_path=root, cal_yaml_path=str(cal_yaml), custom_cal_steps=steps)
+
+    copy = ds.copy()
+
+    assert int(copy.nrows) == 4
+    assert copy.x[2] == 6.0
+    assert copy.write_buffer is False

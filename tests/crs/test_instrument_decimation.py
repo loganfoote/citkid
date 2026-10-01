@@ -37,6 +37,7 @@ async def test_set_decimation_explicit_parameters(
     """Test set_decimation with all parameters explicitly provided."""
     crs = mock_crs_for_set_decimation
     crs.fres_map = {1: [1e9, 2e9], 2: [3e9]}
+    crs.suppress_dec_printout = False
     
     await crs.set_decimation(
         dec_stage = 6,
@@ -222,6 +223,58 @@ async def test_set_decimation_verbose_false_no_print(
     # Verify no output
     captured = capsys.readouterr()
     assert 'Set decimation' not in captured.out
+
+
+def test_suppress_dec_printout_default_before_configure(base_crs):
+    """Test suppress_dec_printout defaults to True on initialization."""
+    assert base_crs.suppress_dec_printout is True
+
+
+@pytest.mark.asyncio
+async def test_set_decimation_before_configure_no_error(
+    mock_crs_for_set_decimation,
+    capsys
+):
+    """Test set_decimation works and is silent before configure_system."""
+    crs = mock_crs_for_set_decimation
+    crs.fres_map = {1: [1e9]}
+
+    await crs.set_decimation(dec_stage = 6, short = True,
+                             module_idxs = [1], verbose = True)
+
+    assert crs.dec_stage == 6
+    captured = capsys.readouterr()
+    assert 'Decimation set' not in captured.out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("suppress,verbose,printed", [
+    (True, True, False),
+    (True, False, False),
+    (False, True, True),
+    (False, False, False),
+])
+async def test_set_decimation_suppress_dec_printout(
+    mock_crs_for_set_decimation,
+    capsys,
+    suppress,
+    verbose,
+    printed
+):
+    """Test suppress_dec_printout and verbose together control output."""
+    crs = mock_crs_for_set_decimation
+    crs.fres_map = {1: [1e9]}
+    crs.suppress_dec_printout = suppress
+
+    await crs.set_decimation(dec_stage = 5, short = True,
+                             module_idxs = [1], verbose = verbose)
+
+    # Decimation is set regardless of the printout
+    crs.d.set_decimation.assert_called_once_with(5, short = True,
+                                                 module = [1])
+    assert crs.dec_stage == 5
+    captured = capsys.readouterr()
+    assert ('Decimation set' in captured.out) == printed
 
 
 @pytest.mark.asyncio

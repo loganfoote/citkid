@@ -213,6 +213,15 @@ class CircleFitPanel(StepPanel):
         if self._ff_cache is not None:
             self._build_mask(self._ff_cache)
 
+    def clear_plots(self):
+        """
+        Blank every data curve and reset the status label.
+        """
+        for curve in (self._amp_data, self._amp_excl, self._iq_data, self._iq_excl,
+                      self._circle_fit, self._idx_t_amp, self._idx_t_iq, self._zt_iq):
+            curve.setData([], [])
+        self._status_label.setText("—")
+
     def get_params_for_step(self, step) -> dict:
         """Only ``fit_iq_circle`` takes a user parameter (``circ_mask``)."""
         if step.name == 'fit_iq_circle':

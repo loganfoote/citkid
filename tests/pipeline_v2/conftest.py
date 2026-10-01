@@ -25,7 +25,7 @@ def _delete_qt_windows_on_main_thread():
 
     Closed windows are otherwise freed whenever Python's cyclic garbage
     collector next runs, which can be in a background thread (e.g. a
-    sweep-fitter worker). Deleting Qt widgets off the GUI thread can abort
+    series-window worker). Deleting Qt widgets off the GUI thread can abort
     the process. Only main windows are deleted: pyqtgraph keeps parentless
     context menus that it deletes itself.
     """

@@ -147,3 +147,80 @@ def test_nonlinear_iq_invalid_input(f, fr, Qr, amp, phi, a, i0, q0, tau,
     with pytest.raises((TypeError, ValueError)):
         funcs.nonlinear_iq_for_fitter(f, fr, Qr, amp, phi, a, i0, q0, tau, 
                                       downward)
+def test_nonlinear_iq_requires_downward():
+    f = np.linspace(1e9, 1.1e9, 5)
+    with pytest.raises(TypeError):
+        funcs.nonlinear_iq(f, 1.05e9, 1e4, 0.5, 0.1, 0.2, 1.0, 0.0, 1e-9)
+
+################################################################################
+################ nonlinear_iq_nogain, linear_iq, linear_iq_nogain ##############
+################################################################################
+def readout_gain(f, fr, i0, q0, tau):
+    """
+    Compute the readout gain and cable delay term shared by nonlinear_iq and
+    linear_iq.
+
+    Parameters:
+    f (np.array): array of frequencies in Hz.
+    fr (float): resonance frequency in Hz.
+    i0 (float): I gain factor.
+    q0 (float): Q gain factor.
+    tau (float): cable delay in seconds.
+
+    Returns:
+    s21_readout (np.array): complex readout gain corresponding to f.
+    """
+    return (i0 + 1.j * q0) * np.exp(-2.j * np.pi * (f - fr) * tau)
+
+@pytest.mark.parametrize("fr,Qr,amp,phi,a,i0,q0,tau,downward", [
+    (1.05e9, 1e4, 0.5, 0.1, 0.2, 1.0, 0.0, 1e-9, True),
+    (1.05e9, 1e4, 0.5, 0.1, 0.2, 1.0, 0.0, 1e-9, False),
+    (1.05e9, 2e4, 0.9, -0.3, 1.5, 0.3, -0.7, 5e-8, True),
+    (1.05e9, 2e4, 0.9, -0.3, 1.5, 0.3, -0.7, 5e-8, False),
+])
+def test_nonlinear_iq_nogain(fr, Qr, amp, phi, a, i0, q0, tau, downward):
+    f = np.linspace(1.05e9 - 2e5, 1.05e9 + 2e5, 51)
+    z = funcs.nonlinear_iq(f, fr, Qr, amp, phi, a, i0, q0, tau, downward)
+    s21_res = funcs.nonlinear_iq_nogain(f, fr, Qr, amp, phi, a, downward)
+    assert s21_res.dtype == np.complex128
+    assert s21_res.shape == f.shape
+    assert np.allclose(z, readout_gain(f, fr, i0, q0, tau) * s21_res)
+    # nogain equals nonlinear_iq with unity gain and no cable delay
+    assert np.allclose(s21_res, funcs.nonlinear_iq(f, fr, Qr, amp, phi, a, 1.,
+                                                   0., 0., downward))
+
+@pytest.mark.parametrize("f,fr,Qr,amp,phi,i0,q0,tau,expected", [
+    # i0 and q0
+    ([0.9e9, 1e9], 1e9, 1., 0., 0., 1., 0., 0., [1., 1.]),
+    ([0.9e9, 1e9], 1e9, 1., 0., 0., 0., 1., 0., [1j, 1j]),
+    # tau
+    ([0.9e9, 1e9], 1e9, 1., 0., 0., 1., 0., 0.5e-8, [-1., 1.]),
+    # amp
+    ([1e9], 1e9, 1., 1.,  0., 1., 0., 0., [0.]),
+    ([1e9], 1e9, 1., 0.5, 0., 1., 0., 0., [1 / 2]),
+    # phi
+    ([1e9], 1e9, 1., 1.,  np.pi / 4, 1., 0., 0., [-1j]),
+    # Qr
+    ([1.1e9], 1e9, 10., 0.5, 0., 1., 0., 0., [0.9 + 0.2j]),
+])
+def test_linear_iq(f, fr, Qr, amp, phi, i0, q0, tau, expected):
+    result = funcs.linear_iq(np.array(f), fr, Qr, amp, phi, i0, q0, tau)
+    assert np.allclose(result, expected)
+
+@pytest.mark.parametrize("fr,Qr,amp,phi,i0,q0,tau", [
+    (1.05e9, 1e4, 0.5, 0.1, 1.0, 0.0, 1e-9),
+    (1.05e9, 2e4, 0.9, -0.3, 0.3, -0.7, 5e-8),
+])
+def test_linear_iq_consistency(fr, Qr, amp, phi, i0, q0, tau):
+    f = np.linspace(1.05e9 - 2e5, 1.05e9 + 2e5, 51)
+    z = funcs.linear_iq(f, fr, Qr, amp, phi, i0, q0, tau)
+    s21_res = funcs.linear_iq_nogain(f, fr, Qr, amp, phi)
+    assert z.dtype == np.complex128 and s21_res.dtype == np.complex128
+    assert z.shape == f.shape and s21_res.shape == f.shape
+    assert np.allclose(z, readout_gain(f, fr, i0, q0, tau) * s21_res)
+    # linear model equals nonlinear model with a = 0, for both sweep directions
+    for downward in [True, False]:
+        assert np.allclose(z, funcs.nonlinear_iq(f, fr, Qr, amp, phi, 0., i0,
+                                                 q0, tau, downward))
+        assert np.allclose(s21_res, funcs.nonlinear_iq_nogain(f, fr, Qr, amp,
+                                                              phi, 0., downward))

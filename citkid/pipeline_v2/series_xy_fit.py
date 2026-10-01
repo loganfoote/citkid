@@ -1,13 +1,13 @@
 """
-Fit the sweep-fitter's y vs x data for each resonator, and store the fits.
+Fit the series windows' y vs x data for each resonator, and store the fits.
 
-The sweep fitter plots one y value per sweep index against an x value (e.g.
+The series windows plot one y value per series index against an x value (e.g.
 the nonlinearity ``a`` against power) for each resonator (``data_idx``).
-``SweepXYFit`` describes an optional fit of that curve, and
-``SweepXYFitStore`` saves one fit per resonator to a small zarr group.
+``SeriesXYFit`` describes an optional fit of that curve, and
+``SeriesXYFitStore`` saves one fit per resonator to a small zarr group.
 
 This is a deliberately small store rather than a ``DataSet``: a fit turns all
-sweeps of one row into a few numbers, so it doesn't need the calibration and
+series points of one row into a few numbers, so it doesn't need the calibration and
 invalidation machinery of the pipeline.
 """
 
@@ -16,14 +16,14 @@ import numpy as np
 from .dataset import _io_lock_for, _retry_io
 
 
-class SweepXYFit:
+class SeriesXYFit:
     """
-    Description of a fit of the sweep plot's y vs x data, one per resonator.
+    Description of a fit of the series plot's y vs x data, one per resonator.
 
     Attributes:
     fit (callable): ``fit(x, y)`` returning the fit outputs, in
         ``output_names`` order (a tuple, or a single value if there is one
-        output). ``x`` and ``y`` are exactly what the sweep plot shows, with
+        output). ``x`` and ``y`` are exactly what the series plot shows, with
         unavailable points removed and sorted by x.
     output_names (list of str): Names of the fit outputs, used for saving
         and for the plot title.
@@ -32,8 +32,8 @@ class SweepXYFit:
     name (str): Name of the fit, shown in the plot title and stored with the
         saved fits. Default 'xy_fit'.
     group (zarr.Group or None): Group to save the fits to. None (default)
-        uses ``root/xy_fit`` in ``run_sweep_fitter`` (or keeps the fits in
-        memory if the sweep fitter has no state group).
+        uses ``root/xy_fit`` in ``run_iq_series`` (or keeps the fits in
+        memory if the series window has no state group).
     n_samples (int): Number of x samples used to draw the fitted curve.
         Default 200.
     min_points (int or None): Fewest usable points to attempt a fit. With
@@ -73,11 +73,11 @@ class SweepXYFit:
 
     def run(self, x, y):
         """
-        Fit the usable points of one resonator's sweep.
+        Fit the usable points of one resonator's series.
 
         Parameters:
-        x (np.ndarray): x value of each sweep index (NaN if unavailable).
-        y (np.ndarray): y value of each sweep index (NaN if unavailable, e.g.
+        x (np.ndarray): x value of each series index (NaN if unavailable).
+        y (np.ndarray): y value of each series index (NaN if unavailable, e.g.
             marked bad).
 
         Returns:
@@ -107,7 +107,7 @@ class SweepXYFit:
         Evaluate the model across the range of the usable x values.
 
         Parameters:
-        x (np.ndarray): x value of each sweep index (NaN if unavailable).
+        x (np.ndarray): x value of each series index (NaN if unavailable).
         outputs (list of np.ndarray or None): Fit outputs, or None.
 
         Returns:
@@ -163,12 +163,12 @@ def usable_points(x, y):
     return x[keep][order], y[keep][order]
 
 
-class SweepXYFitStore:
+class SeriesXYFitStore:
     """
-    Zarr storage for one ``SweepXYFit`` result per resonator.
+    Zarr storage for one ``SeriesXYFit`` result per resonator.
 
     The group holds one array per fit output (shape ``(nrows, ...)``),
-    ``fit_x`` and ``fit_y`` (shape ``(nrows, n_sweep)``, the exact inputs of
+    ``fit_x`` and ``fit_y`` (shape ``(nrows, n_series)``, the exact inputs of
     each saved fit, so a fit can be redone only when its inputs change), and
     ``row_exists`` (rows that have been fitted, including failed fits, whose
     outputs are NaN). Each array is a single small chunk that is rewritten on
@@ -178,27 +178,27 @@ class SweepXYFitStore:
 
     Attributes:
     group (zarr.Group): The fit group.
-    xy_fit (SweepXYFit): The fit definition.
+    xy_fit (SeriesXYFit): The fit definition.
     nrows (int): Number of resonators.
-    n_sweep (int): Number of sweep indices.
+    n_series (int): Number of series indices.
     """
 
-    _ATTR = 'sweep_xy_fit'
+    _ATTR = 'series_xy_fit'
 
-    def __init__(self, group, xy_fit, nrows, n_sweep):
+    def __init__(self, group, xy_fit, nrows, n_series):
         """
         Attach to a fit group. Call ``matches_definition`` before saving.
 
         Parameters:
         group (zarr.Group): Group to store the fits in.
-        xy_fit (SweepXYFit): The fit definition.
+        xy_fit (SeriesXYFit): The fit definition.
         nrows (int): Number of resonators.
-        n_sweep (int): Number of sweep indices.
+        n_series (int): Number of series indices.
         """
         self.group = group
         self.xy_fit = xy_fit
         self.nrows = int(nrows)
-        self.n_sweep = int(n_sweep)
+        self.n_series = int(n_series)
         self._lock = _io_lock_for(group)
 
     def _definition(self):
@@ -206,13 +206,13 @@ class SweepXYFitStore:
         Return the definition stored with the fits.
 
         Returns:
-        definition (dict): Fit name, output names, nrows and n_sweep.
+        definition (dict): Fit name, output names, nrows and n_series.
         """
         return {
             'name': self.xy_fit.name,
             'output_names': list(self.xy_fit.output_names),
             'nrows': self.nrows,
-            'n_sweep': self.n_sweep,
+            'n_series': self.n_series,
         }
 
     def matches_definition(self):
@@ -327,8 +327,8 @@ class SweepXYFitStore:
 
         Parameters:
         data_idx (int): Resonator index.
-        x (np.ndarray): Current x values, one per sweep index.
-        y (np.ndarray): Current y values, one per sweep index.
+        x (np.ndarray): Current x values, one per series index.
+        y (np.ndarray): Current y values, one per series index.
 
         Returns:
         current (bool): True if a saved fit exists with the same x and y
@@ -346,8 +346,8 @@ class SweepXYFitStore:
 
         Parameters:
         data_idx (int): Resonator index.
-        x (np.ndarray): x values used, one per sweep index.
-        y (np.ndarray): y values used, one per sweep index.
+        x (np.ndarray): x values used, one per series index.
+        y (np.ndarray): y values used, one per series index.
         outputs (list of np.ndarray or None): Fit outputs in ``output_names``
             order, or None if the fit failed or wasn't attempted (saved as
             NaN once the output arrays exist).
@@ -373,8 +373,8 @@ class SweepXYFitStore:
             """
             if self._ATTR not in self.group.attrs:
                 self.group.attrs[self._ATTR] = self._definition()
-            require('fit_x', (self.n_sweep,), float, np.nan)[di] = x
-            require('fit_y', (self.n_sweep,), float, np.nan)[di] = y
+            require('fit_x', (self.n_series,), float, np.nan)[di] = x
+            require('fit_y', (self.n_series,), float, np.nan)[di] = y
             for i, name in enumerate(self.xy_fit.output_names):
                 if outputs is not None:
                     value = outputs[i]

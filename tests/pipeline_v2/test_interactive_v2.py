@@ -7,14 +7,14 @@ from unittest.mock import MagicMock, patch
 from pyqtgraph.Qt import QtGui, QtWidgets
 
 import citkid.pipeline_v2.interactive.core as icore
-import citkid.pipeline_v2.interactive.sweep_fitter as isweep
+import citkid.pipeline_v2.interactive.iq_series as iseries
 from citkid.pipeline_v2.framework import plStep
 from citkid.pipeline_v2.interactive.core import (
     DefaultStepPanel,
     InteractiveAnalysisWindow,
     StepPanel,
 )
-from citkid.pipeline_v2.interactive.sweep_fitter import SweepFitterWindow
+from citkid.pipeline_v2.interactive.iq_series import IQSeriesWindow
 
 
 def _make_step(name, func_type='per-row', return_names=None):
@@ -97,6 +97,27 @@ class TestStepPanelV2:
         np.testing.assert_array_equal(store_kwargs['data_idx'], np.array([1], dtype=np.int32))
         assert panel._dirty is True
         assert panel._needs_run is False
+
+    def test_write_nan_outputs_invalidates_downstream(self, qt_app):
+        """Marking bad drops everything computed from the outputs, e.g. sxx from poly_x."""
+        ar, _ = _make_ar('step_c')
+        ar._build_invalidation_plan.return_value = {
+            'memory_invalidate': ['y', 'later_out', 'sxx_10'],
+            'zarr_delete': ['later_out', 'sxx_10'],
+        }
+        with patch.object(StepPanel, 'setup_ui'):
+            panel = StepPanel(ar, ('step_c',), data_idx=2)
+        panel._nan_outputs = lambda: {'y': np.nan}
+
+        assert panel._write_nan_outputs() is True
+
+        invalidated = [c.args[0] for c in ar.DS.invalidate_memory_params.call_args_list]
+        deleted = [c.args[0] for c in ar.DS.delete_saved_params.call_args_list]
+        assert ['later_out', 'sxx_10'] in invalidated
+        assert ['later_out', 'sxx_10'] in deleted
+        assert ['y'] in invalidated                      # the output itself is replaced
+        plan_rows = ar._build_invalidation_plan.call_args.args[2]
+        np.testing.assert_array_equal(plan_rows, np.array([2], dtype=np.int32))
 
 
 class TestInteractiveWindowV2:
@@ -241,11 +262,11 @@ def _assert_hints_wrap(win):
     assert hints.minimumSizeHint().width() < full_width / 2
 
 
-class TestSweepFitterWindowV2:
+class TestIQSeriesWindowV2:
     def _make_window(self, qt_app, monkeypatch, nrows=2, data_idxs=None, start_idx=0,
                      state_group=None, xy_fit=None):
         """
-        Build a SweepFitterWindow over two mock sweep runners.
+        Build a IQSeriesWindow over two mock series runners.
 
         Parameters:
         qt_app (QApplication): Qt application fixture.
@@ -255,10 +276,10 @@ class TestSweepFitterWindowV2:
         start_idx (int or None): Starting position in ``data_idxs``; None
             resumes from ``state_group``.
         state_group (zarr.Group or None): Group for persistent state.
-        xy_fit (SweepXYFit or None): Optional y vs x fit.
+        xy_fit (SeriesXYFit or None): Optional y vs x fit.
 
         Returns:
-        win (SweepFitterWindow): The window.
+        win (IQSeriesWindow): The window.
         """
         step1 = _make_step('fit_gain')
         step2 = _make_step('fit_iq')
@@ -272,15 +293,15 @@ class TestSweepFitterWindowV2:
             ar.DS = MagicMock()
             ar.DS.nrows = nrows
             ars.append(ar)
-        monkeypatch.setattr(isweep, 'get_panel_class', lambda _names: _WindowPanel)
-        monkeypatch.setattr(isweep.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
-        return SweepFitterWindow(
+        monkeypatch.setattr(iseries, 'get_panel_class', lambda _names: _WindowPanel)
+        monkeypatch.setattr(iseries.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
+        return IQSeriesWindow(
             ars,
             x_param_name='x',
             x_name='X',
             y_func=lambda _ar, _di: None,
             y_name='Y',
-            start_sweep_idx=0,
+            start_series_idx=0,
             start_idx=start_idx,
             data_idxs=data_idxs,
             title='test',
@@ -291,14 +312,14 @@ class TestSweepFitterWindowV2:
     @staticmethod
     def _line_fit(group=None, fail=False):
         """
-        Build a linear SweepXYFit that counts its calls.
+        Build a linear SeriesXYFit that counts its calls.
 
         Parameters:
         group (zarr.Group or None): Group to save fits to.
         fail (bool): If True, the fit raises.
 
         Returns:
-        xy_fit (SweepXYFit): The fit.
+        xy_fit (SeriesXYFit): The fit.
         calls (list): One entry per fit call.
         """
         calls = []
@@ -309,7 +330,7 @@ class TestSweepFitterWindowV2:
                 raise RuntimeError('bad fit')
             return tuple(np.polyfit(x, y, 1))
 
-        xy_fit = isweep.SweepXYFit(
+        xy_fit = iseries.SeriesXYFit(
             fit=fit, output_names=['slope', 'intercept'],
             model=lambda xs, slope, intercept: slope * xs + intercept,
             name='line', group=group,
@@ -322,14 +343,14 @@ class TestSweepFitterWindowV2:
         Replace plot refresh and row initialization with no-op mocks.
 
         Parameters:
-        win (SweepFitterWindow): Window to stub.
+        win (IQSeriesWindow): Window to stub.
         """
         for name in (
-            '_update_sweep_combo_items', '_update_sweep_scatter',
+            '_update_series_combo_items', '_update_series_scatter',
             '_update_waterfall', '_autoscale_all', '_ensure_data_idx_initialized',
         ):
             setattr(win, name, MagicMock())
-        win._all_sweeps_outputs_exist = lambda _di: True
+        win._all_series_outputs_exist = lambda _di: True
 
     @staticmethod
     def _close(win):
@@ -337,7 +358,7 @@ class TestSweepFitterWindowV2:
         Close the window, accepting any confirmation prompt.
 
         Parameters:
-        win (SweepFitterWindow): Window to close.
+        win (IQSeriesWindow): Window to close.
         """
         with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
             win.close()
@@ -399,8 +420,8 @@ class TestSweepFitterWindowV2:
 
     def test_background_init_only_visits_subset(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch, nrows=6, data_idxs=[5, 2, 0])
-        win._worker_root = MagicMock()
-        win._all_sweeps_outputs_exist = lambda _di: False
+        win._background_fitting = True
+        win._all_series_outputs_exist = lambda _di: False
         win._make_worker_ars = MagicMock(return_value=[])
         visited = []
         win._initialize_remaining_data_indices = lambda _ars, dis: visited.extend(dis)
@@ -436,7 +457,7 @@ class TestSweepFitterWindowV2:
         worker_ars[0].release_rows.assert_any_call(1)
         self._close(win)
 
-    def test_background_init_stops_between_sweeps(self, qt_app, monkeypatch):
+    def test_background_init_stops_between_series(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch, nrows=3)
         worker_ars = [MagicMock(), MagicMock()]
         attempted = []
@@ -457,13 +478,13 @@ class TestSweepFitterWindowV2:
     def test_attempted_rows_are_not_refit(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch, nrows=4)
         win._initialized_data_idxs = {0, 2}
-        win._all_sweeps_outputs_exist = lambda _di: False
-        win._initialize_all_sweeps_for_data_idx = MagicMock()
+        win._all_series_outputs_exist = lambda _di: False
+        win._initialize_all_series_for_data_idx = MagicMock()
 
         win._ensure_data_idx_initialized(2)
-        win._initialize_all_sweeps_for_data_idx.assert_not_called()
+        win._initialize_all_series_for_data_idx.assert_not_called()
 
-        win._worker_root = MagicMock()
+        win._background_fitting = True
         win._make_worker_ars = MagicMock(return_value=[])
         visited = []
         win._initialize_remaining_data_indices = lambda _ars, dis: visited.extend(dis)
@@ -475,7 +496,7 @@ class TestSweepFitterWindowV2:
 
     def test_background_order_starts_after_current_position(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch, nrows=6, data_idxs=[5, 4, 3, 2, 1], start_idx=2)
-        win._worker_root = MagicMock()
+        win._background_fitting = True
         win._make_worker_ars = MagicMock(return_value=[])
         visited = []
         win._initialize_remaining_data_indices = lambda _ars, dis: visited.extend(dis)
@@ -498,7 +519,7 @@ class TestSweepFitterWindowV2:
         win._advance_resonator(+1)
         assert win._data_idx == 3
         self._close(win)
-        assert state_group.attrs['sweep_fitter']['viewed_data_idxs'] == [0, 1, 3]
+        assert state_group.attrs['series_state']['viewed_data_idxs'] == [0, 1, 3]
 
         # Session 2 over all rows starts at 2, the first row never viewed.
         win = self._make_window(qt_app, monkeypatch, nrows=6, start_idx=None,
@@ -509,7 +530,7 @@ class TestSweepFitterWindowV2:
 
     def test_resume_with_everything_viewed_or_explicit_start(self, qt_app, monkeypatch, tmp_path):
         state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
-        state_group.attrs['sweep_fitter'] = {'viewed_data_idxs': [0, 1, 2], 'prefit_attempted': [1]}
+        state_group.attrs['series_state'] = {'viewed_data_idxs': [0, 1, 2], 'prefit_attempted': [1]}
 
         win = self._make_window(qt_app, monkeypatch, nrows=3, start_idx=None, state_group=state_group)
         assert win._data_idx == 0
@@ -528,7 +549,7 @@ class TestSweepFitterWindowV2:
 
         win._initialize_remaining_data_indices([MagicMock()], [2, 3])
 
-        assert state_group.attrs['sweep_fitter']['prefit_attempted'] == [2, 3]
+        assert state_group.attrs['series_state']['prefit_attempted'] == [2, 3]
         self._close(win)
 
     def test_close_waits_for_worker_and_consolidates(self, qt_app, monkeypatch):
@@ -545,7 +566,7 @@ class TestSweepFitterWindowV2:
         assert win._init_all_stop.is_set()
         assert order == [False]
 
-    def test_consolidate_storage_runs_for_every_sweep(self, qt_app, monkeypatch):
+    def test_consolidate_storage_runs_for_every_series(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch, nrows=3)
 
         self._close(win)
@@ -609,20 +630,20 @@ class TestSweepFitterWindowV2:
         win._x_cache[0] = np.array([1.0, 2.0])
         win._y_cache[0] = np.array([3.0, 5.0])
 
-        win._update_sweep_scatter()
+        win._update_series_scatter()
 
         assert len(calls) == 1
         _, _, outputs = win._xy_store.load(0)
         np.testing.assert_allclose([float(o) for o in outputs], [2.0, 1.0])
         xs, ys = win._xy_fit_curve.getData()
         np.testing.assert_allclose(ys, 2.0 * xs + 1.0)
-        assert 'line: slope = 2, intercept = 1' in win._plot_sweep.titleLabel.text
+        assert 'line: slope = 2, intercept = 1' in win._plot_series.titleLabel.text
 
-        win._update_sweep_scatter()
+        win._update_series_scatter()
         assert len(calls) == 1
 
         win._y_cache[0] = np.array([3.0, 7.0])
-        win._update_sweep_scatter()
+        win._update_series_scatter()
         assert len(calls) == 2
         assert float(win._xy_store.load(0)[2][0]) == pytest.approx(4.0)
         self._close(win)
@@ -633,9 +654,9 @@ class TestSweepFitterWindowV2:
         win._x_cache[0] = np.array([1.0, 2.0])
         win._y_cache[0] = np.array([3.0, 5.0])
 
-        win._update_sweep_scatter()
+        win._update_series_scatter()
 
-        assert 'fit failed (RuntimeError: bad fit)' in win._plot_sweep.titleLabel.text
+        assert 'fit failed (RuntimeError: bad fit)' in win._plot_series.titleLabel.text
         assert win._apply_status_label.text() == 'xy fit failed'
         assert win._xy_store.has_fit(0)
         assert win._xy_fit_curve.getData()[0] is None or len(win._xy_fit_curve.getData()[0]) == 0
@@ -668,7 +689,7 @@ class TestSweepFitterWindowV2:
         win._initialized_data_idxs = {0, 1, 2, 3}
         x = np.array([1.0, 2.0])
         win._xy_store.save(2, x, x, xy_fit.run(x, x))
-        win._worker_root = MagicMock()
+        win._background_fitting = True
         win._make_worker_ars = MagicMock(return_value=[])
         visited = []
         win._initialize_remaining_data_indices = lambda _ars, dis: visited.extend(dis)
@@ -682,12 +703,12 @@ class TestSweepFitterWindowV2:
     @pytest.mark.parametrize('overwrite', [True, False])
     def test_xy_fit_definition_mismatch_asks(self, qt_app, monkeypatch, overwrite):
         group = zarr.open_group(zarr.storage.MemoryStore(), mode='w')
-        old = isweep.SweepXYFit(fit=lambda x, y: y.mean(), output_names=['mean'],
+        old = iseries.SeriesXYFit(fit=lambda x, y: y.mean(), output_names=['mean'],
                                 model=lambda xs, m: xs, name='mean', group=group)
         x = np.array([1.0, 2.0])
-        isweep.SweepXYFitStore(group, old, 2, 2).save(0, x, x, old.run(x, x))
+        iseries.SeriesXYFitStore(group, old, 2, 2).save(0, x, x, old.run(x, x))
         asked = []
-        monkeypatch.setattr(isweep, '_confirm_overwrite_xy_fit',
+        monkeypatch.setattr(iseries, '_confirm_overwrite_xy_fit',
                             lambda message: asked.append(message) or overwrite)
         xy_fit, _ = self._line_fit(group=group)
 
@@ -701,8 +722,8 @@ class TestSweepFitterWindowV2:
                 self._make_window(qt_app, monkeypatch, xy_fit=xy_fit)
         assert len(asked) == 1 and "'mean'" in asked[0]
 
-    def test_sweep_plot_range_ignores_fit_curve(self, qt_app, monkeypatch):
-        xy_fit = isweep.SweepXYFit(
+    def test_series_plot_range_ignores_fit_curve(self, qt_app, monkeypatch):
+        xy_fit = iseries.SeriesXYFit(
             fit=lambda x, y: (1.0,), output_names=['k'],
             model=lambda xs, k: 1e6 * np.sin(xs),   # far outside the data
             name='wild',
@@ -710,12 +731,12 @@ class TestSweepFitterWindowV2:
         win = self._make_window(qt_app, monkeypatch, xy_fit=xy_fit)
         win._x_cache[0] = np.array([1.0, 2.0])
         win._y_cache[0] = np.array([3.0, 5.0])
-        win._update_sweep_scatter()
+        win._update_series_scatter()
         assert np.nanmax(np.abs(win._xy_fit_curve.getData()[1])) > 1e5
 
-        win._plot_sweep.autoRange()
+        win._plot_series.autoRange()
 
-        y_min, y_max = win._plot_sweep.viewRange()[1]
+        y_min, y_max = win._plot_series.viewRange()[1]
         assert y_min > 0 and y_max < 10
         self._close(win)
 
@@ -726,7 +747,7 @@ class TestSweepFitterWindowV2:
         win._x_cache[0] = np.array([1.0, 2.0])
         win._y_cache[0] = np.array([3.0, 5.0])
 
-        win._update_sweep_scatter()
+        win._update_series_scatter()
 
         assert 'slope' in state_group['xy_fit']
         self._close(win)
@@ -736,17 +757,17 @@ class TestSweepFitterWindowV2:
         win = self._make_window(qt_app, monkeypatch, nrows=3, state_group=state_group)
 
         self._close(win)
-        isweep.QtCore.QCoreApplication.sendPostedEvents(
-            None, isweep.QtCore.QEvent.Type.DeferredDelete)
+        iseries.QtCore.QCoreApplication.sendPostedEvents(
+            None, iseries.QtCore.QEvent.Type.DeferredDelete)
 
         with pytest.raises(RuntimeError):
             win.isVisible()
         assert win._viewed_data_idxs == {0}
-        assert state_group.attrs['sweep_fitter']['viewed_data_idxs'] == [0]
+        assert state_group.attrs['series_state']['viewed_data_idxs'] == [0]
 
     def test_worker_ars_are_built_once(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch, nrows=3)
-        win._worker_root = MagicMock()
+        win._background_fitting = True
         win._make_worker_ars = MagicMock(return_value=['ar'])
         win._initialize_remaining_data_indices = lambda _ars, _dis: None
 
@@ -759,15 +780,15 @@ class TestSweepFitterWindowV2:
 
     def test_run_panel_marks_downstream_stale(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch)
-        win._sweep_idx = 0
-        win._update_sweep_point = MagicMock()
+        win._series_idx = 0
+        win._update_series_point = MagicMock()
 
         win._run_panel_by_index(0)
 
         assert win.panels[0]._has_run is True
         assert win.panels[1]._needs_run is True
         assert win.panels[1].clear_calls == 1
-        win._update_sweep_point.assert_called_once_with(0)
+        win._update_series_point.assert_called_once_with(0)
         with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
             win.close()
 
@@ -785,7 +806,7 @@ class TestSweepFitterWindowV2:
 
     def test_panel_save_cancel_skips_persist_when_downstream_stale(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch)
-        win._sweep_idx = 0
+        win._series_idx = 0
         win.panels[1]._needs_run = True
 
         with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.No):
@@ -797,7 +818,7 @@ class TestSweepFitterWindowV2:
 
     def test_prefetch_next_does_not_execute_pipeline(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch)
-        win._sweep_idx = 0
+        win._series_idx = 0
 
         win._prefetch_next()
         if win._prefetch_thread is not None:
@@ -821,16 +842,16 @@ class TestSweepFitterWindowV2:
         ar.DS.nrows = 3
 
         ars = [ar]
-        monkeypatch.setattr(isweep, 'get_panel_class', lambda _names: _WindowPanel)
-        monkeypatch.setattr(isweep.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(iseries, 'get_panel_class', lambda _names: _WindowPanel)
+        monkeypatch.setattr(iseries.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
 
-        win = SweepFitterWindow(
+        win = IQSeriesWindow(
             ars,
             x_param_name='x',
             x_name='X',
             y_func=lambda _ar, _di: None,
             y_name='Y',
-            start_sweep_idx=0,
+            start_series_idx=0,
             start_idx=0,
             title='test',
         )
@@ -850,9 +871,9 @@ class TestSweepFitterWindowV2:
         win._step_outputs_exist = fake_step_outputs_exist
         win._runner_outputs_exist = lambda _ar, _di: False
 
-        win._batch_init_all_sweeps()
+        win._batch_init_all_series()
         win._data_idx = 1
-        win._batch_init_all_sweeps()
+        win._batch_init_all_series()
 
         assert ar.execute_step.call_count == 1
         ar.execute_step.assert_called_with(global_step, data_idx=None, save=True)
@@ -879,15 +900,15 @@ class TestSweepFitterWindowV2:
             ar.DS.nrows = 3
             ars.append(ar)
 
-        monkeypatch.setattr(isweep, 'get_panel_class', lambda _names: _WindowPanel)
-        monkeypatch.setattr(isweep.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
-        win = SweepFitterWindow(
+        monkeypatch.setattr(iseries, 'get_panel_class', lambda _names: _WindowPanel)
+        monkeypatch.setattr(iseries.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
+        win = IQSeriesWindow(
             ars,
             x_param_name='x',
             x_name='X',
             y_func=lambda _ar, _di: None,
             y_name='Y',
-            start_sweep_idx=0,
+            start_series_idx=0,
             start_idx=0,
             title='test',
         )
@@ -914,9 +935,9 @@ class TestSweepFitterWindowV2:
     def test_ensure_data_idx_initialized_runs_sync_when_row_not_ready(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch)
         win._initialized_data_idxs = {0}
-        win._all_sweeps_outputs_exist = lambda _di: False
+        win._all_series_outputs_exist = lambda _di: False
         win._start_background_initialize_remaining = MagicMock()
-        win._initialize_all_sweeps_for_data_idx = MagicMock()
+        win._initialize_all_series_for_data_idx = MagicMock()
 
         class _DeadThread:
             def is_alive(self):
@@ -926,7 +947,7 @@ class TestSweepFitterWindowV2:
 
         win._ensure_data_idx_initialized(1)
 
-        win._initialize_all_sweeps_for_data_idx.assert_called_once_with(1)
+        win._initialize_all_series_for_data_idx.assert_called_once_with(1)
         assert 1 in win._initialized_data_idxs
         win._start_background_initialize_remaining.assert_called_once()
         with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
@@ -935,20 +956,20 @@ class TestSweepFitterWindowV2:
     def test_ensure_data_idx_initialized_skips_ready_rows(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch)
         win._initialized_data_idxs = {0, 1}
-        win._initialize_all_sweeps_for_data_idx = MagicMock()
+        win._initialize_all_series_for_data_idx = MagicMock()
 
         win._ensure_data_idx_initialized(1)
 
-        win._initialize_all_sweeps_for_data_idx.assert_not_called()
+        win._initialize_all_series_for_data_idx.assert_not_called()
         with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
             win.close()
 
     def test_set_data_idx_does_not_trust_prefetch_when_outputs_missing(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch)
         win._prefetched_idx = 1
-        win._all_sweeps_outputs_exist = lambda di: False if di == 1 else True
+        win._all_series_outputs_exist = lambda di: False if di == 1 else True
         win._ensure_data_idx_initialized = MagicMock()
-        win._update_sweep_scatter = MagicMock()
+        win._update_series_scatter = MagicMock()
         win._update_waterfall = MagicMock()
         win._autoscale_all = MagicMock()
 
@@ -960,17 +981,17 @@ class TestSweepFitterWindowV2:
             win.close()
 
     @pytest.mark.parametrize('key, called, not_called', [
-        ('Key_B', '_mark_bad_above', '_mark_all_sweeps_bad'),
+        ('Key_B', '_mark_bad_above', '_mark_all_series_bad'),
         ('Key_A', None, '_apply_to_all'),
     ])
     def test_ctrl_shift_shortcuts(self, qt_app, monkeypatch, key, called, not_called):
         win = self._make_window(qt_app, monkeypatch)
-        for name in ('_mark_bad_above', '_mark_all_sweeps_bad', '_apply_to_all'):
+        for name in ('_mark_bad_above', '_mark_all_series_bad', '_apply_to_all'):
             setattr(win, name, MagicMock())
 
         handled = win._handle_modified_letter_shortcut(
-            getattr(isweep.QtCore.Qt.Key, key),
-            isweep._Qt.ShiftModifier | isweep._Qt.ControlModifier,
+            getattr(iseries.QtCore.Qt.Key, key),
+            iseries._Qt.ShiftModifier | iseries._Qt.ControlModifier,
         )
 
         assert handled is (called is not None)
@@ -988,54 +1009,54 @@ class TestSweepFitterWindowV2:
     ])
     def test_mark_bad_above_selects_points(self, qt_app, monkeypatch, x, selected, expected):
         win = self._make_window(qt_app, monkeypatch)
-        win._n_sweep = len(x)
-        win._sweep_idx = selected
+        win._n_series = len(x)
+        win._series_idx = selected
         win._get_x_array = lambda _di: np.asarray(x)
-        win._mark_sweeps_bad = MagicMock()
+        win._mark_series_bad = MagicMock()
 
         win._mark_bad_above()
 
-        win._mark_sweeps_bad.assert_called_once_with(expected)
-        assert win._apply_status_label.text() == f'Marked {len(expected)} sweep(s) bad'
+        win._mark_series_bad.assert_called_once_with(expected)
+        assert win._apply_status_label.text() == f'Marked {len(expected)} series(s) bad'
         self._close(win)
 
     def test_mark_bad_above_needs_a_selection(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch)
-        win._sweep_idx = None
-        win._mark_sweeps_bad = MagicMock()
+        win._series_idx = None
+        win._mark_series_bad = MagicMock()
 
         win._mark_bad_above()
 
-        win._mark_sweeps_bad.assert_not_called()
-        assert 'Select a sweep point' in win._apply_status_label.text()
+        win._mark_series_bad.assert_not_called()
+        assert 'Select a series point' in win._apply_status_label.text()
         self._close(win)
 
-    def test_mark_sweeps_bad_writes_only_chosen_sweeps(self, qt_app, monkeypatch):
+    def test_mark_series_bad_writes_only_chosen_series(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch)
         written = []
         for panel in win.panels:
             panel._write_nan_outputs = lambda p=panel: written.append(win._ARs.index(p.AR))
         original_ar = win.panels[0].AR
-        win._update_sweep_scatter = MagicMock()
+        win._update_series_scatter = MagicMock()
 
-        win._mark_sweeps_bad([1])
+        win._mark_series_bad([1])
 
         assert written == [1] * len(win.panels)
         assert all(panel.AR is original_ar for panel in win.panels)
-        win._update_sweep_scatter.assert_called_once()
+        win._update_series_scatter.assert_called_once()
         self._close(win)
 
-    def test_shift_b_shortcut_marks_all_sweeps_bad(self, qt_app, monkeypatch):
+    def test_shift_b_shortcut_marks_all_series_bad(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch)
-        win._mark_all_sweeps_bad = MagicMock()
+        win._mark_all_series_bad = MagicMock()
 
         handled = win._handle_modified_letter_shortcut(
-            isweep.QtCore.Qt.Key.Key_B,
-            isweep._Qt.ShiftModifier,
+            iseries.QtCore.Qt.Key.Key_B,
+            iseries._Qt.ShiftModifier,
         )
 
         assert handled is True
-        win._mark_all_sweeps_bad.assert_called_once()
+        win._mark_all_series_bad.assert_called_once()
         with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
             win.close()
 
@@ -1044,11 +1065,42 @@ class TestSweepFitterWindowV2:
         win._apply_to_all = MagicMock()
 
         handled = win._handle_modified_letter_shortcut(
-            isweep.QtCore.Qt.Key.Key_A,
-            isweep._Qt.ShiftModifier,
+            iseries.QtCore.Qt.Key.Key_A,
+            iseries._Qt.ShiftModifier,
         )
 
         assert handled is True
         win._apply_to_all.assert_called_once()
         with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
             win.close()
+
+def test_every_registered_panel_can_clear_its_plots():
+    """Series windows clear panels when the resonator changes; none may skip it."""
+    from citkid.pipeline_v2.interactive import circ, fit_iq, gain, xcal  # noqa: F401 (register)
+
+    missing = [cls.__name__ for cls in set(icore._PANEL_REGISTRY.values())
+               if cls.clear_plots is StepPanel.clear_plots]
+    assert missing == []
+
+
+@pytest.mark.parametrize('module, steps', [
+    ('circ', ('fit_iq_circle', 'get_idx_t', 'get_theta_phase_offset')),
+    ('xcal', ('get_xcal_mask', 'fit_x_theta')),
+])
+def test_ts_panels_clear_every_curve(qt_app, module, steps):
+    import importlib
+    import pyqtgraph as pg
+
+    importlib.import_module(f'citkid.pipeline_v2.interactive.{module}')
+    ar, _ = _make_ar(*steps)
+    panel = icore.get_panel_class(steps)(ar, steps, data_idx=0)
+    curves = [c for c in vars(panel).values() if isinstance(c, pg.PlotDataItem)]
+    assert len(curves) >= 8
+    for curve in curves:
+        curve.setData([1.0, 2.0], [3.0, 4.0])
+
+    panel.clear_plots()
+
+    assert all(len(curve.getData()[0] if curve.getData()[0] is not None else []) == 0
+               for curve in curves)
+    assert panel._status_label.text() == '\u2014'

@@ -474,6 +474,16 @@ class XCalPanel(StepPanel):
         self._idx0_spin.blockSignals(False)
         self._idx1_spin.blockSignals(False)
 
+    def clear_plots(self):
+        """
+        Blank every data curve and reset the status label.
+        """
+        for curve in (self._amp_data, self._amp_excl, self._iq_data, self._iq_excl,
+                      self._zt_iq, self._zt_iq_cut, self._xcal_fit, self._xcal_inc,
+                      self._xcal_exc, self._xcal_ts, self._xcal_ts_cut):
+            curve.setData([], [])
+        self._status_label.setText("—")
+
     # ------------------------------------------------------------------
     # Execution helpers
     # ------------------------------------------------------------------

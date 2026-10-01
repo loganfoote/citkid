@@ -212,6 +212,9 @@ class DataSet:
         self.cal_yaml_text = cal_def["yaml_text"]
         self.cal_custom_source = cal_def["custom_source"]
         self.custom_main_dir_overwrite = custom_main_dir_overwrite
+        # How to reopen this dataset in copy(). Steps passed directly aren't
+        # embedded in the zarr store, so a copy needs them (and the YAML).
+        self._custom_cal_steps = None if custom_cal_steps is None else list(custom_cal_steps)
 
         self.cal_steps = list(cal_def["custom_steps"])
         for step in default_steps.default_cal_steps:
@@ -233,6 +236,33 @@ class DataSet:
             )
         if nrows_path[-1].func_type != "global":
             raise ValueError("Parameter 'nrows' must be produced by a global step")
+
+    def copy(self):
+        """
+        Open another DataSet on the same zarr group with the same definition.
+
+        The copy shares the stored data but not the in-memory caches, so it
+        can be used from another thread (e.g. a background worker). It uses
+        the same ``custom_cal_steps`` if they were passed directly (they
+        aren't embedded in the zarr store), and otherwise the embedded
+        calibration definition, with the same ``custom_main_dir_overwrite``
+        and ``write_buffer``.
+
+        Returns:
+        ds (DataSet): The new dataset.
+        """
+        if self._custom_cal_steps is not None:
+            return DataSet(
+                zarr_path=self.root,
+                cal_yaml_path=self.cal_yaml_path,
+                custom_cal_steps=self._custom_cal_steps,
+                write_buffer=self.write_buffer,
+            )
+        return DataSet(
+            zarr_path=self.root,
+            custom_main_dir_overwrite=self.custom_main_dir_overwrite,
+            write_buffer=self.write_buffer,
+        )
 
     def register_analysis_definition(self, analysis_yaml_text, analysis_custom_source):
         """

@@ -1,5 +1,5 @@
 """
-Tests for citkid.pipeline_v2.sweep_xy_fit (SweepXYFit and SweepXYFitStore).
+Tests for citkid.pipeline_v2.series_xy_fit (SeriesXYFit and SeriesXYFitStore).
 """
 
 import threading
@@ -8,18 +8,18 @@ import numpy as np
 import pytest
 import zarr
 
-from citkid.pipeline_v2.sweep_xy_fit import SweepXYFit, SweepXYFitStore, usable_points
+from citkid.pipeline_v2.series_xy_fit import SeriesXYFit, SeriesXYFitStore, usable_points
 
 
 def _linear_fit(**kwargs):
     """
-    Build a linear SweepXYFit that records its inputs.
+    Build a linear SeriesXYFit that records its inputs.
 
     Parameters:
-    **kwargs: Extra SweepXYFit arguments.
+    **kwargs: Extra SeriesXYFit arguments.
 
     Returns:
-    xy_fit (SweepXYFit): The fit.
+    xy_fit (SeriesXYFit): The fit.
     calls (list): ``(x, y)`` passed to each fit call.
     """
     calls = []
@@ -29,7 +29,7 @@ def _linear_fit(**kwargs):
         slope, intercept = np.polyfit(x, y, 1)
         return slope, intercept
 
-    xy_fit = SweepXYFit(
+    xy_fit = SeriesXYFit(
         fit=fit,
         output_names=['slope', 'intercept'],
         model=lambda xs, slope, intercept: slope * xs + intercept,
@@ -39,22 +39,22 @@ def _linear_fit(**kwargs):
     return xy_fit, calls
 
 
-def _store(xy_fit, nrows=4, n_sweep=4, group=None):
+def _store(xy_fit, nrows=4, n_series=4, group=None):
     """
     Build a store on an in-memory zarr group.
 
     Parameters:
-    xy_fit (SweepXYFit): Fit definition.
+    xy_fit (SeriesXYFit): Fit definition.
     nrows (int): Number of resonators.
-    n_sweep (int): Number of sweep indices.
+    n_series (int): Number of series indices.
     group (zarr.Group or None): Group to use, or None for a new one.
 
     Returns:
-    store (SweepXYFitStore): The store.
+    store (SeriesXYFitStore): The store.
     """
     if group is None:
         group = zarr.open_group(zarr.storage.MemoryStore(), mode='w')
-    return SweepXYFitStore(group, xy_fit, nrows, n_sweep)
+    return SeriesXYFitStore(group, xy_fit, nrows, n_series)
 
 
 def test_usable_points_drops_nan_and_sorts():
@@ -82,12 +82,12 @@ def test_run_with_too_few_points_returns_none():
 
 
 def test_run_wraps_single_output_and_checks_count():
-    single = SweepXYFit(fit=lambda x, y: y.mean(), output_names=['mean'],
+    single = SeriesXYFit(fit=lambda x, y: y.mean(), output_names=['mean'],
                         model=lambda xs, m: np.full_like(xs, m))
     (mean,) = single.run(np.array([1.0, 2.0]), np.array([4.0, 6.0]))
     assert float(mean) == 5.0
 
-    wrong = SweepXYFit(fit=lambda x, y: (1.0, 2.0, 3.0), output_names=['a', 'b'],
+    wrong = SeriesXYFit(fit=lambda x, y: (1.0, 2.0, 3.0), output_names=['a', 'b'],
                        model=lambda xs, a, b: xs)
     with pytest.raises(ValueError, match='returned 3 outputs'):
         wrong.run(np.array([1.0, 2.0]), np.array([1.0, 2.0]))
@@ -96,7 +96,7 @@ def test_run_wraps_single_output_and_checks_count():
 @pytest.mark.parametrize('names', [[], ['a', 'a']])
 def test_invalid_output_names_raise(names):
     with pytest.raises(ValueError, match='output_names'):
-        SweepXYFit(fit=lambda x, y: x, output_names=names, model=lambda xs, *o: xs)
+        SeriesXYFit(fit=lambda x, y: x, output_names=names, model=lambda xs, *o: xs)
 
 
 def test_curve_spans_usable_x_range():
@@ -161,7 +161,7 @@ def test_store_definition_mismatch_and_clear():
     store.save(0, x, x, xy_fit.run(x, x))
     assert _store(xy_fit, group=group).matches_definition()
 
-    other = SweepXYFit(fit=lambda x, y: y.mean(), output_names=['mean'],
+    other = SeriesXYFit(fit=lambda x, y: y.mean(), output_names=['mean'],
                        model=lambda xs, m: xs, name='mean')
     other_store = _store(other, group=group)
     assert not other_store.matches_definition()

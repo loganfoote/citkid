@@ -68,9 +68,13 @@ class CRS:
         self.dec_stage = None
         self.dec_short = None 
         self.dec_module_idxs = None
+        # Suppresses set_decimation printouts. Updated by configure_system
+        self.suppress_dec_printout = True
 
-    async def configure_system(self, clock_source = "VCXO", full_scale_dbm = 7,
-                               analog_bank_high = False, verbose = True):
+    async def configure_system(
+        self, clock_source = "VCXO", full_scale_dbm = 7, 
+        analog_bank_high = False, verbose = True, suppress_dec_printout = True
+        ):
         """
         Resolve the system, validate the CRS firmware version, set the timestamp 
         port, clock source, extended bandwidth, analog bank, and DAC full scale.
@@ -86,13 +90,21 @@ class CRS:
             uses modules 1-4 (DAC/ADC 1-4). Can be changed later using 
             self.set_analog_bank.
         verbose (bool): If True, gets and prints the clocking source.
+        suppress_dec_printout (bool): If True (default), suppress the
+            decimation printout of every subsequent call to
+            self.set_decimation, even if verbose is True. Stored as
+            ``self.suppress_dec_printout``, which defaults to True before
+            configure_system is called.
 
         Returns:
         None
         """
         # Input validation
         _validate_configure_system_params(clock_source, full_scale_dbm, 
-                                          analog_bank_high, verbose)
+                                          analog_bank_high, verbose,
+                                          suppress_dec_printout)
+
+        self.suppress_dec_printout = suppress_dec_printout
         
         # Resolve the system
         await self.d.resolve()
@@ -273,7 +285,7 @@ class CRS:
         module_idxs (array-like int or None): module indices to stream. If None,
             module_idxs is set to all modules with tones in self.fres_map. 
         verbose (bool): If True, prints the decimation settings after 
-            confirming.
+            confirming, unless ``self.suppress_dec_printout`` is True.
 
         Returns:
         None
@@ -314,7 +326,7 @@ class CRS:
         self.dec_module_idxs = module_idxs 
         
         # Print decimation info 
-        if verbose:
+        if verbose and not self.suppress_dec_printout:
             msg = f'Decimation set: stage = {dec_stage}, short = {short}, '
             msg += f'modules = {module_idxs}'
             print(msg)
@@ -1195,7 +1207,8 @@ async def _sweep(module, nco_freqs, frequencies_map, ares_map, sweep_f,
 ########################### Input validation helpers ###########################
 ################################################################################
 def _validate_configure_system_params(clock_source, full_scale_dbm, 
-                                     analog_bank_high, verbose):
+                                     analog_bank_high, verbose,
+                                     suppress_dec_printout = True):
     """
     Validate the input parameters for configure_system.
     
@@ -1215,6 +1228,8 @@ def _validate_configure_system_params(clock_source, full_scale_dbm,
         raise TypeError('analog_bank_high must be a boolean value')
     if not isinstance(verbose, bool):
         raise TypeError('verbose must be a boolean value')
+    if not isinstance(suppress_dec_printout, bool):
+        raise TypeError('suppress_dec_printout must be a boolean value')
     
 def _validate_nco_freqs(nco_freqs, analog_bank_high):
     """

@@ -450,7 +450,7 @@ def plot_fits_batch(directory, file_suffix, plot_directory):
 
             ax.plot(np.real(z), np.imag(z), '.', color = color)
             fsamp = np.linspace(min(f), max(f), 200)
-            zsamp = nonlinear_iq(fsamp, *popt)
+            zsamp = nonlinear_iq(fsamp, *popt, True)
             ax.plot(np.real(zsamp), np.imag(zsamp), '--k')
 
         save_fig(fig, f'fres_update_{fig_index}', plot_directory, ftype = 'png',

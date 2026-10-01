@@ -196,6 +196,51 @@ async def test_configure_system_verbose_false_no_print(
         assert 'System configured' not in captured.out
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kwargs,expected", [
+    ({}, True),
+    ({'suppress_dec_printout': True}, True),
+    ({'suppress_dec_printout': False}, False),
+])
+async def test_configure_system_suppress_dec_printout_stored(
+    mock_crs_for_configure,
+    kwargs,
+    expected
+):
+    """Test that suppress_dec_printout is stored on the CRS object."""
+    crs = mock_crs_for_configure
+    crs.suppress_dec_printout = not expected
+
+    with patch.object(crs, 'set_clock_source', new_callable = AsyncMock),          patch.object(crs, 'set_extended_bw', new_callable = AsyncMock),          patch.object(crs, 'set_analog_bank', new_callable = AsyncMock),          patch.object(crs, 'set_decimation', new_callable = AsyncMock):
+
+        await crs.configure_system(**kwargs)
+
+    assert crs.suppress_dec_printout is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("suppress,printed", [(True, False), (False, True)])
+async def test_configure_system_suppress_dec_printout_output(
+    mock_crs_for_configure,
+    capsys,
+    suppress,
+    printed
+):
+    """Test the decimation printout during configure_system itself."""
+    crs = mock_crs_for_configure
+    crs.d.set_decimation = AsyncMock()
+
+    with patch.object(crs, 'set_clock_source', new_callable = AsyncMock),          patch.object(crs, 'set_extended_bw', new_callable = AsyncMock),          patch.object(crs, 'set_analog_bank', new_callable = AsyncMock),          patch('citkid.crs.instrument.time.sleep'):
+
+        await crs.configure_system(suppress_dec_printout = suppress)
+
+    crs.d.set_decimation.assert_called_once_with(6, short = False,
+                                                 module = [])
+    captured = capsys.readouterr()
+    assert ('Decimation set' in captured.out) == printed
+    assert 'System configured' in captured.out
+
+
 ################################################################################
 ################## configure_system Input Validation Tests ####################
 ################################################################################
@@ -313,3 +358,22 @@ async def test_configure_system_verbose_not_bool(mock_crs_for_configure):
         match = 'verbose must be a boolean value'
     ):
         await crs.configure_system(verbose = 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [1, 0, 'True', None])
+async def test_configure_system_suppress_dec_printout_not_bool(
+    mock_crs_for_configure,
+    value
+):
+    """Test that non-bool suppress_dec_printout raises TypeError."""
+    crs = mock_crs_for_configure
+
+    with pytest.raises(
+        TypeError,
+        match = 'suppress_dec_printout must be a boolean value'
+    ):
+        await crs.configure_system(suppress_dec_printout = value)
+
+    # Validation happens before the device is touched
+    crs.d.resolve.assert_not_called()

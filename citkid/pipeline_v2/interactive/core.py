@@ -243,7 +243,7 @@ class StepPanel(QtWidgets.QWidget):
         Blank all plot displays without re-running steps.
 
         Override in subclasses to set all plot curves to empty data, reset
-        status labels, etc.  Called by the sweep fitter when the user
+        status labels, etc.  Called by the series windows when the user
         navigates to a different resonator so the panels do not show stale
         results.
         """
@@ -404,6 +404,12 @@ class StepPanel(QtWidgets.QWidget):
         """
         Write placeholder "bad data" outputs for the current row only.
 
+        Everything computed from these outputs for the row is invalidated
+        too, as when the step is rerun: later analysis outputs and
+        calibration products (e.g. ``xt`` and ``sxx_*`` from ``poly_x``), in
+        memory and in zarr. Otherwise stale values (e.g. a series-plot point)
+        would survive the bad mark.
+
         Sub-classes should override _nan_outputs to return the dict of
         {return_name: bad_value} appropriate for their step(s).
 
@@ -418,6 +424,7 @@ class StepPanel(QtWidgets.QWidget):
             DS = self.AR.DS
             di = int(self.data_idx)
             data_idx_arr = np.atleast_1d(np.asarray([di], dtype=np.int32))
+            self._invalidate_downstream_of(list(nan_vals), data_idx_arr)
             for name, value in nan_vals.items():
                 producer = self._find_output_step(name)
                 if producer is None:
@@ -446,6 +453,38 @@ class StepPanel(QtWidgets.QWidget):
         except Exception as exc:
             print(f"_write_nan_outputs failed in {self.step_names}: {exc}")
             return False
+
+    def _invalidate_downstream_of(self, names, data_idx_arr):
+        """
+        Invalidate everything computed from some outputs, for some rows.
+
+        Uses the same invalidation plan as rerunning the producing steps:
+        later analysis outputs and dependent calibration products are
+        dropped from memory and deleted from zarr. The outputs themselves are
+        left to the caller.
+
+        Parameters:
+        names (list of str): Output names being replaced.
+        data_idx_arr (np.ndarray): Rows affected.
+        """
+        downstream, delete = set(), set()
+        producers = {}
+        for name in names:
+            step = self._find_output_step(name)
+            if step is not None:
+                producers[step.name] = step
+        for step in producers.values():
+            pipeline_scope, step_index = self.AR._resolve_step_scope(step)
+            plan = self.AR._build_invalidation_plan(
+                step, {}, data_idx_arr, pipeline_scope, step_index)
+            downstream.update(plan["memory_invalidate"])
+            delete.update(plan["zarr_delete"])
+        downstream.difference_update(names)
+        delete.difference_update(names)
+        if downstream:
+            self.AR.DS.invalidate_memory_params(sorted(downstream), data_idx=data_idx_arr)
+        if delete:
+            self.AR.DS.delete_saved_params(sorted(delete), data_idx=data_idx_arr)
 
     def _nan_outputs(self):
         """
