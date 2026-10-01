@@ -731,6 +731,19 @@ class TestSweepFitterWindowV2:
         assert 'slope' in state_group['xy_fit']
         self._close(win)
 
+    def test_closed_window_is_destroyed_but_keeps_python_state(self, qt_app, monkeypatch, tmp_path):
+        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+        win = self._make_window(qt_app, monkeypatch, nrows=3, state_group=state_group)
+
+        self._close(win)
+        isweep.QtCore.QCoreApplication.sendPostedEvents(
+            None, isweep.QtCore.QEvent.Type.DeferredDelete)
+
+        with pytest.raises(RuntimeError):
+            win.isVisible()
+        assert win._viewed_data_idxs == {0}
+        assert state_group.attrs['sweep_fitter']['viewed_data_idxs'] == [0]
+
     def test_worker_ars_are_built_once(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch, nrows=3)
         win._worker_root = MagicMock()

@@ -44,7 +44,7 @@ import zarr
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 
-from ..qt_compat import Qt as _Qt, fit_window_to_screen, get_qapp
+from ..qt_compat import Qt as _Qt, delete_on_close, fit_window_to_screen, get_qapp
 from .s21_filt import highpass_filter, polynomial_baseline
 
 
@@ -950,6 +950,7 @@ class ResMatcher:
         initial curves and markers.
         """
         self.win = QtWidgets.QMainWindow()
+        delete_on_close(self.win)  # destroy on the GUI thread when closed
         self.win.setWindowTitle('Resonance Matcher')
         # Preferred size, shrunk to fit smaller screens, centred
         fit_window_to_screen(self.win, frac=0.9, size=(1500, 850))

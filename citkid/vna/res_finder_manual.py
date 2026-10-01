@@ -12,7 +12,7 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 import os
 
-from ..qt_compat import Qt as _Qt, fit_window_to_screen, get_qapp
+from ..qt_compat import Qt as _Qt, delete_on_close, fit_window_to_screen, get_qapp
 
 
 def run_res_finder_manual(
@@ -89,6 +89,7 @@ class ResFinderWindow(pg.GraphicsLayoutWidget):
             ``pg.GraphicsLayoutWidget``.
         """
         super().__init__(*args, **kwargs)
+        delete_on_close(self)  # destroy on the GUI thread when closed
         self.finder = finder
     
     def closeEvent(self, event):

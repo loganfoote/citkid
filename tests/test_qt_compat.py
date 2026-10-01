@@ -210,6 +210,38 @@ def test_get_qapp_creates_app_with_mkqapp():
     use_font.assert_called_once_with(sentinel)
 
 
+def test_delete_on_close_destroys_window_only_when_closed(qapp):
+    """A closed window is destroyed by Qt; a cancelled close keeps it."""
+    from pyqtgraph.Qt import QtCore, QtWidgets
+    from citkid import qt_compat
+
+    class _Refusing(QtWidgets.QMainWindow):
+        def closeEvent(self, event):
+            event.ignore()
+
+    def flush_deletes():
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+
+    win = QtWidgets.QMainWindow()
+    win.result = [1, 2, 3]
+    qt_compat.delete_on_close(win)
+    win.show()
+    win.close()
+    flush_deletes()
+    assert win.result == [1, 2, 3]          # plain attributes stay usable
+    with pytest.raises(RuntimeError):
+        win.isVisible()                     # the Qt object is gone
+
+    refusing = _Refusing()
+    qt_compat.delete_on_close(refusing)
+    refusing.show()
+    refusing.close()
+    flush_deletes()
+    assert refusing.isVisible()             # close was cancelled: not deleted
+    refusing.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, False)
+    refusing.hide()
+
+
 def test_use_system_ui_font_sets_app_font(qapp):
     """A known system UI font replaces the app default font."""
     from citkid import qt_compat

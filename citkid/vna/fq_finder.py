@@ -47,6 +47,7 @@ from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
 from ..qt_compat import (
     Qt as _Qt,
+    delete_on_close,
     available_screen_geometry,
     fit_window_to_screen,
     get_qapp,
@@ -514,6 +515,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             are shown.
         """
         super().__init__()
+        delete_on_close(self)  # destroy on the GUI thread when closed
         self.setWindowTitle(title)
 
         self._f = np.asarray(f, dtype=np.float64)           # (M, N)

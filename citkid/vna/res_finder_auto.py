@@ -14,7 +14,7 @@ from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 from scipy.signal import find_peaks
 import os
 from .s21_filt import highpass_filter, polynomial_baseline
-from ..qt_compat import Qt as _Qt, fit_window_to_screen, get_qapp
+from ..qt_compat import Qt as _Qt, delete_on_close, fit_window_to_screen, get_qapp
 
 def run_res_finder_auto(f, z, zarr_grp):
     """
@@ -103,6 +103,7 @@ class AutoResFinderWindow(QtWidgets.QMainWindow):
         **kwargs (dict): keyword arguments passed to ``QMainWindow``.
         """
         super().__init__(*args, **kwargs)
+        delete_on_close(self)  # destroy on the GUI thread when closed
         self.finder = finder
     
     def closeEvent(self, event):

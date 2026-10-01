@@ -235,6 +235,25 @@ def available_screen_geometry():
     return screen.availableGeometry()
 
 
+def delete_on_close(win):
+    """
+    Make Qt delete a top-level window as soon as it is closed.
+
+    Without this, a closed window lives until Python's garbage collector
+    frees it, which can happen in any thread (including background threads
+    of zarr or the GUIs). Destroying Qt widgets outside the GUI thread can
+    crash the process, e.g. a Jupyter kernel. With this set, Qt destroys the
+    window on the GUI thread right after it closes. The Python object stays
+    usable for plain attributes (e.g. results), but Qt methods on it then
+    raise ``RuntimeError``. A close that is cancelled (e.g. by a popup)
+    deletes nothing.
+
+    Parameters:
+    win (QWidget): Top-level window.
+    """
+    win.setAttribute(_QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
+
+
 # Logical pixels reserved for a window's title bar and frame when a window
 # may use the full screen height (Windows 11 title bars are ~31 px).
 TITLE_BAR_MARGIN = 40

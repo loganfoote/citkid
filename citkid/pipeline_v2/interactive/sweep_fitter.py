@@ -60,10 +60,12 @@ from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
 from ..analysis import AnalysisRunner
 from ..dataset import DataSet, _io_lock_for, _retry_io
+from ..framework import LazyAttr
 from ..sweep_xy_fit import SweepXYFit, SweepXYFitStore  # noqa: F401 (SweepXYFit re-exported)
 from ...qt_compat import (
     TITLE_BAR_MARGIN,
     Qt as _Qt,
+    delete_on_close,
     fit_window_to_screen,
     get_qapp,
     scroll_area_content_height,
@@ -144,6 +146,51 @@ def _sweep_color(i, n):
     return _viridis_rgb(i / max(n - 1, 1))
 
 
+def _nan_if_none(value):
+    """
+    Return NaN for None, else the value as a float.
+
+    Parameters:
+    value (float or None): Value.
+
+    Returns:
+    value (float): The value, or NaN.
+    """
+    return np.nan if value is None else float(value)
+
+
+def dataset_quantity(name):
+    """
+    Return a getter for a scalar DataSet parameter, for plotting.
+
+    Parameters:
+    name (str): Parameter name: per-row (one value per resonator) or global.
+
+    Returns:
+    getter (callable): ``getter(AR, data_idx)`` returning
+        ``AR.DS.<name>[data_idx]`` (or the global value) as a float, or None
+        if it is unavailable, not a single real number, or not finite.
+    """
+    def getter(AR, data_idx):
+        """
+        Read the parameter for one runner and resonator.
+        """
+        try:
+            value = getattr(AR.DS, name)
+            if isinstance(value, LazyAttr):
+                value = value[data_idx]
+            value = np.asarray(value)
+            if value.size != 1 or np.iscomplexobj(value):
+                return None
+            value = float(value.reshape(()))
+        except Exception:
+            return None
+        return value if np.isfinite(value) else None
+
+    getter.__name__ = f'dataset_quantity_{name}'
+    return getter
+
+
 ################################################################################
 # Main window
 ################################################################################
@@ -195,6 +242,13 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         its title. Fits are saved to ``xy_fit.group``, or to
         ``state_group/xy_fit`` if that is None (in memory if there is no
         state group either). None (default) disables fitting.
+    panels (list of tuple or None): Step-name groups, one panel each, in
+        order. None (default) uses the IQ panels ``[('fit_gain',),
+        ('fit_iq',)]``.
+    precompute_values (bool): If True, the background worker also computes
+        the plotted x and y of every resonator (after pre-fitting it), so
+        slow quantities, e.g. reduced PSDs, don't have to be computed when
+        the user opens a resonator. Default False.
 
     Raises:
     ValueError: If ``data_idxs`` is empty or contains indices outside
@@ -219,18 +273,27 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         parent=None,
         state_group=None,
         xy_fit=None,
+        panels=None,
+        precompute_values=False,
     ):
         """
-        Build the window, toolbar, sweep plots and IQ panels.
+        Build the window, toolbar, sweep plots and analysis panels.
 
         See the class docstring for parameter descriptions.
         """
         super().__init__(parent)
+        delete_on_close(self)  # destroy on the GUI thread when closed
         self._ARs = list(ARs)
         self._x_param_name = x_param_name
         self._x_name = x_name
         self._y_func = y_func
         self._y_name = y_name
+        # Quantity keys identify the plotted x and y in the value cache.
+        self._x_key = x_param_name
+        self._y_key = y_name
+        self._x_getter = dataset_quantity(x_param_name)
+        self._panel_spec = list(panels) if panels is not None else list(_IQ_PANELS)
+        self._precompute_values = bool(precompute_values)
         self._ui_scale = ui_scale
         self._plot_scale = plot_scale
         self._n_sweep = len(self._ARs)
@@ -288,9 +351,14 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self._nav_pos = max(0, min(int(start_idx), len(self._data_idxs) - 1))
         self._data_idx = self._data_idxs[self._nav_pos]
 
-        # x and y value caches: {data_idx: np.ndarray of shape (n_sweep,)}
+        # x and y of the current quantities: {data_idx: array (n_sweep,)}
         self._x_cache: dict = {}
         self._y_cache: dict = {}
+        # Every computed value: {(quantity_key, sweep_idx, data_idx): float}.
+        # Kept across quantity changes, and filled by the background worker
+        # when precompute_values is set.
+        self._values: dict = {}
+        self._restart_background = False
 
         # Prefetch state
         self._prefetch_thread: threading.Thread | None = None
@@ -338,11 +406,11 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         # Apply font scaling
         central.setStyleSheet(widget_font_stylesheet(ui_scale))
 
-        # Build GainFitPanel + FitIQPanel — use ARs[0] as placeholder until
-        # the user selects a sweep point by clicking the scatter.
+        # Build the analysis panels — use ARs[0] as placeholder until the
+        # user selects a sweep point by clicking the scatter.
         self.panels = []
         AR = self._ARs[0]
-        for i, step_names_tuple in enumerate(_IQ_PANELS):
+        for i, step_names_tuple in enumerate(self._panel_spec):
             cls = get_panel_class(step_names_tuple)
             panel = cls(
                 AR, step_names_tuple,
@@ -506,7 +574,8 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         layout.addSpacing(16)
 
         # Sweep selection — dropdown showing index + x value for each sweep
-        layout.addWidget(QtWidgets.QLabel(f'sweep index, {self._x_name}:'))
+        self._sweep_combo_label = QtWidgets.QLabel(f'sweep index, {self._x_name}:')
+        layout.addWidget(self._sweep_combo_label)
         self._sweep_combo = QtWidgets.QComboBox()
         self._sweep_combo.setMinimumWidth(160)
         for i in range(self._n_sweep):
@@ -514,6 +583,8 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         self._sweep_combo.setCurrentIndex(-1)  # nothing selected on startup
         self._sweep_combo.currentIndexChanged.connect(self._on_sweep_combo_changed)
         layout.addWidget(self._sweep_combo)
+
+        self._add_toolbar_controls(layout)
 
         layout.addStretch()
 
@@ -560,6 +631,14 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
         self._update_res_label()
         return w
+
+    def _add_toolbar_controls(self, layout):
+        """
+        Add extra controls to the first toolbar row. Override in subclasses.
+
+        Parameters:
+        layout (QHBoxLayout): First toolbar row, after the sweep selector.
+        """
 
     def _build_sweep_plots(self) -> QtWidgets.QWidget:
         """Build the left-side sweep-plot widget."""
@@ -897,12 +976,16 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         """
         Silently run or load all pipeline steps for every AR at data_idx.
         """
-        for AR in self._ARs:
+        changed = []
+        for si, AR in enumerate(self._ARs):
             if not self._runner_outputs_exist(AR, data_idx):
+                changed.append(si)
                 try:
                     self._initialize_runner_outputs(AR, data_idx)
                 except Exception as exc:
                     print(f"Warning: batch init failed for sweep AR: {exc}")
+        if changed:
+            self._forget_values(data_idx, changed)
 
     def _auto_initialize_all(self):
         self._batch_init_all_sweeps()
@@ -967,9 +1050,9 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         """Update the prefetch label on the UI thread via signal."""
         self._prefetch_label.setText(msg)
         if msg.startswith('\u2713'):
-            QtCore.QTimer.singleShot(
-                4000, lambda: self._prefetch_label.setText('')
-            )
+            # A bound slot (not a lambda) ties the timer to the label, so it
+            # is cancelled if the window is deleted first.
+            QtCore.QTimer.singleShot(4000, self._prefetch_label.clear)
 
     def _save_dirty_panels(self):
         """Save any panels that have unsaved results for the current state."""
@@ -1004,9 +1087,11 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         dialog.show()
         QtWidgets.QApplication.processEvents()
         try:
-            if self._init_all_thread is not None:
-                while self._init_all_thread.is_alive():
-                    self._init_all_thread.join(timeout=0.05)
+            # Wait for background threads: the window (and its panels) is
+            # deleted right after it closes.
+            for thread in (self._init_all_thread, self._prefetch_thread):
+                while thread is not None and thread.is_alive():
+                    thread.join(timeout=0.05)
                     QtWidgets.QApplication.processEvents()
             self._consolidate_storage()
         finally:
@@ -1077,8 +1162,8 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
                 errors.append((si, exc))
                 print(f'Apply to all: error at sweep_idx={si}: {exc}')
 
-        # Invalidate y-cache for this data_idx so scatter refreshes.
-        self._y_cache.pop(di, None)
+        # Drop this row's cached values so the scatter refreshes.
+        self._forget_values(di)
         self._update_sweep_scatter()
 
         if errors:
@@ -1160,6 +1245,7 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         sweep_idxs (iterable of int): Sweep indices to mark bad.
         """
         di = self._data_idx
+        sweep_idxs = list(sweep_idxs)
         old_AR = self.panels[0].AR
         for si in sweep_idxs:
             AR = self._ARs[si]
@@ -1169,8 +1255,8 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
                 panel._write_nan_outputs()
         for panel in self.panels:
             panel.AR = old_AR
-        # Invalidate y-cache so scatter refreshes without these points
-        self._y_cache.pop(di, None)
+        # Drop these points' cached values so the scatter refreshes
+        self._forget_values(di, sweep_idxs)
         self._update_sweep_scatter()
 
     def _runner_outputs_exist(self, AR, data_idx: int) -> bool:
@@ -1239,23 +1325,20 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
         Rows after the current position are done first (in navigation order),
         then rows before it. Whether outputs already exist is checked in the
-        worker thread, so the UI isn't blocked scanning zarr.
+        worker thread, so the UI isn't blocked scanning zarr. If the worker is
+        running and a restart was requested (the plotted quantities changed),
+        it starts another pass when the current one ends.
         """
         if not hasattr(self, '_worker_root'):
             return
         if self._init_all_thread is not None and self._init_all_thread.is_alive():
+            if self._restart_background:
+                # The worker may already be past its restart check; try again.
+                QtCore.QTimer.singleShot(500, self._start_background_initialize_remaining)
             return
 
-        pos = self._nav_pos
-        ordered = self._data_idxs[pos + 1:] + self._data_idxs[:pos]
-        # Also revisit pre-fitted rows that still lack an xy fit (e.g. the
-        # fit was added or overwritten after they were pre-fitted).
-        xy_fitted = self._xy_store.fitted_rows() if self._xy_store is not None else None
-        remaining = [
-            di for di in ordered
-            if di not in self._initialized_data_idxs
-            or (xy_fitted is not None and not xy_fitted[di])
-        ]
+        self._restart_background = False
+        remaining = self._remaining_rows()
         if not remaining:
             return
 
@@ -1263,12 +1346,19 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
 
         def _worker():
             """
-            Build the worker runners once, then fit the remaining rows.
+            Build the worker runners once, then process the remaining rows,
+            repeating while restarts are requested.
             """
             try:
                 if self._worker_ars is None:
                     self._worker_ars = self._make_worker_ars()
-                self._initialize_remaining_data_indices(self._worker_ars, remaining)
+                rows = remaining
+                while True:
+                    self._restart_background = False
+                    self._initialize_remaining_data_indices(self._worker_ars, rows)
+                    if self._init_all_stop.is_set() or not self._restart_background:
+                        break
+                    rows = self._remaining_rows()
             except Exception as exc:
                 print(f'[init-all] stopped: {type(exc).__name__}: {exc}')
 
@@ -1278,6 +1368,70 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
             name='sweep-fitter-init-all',
         )
         self._init_all_thread.start()
+
+    def _remaining_rows(self) -> list:
+        """
+        Return the rows the background worker still has to process.
+
+        Returns:
+        rows (list of int): Rows of ``data_idxs`` that aren't pre-fitted, lack
+            an xy fit, or (with ``precompute_values``) lack values for the
+            current quantities. Rows after the current position come first.
+        """
+        pos = self._nav_pos
+        ordered = self._data_idxs[pos + 1:] + self._data_idxs[:pos]
+        # Also revisit pre-fitted rows that still lack an xy fit (e.g. the
+        # fit was added or overwritten after they were pre-fitted).
+        xy_fitted = self._xy_store.fitted_rows() if self._xy_store is not None else None
+        return [
+            di for di in ordered
+            if di not in self._initialized_data_idxs
+            or (xy_fitted is not None and not xy_fitted[di])
+            or self._row_values_missing(di)
+        ]
+
+    def _row_values_missing(self, data_idx: int) -> bool:
+        """
+        Check whether a row still needs precomputed values.
+
+        Parameters:
+        data_idx (int): Resonator index.
+
+        Returns:
+        missing (bool): True if ``precompute_values`` is set and the current x
+            or y of any sweep isn't in the value cache.
+        """
+        if not self._precompute_values:
+            return False
+        di = int(data_idx)
+        return any(
+            (key, si, di) not in self._values
+            for key in (self._x_key, self._y_key)
+            for si in range(self._n_sweep)
+        )
+
+    def _compute_row_values(self, worker_ars, data_idx: int, store: bool):
+        """
+        Compute the plotted x and y of every sweep from the worker runners.
+
+        Parameters:
+        worker_ars (list of AnalysisRunner): One worker runner per sweep.
+        data_idx (int): Resonator index, pre-fitted for every sweep.
+        store (bool): If True, save the values to the value cache
+            (overwriting older ones), unless the quantities changed meanwhile.
+
+        Returns:
+        x, y (np.ndarray): Values per sweep (NaN if unavailable).
+        """
+        di = int(data_idx)
+        keys = (self._x_key, self._y_key)
+        x = np.array([_nan_if_none(self._x_of(ar, di)) for ar in worker_ars])
+        y = np.array([self._y_of(ar, di) for ar in worker_ars])
+        if store and keys == (self._x_key, self._y_key):
+            for si in range(len(worker_ars)):
+                self._values[(keys[0], si, di)] = x[si]
+                self._values[(keys[1], si, di)] = y[si]
+        return x, y
 
     def _make_worker_ars(self):
         """
@@ -1303,10 +1457,11 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         A failure for one (row, sweep) is printed and skipped rather than
         stopping the loop. The stop flag is checked before each sweep, so a
         stop request waits for at most one fit. A row is marked attempted only
-        once every sweep has been tried. Then its xy fit (if any) is computed
-        and saved, and its cached per-row data is released so memory doesn't
-        grow over the session. Rows attempted in an earlier session only get
-        the xy fit, if they lack one.
+        once every sweep has been tried. Then its plotted values are computed
+        (with ``precompute_values``), its xy fit (if any) is computed and
+        saved, and its cached per-row data is released so memory doesn't grow
+        over the session. Rows attempted earlier only get the values and xy
+        fit they lack.
 
         Parameters:
         worker_ars (list of AnalysisRunner): One worker runner per sweep.
@@ -1317,35 +1472,45 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         xy_fitted = self._xy_store.fitted_rows() if self._xy_store is not None else None
         for di in data_indices:
             di = int(di)
-            if di in self._initialized_data_idxs:
-                # Pre-fitted in an earlier session; it may still need an xy fit.
-                if xy_fitted is not None and not xy_fitted[di]:
+            if self._init_all_stop.is_set():
+                self._init_all_current_di = None
+                return
+            fitted_now = di not in self._initialized_data_idxs
+            if fitted_now:
+                self._init_all_current_di = di
+                for si, ar in enumerate(worker_ars):
                     if self._init_all_stop.is_set():
+                        self._init_all_current_di = None
                         return
-                    self._fit_xy_in_background(worker_ars, di)
-                continue
-            self._init_all_current_di = di
-            for si, ar in enumerate(worker_ars):
-                if self._init_all_stop.is_set():
-                    self._init_all_current_di = None
-                    return
-                done = done_masks[si]
-                if done is not None and done[di]:
-                    continue
-                if done is None and self._runner_outputs_exist(ar, di):
-                    continue
+                    done = done_masks[si]
+                    if done is not None and done[di]:
+                        continue
+                    if done is None and self._runner_outputs_exist(ar, di):
+                        continue
+                    try:
+                        self._initialize_runner_outputs(ar, di)
+                    except Exception as exc:
+                        print(f'[init-all] data_idx={di}, sweep_idx={si} failed: '
+                              f'{type(exc).__name__}: {exc}')
+                self._mark_attempted(di)
+            need_values = self._precompute_values and (fitted_now or self._row_values_missing(di))
+            need_fit = self._xy_fit is not None and (
+                fitted_now or xy_fitted is None or not xy_fitted[di])
+            if need_values or need_fit:
                 try:
-                    self._initialize_runner_outputs(ar, di)
+                    x, y = self._compute_row_values(worker_ars, di, store=need_values)
                 except Exception as exc:
-                    print(f'[init-all] data_idx={di}, sweep_idx={si} failed: '
+                    print(f'[init-all] values for data_idx={di} failed: '
                           f'{type(exc).__name__}: {exc}')
-            self._mark_attempted(di)
-            self._fit_xy_in_background(worker_ars, di)
-            for ar in worker_ars:
-                try:
-                    ar.release_rows(di)
-                except Exception:
-                    pass
+                    x = y = None
+                if need_fit and x is not None:
+                    self._fit_xy_in_background(worker_ars, di, x, y)
+            if fitted_now or need_values:
+                for ar in worker_ars:
+                    try:
+                        ar.release_rows(di)
+                    except Exception:
+                        pass
         self._init_all_current_di = None
 
     def _ensure_data_idx_initialized(self, data_idx: int):
@@ -1518,15 +1683,56 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         data_idx (int): Resonator index.
 
         Returns:
-        x (float or None): ``AR.DS.<x_param_name>[data_idx]``, or None if it
-            is unavailable or not finite.
+        x (float or None): The current x quantity (by default
+            ``AR.DS.<x_param_name>[data_idx]``), or None if it is unavailable
+            or not finite.
         """
         try:
-            attr = getattr(AR.DS, self._x_param_name)
-            val = float(attr[data_idx])
-            return None if not np.isfinite(val) else val
+            return self._x_getter(AR, data_idx)
         except Exception:
             return None
+
+    def _cached_value(self, key, sweep_idx: int, data_idx: int, compute):
+        """
+        Return a plotted value from the value cache, computing it if needed.
+
+        NaN results are only cached once the row has been pre-fitted for
+        every sweep; before that, a NaN may just mean "not fitted yet".
+
+        Parameters:
+        key (str): Quantity key.
+        sweep_idx (int): Sweep index.
+        data_idx (int): Resonator index.
+        compute (callable): ``compute()`` returning the value as a float.
+
+        Returns:
+        value (float): The value (NaN if unavailable).
+        """
+        cache_key = (key, int(sweep_idx), int(data_idx))
+        if cache_key in self._values:
+            return self._values[cache_key]
+        value = compute()
+        if np.isfinite(value) or int(data_idx) in self._initialized_data_idxs:
+            self._values[cache_key] = value
+        return value
+
+    def _forget_values(self, data_idx: int, sweep_idxs=None):
+        """
+        Drop cached plotted values of a resonator whose fits changed.
+
+        Parameters:
+        data_idx (int): Resonator index.
+        sweep_idxs (iterable of int or None): Sweeps to drop. None (default)
+            drops every sweep.
+        """
+        di = int(data_idx)
+        sweeps = set(range(self._n_sweep) if sweep_idxs is None else (int(s) for s in sweep_idxs))
+        for cache_key in [k for k in list(self._values) if k[2] == di and k[1] in sweeps]:
+            self._values.pop(cache_key, None)
+        for cache in (self._x_cache, self._y_cache):
+            if di in cache:
+                for si in sweeps:
+                    cache[di][si] = np.nan
 
     def _get_x_array(self, data_idx: int) -> np.ndarray:
         """Return x values for all sweep indices at *data_idx* (NaN if unavailable)."""
@@ -1535,8 +1741,8 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         x = self._x_cache[data_idx]
         for i in range(self._n_sweep):
             if np.isnan(x[i]):
-                v = self._get_x_value(i, data_idx)
-                x[i] = np.nan if v is None else v
+                x[i] = self._cached_value(
+                    self._x_key, i, data_idx, lambda i=i: _nan_if_none(self._get_x_value(i, data_idx)))
         return x
 
     def _get_y_value(self, sweep_idx: int, data_idx: int) -> float:
@@ -1565,26 +1771,59 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         Return y values for all sweep indices at *data_idx*.
 
         Values already in the cache are returned as-is; NaN slots are filled
-        by calling ``y_func``.
+        from the value cache or by calling ``y_func``.
         """
         if data_idx not in self._y_cache:
             self._y_cache[data_idx] = np.full(self._n_sweep, np.nan)
         y = self._y_cache[data_idx]
         for i in range(self._n_sweep):
             if np.isnan(y[i]):
-                y[i] = self._get_y_value(i, data_idx)
+                y[i] = self._cached_value(
+                    self._y_key, i, data_idx, lambda i=i: self._get_y_value(i, data_idx))
         return y
 
     def _update_sweep_point(self, sweep_idx: int):
         """Recompute x and y for *sweep_idx* at the current data_idx."""
         di = self._data_idx
+        self._forget_values(di, [sweep_idx])
         for cache in (self._x_cache, self._y_cache):
             if di not in cache:
                 cache[di] = np.full(self._n_sweep, np.nan)
-        v = self._get_x_value(sweep_idx, di)
-        self._x_cache[di][sweep_idx] = np.nan if v is None else v
-        self._y_cache[di][sweep_idx] = self._get_y_value(sweep_idx, di)
+        x = _nan_if_none(self._get_x_value(sweep_idx, di))
+        y = self._get_y_value(sweep_idx, di)
+        self._x_cache[di][sweep_idx] = x
+        self._y_cache[di][sweep_idx] = y
+        self._values[(self._x_key, sweep_idx, di)] = x
+        self._values[(self._y_key, sweep_idx, di)] = y
         self._update_sweep_scatter()
+
+    def set_quantities(self, x_key, x_getter, x_name, y_key, y_getter, y_name):
+        """
+        Change what the sweep plot shows on x and y, and redraw it.
+
+        Values already computed for a quantity are kept, so switching back is
+        instant. With ``precompute_values``, the background worker then
+        computes the new quantities for every resonator.
+
+        Parameters:
+        x_key, y_key (str): Unique keys of the quantities (for caching).
+        x_getter, y_getter (callable): ``getter(AR, data_idx)`` returning a
+            float, or None if unavailable.
+        x_name, y_name (str): Axis labels.
+        """
+        self._x_key, self._x_getter, self._x_name = x_key, x_getter, x_name
+        self._y_key, self._y_func, self._y_name = y_key, y_getter, y_name
+        self._x_cache.clear()
+        self._y_cache.clear()
+        self._plot_sweep.setLabel('bottom', x_name)
+        self._plot_sweep.setLabel('left', y_name)
+        self._sweep_combo_label.setText(f'sweep index, {x_name}:')
+        self._update_sweep_combo_items(self._data_idx)
+        self._update_sweep_scatter()
+        self._plot_sweep.autoRange()
+        if self._precompute_values or self._xy_fit is not None:
+            self._restart_background = True
+            self._start_background_initialize_remaining()
 
     def _update_sweep_scatter(self):
         """Redraw all scatter points for the current data_idx."""
@@ -1653,22 +1892,20 @@ class SweepFitterWindow(QtWidgets.QMainWindow):
         store.save(data_idx, x, y, outputs)
         return outputs, error
 
-    def _fit_xy_in_background(self, worker_ars, data_idx: int):
+    def _fit_xy_in_background(self, worker_ars, data_idx: int, x=None, y=None):
         """
         Fit and save one resonator's sweep data from the worker runners.
 
         Parameters:
         worker_ars (list of AnalysisRunner): One worker runner per sweep.
         data_idx (int): Resonator index whose sweeps are all pre-fitted.
+        x, y (np.ndarray or None): Plotted values per sweep, if already
+            computed. None (default) computes them from ``worker_ars``.
         """
         if self._xy_fit is None:
             return
-        x = np.full(len(worker_ars), np.nan)
-        for si, ar in enumerate(worker_ars):
-            value = self._x_of(ar, data_idx)
-            if value is not None:
-                x[si] = value
-        y = np.array([self._y_of(ar, data_idx) for ar in worker_ars])
+        if x is None or y is None:
+            x, y = self._compute_row_values(worker_ars, data_idx, store=False)
         try:
             _, error = self._fit_and_save_xy(data_idx, x, y)
             if error is not None:
@@ -1816,17 +2053,7 @@ def run_sweep_fitter(
             return None if not np.isfinite(val) else float(val)
         except Exception:
             return None
-    ARs = []
-    for i in range(n_sweep):
-        group = root.require_group(f'sweep_{i:03d}')
-        DS = DataSet(
-            zarr_path=group,
-            cal_yaml_path=cal_yaml_path,
-            custom_cal_steps=make_custom_steps(i),
-            write_buffer=True,
-        )
-        AR = AnalysisRunner(DS, analysis_yaml_path=analysis_yaml_path)
-        ARs.append(AR)
+    ARs = build_sweep_runners(make_custom_steps, cal_yaml_path, analysis_yaml_path, root, n_sweep)
 
     app = get_qapp(title)
 
@@ -1845,10 +2072,52 @@ def run_sweep_fitter(
         state_group=root,
         xy_fit=xy_fit,
     )
+    attach_background_worker(win, make_custom_steps, cal_yaml_path, analysis_yaml_path, root)
+    win.show()
+    app.exec()
+    return win
+
+
+def build_sweep_runners(make_custom_steps, cal_yaml_path, analysis_yaml_path, root, n_sweep):
+    """
+    Build one buffered DataSet + AnalysisRunner per sweep index.
+
+    Parameters:
+    make_custom_steps (callable): ``make_custom_steps(sweep_idx) ->
+        list[plStep]`` calibration steps that load one sweep point's data.
+    cal_yaml_path (str): Calibration YAML path or alias.
+    analysis_yaml_path (str): Analysis YAML path or alias.
+    root (zarr.Group): Parent group; sweep ``i`` uses ``root/sweep_{i:03d}``.
+    n_sweep (int): Number of sweep indices.
+
+    Returns:
+    ARs (list of AnalysisRunner): One runner per sweep index.
+    """
+    ARs = []
+    for i in range(n_sweep):
+        group = root.require_group(f'sweep_{i:03d}')
+        DS = DataSet(
+            zarr_path=group,
+            cal_yaml_path=cal_yaml_path,
+            custom_cal_steps=make_custom_steps(i),
+            write_buffer=True,
+        )
+        ARs.append(AnalysisRunner(DS, analysis_yaml_path=analysis_yaml_path))
+    return ARs
+
+
+def attach_background_worker(win, make_custom_steps, cal_yaml_path, analysis_yaml_path, root):
+    """
+    Give a sweep window what it needs to build its background worker runners.
+
+    Parameters:
+    win (SweepFitterWindow): Window.
+    make_custom_steps (callable): As for ``build_sweep_runners``.
+    cal_yaml_path (str): Calibration YAML path or alias.
+    analysis_yaml_path (str): Analysis YAML path or alias.
+    root (zarr.Group): Parent group of the sweep groups.
+    """
     win._worker_root = root
     win._worker_make_custom_steps = make_custom_steps
     win._worker_cal_yaml_path = cal_yaml_path
     win._worker_analysis_yaml_path = analysis_yaml_path
-    win.show()
-    app.exec()
-    return win

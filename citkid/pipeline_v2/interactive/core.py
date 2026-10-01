@@ -24,6 +24,7 @@ from ..analysis import AnalysisRunner
 from ...qt_compat import (
     TITLE_BAR_MARGIN,
     Qt as _Qt,
+    delete_on_close,
     fit_window_to_screen,
     get_qapp,
     scroll_area_content_height,
@@ -834,6 +835,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         parent=None,
     ):
         super().__init__(parent)
+        delete_on_close(self)  # destroy on the GUI thread when closed
         self.AR = AR
         self._ui_scale = ui_scale
         self._plot_scale = plot_scale
@@ -1313,9 +1315,9 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         self._prefetch_label.setText(msg)
         # Auto-clear the "done" message after 4 seconds.
         if msg.startswith("✓"):
-            QtCore.QTimer.singleShot(
-                4000, lambda: self._prefetch_label.setText("")
-            )
+            # A bound slot (not a lambda) ties the timer to the label, so it
+            # is cancelled if the window is deleted first.
+            QtCore.QTimer.singleShot(4000, self._prefetch_label.clear)
 
     def _on_save_status(self, msg: str):
         """Update the save status label (always called on the UI thread via signal)."""
@@ -1342,6 +1344,12 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             QtWidgets.QApplication.processEvents()
         self._save_executor.shutdown(wait=True)
         self._save_executor = None
+        # The window (and its panels) is deleted right after it closes, so
+        # let a running prefetch finish first.
+        prefetch = getattr(self, '_prefetch_thread', None)
+        while prefetch is not None and prefetch.is_alive():
+            prefetch.join(timeout=0.05)
+            QtWidgets.QApplication.processEvents()
         super().closeEvent(event)
 
     def _stale_panels_after(self, source_panel=None):
