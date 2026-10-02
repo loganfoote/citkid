@@ -22,6 +22,8 @@ import threading
 
 from ..analysis import AnalysisRunner
 from ...qt_compat import (
+    responsive_busy,
+    run_responsive,
     TITLE_BAR_MARGIN,
     Qt as _Qt,
     delete_on_close,
@@ -133,6 +135,39 @@ def scale_plot_fonts(ui_scale, *plot_items):
 ################################################################################
 # Base panel
 ################################################################################
+
+class NanOutputsWrite:
+    """
+    The zarr side of marking one row of one DataSet bad.
+
+    Built by ``StepPanel._store_nan_outputs`` after the bad values are in
+    memory, so it can run later (e.g. in a background thread).
+
+    Attributes:
+    DS (DataSet): Dataset to write to.
+    rows (np.ndarray): Rows affected.
+    delete (list of str): Parameters whose saved rows are deleted.
+    write (list of str): Parameters whose in-memory rows are written.
+    """
+
+    def __init__(self, DS, rows, delete, write):
+        """
+        Store the work. See the class docstring for parameters.
+        """
+        self.DS = DS
+        self.rows = rows
+        self.delete = list(delete)
+        self.write = list(write)
+
+    def run(self):
+        """
+        Delete, then write. One delete call, so the zarr store is listed once.
+        """
+        if self.delete:
+            self.DS.delete_saved_params(self.delete, data_idx=self.rows)
+        for name in self.write:
+            self.DS._write_per_row_param(name, data_idx=self.rows)
+
 
 class StepPanel(QtWidgets.QWidget):
     """
@@ -321,35 +356,58 @@ class StepPanel(QtWidgets.QWidget):
 
         Returns:
         ok (bool): True if all steps succeeded, False if any step raised.
+
+        Notes:
+        The steps run in a worker thread (``run_responsive``) so the window
+        keeps responding during long fits; widget values are read before and
+        the plots updated after.
         """
-        for step in self.steps:
-            step_di = (
-                None
-                if step.func_type in ("global", "global-res")
-                else self.data_idx
+        # Read the widgets here, on the GUI thread.
+        plan = [
+            (step,
+             None if step.func_type in ("global", "global-res") else self.data_idx,
+             self.get_params_for_step(step))
+            for step in self.steps
+        ]
+
+        def execute():
+            """
+            Run the steps in order, stopping at the first error or failed row.
+
+            Returns:
+            step (plStep or None): step that failed, or None.
+            exc (Exception or None): the exception it raised.
+            failures (dict or None): its failed rows, ``{data_idx: traceback}``.
+            """
+            for step, step_di, params in plan:
+                try:
+                    self.AR.execute_step(
+                        step, data_idx=step_di, user_params=params, save=save
+                    )
+                except Exception as exc:
+                    return step, exc, None
+                failures = getattr(self.AR, '_last_failures', None)
+                if failures:
+                    return step, None, dict(failures)
+            return None, None, None
+
+        step, exc, failures = run_responsive(execute)
+        if exc is not None:
+            self._last_error = exc
+            self._on_step_error(step, exc)
+            return False
+        if failures:
+            failed_idxs = sorted(failures.keys())
+            err = RuntimeError(
+                f"Step '{step.name}' failed for row(s): {failed_idxs}"
             )
-            params = self.get_params_for_step(step)
-            try:
-                self.AR.execute_step(
-                    step, data_idx=step_di, user_params=params, save=save
-                )
-            except Exception as exc:
-                self._last_error = exc
-                self._on_step_error(step, exc)
-                return False
-            failures = getattr(self.AR, '_last_failures', None)
-            if failures:
-                failed_idxs = sorted(failures.keys())
-                err = RuntimeError(
-                    f"Step '{step.name}' failed for row(s): {failed_idxs}"
-                )
-                self._last_error = err
-                msg = f"Error in '{step.name}': {err}"
-                if hasattr(self, "_status_label"):
-                    self._status_label.setText(msg)
-                for di, tb_str in sorted(failures.items()):
-                    print(f"--- Row {di} ---\n{tb_str}")
-                return False
+            self._last_error = err
+            msg = f"Error in '{step.name}': {err}"
+            if hasattr(self, "_status_label"):
+                self._status_label.setText(msg)
+            for di, tb_str in sorted(failures.items()):
+                print(f"--- Row {di} ---\n{tb_str}")
+            return False
 
         self._has_run = True
         self._last_error = None
@@ -415,32 +473,38 @@ class StepPanel(QtWidgets.QWidget):
         Persist the most recent in-memory outputs of every step owned by this
         panel to the zarr file. Does not re-run the steps. Raises if any step
         has no cached results yet.
+
+        The widgets are read here; the zarr writes run in a worker thread
+        (``run_responsive``), so the window keeps responding on slow drives.
         """
-        for step in self.steps:
-            user_params = self.get_params_for_step(step)
-            if not user_params:
-                continue
-            step_di = (
-                None
-                if step.func_type in ("global", "global-res")
-                else self.data_idx
-            )
-            pipeline_scope, step_index = self.AR._resolve_step_scope(step)
-            self.AR._add_user_params(
-                step,
-                user_params,
-                data_idx=step_di,
-                save=True,
-                pipeline_scope=pipeline_scope,
-                step_index=step_index,
-            )
-        for step in self.steps:
-            step_di = (
-                None
-                if step.func_type in ("global", "global-res")
-                else self.data_idx
-            )
-            self.AR.save_step_outputs(step, data_idx=step_di)
+        AR = self.AR
+        plan = [
+            (step,
+             None if step.func_type in ("global", "global-res") else self.data_idx,
+             self.get_params_for_step(step))
+            for step in self.steps
+        ]
+
+        def write():
+            """
+            Save the user parameters, then the outputs (no Qt calls).
+            """
+            for step, step_di, user_params in plan:
+                if not user_params:
+                    continue
+                pipeline_scope, step_index = AR._resolve_step_scope(step)
+                AR._add_user_params(
+                    step,
+                    user_params,
+                    data_idx=step_di,
+                    save=True,
+                    pipeline_scope=pipeline_scope,
+                    step_index=step_index,
+                )
+            for step, step_di, _ in plan:
+                AR.save_step_outputs(step, data_idx=step_di)
+
+        run_responsive(write)
         self._dirty = False
 
     def _write_nan_outputs(self, redraw=True, save=False, keep=()):
@@ -471,9 +535,46 @@ class StepPanel(QtWidgets.QWidget):
         ok (bool): True on success, False if no override is provided or an
             error occurs.
         """
+        job = self._store_nan_outputs(save=save, keep=keep)
+        if job is None:
+            return False
+        try:
+            job.run()
+        except Exception as exc:
+            print(f"_write_nan_outputs failed in {self.step_names}: {exc}")
+            return False
+        if redraw:
+            try:
+                self.refresh_plots()
+            except Exception:
+                pass
+        return True
+
+    def _store_nan_outputs(self, save=False, keep=()):
+        """
+        Mark the current row bad in memory, and return the matching zarr work.
+
+        The bad outputs are stored in memory, and everything computed from
+        them for the row is invalidated in memory (see ``_write_nan_outputs``).
+        Invalidated rows are never read back from zarr, so the returned job
+        can run later, e.g. in a background thread.
+
+        Parameters:
+        save (bool): If True, the job writes the bad outputs to zarr and the
+            panel is not marked dirty. If False (default), the job deletes the
+            saved outputs and the panel is marked dirty, to save the bad
+            outputs with the panel's other outputs.
+        keep (iterable of str): Downstream names the job doesn't delete,
+            because the caller writes them (e.g. the bad outputs of the later
+            panels).
+
+        Returns:
+        job (NanOutputsWrite or None): The zarr deletes and writes, or None if
+            no override of ``_nan_outputs`` is provided or an error occurs.
+        """
         nan_vals = self._nan_outputs()
         if not nan_vals:
-            return False
+            return None
         try:
             DS = self.AR.DS
             di = int(self.data_idx)
@@ -481,12 +582,7 @@ class StepPanel(QtWidgets.QWidget):
             producers = {name: self._find_output_step(name) for name in nan_vals}
             outputs = [name for name, step in producers.items() if step is not None]
             downstream, delete = self._downstream_of(list(nan_vals), data_idx_arr)
-            # One call each, so the zarr store is listed once, not per name.
             DS.invalidate_memory_params(sorted(downstream) + outputs, data_idx=data_idx_arr)
-            # Saved outputs are overwritten below when saving, so only delete
-            # them when the bad values stay in memory for now.
-            delete.difference_update(keep)
-            DS.delete_saved_params(sorted(delete) + ([] if save else outputs), data_idx=data_idx_arr)
             for name in outputs:
                 producer, value = producers[name], nan_vals[name]
                 pipeline_scope, step_index = self.AR._resolve_step_scope(producer)
@@ -498,20 +594,22 @@ class StepPanel(QtWidgets.QWidget):
                     pipeline_scope=pipeline_scope,
                     step_name=producer.name,
                     step_index=step_index,
-                    save=save,
+                    save=False,
                 )
+            delete.difference_update(keep)
             self._has_run = True
             self._dirty = not save
             self._needs_run = False
-            if redraw:
-                try:
-                    self.refresh_plots()
-                except Exception:
-                    pass
-            return True
+            # Saved outputs are overwritten when saving, so they are only
+            # deleted when the bad values stay in memory for now.
+            return NanOutputsWrite(
+                DS, data_idx_arr,
+                delete=sorted(delete) + ([] if save else outputs),
+                write=outputs if save else [],
+            )
         except Exception as exc:
             print(f"_write_nan_outputs failed in {self.step_names}: {exc}")
-            return False
+            return None
 
     def _downstream_of(self, names, data_idx_arr):
         """
@@ -738,7 +836,7 @@ class StepPanel(QtWidgets.QWidget):
                     break
             if not already_done:
                 try:
-                    self.AR.execute_step(step, data_idx=None, save=False)
+                    run_responsive(self.AR.execute_step, step, data_idx=None, save=False)
                 except Exception as exc:
                     print(
                         f"Warning: auto-prerequisite '{step.name}' failed: {exc}"
@@ -1423,6 +1521,9 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event):
         """Submit any remaining dirty panels, then flush all background saves."""
+        if responsive_busy():
+            event.ignore()  # work in progress; close when it has finished
+            return
         if not self._confirm_stale_downstream_before_leave():
             event.ignore()
             return
@@ -1440,7 +1541,8 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             orig_title = self.windowTitle()
             self.setWindowTitle(f"{orig_title} — flushing saves…")
             QtWidgets.QApplication.processEvents()
-        self._save_executor.shutdown(wait=True)
+        # Wait in a worker thread so the window keeps responding.
+        run_responsive(self._save_executor.shutdown, wait=True)
         self._save_executor = None
         # The window (and its panels) is deleted right after it closes, so
         # let a running prefetch finish first.

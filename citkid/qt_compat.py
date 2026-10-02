@@ -24,8 +24,12 @@ It also provides window helpers shared by all citkid GUIs:
 * ``scroll_area_content_height`` and ``vbox_height_for_width`` give the
   height a scroll area and a vertical layout need to show their contents
   without scrolling, for sizing windows to their content.
+* ``run_responsive`` runs slow work (fits, zarr writes) in a worker thread
+  while the GUI keeps processing events, so the operating system doesn't
+  report the window as not responding.
 """
 
+import threading as _threading
 import warnings as _warnings
 
 import pyqtgraph as _pg
@@ -396,3 +400,90 @@ def vbox_height_for_width(layout, width, overrides=None):
         heights.append(max(height, item.minimumSize().height()))
     spacing = max(layout.spacing(), 0) * max(len(heights) - 1, 0)
     return margins.top() + margins.bottom() + sum(heights) + spacing
+
+
+# Number of run_responsive calls in progress on the GUI thread.
+_responsive_depth = 0
+
+
+def _exclude_user_input_flag():
+    """
+    Return the QEventLoop flag that defers mouse and keyboard events.
+
+    Returns:
+    flag (QEventLoop.ProcessEventsFlag): ``ExcludeUserInputEvents``.
+    """
+    loop = _QtCore.QEventLoop
+    flags = getattr(loop, 'ProcessEventsFlag', loop)
+    return getattr(flags, 'ExcludeUserInputEvents', getattr(loop, 'ExcludeUserInputEvents'))
+
+
+def run_responsive(func, *args, poll_s=0.03, **kwargs):
+    """
+    Run a function in a worker thread while the GUI keeps processing events.
+
+    Windows and Linux report a window as not responding when its GUI thread
+    stops processing events for a few seconds, e.g. during a long fit or a
+    zarr write. Running the work in a thread while this (GUI) thread keeps
+    processing events lets the window repaint (including busy dialogs) and
+    answer the operating system. Mouse and keyboard events are deferred
+    until the work finishes, so the user can't start other work meanwhile;
+    windows should still refuse to close while ``responsive_busy()`` (window
+    close requests are not deferred).
+
+    ``func`` must not touch Qt widgets: collect widget values before, and
+    update widgets after.
+
+    Parameters:
+    func (callable): the work.
+    *args, **kwargs: arguments for ``func``.
+    poll_s (float): how often to process events while waiting (s).
+
+    Returns:
+    result: what ``func`` returned.
+
+    Raises:
+    Exception: whatever ``func`` raised, re-raised on this thread.
+
+    Notes:
+    Without a QApplication, or when called from a thread other than the main
+    thread, ``func`` runs directly.
+    """
+    global _responsive_depth
+    app = _QtWidgets.QApplication.instance()
+    if app is None or _threading.current_thread() is not _threading.main_thread():
+        return func(*args, **kwargs)
+    outcome = {}
+
+    def target():
+        """
+        Run the work, keeping its result or exception.
+        """
+        try:
+            outcome['result'] = func(*args, **kwargs)
+        except BaseException as exc:  # re-raised on the GUI thread
+            outcome['error'] = exc
+
+    worker = _threading.Thread(target=target, name='citkid-responsive', daemon=True)
+    flag = _exclude_user_input_flag()
+    _responsive_depth += 1
+    try:
+        worker.start()
+        while worker.is_alive():
+            worker.join(poll_s)
+            app.processEvents(flag)
+    finally:
+        _responsive_depth -= 1
+    if 'error' in outcome:
+        raise outcome['error']
+    return outcome.get('result')
+
+
+def responsive_busy():
+    """
+    Check whether ``run_responsive`` work is in progress on the GUI thread.
+
+    Returns:
+    busy (bool): True while a ``run_responsive`` call is waiting for its work.
+    """
+    return _responsive_depth > 0

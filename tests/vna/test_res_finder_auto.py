@@ -526,3 +526,33 @@ class TestAutoResFinderQuit:
         app_quit.assert_not_called()
         grp = zarr.open_group(str(outpath), mode='r')
         np.testing.assert_array_almost_equal(grp['fres_auto'][:], [4.5e9, 5.2e9])
+
+
+
+def test_peak_search_runs_in_a_worker_thread(synthetic_vna_data, tmp_path):
+    """
+    The smoothing and peak search (_compute_peaks) use no Qt, so update_peaks
+    runs them through run_responsive; they give the same result in a thread.
+    """
+    import threading
+    from citkid.qt_compat import run_responsive
+
+    finder = AutoResFinder(synthetic_vna_data['f'], synthetic_vna_data['z'],
+                           str(tmp_path / "test.h5"))
+    params = dict(finder.params, f_min=finder.f[0], f_max=finder.f[-1], smoothing='none')
+
+    filtered, fres = finder._compute_peaks(params)
+    threads = []
+
+    def in_worker(p):
+        threads.append(threading.current_thread() is threading.main_thread())
+        return finder._compute_peaks(p)
+
+    filtered_w, fres_w = run_responsive(in_worker, params)
+
+    assert threads == [False]
+    np.testing.assert_array_equal(filtered_w, filtered)
+    assert fres_w == fres and len(fres) > 0
+    assert all(finder.f[0] <= fr <= finder.f[-1] for fr in fres)
+    empty = finder._compute_peaks(dict(params, f_min=1.0, f_max=2.0))
+    assert empty[1] is None                   # no data in range

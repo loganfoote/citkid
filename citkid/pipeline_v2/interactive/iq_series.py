@@ -52,6 +52,7 @@ Ctrl+⇧B     mark the selected series point and all points with larger x bad
 Shift+N     run panel N only
 """
 
+import concurrent.futures
 import sys
 import threading
 import numpy as np
@@ -69,6 +70,8 @@ from ...qt_compat import (
     delete_on_close,
     fit_window_to_screen,
     get_qapp,
+    responsive_busy,
+    run_responsive,
     scroll_area_content_height,
     scroll_area_min_width,
     vbox_height_for_width,
@@ -145,6 +148,9 @@ def _viridis_rgb(t):
 def _series_color(i, n):
     """Return an (R, G, B) tuple for series index *i* of *n*."""
     return _viridis_rgb(i / max(n - 1, 1))
+
+
+_AXIS_SCALES = ('linear', 'log')
 
 
 def _nan_if_none(value):
@@ -271,6 +277,7 @@ def dataset_quantity(name):
 
 class IQSeriesWindow(QtWidgets.QMainWindow):
     _prefetch_status_changed = QtCore.pyqtSignal(str)
+    _marks_saved = QtCore.pyqtSignal(str)
     # Offer Mark Bad Above (button and Ctrl+Shift+B).
     _MARK_BAD_ABOVE = True
     """
@@ -334,6 +341,9 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         ``x_param_name`` from the DataSets, e.g. when each DataSet is one
         drive power that isn't stored in it. None (default) loads x from the
         DataSets. ``y_func`` may also be a ``SeriesValues``.
+    xscale, yscale (str): Series-plot axis scales. Can be 'linear' (default)
+        or 'log' (base 10; points with x or y <= 0 are not drawn). Log scale
+        can also be toggled from the plot's right-click menu.
 
     Notes:
     While the window is open, every dataset writes through its fast write
@@ -343,8 +353,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     Raises:
     ValueError: If ``data_idxs`` is empty or contains indices outside
-        ``0 .. nrows - 1``, or series values don't have one entry per series
-        point.
+        ``0 .. nrows - 1``, series values don't have one entry per series
+        point, or ``xscale`` or ``yscale`` isn't 'linear' or 'log'.
     RuntimeError: If the xy fit group holds fits from a different fit
         definition and the user cancels the overwrite popup.
     """
@@ -369,14 +379,20 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         precompute_values=False,
         background_fitting=False,
         x_values=None,
+        xscale='linear',
+        yscale='linear',
     ):
         """
         Build the window, toolbar, series plots and analysis panels.
 
         See the class docstring for parameter descriptions.
         """
+        for name, scale in (('xscale', xscale), ('yscale', yscale)):
+            if scale not in _AXIS_SCALES:
+                raise ValueError(f"{name} must be one of {_AXIS_SCALES}; got {scale!r}")
         super().__init__(parent)
         delete_on_close(self)  # destroy on the GUI thread when closed
+        self._xscale, self._yscale = xscale, yscale
         self._ARs = list(ARs)
         self._x_param_name = x_param_name
         self._x_name = x_name
@@ -474,9 +490,13 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._init_all_current_di: int | None = None
         self._worker_ars = None  # built once by the background thread
 
-        # Background save state
-        self._save_thread: threading.Thread | None = None
+        # Bad marks (Shift+B) are saved by one background writer, in order.
+        # _pending_marks maps data_idx -> futures not yet known to be done.
+        self._mark_writer = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix='series-mark-bad')
+        self._pending_marks: dict = {}
         self._prefetch_status_changed.connect(self._on_prefetch_status)
+        self._marks_saved.connect(self._on_marks_saved)
         QtWidgets.QApplication.instance().installEventFilter(self)
 
         self.setWindowTitle(title)
@@ -757,6 +777,12 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._plot_series.setLabel('left', self._y_name)
         self._plot_series.setLabel('bottom', self._x_name)
         self._plot_series.showGrid(x=True, y=True, alpha=0.3)
+        # Axes and the fit curve follow the log mode; the scatter points are
+        # placed in log coordinates by _plot_coords. Also redraw when log
+        # mode is toggled from the right-click menu.
+        self._plot_series.setLogMode(x=self._xscale == 'log', y=self._yscale == 'log')
+        for check in (self._plot_series.ctrl.logXCheck, self._plot_series.ctrl.logYCheck):
+            check.toggled.connect(self._on_series_log_mode_changed)
 
         # One ScatterPlotItem per series index so each gets its own colour.
         # The spot's `data` field carries the series index for click handling.
@@ -998,6 +1024,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             self._data_idx_spin.setValue(self._data_idx)
             self._data_idx_spin.blockSignals(False)
             return
+        self._wait_for_marks(new_di)  # returning to a row still being saved
         self._save_dirty_panels()  # persist results for the outgoing resonator
         self._mark_viewed(self._data_idx)
         self._data_idx = new_di
@@ -1039,6 +1066,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         if not self._confirm_stale_downstream_before_leave():
             self._update_series_combo_selection()
             return
+        self._wait_for_marks(self._data_idx)
         self._save_dirty_panels()  # persist results for the outgoing series point
         self._series_idx = new_si
         self._update_series_combo_selection()
@@ -1085,6 +1113,18 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
     def _initialize_all_series_for_data_idx(self, data_idx: int):
         """
         Silently run or load all pipeline steps for every AR at data_idx.
+
+        Runs in a worker thread (``run_responsive``) so the window keeps
+        responding while the row is fitted.
+        """
+        run_responsive(self._initialize_all_series_work, data_idx)
+
+    def _initialize_all_series_work(self, data_idx: int):
+        """
+        Run or load all pipeline steps for every AR at data_idx (no Qt calls).
+
+        Parameters:
+        data_idx (int): Resonator index.
         """
         changed = []
         for si, AR in enumerate(self._ARs):
@@ -1186,6 +1226,9 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         Parameters:
         event (QCloseEvent): Close event.
         """
+        if responsive_busy():
+            event.ignore()  # work in progress; close when it has finished
+            return
         if not self._confirm_stale_downstream_before_leave():
             event.ignore()
             return
@@ -1203,7 +1246,10 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                 while thread is not None and thread.is_alive():
                     thread.join(timeout=0.05)
                     QtWidgets.QApplication.processEvents()
-            self._consolidate_storage()
+            self._wait_for_marks(show_dialog=False)
+            self._mark_writer.shutdown(wait=True)
+            # Merging buffered rows can take a while on a slow drive.
+            run_responsive(self._consolidate_storage)
             for AR, original in zip(self._ARs, self._original_write_buffer):
                 AR.DS.write_buffer = original
         finally:
@@ -1241,6 +1287,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         """
         if self._series_idx is None:
             return
+        self._wait_for_marks(self._data_idx)
 
         di = self._data_idx
 
@@ -1258,8 +1305,12 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             self._apply_status_label.setText(f'Applying {si + 1}/{total}…')
             QtWidgets.QApplication.processEvents()
             AR = self._ARs[si]
-            try:
-                for (step_params_list, panel) in zip(panel_params, self.panels):
+
+            def apply(AR=AR):
+                """
+                Run every panel's steps with the snapshot settings (no Qt calls).
+                """
+                for step_params_list in panel_params:
                     for step, params in step_params_list:
                         step_di = (
                             None
@@ -1270,13 +1321,16 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                             step, data_idx=step_di,
                             user_params=params, save=True,
                         )
+
+            try:
+                run_responsive(apply)
             except Exception as exc:
                 errors.append((si, exc))
                 print(f'Apply to all: error at series_idx={si}: {exc}')
 
         # Drop this row's cached values so the scatter refreshes.
         self._forget_values(di)
-        self._update_series_scatter()
+        self._update_series_scatter(rescale=True)
 
         if errors:
             self._apply_status_label.setText(
@@ -1288,9 +1342,11 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
     def _run_panel_by_index(self, index: int):
         if index >= len(self.panels):
             return
+        self._wait_for_marks(self._data_idx)
         self.panels[index].run_current()
 
     def _run_through_panel(self, index: int):
+        self._wait_for_marks(self._data_idx)
         for panel in self.panels[index:]:
             panel.prepare_run()
             if hasattr(panel, '_status_label'):
@@ -1317,6 +1373,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     def _mark_all_bad(self):
         """Mark every panel's outputs as NaN, clear their plots, and refresh scatter."""
+        self._wait_for_marks(self._data_idx)
         for panel in self.panels:
             panel._write_nan_outputs(redraw=False)
             panel.blank_plots()
@@ -1350,9 +1407,13 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         """
         Mark every panel's outputs as NaN for some series points at the current data_idx.
 
-        The bad outputs are saved right away: only the selected point's
-        panels are saved when leaving, so other points' marks would be lost.
-        Progress is shown in the status label.
+        The marks take effect in memory at once (plots and scatter update
+        immediately), and are saved to zarr by a background writer, so the
+        user can move on. They must be saved now rather than with the
+        panels, since only the selected point's panels are saved when
+        leaving. Anything that uses this row again (running a panel,
+        selecting a point, returning to it, closing) first waits for its
+        saves to finish. Progress is shown in the status label.
 
         Parameters:
         series_idxs (iterable of int): Series indices to mark bad.
@@ -1366,14 +1427,15 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         # delete later panels' outputs first. (The names don't depend on the
         # series point.)
         written = set().union(*(panel._nan_outputs() for panel in self.panels))
-        for n, si in enumerate(series_idxs, start=1):
-            self._apply_status_label.setText(f'Marking bad {n}/{total}…')
-            QtWidgets.QApplication.processEvents()
+        jobs = []
+        for si in series_idxs:
             AR = self._ARs[si]
             for panel in self.panels:
                 panel.AR = AR
             for panel in self.panels:
-                panel._write_nan_outputs(redraw=False, save=True, keep=written)
+                job = panel._store_nan_outputs(save=True, keep=written)
+                if job is not None:
+                    jobs.append((si, job))
         # Show the selected point again (blank if it was marked, or if
         # nothing is selected).
         for panel, flags in zip(self.panels, old_flags):
@@ -1389,8 +1451,81 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                 panel.blank_plots()
         # Drop these points' cached values so the scatter refreshes
         self._forget_values(di, series_idxs)
-        self._update_series_scatter()
-        self._apply_status_label.setText(f'Marked {total} series point(s) bad ✓')
+        self._update_series_scatter(rescale=True)
+        self._apply_status_label.setText(f'Marked {total} series point(s) bad, saving…')
+        # Last, so a save that finishes at once (its callback then runs here)
+        # reports after the label above.
+        future = self._mark_writer.submit(self._save_marks, jobs)
+        self._pending_marks.setdefault(di, []).append(future)
+        future.add_done_callback(lambda _f, di=di: self._marks_saved.emit(f'{di}'))
+
+    @staticmethod
+    def _save_marks(jobs):
+        """
+        Run the zarr side of some bad marks (in the background writer).
+
+        Parameters:
+        jobs (list of (int, NanOutputsWrite)): Series index and job.
+
+        Returns:
+        errors (list of str): One message per failed job.
+        """
+        errors = []
+        for si, job in jobs:
+            try:
+                job.run()
+            except Exception as exc:
+                errors.append(f'series_idx={si}: {exc}')
+                print(f'Saving bad mark failed for series_idx={si}, data_idx={job.rows}: {exc}')
+        return errors
+
+    def _on_marks_saved(self, data_idx_text: str):
+        """
+        Report finished bad-mark saves (on the UI thread).
+
+        Parameters:
+        data_idx_text (str): Row whose save finished.
+        """
+        di = int(data_idx_text)
+        if di not in self._pending_marks:
+            return  # already reported by _wait_for_marks
+        futures = self._pending_marks[di]
+        if any(not f.done() for f in futures):
+            return
+        errors = [e for f in futures for e in f.result()]
+        self._pending_marks.pop(di, None)
+        if errors:
+            self._apply_status_label.setText(
+                f'Saving bad marks for data_idx {di} failed ({len(errors)}); see console')
+        elif not any(self._pending_marks.values()):
+            self._apply_status_label.setText('Bad marks saved \u2713')
+
+    def _wait_for_marks(self, data_idx=None, show_dialog=True):
+        """
+        Wait until pending bad-mark saves finish.
+
+        Parameters:
+        data_idx (int or None): Row to wait for. None (default) waits for
+            every row.
+        show_dialog (bool): If True (default), show a busy dialog while
+            waiting.
+        """
+        rows = list(self._pending_marks) if data_idx is None else [int(data_idx)]
+        futures = [f for di in rows for f in self._pending_marks.get(di, [])]
+        if not all(f.done() for f in futures):
+            dialog = self._make_busy_dialog('Saving bad marks\u2026', 'Saving') if show_dialog else None
+            if dialog is not None:
+                dialog.show()
+            try:
+                while not all(f.done() for f in futures):
+                    concurrent.futures.wait(futures, timeout=0.05)
+                    QtWidgets.QApplication.processEvents()
+            finally:
+                if dialog is not None:
+                    dialog.close()
+        # The done signals may not be delivered yet; report the rows now.
+        for di in rows:
+            self._on_marks_saved(f'{di}')
 
     def _runner_outputs_exist(self, AR, data_idx: int) -> bool:
         """
@@ -1946,7 +2081,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         return y
 
     def _update_series_point(self, series_idx: int):
-        """Recompute x and y for *series_idx* at the current data_idx."""
+        """Recompute x and y for *series_idx* at the current data_idx, and rescale."""
         di = self._data_idx
         self._forget_values(di, [series_idx])
         for cache in (self._x_cache, self._y_cache):
@@ -1958,7 +2093,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._y_cache[di][series_idx] = y
         self._values[(self._x_key, series_idx, di)] = x
         self._values[(self._y_key, series_idx, di)] = y
-        self._update_series_scatter()
+        self._update_series_scatter(rescale=True)
 
     def set_quantities(self, x_key, x_getter, x_name, y_key, y_getter, y_name):
         """
@@ -1994,17 +2129,61 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             self._restart_background = True
             self._start_background_initialize_remaining()
 
-    def _update_series_scatter(self):
-        """Redraw all scatter points for the current data_idx."""
+    def _update_series_scatter(self, rescale=False):
+        """
+        Redraw all scatter points for the current data_idx.
+
+        Parameters:
+        rescale (bool): If True, auto-range the series plot afterwards. Refits
+            (running a panel, Shift+A, marking bad) pass True, so the axes
+            follow the new values. False (default) keeps the user's zoom.
+        """
         x = self._get_x_array(self._data_idx)
         y = self._get_y_array(self._data_idx)
         for i, (xi, yi, si_item) in enumerate(zip(x, y, self._scatter_items)):
-            if np.isnan(xi) or np.isnan(yi):
+            coords = self._plot_coords(xi, yi)
+            if coords is None:
                 si_item.setData([], [])
             else:
-                si_item.setData([xi], [yi], data=[i])
+                si_item.setData([coords[0]], [coords[1]], data=[i])
         self._update_selected_marker()
         self._refresh_xy_fit()
+        if rescale:
+            self._plot_series.autoRange()
+
+    def _plot_coords(self, x, y):
+        """
+        Map a data point to series-plot coordinates.
+
+        pyqtgraph's ScatterPlotItem ignores the plot's log mode, so on a log
+        axis the point is placed at log10 of its value.
+
+        Parameters:
+        x, y (float): Data values.
+
+        Returns:
+        coords (tuple of float or None): ``(x, y)`` in plot coordinates, or
+            None if the point can't be drawn (NaN, or <= 0 on a log axis).
+        """
+        if getattr(self, '_plot_series', None) is None:
+            return None
+        ctrl = self._plot_series.ctrl
+        coords = []
+        for value, log in ((x, ctrl.logXCheck.isChecked()), (y, ctrl.logYCheck.isChecked())):
+            if not np.isfinite(value) or (log and value <= 0):
+                return None
+            coords.append(float(np.log10(value)) if log else float(value))
+        return tuple(coords)
+
+    def _on_series_log_mode_changed(self, _checked=None):
+        """
+        Redraw and rescale the series points after the log mode changes.
+
+        Parameters:
+        _checked (bool or None): New check state (unused; both are read).
+        """
+        self._update_series_scatter()
+        self._plot_series.autoRange()
 
     # ------------------------------------------------------------------
     # Optional y vs x fit
@@ -2023,7 +2202,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         x = self._get_x_array(di).copy()
         y = self._get_y_array(di).copy()
         outputs, error = self._fit_and_save_xy(di, x, y)
-        xs, ys = self._xy_fit.curve(x, outputs)
+        xs, ys = self._xy_fit.curve(
+            x, outputs, log_x=self._plot_series.ctrl.logXCheck.isChecked())
         self._xy_fit_curve.setData([] if xs is None else xs, [] if ys is None else ys)
         if error is not None:
             detail = f'fit failed ({error})'
@@ -2090,12 +2270,11 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             return
         x = self._get_x_array(self._data_idx)
         y = self._get_y_array(self._data_idx)
-        xi = x[self._series_idx]
-        yi = y[self._series_idx]
-        if np.isnan(xi) or np.isnan(yi):
+        coords = self._plot_coords(x[self._series_idx], y[self._series_idx])
+        if coords is None:
             self._selected_marker.setData([], [])
         else:
-            self._selected_marker.setData([xi], [yi])
+            self._selected_marker.setData([coords[0]], [coords[1]])
 
     def _update_waterfall(self):
         """Reload and redraw the ``|S21|`` waterfall for the current data_idx."""
@@ -2141,6 +2320,8 @@ def run_iq_series(
     xy_fit=None,
     datasets=None,
     x_values=None,
+    xscale='linear',
+    yscale='linear',
 ):
     """
     Build one AnalysisRunner per series index, then launch the IQSeriesWindow.
@@ -2205,13 +2386,16 @@ def run_iq_series(
         it isn't stored in it. Used instead of ``x_param_name``; label it
         with ``x_name`` (default 'x'). None (default) loads x from the
         DataSets.
+    xscale, yscale (str): Series-plot axis scales. Can be 'linear' (default)
+        or 'log' (base 10; points with x or y <= 0 are not drawn).
 
     Returns:
     win (IQSeriesWindow): The created (and already shown) window.
 
     Raises:
-    ValueError: If ``y_param_name`` is not a supported fit parameter, or the
-        series inputs are inconsistent (see ``series_runners``).
+    ValueError: If ``y_param_name`` is not a supported fit parameter, the
+        series inputs are inconsistent (see ``series_runners``), or
+        ``xscale`` or ``yscale`` isn't 'linear' or 'log'.
     TypeError: If ``datasets`` contains something other than DataSets.
     RuntimeError: If saved xy fits come from a different fit definition
         and the user cancels the overwrite popup.
@@ -2269,6 +2453,8 @@ def run_iq_series(
         state_group=root,
         xy_fit=xy_fit,
         background_fitting=True,
+        xscale=xscale,
+        yscale=yscale,
     )
     win.show()
     app.exec()

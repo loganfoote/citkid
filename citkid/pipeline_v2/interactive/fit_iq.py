@@ -127,7 +127,6 @@ class FitIQPanel(StepPanel):
         self._plot_amp.setLabel('left', '|S21| (dB)')
         self._plot_amp.setLabel('bottom', 'Frequency (Hz)')
         self._plot_amp.showGrid(x=True, y=True, alpha=0.3)
-        self._plot_amp.setDownsampling(auto=True, mode='peak')
 
         self._plot_iq = self._gw.addPlot(row=0, col=1, title="IQ Loop")
         self._plot_iq.setLabel('left', 'Q (Im)')

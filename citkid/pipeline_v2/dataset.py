@@ -724,6 +724,60 @@ class DataSet:
         }
         return self._param_meta[name]
 
+    def plot(self, data_idx, plot_type, title=None, **kwargs):
+        """
+        Quickly plot one plot type for one row, to check the data.
+
+        Parameters:
+        data_idx (int): row to plot.
+        plot_type (str): one of 'raw_data', 'gain_fit', 's21_rmv', 'circfit',
+            'sparper', 'xcal', 'iq_fit'.
+        title (str or None): figure title. None (default) uses the plot
+            type's title.
+        **kwargs: options of the plot function, e.g. ``max_points``
+            (timestream points drawn; default 5000, None draws all), or
+            ``nbins`` and ``fmin`` for 'sparper'. Options a plot type doesn't
+            use are ignored.
+
+        Returns:
+        fig (matplotlib.figure.Figure): the figure.
+        axs (matplotlib.axes.Axes or np.ndarray of Axes): its axes.
+
+        Raises:
+        ValueError: if ``plot_type`` is unknown, or a parameter it needs is
+            not available for ``data_idx``.
+        """
+        from . import quick_plot
+        return quick_plot.plot(self, data_idx, plot_type, title=title, **kwargs)
+
+    def plot_full_cal(self, data_idx, **kwargs):
+        """
+        Quickly plot every available plot type for one row in one figure.
+
+        Plot types without data in this dataset are left out (e.g. the circle
+        fit of an IQ-only dataset); a plot that fails shows the error in its
+        panel. See ``quick_plot.plot_full_cal``.
+
+        Parameters:
+        data_idx (int): row to plot.
+        **kwargs: options of the plot functions (see ``plot``);
+            ``plot_types`` (list of str) to choose the panels; and
+            ``as_figure`` (bool, default False) to return the matplotlib
+            figure instead of a PNG image.
+
+        Returns:
+        if as_figure:
+            fig (matplotlib.figure.Figure): the combined figure.
+        else:
+            png (io.BytesIO): the figure as a PNG image (as in the legacy
+                pipeline), e.g. ``IPython.display.Image(png.getvalue())``.
+
+        Raises:
+        ValueError: if none of the plot types has data for ``data_idx``.
+        """
+        from . import quick_plot
+        return quick_plot.plot_full_cal(self, data_idx, **kwargs)
+
     def release_rows(self, data_idx, keep=()):
         """
         Drop cached per-row values for rows that are no longer needed.

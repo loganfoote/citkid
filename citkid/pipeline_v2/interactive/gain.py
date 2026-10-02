@@ -104,13 +104,11 @@ class GainFitPanel(StepPanel):
         self._plot_amp.setLabel('left', '|S21| (dB)')
         self._plot_amp.setLabel('bottom', 'Frequency (Hz)')
         self._plot_amp.showGrid(x=True, y=True, alpha=0.3)
-        self._plot_amp.setDownsampling(auto=True, mode='peak')
 
         self._plot_phase = self._gw.addPlot(row=0, col=1, title="Gain Phase")
         self._plot_phase.setLabel('left', 'Phase (rad)')
         self._plot_phase.setLabel('bottom', 'Frequency (Hz)')
         self._plot_phase.showGrid(x=True, y=True, alpha=0.3)
-        self._plot_phase.setDownsampling(auto=True, mode='peak')
 
         self._scale_plot_fonts(self._plot_amp, self._plot_phase)
 

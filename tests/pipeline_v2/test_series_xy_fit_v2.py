@@ -112,6 +112,44 @@ def test_curve_spans_usable_x_range():
     assert xy_fit.curve(np.array([1.0, 3.0]), [np.asarray(np.nan), np.asarray(1.0)]) == (None, None)
 
 
+def test_curve_log_x_spaces_samples_geometrically():
+    xy_fit, _ = _linear_fit(n_samples=4)
+    outputs = [np.asarray(2.0), np.asarray(1.0)]
+
+    xs, ys = xy_fit.curve(np.array([-1.0, 1.0, np.nan, 1000.0]), outputs, log_x=True)
+
+    np.testing.assert_allclose(xs, [1.0, 10.0, 100.0, 1000.0])  # x <= 0 is ignored
+    np.testing.assert_allclose(ys, 2.0 * xs + 1.0)
+    assert xy_fit.curve(np.array([-1.0, 5.0]), outputs, log_x=True) == (None, None)
+
+
+def test_curve_works_with_numba_float64_model():
+    """Scalar outputs reach the model as floats, as numba float64 signatures need."""
+    from numba import float64, njit
+
+    @njit(float64[:](float64[:], float64, float64))
+    def line(x, slope, intercept):
+        return slope * x + intercept
+
+    xy_fit = SeriesXYFit(fit=lambda x, y: (2.0, 1.0), output_names=['slope', 'intercept'],
+                         model=line, n_samples=3)
+
+    xs, ys = xy_fit.curve(np.array([1.0, 3.0]), [np.asarray(2.0), np.asarray(1.0)])
+
+    np.testing.assert_allclose(ys, [3.0, 5.0, 7.0])
+
+
+def test_curve_passes_array_outputs_as_arrays():
+    seen = []
+    xy_fit = SeriesXYFit(fit=lambda x, y: (np.ones(2), 1.0), output_names=['coeffs', 'c'],
+                         model=lambda xs, coeffs, c: (seen.append((coeffs, c)), xs)[1],
+                         n_samples=2)
+
+    xy_fit.curve(np.array([1.0, 3.0]), [np.ones(2), np.asarray(1.0)])
+
+    assert isinstance(seen[0][0], np.ndarray) and type(seen[0][1]) is float
+
+
 def test_describe_formats_scalar_outputs():
     xy_fit, _ = _linear_fit()
 

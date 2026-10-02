@@ -576,6 +576,7 @@ class TestFqFinderSaveCurrent:
         new_fres = w._fres_init[ri] + 500e3
         w._fres_work[ri] = new_fres
         w._save_current()
+        w._flush_saves()
         assert w._zg["fres_opt"][ri] == pytest.approx(new_fres)
 
     def test_save_writes_qres_to_zarr(self, basic_win):
@@ -583,12 +584,14 @@ class TestFqFinderSaveCurrent:
         ri = w._ri
         w._qres_work[ri] = 12345.0
         w._save_current()
+        w._flush_saves()
         assert w._zg["qres_opt"][ri] == pytest.approx(12345.0)
 
     def test_save_writes_empty_reason_for_accepted(self, basic_win):
         w = basic_win
         ri = w._ri
         w._save_current()
+        w._flush_saves()
         assert str(w._zg["reject_reason"][ri]) == ""
 
     def test_save_writes_reason_for_rejected(self, basic_win):
@@ -597,6 +600,7 @@ class TestFqFinderSaveCurrent:
         w._reason_combo.setCurrentText("overlapping resonance")
         w._reject_current()
         w._save_current()
+        w._flush_saves()
         assert str(w._zg["reject_reason"][ri]) == "overlapping resonance"
 
     def test_save_nan_fres_stored(self, basic_win):
@@ -604,6 +608,7 @@ class TestFqFinderSaveCurrent:
         ri = w._ri
         w._reject_current()
         w._save_current()
+        w._flush_saves()
         assert np.isnan(w._zg["fres_opt"][ri])
         assert np.isnan(w._zg["qres_opt"][ri])
 
@@ -625,6 +630,7 @@ class TestFqFinderNavigation:
         new_f = w._fres_init[ri] + 200e3
         w._fres_work[ri] = new_f
         w._go_next()
+        w._flush_saves()
         assert w._zg["fres_opt"][ri] == pytest.approx(new_f)
 
     def test_go_next_at_last_resonator_does_not_overflow(self, qapp):
@@ -661,6 +667,7 @@ class TestFqFinderNavigation:
         new_f = w._fres_init[ri] + 100e3
         w._fres_work[ri] = new_f
         w._go_back()
+        w._flush_saves()
         assert w._zg["fres_opt"][ri] == pytest.approx(new_f)
 
     def test_go_back_at_first_does_nothing(self, basic_win):
@@ -1091,6 +1098,7 @@ class TestFqFinderRoundTrip:
         w._reason_combo.setCurrentText("tone off resonance")
         w._reject_current()
         w._go_next()    # saves ri0 then moves to cursor=1
+        w._flush_saves()
         assert str(zg["reject_reason"][ri0]) == "tone off resonance"
         assert np.isnan(zg["fres_opt"][ri0])
         w.close()
@@ -1101,6 +1109,7 @@ class TestFqFinderRoundTrip:
         w = FqFinderWindow(f, z, fres, qres, res_idxs, zg)
         ri0 = w._ri
         w._go_next()
+        w._flush_saves()
         assert str(zg["reject_reason"][ri0]) == ""
         assert not np.isnan(zg["fres_opt"][ri0])
         w.close()
@@ -1114,6 +1123,7 @@ class TestFqFinderRoundTrip:
         w._reject_current()
         w._reset_current()      # un-reject
         w._go_next()            # saves → empty reason
+        w._flush_saves()
         assert str(zg["reject_reason"][ri0]) == ""
         assert not np.isnan(zg["fres_opt"][ri0])
         w.close()
@@ -1127,6 +1137,7 @@ class TestFqFinderRoundTrip:
         w._set_fres(new_f)
         w._go_next()
         w._go_back()
+        w._flush_saves()
         # After going back, the working value should still be the saved one
         assert zg["fres_opt"][ri0] == pytest.approx(new_f)
         w.close()
@@ -1141,8 +1152,10 @@ def test_save_current_writes_data_idx(basic_win):
     zg = basic_win._zg
     assert zg[_DATA_IDX_KEY][0] == -1
     basic_win._go_next()           # saves index 0, then moves to 1
+    basic_win._flush_saves()
     assert zg[_DATA_IDX_KEY][0] == 0
     basic_win._save_current()
+    basic_win._flush_saves()
     assert zg[_DATA_IDX_KEY][0] == 1
 
 
@@ -1355,6 +1368,7 @@ def test_editing_rejected_resonator_unrejects_it(basic_win, edit):
     assert not np.isnan(w._qres_work[ri])
 
     w._save_current()
+    w._flush_saves()
     assert w._zg["reject_reason"][ri] == ""
     assert not np.isnan(w._zg["fres_opt"][ri])
     assert not np.isnan(w._zg["qres_opt"][ri])
@@ -1368,3 +1382,46 @@ def test_unreject_restores_pre_rejection_values(basic_win):
     _reject(w)
     w._fres_spin.setValue((w._fres_init[ri] + 5e3) * 1e-6)
     assert w._qres_work[ri] == pytest.approx(3.3e4)
+
+
+def test_navigation_saves_in_the_background_in_order(basic_win, monkeypatch):
+    """Navigating doesn't wait for zarr; saves are written in order."""
+    import threading
+    w = basic_win
+    gate = threading.Event()
+    written = []
+    original = w._write_resonator
+
+    def slow_write(ri, fres, qres, reason):
+        gate.wait(5)
+        written.append((ri, threading.current_thread().name))
+        original(ri, fres, qres, reason)
+
+    monkeypatch.setattr(w, "_write_resonator", slow_write)
+    first = w._ri
+    w._go_next()
+    second = w._ri
+    w._go_back()
+
+    assert written == []                      # navigation returned before writing
+    gate.set()
+    w._flush_saves()
+    assert [ri for ri, _ in written] == [first, second]
+    assert all(name.startswith("fq-finder-save") for _, name in written)
+    assert w._zg[_DATA_IDX_KEY][0] == second  # last queued save wins
+
+
+def test_close_waits_for_queued_saves(qapp):
+    import threading
+    f, z, fres, qres, res_idxs = _make_sweep(M=3)
+    zg = _make_zarr()
+    w = FqFinderWindow(f, z, fres, qres, res_idxs, zg)
+    original = w._write_resonator
+    w._write_resonator = lambda *a: (threading.Event().wait(0.2), original(*a))
+    ri = w._ri
+    w._fres_work[ri] = w._fres_init[ri] + 1e5
+    w._go_next()
+
+    w.close()
+
+    assert zg["fres_opt"][ri] == pytest.approx(w._fres_init[ri] + 1e5)

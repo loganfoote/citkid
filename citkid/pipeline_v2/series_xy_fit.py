@@ -28,7 +28,10 @@ class SeriesXYFit:
     output_names (list of str): Names of the fit outputs, used for saving
         and for the plot title.
     model (callable): ``model(xs, *outputs)`` returning the fitted y values at
-        the x values ``xs``, for plotting the fit.
+        the x values ``xs`` (a float64 array), for plotting the fit. Scalar
+        outputs are passed as Python floats, so numba functions with float64
+        signatures work; array outputs as arrays. It must return y in the
+        units of the series plot's y axis.
     name (str): Name of the fit, shown in the plot title and stored with the
         saved fits. Default 'xy_fit'.
     group (zarr.Group or None): Group to save the fits to. None (default)
@@ -102,27 +105,35 @@ class SeriesXYFit:
             )
         return [np.asarray(value, dtype=float) for value in result]
 
-    def curve(self, x, outputs):
+    def curve(self, x, outputs, log_x=False):
         """
         Evaluate the model across the range of the usable x values.
 
         Parameters:
         x (np.ndarray): x value of each series index (NaN if unavailable).
         outputs (list of np.ndarray or None): Fit outputs, or None.
+        log_x (bool): If True (for a log x axis), space the samples
+            geometrically and use only x > 0. If False (default), space them
+            linearly.
 
         Returns:
         xs, ys (np.ndarray or None): ``n_samples`` x values spanning the
             usable x range and the model at them, or None, None if there are
-            no outputs, any output is NaN, or fewer than 2 usable x values.
+            no outputs, any output is NaN, or fewer than 2 distinct usable x
+            values.
         """
         if outputs is None or any(np.any(~np.isfinite(o)) for o in outputs):
             return None, None
         finite = np.asarray(x, dtype=float)
         finite = finite[np.isfinite(finite)]
+        if log_x:
+            finite = finite[finite > 0]
         if len(finite) < 2 or finite.min() == finite.max():
             return None, None
-        xs = np.linspace(finite.min(), finite.max(), self.n_samples)
-        return xs, np.asarray(self.model(xs, *outputs), dtype=float)
+        spacing = np.geomspace if log_x else np.linspace
+        xs = spacing(finite.min(), finite.max(), self.n_samples)
+        params = [float(o) if np.ndim(o) == 0 else o for o in outputs]
+        return xs, np.asarray(self.model(xs, *params), dtype=float)
 
     def describe(self, outputs):
         """

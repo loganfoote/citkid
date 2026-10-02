@@ -44,7 +44,14 @@ import zarr
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 
-from ..qt_compat import Qt as _Qt, delete_on_close, fit_window_to_screen, get_qapp
+from ..qt_compat import (
+    Qt as _Qt,
+    delete_on_close,
+    fit_window_to_screen,
+    get_qapp,
+    responsive_busy,
+    run_responsive,
+)
 from .s21_filt import highpass_filter, polynomial_baseline
 
 
@@ -1599,16 +1606,19 @@ class ResMatcher:
 
         Parameters:
         ds (int): dataset number; 1 for DS1, anything else for DS2.
+
+        The filtering runs in a worker thread (``run_responsive``), so the
+        window keeps responding on long sweeps.
         """
         self.win.setCursor(_Qt.WaitCursor)
         QtWidgets.QApplication.processEvents()
         if ds == 1:
-            self.filtered_mag1 = self._apply_filter(
-                self.f1, self.mag_db1, self.filter_params1
+            self.filtered_mag1 = run_responsive(
+                self._apply_filter, self.f1, self.mag_db1, dict(self.filter_params1)
             )
         else:
-            self.filtered_mag2 = self._apply_filter(
-                self.f2, self.mag_db2, self.filter_params2
+            self.filtered_mag2 = run_responsive(
+                self._apply_filter, self.f2, self.mag_db2, dict(self.filter_params2)
             )
         self._update_curves()
         self.update_markers()
@@ -3024,10 +3034,17 @@ class ResMatcher:
             # Display-only DS2 offset; fres2 above stays in real frequencies
             'res_matcher_ds2_f_offset': (np.float64, [self.ds2_f_offset]),
         }
-        for key, (dtype, data) in _to_save.items():
-            if key in self.zarr_group:
-                del self.zarr_group[key]
-            self.zarr_group.create_array(key, data=np.array(data, dtype=dtype))
+        def write():
+            """
+            Replace every saved array (no Qt calls).
+            """
+            for key, (dtype, data) in _to_save.items():
+                if key in self.zarr_group:
+                    del self.zarr_group[key]
+                self.zarr_group.create_array(key, data=np.array(data, dtype=dtype))
+
+        # In a worker thread, so the window keeps responding on slow drives
+        run_responsive(write)
 
         self.log(
             f'Saved: {len(self.groups)} groups, '
@@ -3047,10 +3064,13 @@ class ResMatcher:
     def _on_window_close(self, event):
         """
         Handle window close event - auto-save before closing.
-        
+
         Parameters:
         event (QCloseEvent): The close event.
         """
+        if responsive_busy():
+            event.ignore()  # work in progress; close when it has finished
+            return
         self.save_data()
         event.accept()
 

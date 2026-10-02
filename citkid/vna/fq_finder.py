@@ -41,6 +41,8 @@ cancel. When loading, a second dialog asks whether to resume at the saved
 data index or start from data index 0.
 """
 
+import concurrent.futures
+
 import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
@@ -51,6 +53,8 @@ from ..qt_compat import (
     available_screen_geometry,
     fit_window_to_screen,
     get_qapp,
+    responsive_busy,
+    run_responsive,
 )
 from ..multitone.fres import update_fres as _update_fres
 
@@ -549,16 +553,24 @@ class FqFinderWindow(QtWidgets.QMainWindow):
 
         self._reject_reasons: dict = {}
         self._pre_reject: dict = {}   # fres/qres saved before rejection
+        # Each resonator is saved by one background writer, in order, so
+        # navigating doesn't wait for zarr (slow on network drives).
+        self._save_writer = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="fq-finder-save")
+        self._save_futures: list = []
 
         _ensure_zarr_arrays(self._zg, self._M)
         if load_saved:
             self._load_saved_state()
 
-        # Pre-save calibration tones immediately (they are never interactive)
-        for i in range(self._M):
-            if self._res_idxs[i] < 0:
-                self._zg["fres_opt"][i] = self._fres_work[i]
-                self._zg["qres_opt"][i] = self._qres_work[i]
+        # Pre-save calibration tones immediately (they are never interactive),
+        # one write per array rather than one per tone.
+        cal = np.asarray(self._res_idxs) < 0
+        if np.any(cal):
+            for key, work in (("fres_opt", self._fres_work), ("qres_opt", self._qres_work)):
+                saved = np.asarray(self._zg[key][:], dtype=np.float64)
+                saved[cal] = np.asarray(work, dtype=np.float64)[cal]
+                self._zg[key][:] = saved
 
         # Build the list of interactive indices (non-cal tones)
         self._interactive_indices = [
@@ -1175,20 +1187,50 @@ class FqFinderWindow(QtWidgets.QMainWindow):
 
     def _save_current(self):
         """
-        Write working fres/qres, rejection reason, and data index for the
-        current resonator to zarr.
+        Queue writing the current resonator's working fres/qres, rejection
+        reason, and data index to zarr.
+
+        The values are taken now; a background writer saves them in order
+        (see ``_flush_saves``), so navigation doesn't wait for zarr.
         """
         ri = self._ri
-        self._zg["fres_opt"][ri] = self._fres_work[ri]
-        self._zg["qres_opt"][ri] = self._qres_work[ri]
+        future = self._save_writer.submit(
+            self._write_resonator, ri, float(self._fres_work[ri]),
+            float(self._qres_work[ri]), str(self._reject_reasons.get(ri, "")))
+        future.add_done_callback(_report_save_error)
+        self._save_futures = [f for f in self._save_futures if not f.done()] + [future]
+
+    def _write_resonator(self, ri, fres, qres, reason):
+        """
+        Write one resonator's results to zarr (runs in the background writer).
+
+        Parameters:
+        ri (int): resonator index.
+        fres (float): working resonance frequency.
+        qres (float): working quality factor.
+        reason (str): rejection reason, or '' if accepted.
+        """
+        self._zg["fres_opt"][ri] = fres
+        self._zg["qres_opt"][ri] = qres
         self._zg[_DATA_IDX_KEY][0] = ri
         # Handle reject_reason: read entire array, modify, and write back
-        reason = str(self._reject_reasons.get(ri, ""))
-        reject_arr = self._zg["reject_reason"]
-        reasons_array = np.array(reject_arr[:], dtype=object)
+        reasons_array = np.array(self._zg["reject_reason"][:], dtype=object)
         reasons_array[ri] = reason
-        # Write back the entire array
         self._zg["reject_reason"][:] = reasons_array
+
+    def _flush_saves(self):
+        """
+        Wait until every queued save is written, keeping the window responsive.
+
+        Raises:
+        Exception: the first error raised by a queued save.
+        """
+        futures = list(self._save_futures)
+        if futures:
+            run_responsive(concurrent.futures.wait, futures)
+        self._save_futures = []
+        for future in futures:
+            future.result()
 
     # ------------------------------------------------------------------
     # Public navigation (also called by key/button handlers)
@@ -1444,14 +1486,34 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         """
         Save the current resonator and accept the close event.
 
-        Nothing is saved if there are no interactive resonators.
+        Nothing is saved if there are no interactive resonators. Waits for
+        queued saves first (the window keeps responding meanwhile).
 
         Parameters:
         event (QtGui.QCloseEvent): close event.
         """
+        if responsive_busy():
+            event.ignore()  # saves in progress; close when they have finished
+            return
         if self._interactive_indices:
             self._save_current()
+        try:
+            self._flush_saves()
+        except Exception as exc:
+            print(f"FQ Finder: saving failed: {exc}")
+        self._save_writer.shutdown(wait=False)
         event.accept()
+
+
+def _report_save_error(future):
+    """
+    Print the error of a failed background save (the writer has no console).
+
+    Parameters:
+    future (concurrent.futures.Future): finished save.
+    """
+    if not future.cancelled() and future.exception() is not None:
+        print(f"FQ Finder: saving a resonator failed: {future.exception()}")
 
 
 # ---------------------------------------------------------------------------

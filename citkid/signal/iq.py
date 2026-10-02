@@ -37,6 +37,30 @@ def density_subsample(z, n_keep=5000, n_bins=100, seed=0):
     z = np.asarray(z, dtype=np.complex128)
     if len(z) <= n_keep:
         return z
+    return z[density_subsample_idx(z, n_keep=n_keep, n_bins=n_bins, seed=seed)]
+
+
+def density_subsample_idx(z, n_keep=5000, n_bins=100, seed=0):
+    """
+    Choose the indices kept by ``density_subsample``.
+
+    Use this to subsample several arrays that belong together (e.g. a
+    timestream and its phase) with the same points.
+
+    Parameters:
+    z (array-like, complex128): Input IQ timestream or sweep data.
+    n_keep (int): Maximum number of indices. Default 5000.
+    n_bins (int): Number of histogram bins for density estimation along the
+        principal axis. Default 100.
+    seed (int): Seed for the NumPy random-number generator. Default 0.
+
+    Returns:
+    idx (np.ndarray, int): Indices into ``z``, unsorted, of length
+        min(len(z), n_keep). All indices, in order, if len(z) <= n_keep.
+    """
+    z = np.asarray(z, dtype=np.complex128)
+    if len(z) <= n_keep:
+        return np.arange(len(z))
 
     # Project onto 1st principal component (direction of maximum variance).
     X  = np.column_stack([z.real, z.imag])
@@ -52,5 +76,5 @@ def density_subsample(z, n_keep=5000, n_bins=100, seed=0):
     weights /= weights.sum()
 
     rng  = np.random.default_rng(seed)
-    isub = rng.choice(len(z), size=n_keep, replace=False, p=weights)
+    return rng.choice(len(z), size=n_keep, replace=False, p=weights)
     return z[isub]

@@ -12,7 +12,14 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 import os
 
-from ..qt_compat import Qt as _Qt, delete_on_close, fit_window_to_screen, get_qapp
+from ..qt_compat import (
+    Qt as _Qt,
+    delete_on_close,
+    fit_window_to_screen,
+    get_qapp,
+    responsive_busy,
+    run_responsive,
+)
 
 
 def run_res_finder_manual(
@@ -95,10 +102,13 @@ class ResFinderWindow(pg.GraphicsLayoutWidget):
     def closeEvent(self, event):
         """
         Handle window close event by saving data.
-        
+
         Parameters:
         event (QCloseEvent): Qt close event.
         """
+        if responsive_busy():
+            event.ignore()  # work in progress; close when it has finished
+            return
         if self.finder is not None:
             self.finder.save_data()
         super().closeEvent(event)
@@ -1287,26 +1297,34 @@ class ResFinder(QtCore.QObject):
     def save_data(self):
         """
         Save the current resonance list to zarr group.
+
+        The current view x-limits are saved too, to restore the view next
+        run (skipped if the plot isn't available). The zarr writes run in a
+        worker thread (``run_responsive``), so the window keeps responding on
+        slow drives.
         """
         fres_array = np.array(self.fres, dtype = np.float64)
-
-        if 'fres_manual' in self.zarr_group:
-            del self.zarr_group['fres_manual']
-        self.zarr_group.create_array('fres_manual', data = fres_array)
-
-        # Save current view x-limits so we can restore exact view next run
         try:
             x_min, x_max = self.plot_mag.viewRange()[0]
-            # Overwrite existing key if present
-            if 'res_finder_manual_xlims' in self.zarr_group:
-                del self.zarr_group['res_finder_manual_xlims']
-            self.zarr_group.create_array('res_finder_manual_xlims', data = np.array([x_min, x_max], dtype=np.float64))
+            xlims = np.array([x_min, x_max], dtype=np.float64)
         except Exception:
-            # UI not available; ignore
-            pass
+            xlims = None  # UI not available
 
+        def write():
+            """
+            Replace the saved arrays (no Qt calls).
+            """
+            if 'fres_manual' in self.zarr_group:
+                del self.zarr_group['fres_manual']
+            self.zarr_group.create_array('fres_manual', data = fres_array)
+            if xlims is not None:
+                if 'res_finder_manual_xlims' in self.zarr_group:
+                    del self.zarr_group['res_finder_manual_xlims']
+                self.zarr_group.create_array('res_finder_manual_xlims', data = xlims)
+
+        run_responsive(write)
         self.log(f"Saved {len(self.fres)} resonances to zarr group")
-        
+
     def quit_and_save(self):
         """
         Close the window, which saves the data and ends the event loop.

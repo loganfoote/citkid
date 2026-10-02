@@ -14,7 +14,14 @@ from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 from scipy.signal import find_peaks
 import os
 from .s21_filt import highpass_filter, polynomial_baseline
-from ..qt_compat import Qt as _Qt, delete_on_close, fit_window_to_screen, get_qapp
+from ..qt_compat import (
+    Qt as _Qt,
+    delete_on_close,
+    fit_window_to_screen,
+    get_qapp,
+    responsive_busy,
+    run_responsive,
+)
 
 def run_res_finder_auto(f, z, zarr_grp):
     """
@@ -113,6 +120,9 @@ class AutoResFinderWindow(QtWidgets.QMainWindow):
         Parameters:
         event (QCloseEvent): Qt close event.
         """
+        if responsive_busy():
+            event.ignore()  # work in progress; close when it has finished
+            return
         if self.finder is not None:
             self.finder.save_data()
         super().closeEvent(event)
@@ -632,75 +642,97 @@ class AutoResFinder:
         The method is set by ``self.params['smoothing']``: 'highpass',
         'polynomial', or 'none' (copy of the unsmoothed data).
         """
-        if self.params['smoothing'] == 'highpass':
-            self.filtered_mag = highpass_filter(
-                self.f, self.mag_db, self.params['highpass_mhz']
-            )
-        elif self.params['smoothing'] == 'polynomial':
-            self.filtered_mag = polynomial_baseline(
-                self.f, self.mag_db, self.params['poly_order']
-            )
-        else:  # 'none'
-            self.filtered_mag = self.mag_db.copy()
-            
-    def update_peaks(self):
-        """
-        Update peak detection and plot.
+        self.filtered_mag = self._smoothed(self.params)
 
-        Results are stored in ``self.fres``.
+    def _smoothed(self, params):
         """
-        # Apply smoothing
-        self.apply_smoothing()
-        
-        # Update curves with visible slice only
-        self._update_curves()
-        
-        # Trigger auto-scaling
-        self.auto_scale_y(self.plot_filtered, self.filtered_mag)
-        self.auto_scale_y(self.plot_original, self.mag_db)
-        
+        Return the smoothed magnitude data (no Qt calls).
+
+        Parameters:
+        params (dict): parameters, as ``self.params``.
+
+        Returns:
+        filtered_mag (np.ndarray): smoothed magnitude (dB).
+        """
+        if params['smoothing'] == 'highpass':
+            return highpass_filter(self.f, self.mag_db, params['highpass_mhz'])
+        if params['smoothing'] == 'polynomial':
+            return polynomial_baseline(self.f, self.mag_db, params['poly_order'])
+        return self.mag_db.copy()  # 'none'
+
+    def _compute_peaks(self, params):
+        """
+        Smooth the data and find the resonance dips (no Qt calls, so it can
+        run in a worker thread).
+
+        Parameters:
+        params (dict): parameters, as ``self.params``.
+
+        Returns:
+        filtered_mag (np.ndarray): smoothed magnitude (dB).
+        fres (list of float or None): resonance frequencies (Hz), or None if
+            no data is in the frequency range.
+        """
+        filtered_mag = self._smoothed(params)
+
         # Mask for frequency range
-        mask = (self.f >= self.params['f_min']) & \
-               (self.f <= self.params['f_max'])
-        
+        mask = (self.f >= params['f_min']) & (self.f <= params['f_max'])
         f_masked = self.f[mask]
-        mag_masked = self.filtered_mag[mask]
-        
+        mag_masked = filtered_mag[mask]
         if len(f_masked) == 0:
-            self.fres = []
-            self.update_markers()
-            return
-        
+            return filtered_mag, None
+
         # Calculate width and distance in samples
         # Width and distance are in kHz/GHz
         # Convert: (kHz/GHz) * (GHz) = kHz, then * 1e3 = Hz
-        f_center = np.mean([self.params['f_min'], self.params['f_max']])
+        f_center = np.mean([params['f_min'], params['f_max']])
         f_center_ghz = f_center / 1e9
-        width_hz = self.params['width'] * f_center_ghz * 1e3
-        distance_hz = self.params['distance'] * f_center_ghz * 1e3
-        
+        width_hz = params['width'] * f_center_ghz * 1e3
+        distance_hz = params['distance'] * f_center_ghz * 1e3
+
         # Convert to samples
         df = np.median(np.diff(f_masked))
         width_samples = max(1, int(width_hz / df))
         distance_samples = max(1, int(distance_hz / df))
-        
+
         # Find peaks (looking for dips, so invert)
         peaks, properties = find_peaks(
             -mag_masked,
-            height = -self.params['height'],
+            height = -params['height'],
             width = width_samples,
             distance = distance_samples
         )
-        
-        # Convert to frequencies
-        self.fres = f_masked[peaks].tolist()
-        
+        return filtered_mag, f_masked[peaks].tolist()
+
+    def update_peaks(self):
+        """
+        Update peak detection and plot.
+
+        Results are stored in ``self.fres``. The smoothing and peak finding
+        run in a worker thread (``run_responsive``), so the window keeps
+        responding on long sweeps; the plots are updated afterwards.
+        """
+        self.filtered_mag, fres = run_responsive(self._compute_peaks, dict(self.params))
+
+        # Update curves with visible slice only
+        self._update_curves()
+
+        # Trigger auto-scaling
+        self.auto_scale_y(self.plot_filtered, self.filtered_mag)
+        self.auto_scale_y(self.plot_original, self.mag_db)
+
+        if fres is None:  # no data in the frequency range
+            self.fres = []
+            self.update_markers()
+            return
+        self.fres = fres
+
         # Update markers
         self.update_markers()
-        
+
         # Update info
         self.info_label.setText(f'Peaks found: {len(self.fres)}')
-        
+
     def update_markers(self):
         """
         Update res markers on plots.
@@ -764,18 +796,24 @@ class AutoResFinder:
         array), and ``self.params`` is saved as group attributes.
         """
         fres_array = np.array(self.fres, dtype = np.float64)
+        params = dict(self.params)
 
-        self.zarr_group.create_array(
-            'fres_auto', 
-            data = fres_array, 
-            overwrite = True
-            )
-        # Save parameters as group attributes
-        for key, val in self.params.items():
-            self.zarr_group.attrs[key] = val
+        def write():
+            """
+            Write the resonances and parameters (no Qt calls).
+            """
+            self.zarr_group.create_array(
+                'fres_auto',
+                data = fres_array,
+                overwrite = True
+                )
+            # Save parameters as group attributes, in one metadata write
+            self.zarr_group.attrs.update(params)
 
+        # In a worker thread, so the window keeps responding on slow drives
+        run_responsive(write)
         print(f"Saved {len(self.fres)} resonances to zarr group")
-        
+
     def quit_and_save(self):
         """
         Close the window, which saves the data and ends the event loop.

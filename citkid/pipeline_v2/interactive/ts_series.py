@@ -163,7 +163,7 @@ class TSSeriesWindow(IQSeriesWindow):
     **kwargs: Other ``IQSeriesWindow`` arguments (``start_series_idx``,
         ``start_idx``, ``data_idxs``, ``title``, ``ui_scale``,
         ``plot_scale``, ``parent``, ``state_group``, ``xy_fit``,
-        ``background_fitting``).
+        ``background_fitting``, ``xscale``, ``yscale``).
 
     Raises:
     ValueError: If ``x`` or ``y`` is not one of the quantities, or series
@@ -283,6 +283,8 @@ def run_ts_series(
     datasets=None,
     x_values=None,
     x_name=None,
+    xscale='linear',
+    yscale='linear',
 ):
     """
     Build one AnalysisRunner per series index for the 'ts' analysis, then
@@ -339,13 +341,18 @@ def run_ts_series(
         point, in order, all with the same number of rows. The background
         worker opens its own copies (``DataSet.copy``). None if
         ``make_custom_steps`` is given.
+    xscale, yscale (str): Series-plot axis scales. Can be 'linear' (default)
+        or 'log' (base 10; points with x or y <= 0 are not drawn). They stay
+        when the plotted quantities change, and can also be toggled from the
+        plot's right-click menu.
 
     Returns:
     win (TSSeriesWindow): The window (after it is closed).
 
     Raises:
-    ValueError: If ``x`` or ``y`` is not one of the quantities, or the series
-        inputs are inconsistent (see ``iq_series.series_runners``).
+    ValueError: If ``x`` or ``y`` is not one of the quantities, the series
+        inputs are inconsistent (see ``iq_series.series_runners``), or
+        ``xscale`` or ``yscale`` isn't 'linear' or 'log'.
     TypeError: If ``datasets`` contains something other than DataSets.
     """
     ARs = series_runners(make_custom_steps, datasets, cal_yaml_path, analysis_yaml_path,
@@ -367,6 +374,8 @@ def run_ts_series(
         state_group=root,
         xy_fit=xy_fit,
         background_fitting=True,
+        xscale=xscale,
+        yscale=yscale,
     )
     win.show()
     app.exec()

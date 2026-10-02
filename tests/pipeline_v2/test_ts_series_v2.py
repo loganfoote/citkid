@@ -422,3 +422,119 @@ def test_ts_window_shift_b_marks_all_series_bad(qt_app, monkeypatch):
     assert handled is True
     win._mark_all_series_bad.assert_called_once()
     _close(win)
+
+
+def _drawn_points(win):
+    """
+    Return the drawn series-scatter points in plot coordinates.
+
+    Parameters:
+    win (IQSeriesWindow): Window.
+
+    Returns:
+    points (dict): Series index -> (x, y) of each drawn point.
+    """
+    return {i: (float(item.data['x'][0]), float(item.data['y'][0]))
+            for i, item in enumerate(win._scatter_items) if len(item.data)}
+
+
+def test_log_scales_place_points_in_log_coordinates(qt_app, monkeypatch):
+    # data_idx 0: x = p = 1, 2, 3 and y = a = 0, 10, 20 (y = 0 can't be drawn on log)
+    win, _ = _make_window(qt_app, monkeypatch, xscale='log', yscale='log')
+    win._series_idx = 2
+    win._update_series_scatter()
+
+    ctrl = win._plot_series.ctrl
+    assert ctrl.logXCheck.isChecked() and ctrl.logYCheck.isChecked()
+    points = _drawn_points(win)
+    assert sorted(points) == [1, 2]
+    np.testing.assert_allclose(points[1], (np.log10(2.0), 1.0))
+    np.testing.assert_allclose(points[2], (np.log10(3.0), np.log10(20.0)))
+    np.testing.assert_allclose(
+        (win._selected_marker.data['x'][0], win._selected_marker.data['y'][0]),
+        (np.log10(3.0), np.log10(20.0)))
+    _close(win)
+
+
+def test_linear_scale_is_default_and_menu_toggle_redraws(qt_app, monkeypatch):
+    win, _ = _make_window(qt_app, monkeypatch)
+    win._update_series_scatter()
+    assert not win._plot_series.ctrl.logXCheck.isChecked()
+    assert _drawn_points(win)[2] == (3.0, 20.0)
+
+    win._plot_series.ctrl.logXCheck.setChecked(True)   # as from the right-click menu
+
+    np.testing.assert_allclose(_drawn_points(win)[2], (np.log10(3.0), 20.0))
+    _close(win)
+
+
+def test_log_scale_survives_quantity_change(qt_app, monkeypatch):
+    win, _ = _make_window(qt_app, monkeypatch, yscale='log')
+    win._y_combo.setCurrentText('b')                   # b = 0, -1, -2: nothing drawable
+
+    assert win._plot_series.ctrl.logYCheck.isChecked()
+    assert _drawn_points(win) == {}
+    _close(win)
+
+
+@pytest.mark.parametrize('xscale, expected', [
+    ('linear', [1.0, 2.0, 3.0]),
+    ('log', [1.0, 3.0 ** 0.5, 3.0]),
+])
+def test_xy_fit_curve_follows_x_scale(qt_app, monkeypatch, xscale, expected):
+    from citkid.pipeline_v2.series_xy_fit import SeriesXYFit
+
+    xy_fit = SeriesXYFit(fit=lambda x, y: (1.0, 0.0), output_names=['slope', 'intercept'],
+                         model=lambda xs, m, c: m * xs + c, n_samples=3)
+    win, _ = _make_window(qt_app, monkeypatch, xy_fit=xy_fit, xscale=xscale)  # x = p = 1, 2, 3
+    win._update_series_scatter()
+
+    xs, _ = win._xy_fit_curve.getOriginalDataset()
+    np.testing.assert_allclose(xs, expected)
+    _close(win)
+
+
+@pytest.mark.parametrize('kwargs', [{'xscale': 'symlog'}, {'yscale': 'Log'}])
+def test_bad_scale_raises(qt_app, monkeypatch, kwargs):
+    with pytest.raises(ValueError, match="'linear', 'log'"):
+        _make_window(qt_app, monkeypatch, **kwargs)
+
+
+@pytest.mark.parametrize('module, run, window', [
+    (its, 'run_ts_series', 'TSSeriesWindow'),
+    (iseries, 'run_iq_series', 'IQSeriesWindow'),
+])
+def test_run_functions_pass_scales(monkeypatch, module, run, window):
+    created = MagicMock()
+    monkeypatch.setattr(module, window, created)
+    monkeypatch.setattr(module, 'series_runners', lambda *_a, **_k: [MagicMock()])
+    monkeypatch.setattr(module, 'get_qapp', lambda _title: MagicMock())
+
+    getattr(module, run)(datasets=[MagicMock()], xscale='log', yscale='linear')
+
+    assert created.call_args.kwargs['xscale'] == 'log'
+    assert created.call_args.kwargs['yscale'] == 'linear'
+
+
+@pytest.mark.parametrize('refit', ['panel_run', 'apply_to_all', 'mark_bad'])
+def test_refits_rescale_the_series_plot(qt_app, monkeypatch, refit):
+    win, _ = _make_window(qt_app, monkeypatch)
+    win._series_idx = 0
+    win._update_series_scatter(rescale=True)
+    view = win._plot_series.getViewBox()
+    data_range = view.viewRange()
+    view.setRange(xRange=(100, 200), yRange=(100, 200), padding=0)   # user zoom
+
+    win._update_series_scatter()                     # plain redraw keeps the zoom
+    assert view.viewRange()[0] == pytest.approx([100, 200])
+
+    for panel in win.panels:
+        panel._store_nan_outputs = lambda **_kw: None
+    {'panel_run': lambda: win._update_series_point(0),
+     'apply_to_all': win._apply_to_all,
+     'mark_bad': lambda: win._mark_series_bad([1])}[refit]()
+    win._wait_for_marks()
+
+    assert view.viewRange()[0][1] < 100              # back on the data
+    assert view.viewRange()[0] == pytest.approx(data_range[0], rel=0.5)
+    _close(win)

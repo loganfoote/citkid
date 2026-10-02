@@ -344,3 +344,69 @@ def test_scroll_area_content_height(qapp):
     assert qt_compat.scroll_area_content_height(scroll) == expected
     assert expected >= 400
     scroll.close()
+
+
+# ---------------------------------------------------------------------------
+# run_responsive
+# ---------------------------------------------------------------------------
+
+def test_run_responsive_keeps_processing_events(qapp):
+    """Timers (repaints, OS pings) keep running while the work runs off-thread."""
+    import threading
+    import time
+    from citkid import qt_compat
+    from pyqtgraph.Qt import QtCore
+
+    ticks, threads = [], []
+    timer = QtCore.QTimer()
+    timer.timeout.connect(lambda: ticks.append(qt_compat.responsive_busy()))
+    timer.start(10)
+
+    def work(a, b=0):
+        threads.append(threading.current_thread() is threading.main_thread())
+        time.sleep(0.3)
+        return a + b
+
+    try:
+        assert qt_compat.run_responsive(work, 1, b=2) == 3
+    finally:
+        timer.stop()
+    assert threads == [False]                 # ran off the GUI thread
+    assert len(ticks) >= 5 and all(ticks)     # events processed meanwhile
+    assert not qt_compat.responsive_busy()
+
+
+def test_run_responsive_defers_user_input(qapp, monkeypatch):
+    """
+    Events are processed with ExcludeUserInputEvents, so real mouse and
+    keyboard input waits until the work is done (no re-entrant clicks).
+    Posted test events aren't spontaneous input, so the flag is checked.
+    """
+    import time
+    from citkid import qt_compat
+    from pyqtgraph.Qt import QtCore
+
+    flags = []
+    original = qapp.processEvents
+    monkeypatch.setattr(qapp, 'processEvents', lambda *a: (flags.append(a), original(*a))[1])
+
+    qt_compat.run_responsive(time.sleep, 0.1)
+
+    expected = QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents
+    assert flags and all(a == (expected,) for a in flags)
+
+
+def test_run_responsive_reraises_and_runs_directly_off_main_thread(qapp):
+    import threading
+    from citkid import qt_compat
+
+    with pytest.raises(ValueError, match='boom'):
+        qt_compat.run_responsive(lambda: (_ for _ in ()).throw(ValueError('boom')))
+    assert not qt_compat.responsive_busy()
+
+    seen = []
+    worker = threading.Thread(target=lambda: seen.append(
+        qt_compat.run_responsive(lambda: threading.current_thread().name)))
+    worker.start()
+    worker.join()
+    assert seen == [worker.name]              # nested in a thread: no new thread

@@ -111,3 +111,15 @@ def test_n_keep_one():
     z = _make_iq(1000)
     out = density_subsample(z, n_keep=1)
     assert len(out) == 1
+
+
+def test_density_subsample_idx_matches_density_subsample():
+    """The indices select exactly what density_subsample returns."""
+    from citkid.signal.iq import density_subsample_idx
+    rng = np.random.default_rng(4)
+    z = rng.standard_normal(20_000) + 0.1j * rng.standard_normal(20_000)
+    z[::401] += 4  # sparse tail
+    idx = density_subsample_idx(z, n_keep=700)
+    assert len(idx) == 700 and len(np.unique(idx)) == 700
+    np.testing.assert_array_equal(z[idx], density_subsample(z, n_keep=700))
+    np.testing.assert_array_equal(density_subsample_idx(z[:50], n_keep=700), np.arange(50))

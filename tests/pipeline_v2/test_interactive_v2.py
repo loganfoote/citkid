@@ -134,9 +134,31 @@ class TestStepPanelV2:
         assert panel._write_nan_outputs(redraw=False, save=True, keep={'later_out'}) is True
 
         assert ar.DS.delete_saved_params.call_args.args[0] == ['sxx_10']
-        assert ar.DS._store_param.call_args.kwargs['save'] is True
+        assert ar.DS._write_per_row_param.call_args.args[0] == 'y'
         assert panel._dirty is False
         panel.refresh_plots.assert_not_called()
+
+    def test_store_nan_outputs_touches_only_memory(self, qt_app):
+        """The zarr work is returned as a job, so it can run in the background."""
+        ar, _ = _make_ar('step_c')
+        ar._build_invalidation_plan.return_value = {
+            'memory_invalidate': ['y', 'sxx_10'], 'zarr_delete': ['sxx_10']}
+        with patch.object(StepPanel, 'setup_ui'):
+            panel = StepPanel(ar, ('step_c',), data_idx=2)
+        panel._nan_outputs = lambda: {'y': np.nan}
+
+        job = panel._store_nan_outputs(save=True)
+
+        ar.DS.invalidate_memory_params.assert_called_once()
+        assert ar.DS._store_param.call_args.kwargs['save'] is False
+        ar.DS.delete_saved_params.assert_not_called()
+        ar.DS._write_per_row_param.assert_not_called()
+        assert (job.delete, job.write) == (['sxx_10'], ['y'])
+
+        job.run()
+
+        assert ar.DS.delete_saved_params.call_args.args[0] == ['sxx_10']
+        assert ar.DS._write_per_row_param.call_args.args[0] == 'y'
 
 
 class TestInteractiveWindowV2:
@@ -1049,21 +1071,108 @@ class TestIQSeriesWindowV2:
         assert 'Select a series point' in win._apply_status_label.text()
         self._close(win)
 
-    def test_mark_series_bad_writes_only_chosen_series(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-        written = []
+    @staticmethod
+    def _record_marks(win, gate=None):
+        """
+        Replace the panels' bad marking with recorders.
+
+        Parameters:
+        win (IQSeriesWindow): Window.
+        gate (threading.Event or None): If given, each job's ``run`` waits
+            for it, to hold the background writer.
+
+        Returns:
+        stored (list): ``(series_idx, save)`` per in-memory mark.
+        ran (list): ``(series_idx, thread name)`` per job run.
+        """
+        stored, ran = [], []
+
+        def store(p, save=False, keep=()):
+            si = win._ARs.index(p.AR)
+            stored.append((si, save))
+
+            def run():
+                if gate is not None:
+                    gate.wait(5)
+                ran.append((si, threading.current_thread().name))
+            return MagicMock(run=run, rows=np.array([0]))
+
         for panel in win.panels:
-            panel._write_nan_outputs = (
-                lambda p=panel, **kw: written.append((win._ARs.index(p.AR), kw['save'], kw['redraw'])))
+            panel._store_nan_outputs = lambda p=panel, **kw: store(p, **kw)
+        return stored, ran
+
+    def test_mark_series_bad_saves_chosen_series_in_background(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+        stored, ran = self._record_marks(win)
         original_ar = win.panels[0].AR
         win._update_series_scatter = MagicMock()
 
         win._mark_series_bad([1])
+        win._wait_for_marks()
 
-        assert written == [(1, True, False)] * len(win.panels)  # saved now, no redraw
+        assert stored == [(1, True)] * len(win.panels)
+        assert [si for si, _ in ran] == [1] * len(win.panels)
+        assert all(name.startswith('series-mark-bad') for _, name in ran)
         assert all(panel.AR is original_ar for panel in win.panels)
         win._update_series_scatter.assert_called_once()
+        assert win._apply_status_label.text() == 'Bad marks saved \u2713'
         self._close(win)
+
+    def test_mark_series_bad_returns_before_saving(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+        gate = threading.Event()
+        _, ran = self._record_marks(win, gate)
+        win._update_series_scatter = MagicMock()
+
+        win._mark_series_bad([0, 1])
+
+        assert ran == []                               # still saving
+        win._update_series_scatter.assert_called_once()
+        assert win._apply_status_label.text() == 'Marked 2 series point(s) bad, saving\u2026'
+        gate.set()
+        win._wait_for_marks()
+        assert len(ran) == 2 * len(win.panels)
+        self._close(win)
+
+    @pytest.mark.parametrize('action', ['run_through', 'run_panel', 'select', 'mark_one'])
+    def test_using_the_row_waits_for_its_saves(self, qt_app, monkeypatch, action):
+        win = self._make_window(qt_app, monkeypatch)
+        gate = threading.Event()
+        _, ran = self._record_marks(win, gate)
+        win._update_series_scatter = MagicMock()
+        win._update_series_point = MagicMock()
+        win._run_all_panels = MagicMock()
+        win._mark_series_bad([0, 1])
+        waited = []
+        win._make_busy_dialog = lambda *_a: (waited.append(len(ran)), gate.set(),
+                                             MagicMock())[2]
+        for panel in win.panels:
+            panel.run_steps = lambda: (waited.append(len(ran)), True)[1]
+            panel.run_current = lambda: waited.append(len(ran))
+            panel._write_nan_outputs = lambda **_kw: waited.append(len(ran))
+
+        {'run_through': lambda: win._run_through_panel(0),
+         'run_panel': lambda: win._run_panel_by_index(0),
+         'select': lambda: win._set_series_idx(1),
+         'mark_one': win._mark_all_bad}[action]()
+
+        assert waited[0] == 0                         # the busy dialog came first
+        assert len(ran) == 2 * len(win.panels)        # and the saves finished before use
+        assert all(n == len(ran) for n in waited[1:])
+        self._close(win)
+
+    def test_other_rows_and_close_dont_lose_pending_saves(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch, nrows=3, data_idxs=[0, 1, 2])
+        gate = threading.Event()
+        _, ran = self._record_marks(win, gate)
+        win._update_series_scatter = MagicMock()
+        win._mark_series_bad([0, 1])
+
+        assert win._pending_marks[0]
+        threading.Timer(0.2, gate.set).start()
+        self._close(win)                              # waits for the writer
+
+        assert len(ran) == 2 * len(win.panels)
 
     @pytest.mark.parametrize('selected, marked, cleared', [
         (1, [0, 1], True),     # the shown point was marked: blank the panels
@@ -1073,8 +1182,8 @@ class TestIQSeriesWindowV2:
     def test_mark_series_bad_redraws_or_blanks_panels(self, qt_app, monkeypatch,
                                                       selected, marked, cleared):
         win = self._make_window(qt_app, monkeypatch)
+        self._record_marks(win)
         for panel in win.panels:
-            panel._write_nan_outputs = lambda **_kw: None
             panel.clear_calls = panel.update_calls = 0
         win._series_idx = selected
         win._update_series_scatter = MagicMock()
@@ -1085,26 +1194,31 @@ class TestIQSeriesWindowV2:
             assert (panel.clear_calls, panel.update_calls) == ((1, 0) if cleared else (0, 1))
         self._close(win)
 
-    def test_mark_series_bad_shows_progress_and_keeps_shown_point_state(self, qt_app, monkeypatch):
+    def test_mark_series_bad_keeps_shown_point_state(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch)
-        shown = []
-
-        def write_nan(**_kw):
-            shown.append(win._apply_status_label.text())
-            for panel in win.panels:
-                panel._dirty = False
-
+        self._record_marks(win)
         for panel in win.panels:
-            panel._write_nan_outputs = write_nan
             panel._dirty = True                    # unsaved work on the shown point
         win._series_idx = 0
         win._update_series_scatter = MagicMock()
 
         win._mark_series_bad([1])
 
-        assert set(shown) == {'Marking bad 1/1…'}
-        assert win._apply_status_label.text() == 'Marked 1 series point(s) bad ✓'
         assert all(panel._dirty for panel in win.panels)
+        self._close(win)
+
+    def test_failed_background_save_is_reported(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+        for panel in win.panels:
+            panel._store_nan_outputs = lambda **_kw: MagicMock(
+                run=MagicMock(side_effect=OSError('disk full')), rows=np.array([0]))
+        win._update_series_scatter = MagicMock()
+
+        win._mark_series_bad([1])
+        win._wait_for_marks()
+
+        assert 'failed' in win._apply_status_label.text()
+        assert win._pending_marks == {}
         self._close(win)
 
     def test_shift_b_shortcut_marks_all_series_bad(self, qt_app, monkeypatch):
@@ -1208,3 +1322,64 @@ def test_panel_drops_all_nan_curves(qt_app, method):
         else:
             assert len(curve.scatter.data) == 0
     _assert_autorange_quiet([panel._plot_amp, panel._plot_iq])
+
+
+@pytest.mark.parametrize('module, steps', [
+    ('gain', ('fit_gain',)),
+    ('fit_iq', ('fit_iq',)),
+    ('circ', ('fit_iq_circle', 'get_idx_t', 'get_theta_phase_offset')),
+    ('xcal', ('get_xcal_mask', 'fit_x_theta')),
+])
+def test_sweep_panels_draw_every_point(qt_app, module, steps):
+    """No auto-downsampling: it drops sweep points, and its peak mode can raise
+    'Maximum allowed dimension exceeded' on degenerate plot geometry."""
+    import importlib
+    import pyqtgraph as pg
+
+    importlib.import_module(f'citkid.pipeline_v2.interactive.{module}')
+    ar, _ = _make_ar(*steps)
+    panel = icore.get_panel_class(steps)(ar, steps, data_idx=0)
+    curves = [c for c in vars(panel).values() if isinstance(c, pg.PlotDataItem)]
+    assert curves
+    assert not any(c.opts['autoDownsample'] for c in curves)
+
+
+def test_panel_steps_run_off_the_gui_thread(qt_app):
+    """Fits run in a worker thread so the window keeps responding."""
+    ar, steps = _make_ar('step_a', 'step_b')
+    on_main = []
+    ar.execute_step.side_effect = lambda *a, **k: on_main.append(
+        threading.current_thread() is threading.main_thread())
+    ar._last_failures = {}
+    with patch.object(StepPanel, 'setup_ui'):
+        panel = StepPanel(ar, ('step_a', 'step_b'), data_idx=1)
+    panel.refresh_plots = MagicMock()
+
+    assert panel.run_steps() is True
+    assert on_main == [False, False]
+    panel.refresh_plots.assert_called_once()     # back on the GUI thread
+
+
+def test_panel_step_error_is_reported_on_the_gui_thread(qt_app):
+    ar, _ = _make_ar('step_a', 'step_b')
+    ar.execute_step.side_effect = [None, ValueError('bad fit')]
+    ar._last_failures = {}
+    with patch.object(StepPanel, 'setup_ui'):
+        panel = StepPanel(ar, ('step_a', 'step_b'), data_idx=1)
+    seen = []
+    panel._on_step_error = lambda step, exc: seen.append(
+        (step.name, str(exc), threading.current_thread() is threading.main_thread()))
+
+    assert panel.run_steps() is False
+    assert seen == [('step_b', 'bad fit', True)]
+
+
+def test_series_window_refuses_to_close_while_busy(qt_app, monkeypatch):
+    win = TestIQSeriesWindowV2()._make_window(qt_app, monkeypatch)
+    monkeypatch.setattr(iseries, 'responsive_busy', lambda: True)
+    win._confirm_stale_downstream_before_leave = MagicMock(return_value=True)
+
+    assert win.close() is False
+    win._confirm_stale_downstream_before_leave.assert_not_called()
+    monkeypatch.setattr(iseries, 'responsive_busy', lambda: False)
+    assert win.close() is True
