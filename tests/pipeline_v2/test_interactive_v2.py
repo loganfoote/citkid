@@ -111,13 +111,32 @@ class TestStepPanelV2:
 
         assert panel._write_nan_outputs() is True
 
-        invalidated = [c.args[0] for c in ar.DS.invalidate_memory_params.call_args_list]
-        deleted = [c.args[0] for c in ar.DS.delete_saved_params.call_args_list]
-        assert ['later_out', 'sxx_10'] in invalidated
-        assert ['later_out', 'sxx_10'] in deleted
-        assert ['y'] in invalidated                      # the output itself is replaced
+        # One call each (the zarr store is listed once), outputs included.
+        ar.DS.invalidate_memory_params.assert_called_once()
+        ar.DS.delete_saved_params.assert_called_once()
+        assert ar.DS.invalidate_memory_params.call_args.args[0] == ['later_out', 'sxx_10', 'y']
+        assert ar.DS.delete_saved_params.call_args.args[0] == ['later_out', 'sxx_10', 'y']
         plan_rows = ar._build_invalidation_plan.call_args.args[2]
         np.testing.assert_array_equal(plan_rows, np.array([2], dtype=np.int32))
+
+    def test_write_nan_outputs_save_and_keep(self, qt_app):
+        """save=True writes the outputs instead of deleting them; keep is not deleted."""
+        ar, _ = _make_ar('step_c')
+        ar._build_invalidation_plan.return_value = {
+            'memory_invalidate': ['y', 'later_out', 'sxx_10'],
+            'zarr_delete': ['later_out', 'sxx_10'],
+        }
+        with patch.object(StepPanel, 'setup_ui'):
+            panel = StepPanel(ar, ('step_c',), data_idx=2)
+        panel._nan_outputs = lambda: {'y': np.nan}
+        panel.refresh_plots = MagicMock()
+
+        assert panel._write_nan_outputs(redraw=False, save=True, keep={'later_out'}) is True
+
+        assert ar.DS.delete_saved_params.call_args.args[0] == ['sxx_10']
+        assert ar.DS._store_param.call_args.kwargs['save'] is True
+        assert panel._dirty is False
+        panel.refresh_plots.assert_not_called()
 
 
 class TestInteractiveWindowV2:
@@ -1017,7 +1036,6 @@ class TestIQSeriesWindowV2:
         win._mark_bad_above()
 
         win._mark_series_bad.assert_called_once_with(expected)
-        assert win._apply_status_label.text() == f'Marked {len(expected)} series(s) bad'
         self._close(win)
 
     def test_mark_bad_above_needs_a_selection(self, qt_app, monkeypatch):
@@ -1035,15 +1053,58 @@ class TestIQSeriesWindowV2:
         win = self._make_window(qt_app, monkeypatch)
         written = []
         for panel in win.panels:
-            panel._write_nan_outputs = lambda p=panel: written.append(win._ARs.index(p.AR))
+            panel._write_nan_outputs = (
+                lambda p=panel, **kw: written.append((win._ARs.index(p.AR), kw['save'], kw['redraw'])))
         original_ar = win.panels[0].AR
         win._update_series_scatter = MagicMock()
 
         win._mark_series_bad([1])
 
-        assert written == [1] * len(win.panels)
+        assert written == [(1, True, False)] * len(win.panels)  # saved now, no redraw
         assert all(panel.AR is original_ar for panel in win.panels)
         win._update_series_scatter.assert_called_once()
+        self._close(win)
+
+    @pytest.mark.parametrize('selected, marked, cleared', [
+        (1, [0, 1], True),     # the shown point was marked: blank the panels
+        (None, [0, 1], True),  # nothing selected: panels stay blank
+        (0, [1], False),       # another point was marked: redraw the shown one
+    ])
+    def test_mark_series_bad_redraws_or_blanks_panels(self, qt_app, monkeypatch,
+                                                      selected, marked, cleared):
+        win = self._make_window(qt_app, monkeypatch)
+        for panel in win.panels:
+            panel._write_nan_outputs = lambda **_kw: None
+            panel.clear_calls = panel.update_calls = 0
+        win._series_idx = selected
+        win._update_series_scatter = MagicMock()
+
+        win._mark_series_bad(marked)
+
+        for panel in win.panels:
+            assert (panel.clear_calls, panel.update_calls) == ((1, 0) if cleared else (0, 1))
+        self._close(win)
+
+    def test_mark_series_bad_shows_progress_and_keeps_shown_point_state(self, qt_app, monkeypatch):
+        win = self._make_window(qt_app, monkeypatch)
+        shown = []
+
+        def write_nan(**_kw):
+            shown.append(win._apply_status_label.text())
+            for panel in win.panels:
+                panel._dirty = False
+
+        for panel in win.panels:
+            panel._write_nan_outputs = write_nan
+            panel._dirty = True                    # unsaved work on the shown point
+        win._series_idx = 0
+        win._update_series_scatter = MagicMock()
+
+        win._mark_series_bad([1])
+
+        assert set(shown) == {'Marking bad 1/1…'}
+        assert win._apply_status_label.text() == 'Marked 1 series point(s) bad ✓'
+        assert all(panel._dirty for panel in win.panels)
         self._close(win)
 
     def test_shift_b_shortcut_marks_all_series_bad(self, qt_app, monkeypatch):
@@ -1104,3 +1165,46 @@ def test_ts_panels_clear_every_curve(qt_app, module, steps):
     assert all(len(curve.getData()[0] if curve.getData()[0] is not None else []) == 0
                for curve in curves)
     assert panel._status_label.text() == '\u2014'
+
+
+def _assert_autorange_quiet(plots):
+    """
+    Auto-range plots and fail on any warning (e.g. "All-NaN slice encountered").
+
+    Parameters:
+    plots (list of pg.PlotItem): Plots to auto-range.
+    """
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        for plot in plots:
+            plot.autoRange()
+            for item in plot.items:
+                item.boundingRect()
+
+
+@pytest.mark.parametrize('method', ['blank_plots', 'refresh_plots'])
+def test_panel_drops_all_nan_curves(qt_app, method):
+    """Bad (all-NaN) data must not stay in curves, or autoscaling warns."""
+    import importlib
+    import pyqtgraph as pg
+
+    steps = ('fit_iq_circle', 'get_idx_t', 'get_theta_phase_offset')
+    importlib.import_module('citkid.pipeline_v2.interactive.circ')
+    ar, _ = _make_ar(*steps)
+    panel = icore.get_panel_class(steps)(ar, steps, data_idx=0)
+    curves = [c for c in vars(panel).values() if isinstance(c, pg.PlotDataItem)]
+    for curve in curves:
+        curve.setData([np.nan, np.nan], [np.nan, np.nan])
+    good = curves[0]
+    panel.update_plots = lambda: good.setData([1.0, 2.0], [3.0, 4.0])
+
+    getattr(panel, method)()
+
+    for curve in curves:
+        if curve is good and method == 'refresh_plots':
+            assert len(curve.getData()[0]) == 2
+        else:
+            assert len(curve.scatter.data) == 0
+    _assert_autorange_quiet([panel._plot_amp, panel._plot_iq])

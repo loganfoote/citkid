@@ -1014,7 +1014,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         for panel in self.panels:
             panel.data_idx = new_di
             panel.on_data_idx_changing()
-            panel.clear_plots()
+            panel.blank_plots()
             panel._needs_run = False
             panel._dirty = False
             panel._has_run = False
@@ -1318,8 +1318,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
     def _mark_all_bad(self):
         """Mark every panel's outputs as NaN, clear their plots, and refresh scatter."""
         for panel in self.panels:
-            panel._write_nan_outputs()
-            panel.clear_plots()
+            panel._write_nan_outputs(redraw=False)
+            panel.blank_plots()
         if self._series_idx is not None:
             self._update_series_point(self._series_idx)
 
@@ -1345,13 +1345,14 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             if si == self._series_idx or (np.isfinite(x[si]) and x[si] > x_sel)
         ]
         self._mark_series_bad(series_idxs)
-        for panel in self.panels:
-            panel.clear_plots()
-        self._apply_status_label.setText(f'Marked {len(series_idxs)} series(s) bad')
 
     def _mark_series_bad(self, series_idxs):
         """
         Mark every panel's outputs as NaN for some series points at the current data_idx.
+
+        The bad outputs are saved right away: only the selected point's
+        panels are saved when leaving, so other points' marks would be lost.
+        Progress is shown in the status label.
 
         Parameters:
         series_idxs (iterable of int): Series indices to mark bad.
@@ -1359,17 +1360,37 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         di = self._data_idx
         series_idxs = list(series_idxs)
         old_AR = self.panels[0].AR
-        for si in series_idxs:
+        old_flags = [(p._dirty, p._has_run, p._needs_run) for p in self.panels]
+        total = len(series_idxs)
+        # Every panel writes its bad outputs, so earlier panels needn't
+        # delete later panels' outputs first. (The names don't depend on the
+        # series point.)
+        written = set().union(*(panel._nan_outputs() for panel in self.panels))
+        for n, si in enumerate(series_idxs, start=1):
+            self._apply_status_label.setText(f'Marking bad {n}/{total}…')
+            QtWidgets.QApplication.processEvents()
             AR = self._ARs[si]
             for panel in self.panels:
                 panel.AR = AR
             for panel in self.panels:
-                panel._write_nan_outputs()
-        for panel in self.panels:
+                panel._write_nan_outputs(redraw=False, save=True, keep=written)
+        # Show the selected point again (blank if it was marked, or if
+        # nothing is selected).
+        for panel, flags in zip(self.panels, old_flags):
             panel.AR = old_AR
+            if self._series_idx is not None and self._series_idx not in series_idxs:
+                # The shown point wasn't marked: keep its unsaved/stale state.
+                panel._dirty, panel._has_run, panel._needs_run = flags
+            if self._series_idx is None or self._series_idx in series_idxs:
+                panel.blank_plots()
+            elif panel._outputs_exist():
+                panel.refresh_plots()
+            else:
+                panel.blank_plots()
         # Drop these points' cached values so the scatter refreshes
         self._forget_values(di, series_idxs)
         self._update_series_scatter()
+        self._apply_status_label.setText(f'Marked {total} series point(s) bad ✓')
 
     def _runner_outputs_exist(self, AR, data_idx: int) -> bool:
         """

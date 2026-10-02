@@ -1028,6 +1028,32 @@ def test_pending_rows_override_and_are_cleared_by_direct_writes(tmp_path):
     assert DataSet(zarr_path=ds.root).p[1] == 201.0
 
 
+def test_delete_saved_params_skips_unsaved_names(tmp_path, monkeypatch):
+    """Several names: one store listing, and no lookups for names never saved."""
+    ds = _make_io_dataset(tmp_path)
+    _save_rows(ds, "p", [1, 2])
+    looked_up = []
+    original = ds._delete_saved_param
+    monkeypatch.setattr(ds, "_delete_saved_param",
+                        lambda name, data_idx=None: (looked_up.append(name), original(name, data_idx)))
+
+    ds.delete_saved_params(["never_saved", "p", "also_never"], data_idx=[1])
+
+    assert looked_up == ["p"]
+    assert sorted(np.flatnonzero(ds.root["p"]["row_exists"][...])) == [2]
+
+
+def test_delete_saved_params_without_listing_checks_each_name(tmp_path, monkeypatch):
+    """If the store can't be listed, every name is still handled."""
+    ds = _make_io_dataset(tmp_path)
+    _save_rows(ds, "p", [1, 2])
+    monkeypatch.setattr(ds, "_child_names", lambda: None)
+
+    ds.delete_saved_params(["never_saved", "p"], data_idx=[1])
+
+    assert sorted(np.flatnonzero(ds.root["p"]["row_exists"][...])) == [2]
+
+
 def test_delete_saved_param_clears_pending_rows(tmp_path):
     ds = _make_io_dataset(tmp_path)
     _save_rows(ds, "p", [1])

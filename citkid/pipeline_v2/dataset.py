@@ -8,6 +8,7 @@ from datetime import datetime
 import numpy as np
 import yaml
 import zarr
+from zarr.core.sync import collect_aiterator
 
 from . import default_steps
 from . import framework as pf
@@ -70,12 +71,44 @@ def _row_masks(group):
     pending (np.ndarray or None): ``pending_row_exists`` of the write
         buffer, or None if there is no buffer.
     """
-    main = np.asarray(group["row_exists"][...], dtype=bool) if "row_exists" in group else None
-    pending = (
-        np.asarray(group[_PENDING_EXISTS][...], dtype=bool)
-        if _PENDING_EXISTS in group else None
-    )
+    main = _read_optional(group, "row_exists")
+    pending = _read_optional(group, _PENDING_EXISTS)
     return main, pending
+
+
+def _open_optional(group, key):
+    """
+    Open a child array, or return None if it doesn't exist.
+
+    One metadata read, where ``key in group`` followed by ``group[key]``
+    would take two (slow on slow drives).
+
+    Parameters:
+    group (zarr.Group): Parent group.
+    key (str): Child name.
+
+    Returns:
+    array (zarr.Array or None): The child, or None if missing.
+    """
+    try:
+        return group[key]
+    except KeyError:
+        return None
+
+
+def _read_optional(group, key):
+    """
+    Read a boolean child array, or return None if it doesn't exist.
+
+    Parameters:
+    group (zarr.Group): Parent group.
+    key (str): Child name.
+
+    Returns:
+    values (np.ndarray or None): The array as bool, or None if missing.
+    """
+    array = _open_optional(group, key)
+    return None if array is None else np.asarray(array[...], dtype=bool)
 
 
 def _retry_io(func, *args, **kwargs):
@@ -414,8 +447,30 @@ class DataSet:
         Delete persisted parameter data from zarr for the requested scope.
         """
         rows = self._normalize_rows(data_idx)
+        names = list(names)
+        children = self._child_names() if len(names) > 1 else None
         for name in names:
+            if children is not None and name not in children:
+                continue  # never saved; skip the per-name zarr lookup
             self._delete_saved_param(name, data_idx=rows)
+
+    def _child_names(self):
+        """
+        List the names of the zarr root's children with one store listing.
+
+        Checking ``name in self.root`` reads metadata for each name, which is
+        slow on slow drives when most names were never saved.
+
+        Returns:
+        names (set of str or None): Child names (may include non-parameter
+            entries such as ``zarr.json``), or None if the store can't be
+            listed.
+        """
+        try:
+            with self._io_lock:
+                return set(collect_aiterator(self.root.store.list_dir(self.root.path)))
+        except Exception:
+            return None
 
     def write_params(self, names, data_idx=None):
         """
@@ -1177,18 +1232,16 @@ class DataSet:
                         "row_exists", data=np.zeros((int(self.nrows),), dtype=np.bool_)
                     )
             if self.write_buffer:
-                if _PENDING_DATA in group:
-                    pending_data = group[_PENDING_DATA]
-                else:
+                pending_data = _open_optional(group, _PENDING_DATA)
+                if pending_data is None:
                     pending_data = group.create_array(
                         _PENDING_DATA,
                         shape=data_array.shape,
                         chunks=(_PER_ROW_CHUNK_ROWS, *data_array.shape[1:]),
                         dtype=data_array.dtype,
                     )
-                if _PENDING_EXISTS in group:
-                    pending_exists = group[_PENDING_EXISTS]
-                else:
+                pending_exists = _open_optional(group, _PENDING_EXISTS)
+                if pending_exists is None:
                     pending_exists = group.create_array(
                         _PENDING_EXISTS, data=np.zeros((int(self.nrows),), dtype=np.bool_)
                     )
@@ -1248,12 +1301,12 @@ class DataSet:
             """
             Delete the rows, or the group if no saved rows would remain.
             """
-            if name not in self.root:
+            group = _open_optional(self.root, name)
+            if group is None:
                 return
             if meta["global"] or rows is None:
                 del self.root[name]
                 return
-            group = self.root[name]
             main, pending = _row_masks(group)
             if main is None and pending is None:
                 del self.root[name]

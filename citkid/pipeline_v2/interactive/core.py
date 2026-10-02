@@ -249,6 +249,49 @@ class StepPanel(QtWidgets.QWidget):
         """
         pass
 
+    def refresh_plots(self):
+        """
+        Call ``update_plots``, then blank curves that have no finite points.
+
+        Data marked bad is NaN. An all-NaN curve has no bounds, so pyqtgraph
+        autoscaling would warn ("All-NaN slice encountered"); an empty curve
+        is simply skipped.
+        """
+        self.update_plots()
+        self._blank_nonfinite_items()
+
+    def blank_plots(self):
+        """
+        Call ``clear_plots``, then drop data pyqtgraph keeps for empty curves.
+        """
+        self.clear_plots()
+        self._blank_nonfinite_items()
+
+    def _blank_nonfinite_items(self):
+        """
+        Empty every plot data item in this panel with no finite (x, y) point.
+
+        Notes:
+        Given empty data, a pyqtgraph 0.13 ``PlotDataItem`` only hides its
+        symbol scatter, which keeps the old points. Qt still asks that hidden
+        scatter for its bounds, so old all-NaN points warn too. The scatter is
+        therefore cleared as well.
+        """
+        views = self.findChildren(pg.GraphicsLayoutWidget) + self.findChildren(pg.PlotWidget)
+        for view in views:
+            plots = view.ci.items if isinstance(view, pg.GraphicsLayoutWidget) else [view.getPlotItem()]
+            for plot in plots:
+                if not hasattr(plot, 'listDataItems'):
+                    continue
+                for item in plot.listDataItems():
+                    x, y = item.getData()
+                    if x is not None and len(x):
+                        finite = np.isfinite(np.asarray(x, dtype=float)) & np.isfinite(np.asarray(y, dtype=float))
+                        if finite.any():
+                            continue
+                        item.setData([], [])
+                    item.scatter.clear()
+
     def _scale_plot_fonts(self, *plot_items):
         """
         Apply self.ui_scale to tick labels, axis labels, and titles on each
@@ -313,7 +356,7 @@ class StepPanel(QtWidgets.QWidget):
         self._dirty = True
         self._needs_run = False
         try:
-            self.update_plots()
+            self.refresh_plots()
         except Exception as exc:
             print(f"Warning: update_plots() raised in {self.step_names}: {exc}")
         return True
@@ -400,7 +443,7 @@ class StepPanel(QtWidgets.QWidget):
             self.AR.save_step_outputs(step, data_idx=step_di)
         self._dirty = False
 
-    def _write_nan_outputs(self):
+    def _write_nan_outputs(self, redraw=True, save=False, keep=()):
         """
         Write placeholder "bad data" outputs for the current row only.
 
@@ -413,6 +456,17 @@ class StepPanel(QtWidgets.QWidget):
         Sub-classes should override _nan_outputs to return the dict of
         {return_name: bad_value} appropriate for their step(s).
 
+        Parameters:
+        redraw (bool): If True (default), redraw the plots afterwards. The
+            series windows pass False when marking several series points,
+            and redraw once at the end.
+        save (bool): If True, write the bad outputs to zarr now. If False
+            (default), they are held in memory and the panel is marked dirty,
+            to be saved with the panel's other outputs.
+        keep (iterable of str): Downstream names not to delete from zarr,
+            because the caller writes them next (e.g. the bad outputs of the
+            later panels).
+
         Returns:
         ok (bool): True on success, False if no override is provided or an
             error occurs.
@@ -424,14 +478,18 @@ class StepPanel(QtWidgets.QWidget):
             DS = self.AR.DS
             di = int(self.data_idx)
             data_idx_arr = np.atleast_1d(np.asarray([di], dtype=np.int32))
-            self._invalidate_downstream_of(list(nan_vals), data_idx_arr)
-            for name, value in nan_vals.items():
-                producer = self._find_output_step(name)
-                if producer is None:
-                    continue
+            producers = {name: self._find_output_step(name) for name in nan_vals}
+            outputs = [name for name, step in producers.items() if step is not None]
+            downstream, delete = self._downstream_of(list(nan_vals), data_idx_arr)
+            # One call each, so the zarr store is listed once, not per name.
+            DS.invalidate_memory_params(sorted(downstream) + outputs, data_idx=data_idx_arr)
+            # Saved outputs are overwritten below when saving, so only delete
+            # them when the bad values stay in memory for now.
+            delete.difference_update(keep)
+            DS.delete_saved_params(sorted(delete) + ([] if save else outputs), data_idx=data_idx_arr)
+            for name in outputs:
+                producer, value = producers[name], nan_vals[name]
                 pipeline_scope, step_index = self.AR._resolve_step_scope(producer)
-                DS.invalidate_memory_params([name], data_idx=data_idx_arr)
-                DS.delete_saved_params([name], data_idx=data_idx_arr)
                 DS._store_param(
                     name,
                     [value],
@@ -440,32 +498,36 @@ class StepPanel(QtWidgets.QWidget):
                     pipeline_scope=pipeline_scope,
                     step_name=producer.name,
                     step_index=step_index,
-                    save=False,
+                    save=save,
                 )
             self._has_run = True
-            self._dirty = True
+            self._dirty = not save
             self._needs_run = False
-            try:
-                self.update_plots()
-            except Exception:
-                pass
+            if redraw:
+                try:
+                    self.refresh_plots()
+                except Exception:
+                    pass
             return True
         except Exception as exc:
             print(f"_write_nan_outputs failed in {self.step_names}: {exc}")
             return False
 
-    def _invalidate_downstream_of(self, names, data_idx_arr):
+    def _downstream_of(self, names, data_idx_arr):
         """
-        Invalidate everything computed from some outputs, for some rows.
+        Find everything computed from some outputs, for some rows.
 
         Uses the same invalidation plan as rerunning the producing steps:
-        later analysis outputs and dependent calibration products are
-        dropped from memory and deleted from zarr. The outputs themselves are
-        left to the caller.
+        later analysis outputs and dependent calibration products.
 
         Parameters:
         names (list of str): Output names being replaced.
         data_idx_arr (np.ndarray): Rows affected.
+
+        Returns:
+        downstream (set of str): Names to drop from memory, excluding
+            ``names``.
+        delete (set of str): Names to delete from zarr, excluding ``names``.
         """
         downstream, delete = set(), set()
         producers = {}
@@ -481,10 +543,7 @@ class StepPanel(QtWidgets.QWidget):
             delete.update(plan["zarr_delete"])
         downstream.difference_update(names)
         delete.difference_update(names)
-        if downstream:
-            self.AR.DS.invalidate_memory_params(sorted(downstream), data_idx=data_idx_arr)
-        if delete:
-            self.AR.DS.delete_saved_params(sorted(delete), data_idx=data_idx_arr)
+        return downstream, delete
 
     def _nan_outputs(self):
         """
@@ -639,7 +698,7 @@ class StepPanel(QtWidgets.QWidget):
         """
         self._ensure_global_prerequisites()
         if self._outputs_exist():
-            self.update_plots()
+            self.refresh_plots()
         else:
             self.run_steps(save=False)
 
@@ -1286,7 +1345,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
                     # Do not mark dirty here: prefetch is read-only and should
                     # not create new unsaved pipeline outputs.
                     panel._has_run = True
-                    panel.update_plots()
+                    panel.refresh_plots()
                 else:
                     ok = panel.run_steps()
                     if not ok:
