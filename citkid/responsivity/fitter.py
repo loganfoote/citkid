@@ -1,9 +1,12 @@
 import numpy as np
 from scipy.optimize import curve_fit
-from .funcs import responsivity_int_for_fitter
+from .funcs import responsivity_int_for_fitter, responsivity_int_x0_for_fitter
 from .guess import guess_p0_responsivity_int, get_bounds_responsivity_int
-from .plot import plot_responsivity_int
-from .data_io import make_fit_row
+from .guess import guess_p0_responsivity_int_x0, get_bounds_responsivity_int_x0
+from .guess import guess_p0_responsivity_int_x0_fixed_R0
+from .guess import get_bounds_responsivity_int_x0_fixed_R0
+from .plot import plot_responsivity_int, plot_responsivity_int_x0
+from .data_io import make_fit_row, responsivity_int_x0_names
 
 def fit_responsivity_int(power, x, f1, x_err = None, guess = None,
                          guess_nfit = 3, return_dataframe = False,
@@ -109,5 +112,214 @@ def fit_responsivity_int(power, x, f1, x_err = None, guess = None,
     f0err = f1 * perr[2]
     if return_dataframe:
         row = make_fit_row(p0, popt, perr, f1, f0, f0err)
+        return row, (fig, ax)
+    return p0, popt, perr, f0, f0err, (fig, ax)
+
+def fit_responsivity_int_x0(
+    power, x, f1, x_err = None, guess = None, guess_nfit = 3, 
+    return_dataframe = False, plotq = False
+    ):
+    """
+    Fit x versus power data to the integrated responsivity equation with
+    c = 1 and a free offset x0 (responsivity_int_x0).
+    The fitter works best if there are at least three data points at P >> P_0
+    and the lowest-power point is at P << P_0. Otherwise, an alternative
+    initial guess may be required.
+
+    Parameters:
+    power (array-like): Array of blackbody powers in W.
+    x (array-like): Fractional frequency shifts in Hz / Hz.
+    f1 (float): Frequency at P = 0 used to calculate x.
+    x_err (array-like or None): Error on x used in the fitting. If None,
+        points are weighted equally.
+    guess (list or None): If not None, overwrite the initial guess
+        [R0_guess, P0_guess, x0_guess] (unscaled units: 1 / W, W, Hz / Hz).
+    guess_nfit (int): Number of high-power (P >> P_0) points for the guess.
+    return_dataframe (bool): If True, returns a pandas series of output data.
+    plotq (bool): If True, plots the fit and initial guess.
+
+    Returns:
+    if return_dataframe:
+        row (pd.Series): output of make_fit_row with columns named by
+            responsivity_int_x0_names.
+        (fig, ax): pyplot figure and axis, or (None, None) if not plotq.
+    else:
+        p0 (list): Initial guess parameters [R0_guess, P0_guess, x0_guess].
+        popt (list): Fit parameters [R0, P0, x0].
+        perr (list): Fit parameter uncertainties [R0_err, P0_err, x0_err].
+        f0 (float): Frequency at P = 0 determined by the fit,
+            f1 * (1 + x0).
+        f0err (float): Uncertainty in f0.
+        (fig, ax): pyplot figure and axis, or (None, None) if not plotq.
+    """
+    scale = np.array([1e-9, 1e16, 1e6])
+    power, x = np.array(power, dtype = float), np.array(x, dtype = float)
+    ix = np.argsort(power)
+    power, x = power[ix], x[ix]
+    if x_err is not None:
+        x_err = np.array(x_err, dtype = float)[ix]
+    # Initial guess, scaled for responsivity_int_x0_for_fitter
+    if guess is not None:
+        p0 = list(np.asarray(guess, dtype = float) * scale)
+        bounds = get_bounds_responsivity_int_x0(p0, np.ptp(x) * 1e6)
+    else:
+        p0, bounds = guess_p0_responsivity_int_x0(
+            power,
+            x,
+            guess_nfit = guess_nfit,
+        )
+    # Fit
+    if x_err is None:
+        sigma = None
+        p00 = p0
+    else:
+        sigma = x_err * 1e6
+        # To fit with sigma, the initial guess must be really good, so
+        # update the initial guess with curve_fit without sigma.
+        try:
+            p00, _ = curve_fit(
+                responsivity_int_x0_for_fitter,
+                np.log(power),
+                x * 1e6,
+                p0 = p0,
+                bounds = bounds,
+            )
+        except Exception:
+            p00 = p0
+    try:
+        popt, pcov = curve_fit(
+            responsivity_int_x0_for_fitter,
+            np.log(power),
+            x * 1e6,
+            sigma = sigma,
+            p0 = p00,
+            bounds = bounds,
+            absolute_sigma = True,
+        )
+        popt = popt / scale
+        perr = np.sqrt(np.diag(pcov)) / scale
+    except Exception:
+        popt = np.full(3, np.nan)
+        perr = np.full(3, np.nan)
+    p0 = np.asarray(p0) / scale
+    # Plot
+    if plotq:
+        fig, ax = plot_responsivity_int_x0(power, x, x_err, popt, p0)
+    else:
+        fig, ax = None, None
+    # Determine f0
+    f0 = f1 * (1 + popt[2])
+    f0err = f1 * perr[2]
+    if return_dataframe:
+        row = make_fit_row(p0, popt, perr, f1, f0, f0err,
+                           names = responsivity_int_x0_names)
+        return row, (fig, ax)
+    return p0, popt, perr, f0, f0err, (fig, ax)
+
+def fit_responsivity_int_x0_fixed_R0(power, x, f1, R0, x_err = None,
+                                     guess = None, guess_nfit = 3,
+                                     return_dataframe = False, plotq = False):
+    """
+    Fit x versus power data to the integrated responsivity equation with
+    c = 1 (responsivity_int_x0), holding R0 fixed and fitting only P0 and x0.
+    The fitter works best if there are at least three data points at P >> P_0
+    and the lowest-power point is at P << P_0. Otherwise, an alternative
+    initial guess may be required.
+
+    Parameters:
+    power (array-like): Array of blackbody powers in W.
+    x (array-like): Fractional frequency shifts in Hz / Hz.
+    f1 (float): Frequency at P = 0 used to calculate x.
+    R0 (float): Fixed responsivity at P = 0 (1 / W). In the sign convention of
+        responsivity_int_x0, R0 < 0 for x decreasing with power.
+    x_err (array-like or None): Error on x used in the fitting. If None,
+        points are weighted equally.
+    guess (list or None): If not None, overwrite the initial guess
+        [P0_guess, x0_guess] (unscaled units: W, Hz / Hz).
+    guess_nfit (int): Number of high-power (P >> P_0) points for the guess.
+    return_dataframe (bool): If True, returns a pandas series of output data.
+    plotq (bool): If True, plots the fit and initial guess.
+
+    Returns:
+    if return_dataframe:
+        row (pd.Series): output of make_fit_row with columns named by
+            responsivity_int_x0_names. R0_err is 0.
+        (fig, ax): pyplot figure and axis, or (None, None) if not plotq.
+    else:
+        p0 (np.array): Initial guess parameters [R0, P0_guess, x0_guess].
+        popt (np.array): Fit parameters [R0, P0, x0]. R0 is the fixed input.
+        perr (np.array): Fit parameter uncertainties [0, P0_err, x0_err].
+        f0 (float): Frequency at P = 0 determined by the fit,
+            f1 * (1 + x0).
+        f0err (float): Uncertainty in f0.
+        (fig, ax): pyplot figure and axis, or (None, None) if not plotq.
+    """
+    scale = np.array([1e16, 1e6])
+    R0_scaled = R0 * 1e-9
+    def model(log_power, P0, x0):
+        return responsivity_int_x0_for_fitter(log_power, R0_scaled, P0, x0)
+    power, x = np.array(power, dtype = float), np.array(x, dtype = float)
+    ix = np.argsort(power)
+    power, x = power[ix], x[ix]
+    if x_err is not None:
+        x_err = np.array(x_err, dtype = float)[ix]
+    # Initial guess, scaled for responsivity_int_x0_for_fitter
+    if guess is not None:
+        p0 = list(np.asarray(guess, dtype = float) * scale)
+        bounds = get_bounds_responsivity_int_x0_fixed_R0(p0, np.ptp(x) * 1e6)
+    else:
+        p0, bounds = guess_p0_responsivity_int_x0_fixed_R0(
+            power,
+            x,
+            R0,
+            guess_nfit = guess_nfit,
+        )
+    # Fit
+    if x_err is None:
+        sigma = None
+        p00 = p0
+    else:
+        sigma = x_err * 1e6
+        # To fit with sigma, the initial guess must be really good, so
+        # update the initial guess with curve_fit without sigma.
+        try:
+            p00, _ = curve_fit(
+                model,
+                np.log(power),
+                x * 1e6,
+                p0 = p0,
+                bounds = bounds,
+            )
+        except Exception:
+            p00 = p0
+    try:
+        popt, pcov = curve_fit(
+            model,
+            np.log(power),
+            x * 1e6,
+            sigma = sigma,
+            p0 = p00,
+            bounds = bounds,
+            absolute_sigma = True,
+        )
+        popt = popt / scale
+        perr = np.sqrt(np.diag(pcov)) / scale
+    except Exception:
+        popt = np.full(2, np.nan)
+        perr = np.full(2, np.nan)
+    p0 = np.concatenate([[R0], np.asarray(p0) / scale])
+    popt = np.concatenate([[R0], popt])
+    perr = np.concatenate([[0.], perr])
+    # Plot
+    if plotq:
+        fig, ax = plot_responsivity_int_x0(power, x, x_err, popt, p0)
+    else:
+        fig, ax = None, None
+    # Determine f0
+    f0 = f1 * (1 + popt[2])
+    f0err = f1 * perr[2]
+    if return_dataframe:
+        row = make_fit_row(p0, popt, perr, f1, f0, f0err,
+                           names = responsivity_int_x0_names)
         return row, (fig, ax)
     return p0, popt, perr, f0, f0err, (fig, ax)
