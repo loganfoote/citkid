@@ -9,6 +9,11 @@ main_dir = '/path/to/data/'
 data_path = os.path.join(main_dir, 'example.zarr')
 root = zarr.open(data_path, mode = 'r')
 
+# To check these steps: create the DataSet, then run DS.check_cal(0). It runs
+# every calibration step for data_idx 0 and prints each step's output shapes
+# and dtypes, structure problems (e.g. ff and zf of different lengths), and
+# for a failing step the error traced into its function.
+
 def load_global_data():
     fres_all = np.load(os.path.join(main_dir, 'fres_init/fres.npy'))
     fres_all = np.sort(fres_all)

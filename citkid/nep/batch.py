@@ -28,12 +28,36 @@ def per_set_values(value, n_sets, name):
     return values
 
 
+def per_set_powers(powers, neps):
+    """
+    Return one power array per set, expanding powers shared by every set.
+
+    Parameters:
+    powers (array-like or list of array-like): one 1-D array of powers for
+        every set, or one array per set.
+    neps (list of array-like or np.ndarray): NEPs of each set (one per set,
+        or a 2-D array with one row per set).
+
+    Returns:
+    powers (list of np.ndarray or array-like): one entry per set (the shared
+        array repeated, or ``powers`` as given).
+    """
+    try:
+        shared = np.asarray(powers, dtype=float)
+    except (TypeError, ValueError):  # sets of different lengths
+        return list(powers)
+    if shared.ndim == 1:
+        return [shared] * len(neps)
+    return list(powers)
+
+
 def check_sets(powers, neps, nep_errs=None):
     """
     Check that the power, NEP (and NEP uncertainty) lists match.
 
     Parameters:
-    powers (list of array-like): incident powers of each set (W).
+    powers (list of array-like): incident powers of each set (W), as
+        returned by ``per_set_powers``.
     neps (list of array-like): NEPs of each set (W / Hz^0.5).
     nep_errs (list of array-like or None): NEP uncertainties of each set, or
         None.
@@ -62,7 +86,9 @@ def fit_nep_photon_sets(powers, neps, nu, p_min=None, nep_errs=None, progress=Tr
     Fit the photon-noise NEP of each of several sets.
 
     Parameters:
-    powers (list of array-like): incident powers of each set (W).
+    powers (array-like or list of array-like): incident powers (W): one
+        1-D array shared by every set (e.g. powers of length M with neps
+        of shape (N, M)), or one array per set.
     neps (list of array-like): NEPs of each set (W / Hz^0.5).
     nu (float): photon frequency (Hz).
     p_min (float, array-like, or None): minimum fitted power, one for every
@@ -81,6 +107,7 @@ def fit_nep_photon_sets(powers, neps, nu, p_min=None, nep_errs=None, progress=Tr
     Raises:
     ValueError: if the inputs don't have one entry per set.
     """
+    powers = per_set_powers(powers, neps)
     check_sets(powers, neps, nep_errs)
     n_sets = len(neps)
     p_mins = per_set_values(p_min, n_sets, 'p_min')

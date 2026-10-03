@@ -1,4 +1,82 @@
+import inspect
+import os
+
 import numpy as np
+
+
+def describe_value(value):
+    """
+    Summarize a value for error messages: type, shape and dtype, not data.
+
+    Parameters:
+    value: any value.
+
+    Returns:
+    text (str): e.g. ``'ndarray (400,) complex128'``, ``'int 3'`` or
+        ``'list of 2'``.
+    """
+    if isinstance(value, np.ndarray):
+        text = f"ndarray {value.shape} {value.dtype}"
+        if value.size == 1:
+            text += f" = {value.ravel()[0]!r}"
+        return text
+    if isinstance(value, (bool, int, float, complex, np.generic)):
+        return f"{type(value).__name__} {value!r}"
+    if isinstance(value, str):
+        return f"str {value[:40]!r}"
+    if value is None:
+        return "None"
+    if isinstance(value, (list, tuple)):
+        return f"{type(value).__name__} of {len(value)}"
+    return type(value).__name__
+
+
+def function_location(func):
+    """
+    Describe where a step's function is defined.
+
+    Parameters:
+    func (callable): the function.
+
+    Returns:
+    text (str): e.g. ``'load_data_f (custom_steps.py:42)'``.
+    """
+    name = getattr(func, "__qualname__", None) or getattr(func, "__name__", repr(func))
+    try:
+        path = inspect.getsourcefile(func)
+        line = inspect.getsourcelines(func)[1]
+        return f"{name} ({os.path.basename(path)}:{line})"
+    except (TypeError, OSError):
+        module = getattr(func, "__module__", None)
+        return f"{name} ({module})" if module else name
+
+
+def step_context(step, params, rows=None, scope=None):
+    """
+    Describe a step call for an error note: step, function, rows and inputs.
+
+    Parameters:
+    step (plStep): the step.
+    params (list or None): the values passed for ``step.param_names``, or
+        None if they weren't collected yet.
+    rows (array-like or None): rows of the call, or None for global steps.
+    scope (str or None): 'cal' or 'analysis', or None if unknown.
+
+    Returns:
+    text (str): multi-line description.
+    """
+    kind = {"cal": "calibration step", "analysis": "analysis step"}.get(scope, "step")
+    where = "" if rows is None else f", data_idx {list(np.atleast_1d(rows))}"
+    lines = [f"In {kind} '{step.name}' ({step.func_type}; function "
+             f"{function_location(step.func)}){where}."]
+    if params is not None:
+        lines.append("Inputs:")
+        width = max((len(n) for n in step.param_names), default=0)
+        for name, value in zip(step.param_names, params):
+            lines.append(f"  {name:<{width}} = {describe_value(value)}")
+    lines.append(f"Expected outputs (in order): {', '.join(step.return_names) or 'none'}")
+    return "\n".join(lines)
+
 
 ################################################################################
 ############################### Lazy Attribute #################################
@@ -324,10 +402,23 @@ class plStep:
 
             # For vectorized, confirm that output length matches expected length
             if self.func_type == 'vectorized':
-                for res in results:
-                    if len(res) != nrows:
-                        raise ValueError("Vectorized function output length "
-                                         "does not match parameter length.")
+                if len(results) != len(self.return_names):
+                    raise ValueError(
+                        f"Step '{self.name}' returned {len(results)} output(s) "
+                        f"but has {len(self.return_names)} return names "
+                        f"{self.return_names}. Return a tuple in return_names "
+                        f"order."
+                    )
+                for name, res in zip(self.return_names, results):
+                    length = len(res) if np.ndim(res) > 0 else None
+                    if length != nrows:
+                        raise ValueError(
+                            f"Vectorized step '{self.name}' was called for "
+                            f"{nrows} row(s) but output '{name}' is "
+                            f"{describe_value(res)}. A vectorized step must "
+                            f"return one entry per requested row along axis 0 "
+                            f"(e.g. shape ({nrows}, ...)), even for one row."
+                        )
 
         else: # per-row
             results = [[] for _ in self.return_names]
@@ -362,8 +453,11 @@ class plStep:
         # Confirm that output length matches return_names length, and assign 
         # to output dict
         if len(self.return_names) != len(results):
-            raise ValueError("Function return length does not match "
-                             "number of return names.")
+            raise ValueError(
+                f"Step '{self.name}' returned {len(results)} output(s) but has "
+                f"{len(self.return_names)} return names {self.return_names}. "
+                f"Return a tuple in return_names order."
+            )
         
         out = {}
         for name, val in zip(self.return_names, results):

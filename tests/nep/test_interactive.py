@@ -54,7 +54,7 @@ def test_initial_fits_and_all_nan_set(qt_app):
     assert eta[1] == pytest.approx(0.3)
     assert eta[0] < 0.4                                 # p_min = 0 includes detector noise
     assert np.isnan(eta[2]) and n_fit[2] == 0
-    assert 'set 1/3 (a)' in win._plot.titleLabel.text
+    assert 'data_idx 0 [1/3] a' in win._plot.titleLabel.text
     win.close()
 
 
@@ -117,7 +117,7 @@ def test_mark_bad_and_apply_to_all(qt_app):
 
 
 def test_all_nan_set_hides_line(qt_app):
-    win = _window(qt_app, start_idx=2)
+    win = _window(qt_app, data_idxs=[2])
     assert not win._line.isVisible() and _drawn(win._fitted) == 0
     assert 'no usable points' in win._plot.titleLabel.text
     win.close()
@@ -164,3 +164,77 @@ def test_bad_inputs_raise(qt_app):
         inep.NEPFitWindow([], [], NU)
     with pytest.raises(ValueError, match='same shape'):
         inep.NEPFitWindow([np.ones(3)], [np.ones(2)], NU)
+
+
+def test_window_accepts_shared_powers_and_2d_neps(qt_app):
+    neps = np.array(_data()[1][:2])
+    win = inep.NEPFitWindow(POWER, neps, NU)
+
+    p_min, eta, _, n_fit, _ = win.results
+    assert eta[1] == pytest.approx(0.3)
+    np.testing.assert_array_equal(n_fit, [len(POWER), len(POWER)])
+    win.close()
+
+
+def test_plot_scales_to_the_data_not_the_fit(qt_app):
+    """The fit falls far below the low-power data (detector noise); the view must not."""
+    win = _window(qt_app)            # set 0: detector noise below 1e-12 W, p_min = 0
+    win._set_p_min(1e-11)            # fit only the top: the curve drops below the data
+    win._plot.autoRange()
+
+    y_min, y_max = win._plot.getViewBox().viewRange()[1]
+    data = np.log10(_data()[1][0])
+    curve_y = win._curve.getData()[1]   # log10 already (log mode)
+    assert curve_y.min() < data.min() - 0.3                    # the fit goes lower
+    assert y_min > data.min() - 0.2 and y_max < data.max() + 0.2
+    win.close()
+
+
+def test_data_idxs_choose_and_order_the_sets(qt_app):
+    win = _window(qt_app, data_idxs=[2, 0])
+
+    assert win._idx == 2 and 'data_idx 2 [1/2]' in win._plot.titleLabel.text
+    win._go(1)
+    assert win._idx == 0 and win._viewed[2]
+    win._go(1)                                          # stays at the last listed set
+    assert win._idx == 0
+    p_min, eta, _, _, _ = win.results
+    assert np.isnan(eta[1])                             # set 1 not reviewed: not fitted
+    assert np.isfinite(eta[0])
+    win._set_p_min(1e-12)
+    win._apply_p_min_to_all()
+    p_min, _, _, _, _ = win.results
+    assert p_min[0] == p_min[2] == pytest.approx(1e-12) and p_min[1] == 0
+    win.close()
+
+
+def test_spin_box_snaps_to_the_nearest_listed_set(qt_app):
+    win = _window(qt_app, data_idxs=[0, 2])
+
+    win._idx_spin.setValue(1)                            # not listed: go to the nearest (0 or 2)
+    assert win._idx in (0, 2) and win._idx_spin.value() == win._idx
+    win._idx_spin.setValue(2)
+    assert win._idx == 2
+    win.close()
+
+
+def test_resume_with_data_idxs(qt_app):
+    group = zarr.open_group(zarr.storage.MemoryStore(), mode='w')
+    win = _window(qt_app, group=group, data_idxs=[1, 0])
+    win._set_p_min(1e-12)
+    win.close()                                         # set 1 viewed
+
+    resumed = _window(qt_app, group=group, data_idxs=[1, 0])
+    assert resumed._idx == 0                            # first listed set not yet viewed
+    resumed.close()
+    later = _window(qt_app, group=group, data_idxs=[0])
+    _, eta, _, _, _ = later.results
+    assert np.isfinite(eta[1])                          # saved earlier: still fitted
+    later.close()
+
+
+@pytest.mark.parametrize('data_idxs, match', [([], 'at least one'), ([0, 3], 'out of range'),
+                                              ([1, 1], 'repeat')])
+def test_bad_data_idxs_raise(qt_app, data_idxs, match):
+    with pytest.raises(ValueError, match=match):
+        _window(qt_app, data_idxs=data_idxs)

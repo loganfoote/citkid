@@ -12,7 +12,7 @@ from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
 from ..pipeline_v2.interactive.core import scale_plot_fonts, widget_font_stylesheet
 from ..qt_compat import TITLE_BAR_MARGIN, delete_on_close, fit_window_to_screen, get_qapp
-from .batch import check_sets, per_set_values
+from .batch import check_sets, per_set_powers, per_set_values
 from .fitter import fit_nep_photon
 from .funcs import nep_photon
 from .store import NEPFitStore
@@ -40,6 +40,34 @@ def _confirm_overwrite_nep_fits(message):
     return box.clickedButton() is overwrite_btn
 
 
+def _check_data_idxs(data_idxs, n_sets):
+    """
+    Check the sets to review.
+
+    Parameters:
+    data_idxs (array-like of int or None): sets to review, in order, or None
+        for every set.
+    n_sets (int): number of sets.
+
+    Returns:
+    data_idxs (list of int): the sets to review.
+
+    Raises:
+    ValueError: if ``data_idxs`` is empty, repeats a set, or is out of range.
+    """
+    if data_idxs is None:
+        return list(range(n_sets))
+    idxs = [int(i) for i in np.atleast_1d(data_idxs)]
+    if not idxs:
+        raise ValueError('data_idxs must contain at least one set')
+    bad = [i for i in idxs if not 0 <= i < n_sets]
+    if bad:
+        raise ValueError(f'data_idxs {bad} out of range 0..{n_sets - 1}')
+    if len(set(idxs)) != len(idxs):
+        raise ValueError('data_idxs must not repeat a set')
+    return idxs
+
+
 class NEPFitWindow(QtWidgets.QMainWindow):
     """
     Window for fitting the photon-noise NEP of several sets, one at a time.
@@ -50,10 +78,13 @@ class NEPFitWindow(QtWidgets.QMainWindow):
     the spin box). The fit is redone whenever ``p_min`` changes.
 
     Parameters:
-    powers (list of array-like): incident powers of each set (W).
-    neps (list of array-like): NEPs of each set, referred to incident power
-        (W / Hz^0.5). NaN points are ignored; a set with no usable points has
-        NaN fit values.
+    powers (array-like or list of array-like): incident powers (W): one
+        1-D array shared by every set (e.g. powers of length M with neps
+        of shape (N, M)), or one array per set.
+    neps (list of array-like or np.ndarray): NEPs of each set, referred to
+        incident power (W / Hz^0.5): one array per set, or a 2-D array with
+        one row per set. NaN points are ignored; a set with no usable points
+        has NaN fit values.
     nu (float): photon frequency (Hz).
     p_min (float, array-like, or None): initial minimum fitted power, one for
         every set or one per set. None (default) or 0 fits every point. With
@@ -66,30 +97,35 @@ class NEPFitWindow(QtWidgets.QMainWindow):
     group (zarr.Group or None): group to save each set's ``p_min``, bad flag,
         viewed flag and fit results to, so a later session resumes where this
         one stopped. None (default) keeps them in memory only.
-    start_idx (int or None): set to start at. None (default) starts at the
-        first set not yet viewed (or 0).
+    data_idxs (list of int or None): sets to review, in order. Navigation
+        visits only these, starting at the first one not yet viewed (see
+        ``group``); only these, and sets saved in ``group`` by an earlier
+        session, are fitted. None (default) reviews every set.
     title (str): window title. Default 'NEP Fit'.
     ui_scale (float): font and widget size multiplier. Default 1.0.
     parent (QWidget or None): parent widget.
 
     Raises:
-    ValueError: if the inputs don't have one entry per set, or there are no
-        sets.
+    ValueError: if the inputs don't have one entry per set, there are no
+        sets, or ``data_idxs`` is empty, repeats a set, or is out of range.
     RuntimeError: if ``group`` holds fits of different data and the user
         cancels the overwrite popup.
 
     Notes:
-    Shortcuts: ←/A and →/D previous/next set, B mark the set bad (or unmark
-    it), Shift+A apply this set's ``p_min`` to every set, R rescale. A set
+    Shortcuts: ←/A and →/D previous/next set of ``data_idxs``, B mark the
+    set bad (or unmark it), Shift+A apply this set's ``p_min`` to every set
+    of ``data_idxs``, R rescale. Results have one entry per input set; sets
+    not reviewed (and not saved earlier) are NaN. A set
     counts as viewed once you leave it, or if it is open when the window
     closes.
     """
 
     def __init__(self, powers, neps, nu, p_min=None, nep_errs=None, names=None, group=None,
-                 start_idx=None, title='NEP Fit', ui_scale=1.0, parent=None):
+                 data_idxs=None, title='NEP Fit', ui_scale=1.0, parent=None):
         """
         Build the window. See the class docstring for parameters.
         """
+        powers = per_set_powers(powers, neps)
         check_sets(powers, neps, nep_errs)
         n_sets = len(neps)
         if n_sets == 0:
@@ -104,6 +140,8 @@ class NEPFitWindow(QtWidgets.QMainWindow):
                           else [np.asarray(e, dtype=float).ravel() for e in nep_errs])
         self._names = ([str(i) for i in range(n_sets)] if names is None
                        else [str(n) for n in per_set_values(names, n_sets, 'names')])
+        self._has_names = names is not None
+        self._data_idxs = _check_data_idxs(data_idxs, n_sets)
         self._carry_p_min = np.ndim(p_min) == 0
         self._p_min = np.array([0.0 if v is None else float(v)
                                 for v in per_set_values(p_min, n_sets, 'p_min')])
@@ -126,12 +164,12 @@ class NEPFitWindow(QtWidgets.QMainWindow):
             self._store = store
             self._load_state()
 
-        for i in range(n_sets):
-            self._refit(i)
-        if start_idx is None:
-            unviewed = np.flatnonzero(~self._viewed)
-            start_idx = int(unviewed[0]) if len(unviewed) else 0
-        self._idx = max(0, min(int(start_idx), n_sets - 1))
+        # Fit the sets to review, and sets saved by an earlier session.
+        for i in sorted(set(self._data_idxs) | set(np.flatnonzero(self._touched | self._viewed))):
+            self._refit(int(i))
+        unviewed = [pos for pos, i in enumerate(self._data_idxs) if not self._viewed[i]]
+        self._pos = unviewed[0] if unviewed else 0
+        self._idx = self._data_idxs[self._pos]
         self._updating = False  # set while widgets are updated programmatically
 
         self._ui_scale = ui_scale
@@ -267,7 +305,10 @@ class NEPFitWindow(QtWidgets.QMainWindow):
                                          symbolBrush=pg.mkBrush(150, 150, 150, 200))
         self._fitted = self._plot.plot(pen=None, symbol='o', symbolSize=8, symbolPen=None,
                                        symbolBrush=pg.mkBrush(100, 180, 255, 230))
-        self._curve = self._plot.plot(pen=pg.mkPen((255, 80, 80), width=2))
+        # The fit curve doesn't count for autoscaling: the view follows the
+        # data, even where the fit extends far below it at low power.
+        self._curve = pg.PlotDataItem(pen=pg.mkPen((255, 80, 80), width=2))
+        self._plot.addItem(self._curve, ignoreBounds=True)
         # The line lives in the view's log10 coordinates.
         self._line = pg.InfiniteLine(angle=90, movable=True,
                                      pen=pg.mkPen('w', width=1.5, style=QtCore.Qt.DashLine))
@@ -342,7 +383,9 @@ class NEPFitWindow(QtWidgets.QMainWindow):
         Returns:
         text (str): set position, name, and eta or why there is none.
         """
-        head = f'set {i + 1}/{self._n_sets} ({self._names[i]})'
+        head = f'data_idx {i} [{self._pos + 1}/{len(self._data_idxs)}]'
+        if self._has_names:
+            head += f' {self._names[i]}'
         if self._bad[i]:
             return f'{head}: marked bad'
         if not np.isfinite(self._eta[i]):
@@ -396,33 +439,53 @@ class NEPFitWindow(QtWidgets.QMainWindow):
 
     def _on_idx_spin(self, value):
         """
-        Go to the set chosen in the set spin box.
+        Go to the set chosen in the set spin box (the nearest set of
+        ``data_idxs`` if that set isn't one of them).
 
         Parameters:
         value (int): set index.
         """
-        if not self._updating:
-            self._go_to(int(value))
+        if self._updating:
+            return
+        idxs = np.asarray(self._data_idxs)
+        self._go_to_pos(int(np.argmin(np.abs(idxs - int(value)))))
+        if self._idx != int(value):
+            self._updating = True
+            try:
+                self._idx_spin.setValue(self._idx)
+            finally:
+                self._updating = False
 
     def _go(self, delta):
         """
-        Move to a neighbouring set.
+        Move to a neighbouring set of ``data_idxs``.
 
         Parameters:
-        delta (int): number of sets to move (negative moves back).
+        delta (int): number of positions to move (negative moves back).
         """
-        self._go_to(max(0, min(self._n_sets - 1, self._idx + delta)))
+        self._go_to_pos(max(0, min(len(self._data_idxs) - 1, self._pos + delta)))
 
     def _go_to(self, new_idx):
         """
-        Leave the current set (marking it viewed and saving) and show another.
+        Go to a set of ``data_idxs``.
+
+        Parameters:
+        new_idx (int): set index (must be in ``data_idxs``).
+        """
+        self._go_to_pos(self._data_idxs.index(int(new_idx)))
+
+    def _go_to_pos(self, new_pos):
+        """
+        Leave the current set (marking it viewed and saving) and show the set
+        at a position of ``data_idxs``.
 
         With a single initial p_min, a set not yet visited takes the p_min of
         the set being left.
 
         Parameters:
-        new_idx (int): set index.
+        new_pos (int): position in ``data_idxs``.
         """
+        new_idx = self._data_idxs[new_pos]
         if new_idx == self._idx:
             return
         old = self._idx
@@ -431,7 +494,7 @@ class NEPFitWindow(QtWidgets.QMainWindow):
             self._p_min[new_idx] = self._p_min[old]
             self._refit(new_idx)
         self._save()
-        self._idx = new_idx
+        self._pos, self._idx = new_pos, new_idx
         self._show_set()
 
     def _toggle_bad(self):
@@ -447,12 +510,13 @@ class NEPFitWindow(QtWidgets.QMainWindow):
 
     def _apply_p_min_to_all(self):
         """
-        Apply the current set's p_min to every set and refit them.
+        Apply the current set's p_min to every set of ``data_idxs`` and refit
+        them.
         """
         value = self._p_min[self._idx]
-        self._p_min[:] = value
-        self._touched[:] = True
-        for i in range(self._n_sets):
+        for i in self._data_idxs:
+            self._p_min[i] = value
+            self._touched[i] = True
             self._refit(i)
         self._show_set(rescale=False)
         self._save()
@@ -470,14 +534,17 @@ class NEPFitWindow(QtWidgets.QMainWindow):
 
 
 def run_nep_fit(powers, neps, nu, p_min=None, nep_errs=None, names=None, group=None,
-                start_idx=None, title='NEP Fit', ui_scale=1.0):
+                data_idxs=None, title='NEP Fit', ui_scale=1.0):
     """
     Open the NEP fit window, wait until it is closed, and return the results.
 
     Parameters:
-    powers (list of array-like): incident powers of each set (W).
-    neps (list of array-like): NEPs of each set, referred to incident power
-        (W / Hz^0.5). NaN points are ignored.
+    powers (array-like or list of array-like): incident powers (W): one
+        1-D array shared by every set (e.g. powers of length M with neps
+        of shape (N, M)), or one array per set.
+    neps (list of array-like or np.ndarray): NEPs of each set, referred to
+        incident power (W / Hz^0.5): one array per set, or a 2-D array with
+        one row per set. NaN points are ignored.
     nu (float): photon frequency (Hz).
     p_min (float, array-like, or None): initial minimum fitted power, one for
         every set or one per set. None (default) or 0 fits every point.
@@ -486,8 +553,9 @@ def run_nep_fit(powers, neps, nu, p_min=None, nep_errs=None, names=None, group=N
     names (list of str or None): set names. None (default) uses the indices.
     group (zarr.Group or None): group to save the fits and session state to
         (see ``NEPFitWindow``). None (default) keeps them in memory only.
-    start_idx (int or None): set to start at. None (default) resumes at the
-        first set not yet viewed.
+    data_idxs (list of int or None): sets to review, in order (see
+        ``NEPFitWindow``). None (default) reviews every set; the session
+        resumes at the first one not yet viewed.
     title (str): window title. Default 'NEP Fit'.
     ui_scale (float): font and widget size multiplier. Default 1.0.
 
@@ -507,7 +575,7 @@ def run_nep_fit(powers, neps, nu, p_min=None, nep_errs=None, names=None, group=N
     """
     app = get_qapp(title)
     win = NEPFitWindow(powers, neps, nu, p_min=p_min, nep_errs=nep_errs, names=names,
-                       group=group, start_idx=start_idx, title=title, ui_scale=ui_scale)
+                       group=group, data_idxs=data_idxs, title=title, ui_scale=ui_scale)
     win.show()
     app.exec()
     return win.results

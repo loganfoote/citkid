@@ -183,6 +183,39 @@ class TestVectorize:
         assert ds._has_rows("result", [0, 2])
         assert not ds._has_rows("result", [1])
 
+    def test_failure_warning_shows_the_first_error(self, options_fixture):
+        ds, ar, module = _make_runner(options_fixture)
+        ar.execute_step(_step(ar, "load_vector"), save=True)
+        module["fail_rows"].add(1)
+
+        with pytest.warns(RuntimeWarning, match=r"(?s)First failure \(data_idx 1\):.*bad row"):
+            ar.execute_step(_step(ar, "vec_mult"), data_idx=[0, 1, 2], vectorize=False, save=True)
+        assert "In analysis step 'vec_mult'" in ar._last_failures[1]
+
+    @pytest.mark.parametrize("path_per_row", [False, True])
+    def test_execute_path_drops_failed_rows_from_later_steps(self, options_fixture, path_per_row):
+        ds, ar, module = _make_runner(options_fixture)
+        module["fail_rows"].add(1)
+
+        with pytest.warns(RuntimeWarning, match="bad row"):
+            ar.execute_path(data_idx=[0, 1, 2], vectorize=False, path_per_row=path_per_row,
+                            save=True, verbose=False)
+
+        np.testing.assert_array_equal(ds.final[[0, 2]], np.array([0, 14]))  # 7 * data_idx
+        assert not ds._has_rows("final", [1])
+
+    @pytest.mark.parametrize("path_per_row", [False, True])
+    def test_execute_path_raises_when_every_row_fails(self, options_fixture, path_per_row):
+        _, ar, module = _make_runner(options_fixture)
+        module["fail_rows"].update({0, 1})
+
+        with pytest.warns(RuntimeWarning):
+            with pytest.raises(RuntimeError, match=r"(?s)Every requested row failed\. First "
+                                                   r"failure: step 'vec_mult' for data_idx 0:"
+                                                   r".*bad row"):
+                ar.execute_path(data_idx=[0, 1], vectorize=False, path_per_row=path_per_row,
+                                verbose=False)
+
     @pytest.mark.parametrize("old_kwarg", [{"execution_mode": "per-row"}, {"execute_per_row": True}])
     def test_old_keyword_names_are_rejected(self, options_fixture, old_kwarg):
         _, ar, _ = _make_runner(options_fixture)

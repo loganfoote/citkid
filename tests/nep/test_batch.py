@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import zarr
 
-from citkid.nep.batch import fit_nep_photon_sets, per_set_values
+from citkid.nep.batch import fit_nep_photon_sets, per_set_powers, per_set_values
 from citkid.nep.funcs import nep_photon
 from citkid.nep.store import NEPFitStore
 
@@ -74,3 +74,24 @@ def test_store_round_trip_and_definition_check():
     assert not other.matches_definition() and 'nu' in other.describe_existing()
     other.clear()
     assert other.matches_definition() and other.load() is None
+
+
+def test_shared_powers_apply_to_every_set():
+    """One power array of length M with neps of shape (N, M)."""
+    power = np.geomspace(1e-13, 1e-10, 8)
+    neps = np.array([nep_photon(power, 0.4, NU), nep_photon(power, 0.6, NU)])
+
+    eta, _, n_fit = fit_nep_photon_sets(power, neps, NU, progress=False)
+
+    np.testing.assert_allclose(eta, [0.4, 0.6])
+    np.testing.assert_array_equal(n_fit, [8, 8])
+    with pytest.raises(ValueError, match='same shape'):
+        fit_nep_photon_sets(power[:-1], neps, NU, progress=False)
+
+
+def test_per_set_powers():
+    power = np.arange(3.0)
+    assert len(per_set_powers(power, np.zeros((4, 3)))) == 4
+    assert per_set_powers([power, power[:2]], [0, 0])[1].shape == (2,)   # ragged: per set
+    two_d = per_set_powers(np.zeros((2, 3)), np.zeros((2, 3)))
+    assert len(two_d) == 2 and np.shape(two_d[0]) == (3,)

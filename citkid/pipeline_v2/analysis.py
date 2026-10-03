@@ -116,9 +116,19 @@ class AnalysisRunner:
             before starting the next, instead of running each step on every
             row first. Global and global-res steps still run once. Implies
             ``vectorize=False``. Default False.
+
+        Notes:
+        A row for which a step fails (recorded in ``_last_failures``, with a
+        warning showing the error) is not passed to the later steps, which
+        couldn't use it; the other rows continue.
+
+        Raises:
+        RuntimeError: if every requested row failed, with the first failure's
+            traceback.
         """
         path_steps = self.path[start_from_idx:]
         self._validate_execute_path_scope(path_steps, data_idx)
+        failed = {}  # data_idx -> (step name, traceback)
         if path_per_row:
             rows = self.DS._normalize_rows(data_idx)
             if rows is None:
@@ -156,7 +166,14 @@ class AnalysisRunner:
                         save=save,
                         vectorize=False,
                     )
+                    if self._last_failures:
+                        # The rest of this row's path can't run without this step.
+                        failed[int(row)] = (step.name, self._last_failures[int(row)])
+                        break
+            self._raise_if_all_failed(rows, failed)
             return
+        remaining = None   # rows still being processed (set at the first per-row step)
+        requested = None
         path_iter = path_steps
         if verbose:
             path_iter = tqdm(
@@ -169,7 +186,15 @@ class AnalysisRunner:
                 path_iter.set_description(f"Executing step: {step_dict['task'].name}")
             step = step_dict["task"]
             params = step_dict.get("params", {})
-            step_data_idx = None if step.func_type in ("global", "global-res") else data_idx
+            if step.func_type in ("global", "global-res"):
+                step_data_idx = None
+            else:
+                if remaining is None:
+                    remaining = self.DS._normalize_rows(data_idx)
+                    if remaining is None:
+                        remaining = np.arange(int(self.DS.nrows), dtype=np.int32)
+                    requested = remaining
+                step_data_idx = remaining
             self.execute_step(
                 step,
                 data_idx=step_data_idx,
@@ -177,12 +202,44 @@ class AnalysisRunner:
                 save=save,
                 vectorize=vectorize,
             )
+            if self._last_failures and step_data_idx is not None:
+                # Later steps can't use rows whose step failed: drop them.
+                for di, message in self._last_failures.items():
+                    failed[int(di)] = (step.name, message)
+                remaining = np.asarray([di for di in remaining if int(di) not in failed],
+                                       dtype=np.int32)
+                if len(remaining) == 0:
+                    break
+        if remaining is not None:
+            self._raise_if_all_failed(requested, failed)
+
+    def _raise_if_all_failed(self, rows, failed):
+        """
+        Raise if every requested row failed in some step.
+
+        Parameters:
+        rows (array-like): requested rows.
+        failed (dict): ``{data_idx: (step name, traceback)}`` of failed rows.
+
+        Raises:
+        RuntimeError: if every row in ``rows`` failed, with the first
+            failure's step and traceback.
+        """
+        rows = [int(di) for di in np.atleast_1d(rows)]
+        if not rows or any(di not in failed for di in rows):
+            return
+        first = min(rows)
+        step_name, message = failed[first]
+        raise RuntimeError(
+            f"Every requested row failed. First failure: step '{step_name}' "
+            f"for data_idx {first}:\n{message}"
+        )
 
     def execute_step(
         self,
         step,
         data_idx=None,
-        user_params=None,
+        user_params="from_yaml",
         save=True,
         vectorize=True,
         allow_global_step_overwrite=False,
@@ -194,9 +251,12 @@ class AnalysisRunner:
         step (plStep): Step to execute.
         data_idx (int, array-like, or None): Rows to process for per-row and
             vectorized steps.
-        user_params (dict, None, or 'from_yaml'): Explicit user parameters for
-            the step, or the sentinel ``'from_yaml'`` to reuse parameters from
-            the loaded analysis YAML.
+        user_params (dict, None, or 'from_yaml'): User parameters for the
+            step. 'from_yaml' (default) uses the step's parameters from the
+            loaded analysis YAML, as ``execute_path`` does (none for steps not
+            in the analysis path, e.g. calibration steps). A dict gives them
+            explicitly (parameters it leaves out are not taken from the YAML);
+            None or {} runs the step without user parameters.
         save (bool): If True, persist inputs and outputs immediately after
             execution. Default True.
         vectorize (bool): If True (default), a step with ``func_type``
@@ -212,7 +272,7 @@ class AnalysisRunner:
         ValueError: If inputs are missing or step/data_idx constraints are
             violated.
         """
-        if user_params == "from_yaml":
+        if isinstance(user_params, str) and user_params == "from_yaml":
             user_params = self._get_yaml_params(step)
         if user_params is None:
             user_params = {}
@@ -276,8 +336,11 @@ class AnalysisRunner:
         if save:
             self.save_step_outputs(step, data_idx=data_idx)
         if failures:
+            first = min(failures)
             warnings.warn(
-                f"Step '{step.name}' failed for {len(failures)} row(s): {sorted(failures)}",
+                f"Step '{step.name}' failed for {len(failures)} row(s): {sorted(failures)}. "
+                f"First failure (data_idx {first}):\n{failures[first]}"
+                f"All tracebacks are in AnalysisRunner._last_failures.",
                 RuntimeWarning,
                 stacklevel=2,
             )
@@ -521,15 +584,13 @@ class AnalysisRunner:
         step (plStep): Step whose YAML parameters should be returned.
 
         Returns:
-        dict: Parameter mapping defined in the YAML.
-
-        Raises:
-        ValueError: If the step is not present in the loaded path.
+        dict: Parameter mapping defined in the YAML, or {} if the step is not
+            in the analysis path (e.g. a calibration step).
         """
         for step_dict in self.path:
             if step_dict["task"].name == step.name:
                 return dict(step_dict.get("params", {}) or {})
-        raise ValueError(f"Step '{step.name}' not found in analysis path")
+        return {}
 
     def _expand_none_masks(self, user_params, func_type, data_idx):
         """

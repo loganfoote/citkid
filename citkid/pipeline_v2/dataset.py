@@ -2,6 +2,7 @@ import os
 import re
 import threading
 import time
+import traceback
 import warnings
 from datetime import datetime
 
@@ -232,6 +233,8 @@ class DataSet:
         self._analysis_step_names = {}
         self._invalidated_globals = set()
         self._invalidated_rows = {}
+        # Latest per-row step failure messages: {step name: {row: message}}
+        self._step_failures = {}
 
         self._metadata = self._read_metadata()
         cal_def = self._resolve_cal_definition(
@@ -615,9 +618,32 @@ class DataSet:
         if unresolved:
             raise ValueError(
                 f"Parameter '{name}' is missing rows {unresolved} and cannot be produced"
+                + self._failure_cause(name, unresolved)
             )
 
         return np.array([lazy_attr._cache[int(di)] for di in rows])
+
+    def _failure_cause(self, name, rows):
+        """
+        Explain why rows of a calibration parameter couldn't be produced.
+
+        Parameters:
+        name (str): parameter name.
+        rows (list of int): rows that couldn't be produced.
+
+        Returns:
+        text (str): the recorded failure of the first calibration step on
+            ``name``'s path that failed for one of the rows (its traceback
+            and context note), or '' if none was recorded.
+        """
+        path = pf.find_pl_path(self.cal_pl, name) or []
+        for step in path:
+            failed = self._step_failures.get(step.name, {})
+            for di in rows:
+                if int(di) in failed:
+                    return (f", because calibration step '{step.name}' failed for "
+                            f"data_idx {int(di)}:\n{failed[int(di)]}")
+        return ""
 
     def _read_saved_rows(self, name, rows):
         """
@@ -723,6 +749,31 @@ class DataSet:
             "step_index": attrs.get("step_index"),
         }
         return self._param_meta[name]
+
+    def check_cal(self, data_idx=0, verbose=True):
+        """
+        Check the calibration steps (including custom steps) on one row.
+
+        Runs every calibration step for ``data_idx`` in order, using only the
+        step functions (nothing is cached or saved), and prints each step's
+        inputs and outputs (type, shape, dtype), structure problems (e.g. a
+        global-res output without one entry per resonator, unsorted
+        frequencies, ``ff`` and ``zf`` of different lengths), and for a
+        failing step the error with a traceback into its function. Use it
+        when setting up a ``custom_steps`` file, or when a calibration error
+        is unclear. See ``check.check_calibration``.
+
+        Parameters:
+        data_idx (int): row to check. Default 0.
+        verbose (bool): If True (default), print the report.
+
+        Returns:
+        results (list of dict): one entry per step with its status ('ok',
+            'warning', 'failed' or 'skipped'), inputs, outputs, messages,
+            error and traceback.
+        """
+        from .check import check_calibration
+        return check_calibration(self, data_idx=data_idx, verbose=verbose)
 
     def plot(self, data_idx, plot_type, title=None, **kwargs):
         """
@@ -1049,7 +1100,7 @@ class DataSet:
 
         if step.func_type == "global":
             params, param_is_global = self._collect_params(step, None)
-            out = step._run(params, param_is_global)
+            out = self._run_step(step, params, param_is_global, None, pipeline_scope)
             for name, value in out.items():
                 self._store_param(
                     name,
@@ -1064,7 +1115,7 @@ class DataSet:
 
         if step.func_type == "global-res":
             params, param_is_global = self._collect_params(step, None)
-            out = step._run(params, param_is_global)
+            out = self._run_step(step, params, param_is_global, None, pipeline_scope)
             all_rows = np.arange(int(self.nrows), dtype=np.int32)
             for name, value in out.items():
                 self._store_param(
@@ -1085,7 +1136,7 @@ class DataSet:
 
         if step.func_type == "vectorized" and vectorize:
             params, param_is_global = self._collect_params(step, rows)
-            out = step._run(params, param_is_global)
+            out = self._run_step(step, params, param_is_global, rows, pipeline_scope)
             for name, value in out.items():
                 self._store_param(
                     name,
@@ -1100,11 +1151,12 @@ class DataSet:
             return None
 
         failures = {}
+        step_failures = self._step_failures.setdefault(step.name, {})
         for di in rows:
             try:
                 step_rows = np.asarray([int(di)], dtype=np.int32)
                 params, param_is_global = self._collect_params(step, step_rows)
-                out = step._run(params, param_is_global)
+                out = self._run_step(step, params, param_is_global, step_rows, pipeline_scope)
                 for name, value in out.items():
                     self._store_param(
                         name,
@@ -1116,12 +1168,80 @@ class DataSet:
                         step_index=step_index,
                         save=save,
                     )
+                step_failures.pop(int(di), None)
             except Exception as exc:
-                failures[int(di)] = str(exc)
+                # Keep the whole traceback (with the step context note), so
+                # the cause can be shown later, e.g. in "missing rows" errors.
+                failures[int(di)] = "".join(traceback.format_exception(exc))
+                step_failures[int(di)] = failures[int(di)]
 
         if failures:
             self._record_failures(step.name, failures)
         return failures
+
+    def _run_step(self, step, params, param_is_global, rows, pipeline_scope):
+        """
+        Run a step, check the structure of its outputs, and add context to
+        any error.
+
+        Errors keep their type and traceback (into the step's function); a
+        note names the step, its function and source line, the rows, and a
+        summary of every input, so wrong shapes from custom steps can be
+        traced without rerunning the functions by hand.
+
+        Parameters:
+        step (plStep): step to run.
+        params (list): input values, in ``step.param_names`` order.
+        param_is_global (list of bool): which inputs are global.
+        rows (np.ndarray or None): rows of the call (None for global steps).
+        pipeline_scope (str or None): 'cal' or 'analysis'.
+
+        Returns:
+        out (dict): outputs by name.
+
+        Raises:
+        Exception: whatever the step raised, or ValueError if its outputs
+            have the wrong structure, with the context note added.
+        """
+        try:
+            out = step._run(params, param_is_global)
+            self._check_step_outputs(step, out)
+            return out
+        except Exception as exc:
+            exc.add_note(pf.step_context(step, params, rows, pipeline_scope))
+            raise
+
+    def _check_step_outputs(self, step, out):
+        """
+        Check outputs whose structure the pipeline relies on.
+
+        ``nrows`` must be a whole number, and a global-res step must return
+        one entry per resonator (``nrows``) along axis 0 for every output.
+
+        Parameters:
+        step (plStep): step that produced the outputs.
+        out (dict): outputs by name.
+
+        Raises:
+        ValueError: if an output has the wrong structure.
+        """
+        if "nrows" in out:
+            value = out["nrows"]
+            whole = (np.ndim(value) == 0 and np.isreal(value)
+                     and float(np.real(value)).is_integer() and value >= 0)
+            if not whole:
+                raise ValueError(
+                    f"Step '{step.name}' returned nrows = {pf.describe_value(value)}; "
+                    f"nrows must be a whole number (the number of resonators/rows).")
+        if step.func_type == "global-res":
+            nrows = int(out["nrows"]) if "nrows" in out else int(self.nrows)
+            for name, value in out.items():
+                length = len(value) if np.ndim(value) > 0 else None
+                if length != nrows:
+                    raise ValueError(
+                        f"Global-res step '{step.name}' output '{name}' is "
+                        f"{pf.describe_value(value)}, but a global-res step must return "
+                        f"one entry per resonator: length nrows = {nrows} along axis 0.")
 
     def _collect_params(self, step, data_idx):
         """
