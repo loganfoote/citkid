@@ -8,10 +8,11 @@ from .data_io import *
 ################################################################################
 ############### Resonance shift from thermal QP density and TLS ################
 ################################################################################
-def fit_f_vs_T(T, f, gamma = 1, Tc_guess = 1.2, enforced_alpha = None,
-               f_err = None, guess = None, bounds = None,
-               return_dataframe = False, plotq = False,
-               catch_exceptions = False):
+def fit_f_vs_T(
+    T, f, gamma = 1, Tc_guess = 1.2, enforced_alpha = None, f_err = None,
+    guess = None, bounds = None, return_dataframe = False, plotq = False,
+    catch_exceptions = False
+):
     """
     Fit resonant frequency versus temperature data to f_vs_T.
 
@@ -110,10 +111,11 @@ def fit_f_vs_T(T, f, gamma = 1, Tc_guess = 1.2, enforced_alpha = None,
         return row, (fig, ax)
     return p0, popt, perr, (fig, ax)
 
-def fit_Q_vs_T(T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
-               enforced_alpha = None, guess = None, bounds = None,
-               return_dataframe = False, plotq = False,
-               catch_exceptions = False):
+def fit_Q_vs_T(
+    T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
+    enforced_alpha = None, guess = None, bounds = None,
+    return_dataframe = False, plotq = False, catch_exceptions = False
+):
     """
     Fit quality factor versus temperature data to Q_vs_T.
 
@@ -219,10 +221,11 @@ def fit_Q_vs_T(T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
 ################################################################################
 ################### Resonance shift from thermal QP density ####################
 ################################################################################
-def fit_f_vs_T_qp(T, f, gamma = 1, Tc_guess = 1.2, f_err = None,
-                  enforced_alpha = None, guess = None, bounds = None,
-                  return_dataframe = False, plotq = False,
-                  catch_exceptions = False):
+def fit_f_vs_T_qp(
+    T, f, gamma = 1, Tc_guess = 1.2, f_err = None, enforced_alpha = None,
+    guess = None, bounds = None, return_dataframe = False, plotq = False,
+    catch_exceptions = False
+):
     """
     Fit resonant frequency versus temperature data to f_vs_T_qp.
 
@@ -317,10 +320,11 @@ def fit_f_vs_T_qp(T, f, gamma = 1, Tc_guess = 1.2, f_err = None,
        return row, (fig, ax)
     return p0, popt, perr, (fig, ax)
 
-def fit_Q_vs_T_qp(T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
-                  enforced_alpha = None, guess = None, bounds = None,
-                  return_dataframe = False, plotq = False,
-                  catch_exceptions = False):
+def fit_Q_vs_T_qp(
+    T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
+    enforced_alpha = None, guess = None, bounds = None,
+    return_dataframe = False, plotq = False, catch_exceptions = False
+):
     """
     Fit quality factor versus temperature data to Q_vs_T_qp.
 
@@ -421,9 +425,10 @@ def fit_Q_vs_T_qp(T, Q, f0_guess, gamma = 1, Tc_guess = 1.2, Q_err = None,
 ################################################################################
 ########################### Resonance shift from TLS ###########################
 ################################################################################
-def fit_f_vs_T_tls(T, f, f_err = None, guess = None, bounds = None,
-                   return_dataframe = False, plotq = False,
-                   catch_exceptions = False):
+def fit_f_vs_T_tls(
+    T, f, f_err = None, guess = None, bounds = None, return_dataframe = False,
+    plotq = False, catch_exceptions = False
+):
     """
     Fit resonant frequency versus temperature data to f_vs_T_tls.
 
@@ -501,9 +506,10 @@ def fit_f_vs_T_tls(T, f, f_err = None, guess = None, bounds = None,
        return row, (fig, ax)
     return p0, popt, perr, (fig, ax)
 
-def fit_Q_vs_T_tls(T, Q, f0_guess, Q_err = None,  guess = None, bounds = None,
-                   return_dataframe = False, plotq = False,
-                   catch_exceptions = False):
+def fit_Q_vs_T_tls(
+    T, Q, f0_guess, Q_err = None, guess = None, bounds = None,
+    return_dataframe = False, plotq = False, catch_exceptions = False
+):
     """
     Fit resonant frequency versus temperature data to Q_vs_T_tls.
 

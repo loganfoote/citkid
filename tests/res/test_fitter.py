@@ -20,8 +20,9 @@ PARAMS_TYPICAL = [500e6, 20000, 0.5, 0.1, 0.05, 1.0, 0.0, 0.0]
 PARAMS_UPWARD = [500e6, 20000, 0.5, 0.1, 0.05, 1.0, 0.0, 0.0]
 
 
-def make_synthetic_data(params=None, n=500, span_factor=6, downward=True,
-                        noise_sigma=None, seed=0):
+def make_synthetic_data(
+    params=None, n=500, span_factor=6, downward=True, noise_sigma=None, seed=0
+):
     """Generate synthetic IQ data from known parameters."""
     if params is None:
         params = PARAMS_TYPICAL
@@ -227,28 +228,3 @@ class TestFitNonlinearIQPl:
         mask = np.ones(len(f), dtype=bool)
         p0, popt, nrmse = fit_nonlinear_iq_pl(f, z, mask)
         assert nrmse < 1e-2
-
-
-################################################################################
-####################### test legacy deprecation warnings #######################
-################################################################################
-
-class TestLegacyWarnings:
-    def test_fit_iq_circle_warns(self):
-        from citkid.res.fitter import fit_iq_circle
-        z = np.exp(1j * np.linspace(0, 2 * np.pi, 100))
-        with pytest.warns(DeprecationWarning, match='fit_iq_circle'):
-            fit_iq_circle(z)
-
-    def test_fit_nonlinear_iq_with_gain_warns(self):
-        from citkid.res.fitter import fit_nonlinear_iq_with_gain
-        # Pass obviously bad data — we only care that the warning fires
-        dummy = np.ones(10, dtype=float)
-        dummy_c = np.ones(10, dtype=complex)
-        with pytest.warns(DeprecationWarning, match='fit_nonlinear_iq_with_gain'):
-            try:
-                fit_nonlinear_iq_with_gain(
-                    dummy, dummy_c, dummy, dummy_c, [], []
-                )
-            except Exception:
-                pass  # failure after the warning is fine

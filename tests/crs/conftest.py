@@ -56,7 +56,56 @@ def base_crs(mock_rfmux_base):
     mock_rfmux, mock_device = mock_rfmux_base
     crs = CRS(serial_number=1, interface='eth0')
     crs.d = mock_device
+    # Module settings normally set by configure_system/attach
+    crs.module_cfg = {mi: default_module_cfg() for mi in range(1, 9)}
     return crs
+
+
+def mock_module_settings(device, full_scale_dbm = 7):
+    """
+    Mock the device setters and getters used by ``CRS.configure_modules``.
+    Getters return the ``configure_modules`` defaults.
+
+    Parameters:
+    device (MagicMock): mock rfmux CRS device.
+    full_scale_dbm (float): value returned by ``get_dac_scale``.
+
+    Returns:
+    None
+    """
+    device.UNITS = MagicMock()
+    device.UNITS.DBM = 'DBM'
+    for name in ['set_dac_scale', 'set_adc_attenuator', 'set_nyquist_zone',
+                 'set_cable_length', 'set_adc_calibration_mode',
+                 'set_adc_autocal']:
+        setattr(device, name, AsyncMock())
+    device.get_dac_scale = AsyncMock(return_value = full_scale_dbm)
+    device.get_adc_attenuator = AsyncMock(return_value = 0.0)
+    device.get_nyquist_zone = AsyncMock(return_value = 1)
+    device.get_cable_length = AsyncMock(return_value = 0.0)
+    device.get_adc_calibration_mode = AsyncMock(return_value = 'AUTO')
+    device.get_adc_autocal = AsyncMock(return_value = True)
+
+
+def default_module_cfg(full_scale_dbm = 7.0):
+    """
+    Return the module settings stored by ``CRS.configure_modules`` with its
+    default arguments.
+
+    Parameters:
+    full_scale_dbm (float): DAC full scale in dBm.
+
+    Returns:
+    dict: module settings.
+    """
+    return {
+        'full_scale_dbm': float(full_scale_dbm),
+        'adc_attenuation_db': 0.0,
+        'nyquist_zone': 1,
+        'cable_length_m': 0.0,
+        'adc_calibration_mode': 'AUTO',
+        'adc_autocal': True,
+    }
 
 
 @pytest.fixture

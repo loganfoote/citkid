@@ -14,7 +14,7 @@ def update_fres(fs, zs, fres, qres, res_idxs, method='distance'):
     qres (array-like): Q-factors, length M.
     res_idxs (array-like): Resonator indices, length M.  Entries with
         values < 0 are treated as calibration tones.
-    method (str): Algorithm used to locate the resonance.  'mins21' finds
+    method (str): Algorithm used to locate the resonance.  'minS21' finds
         the minimum of |S21| after subtracting a linear baseline.  'spacing'
         finds the point of maximum adjacent IQ spacing.  'distance' finds
         the point furthest from the off-resonance IQ value.  'none' returns
@@ -34,7 +34,7 @@ def update_fres(fs, zs, fres, qres, res_idxs, method='distance'):
     res_idxs = np.asarray(res_idxs)
 
     # Select update method
-    if method == 'mins21':
+    if method == 'minS21':
         update = update_fr_minS21
     elif method == 'spacing':
         update = update_fr_spacing
@@ -42,7 +42,7 @@ def update_fres(fs, zs, fres, qres, res_idxs, method='distance'):
         update = update_fr_distance
     else:
         raise ValueError(
-            "method must be 'mins21', 'distance', 'spacing', or 'none'."
+            "method must be 'minS21', 'distance', 'spacing', or 'none'."
             )
 
     # Apply update to on-resonance tones only

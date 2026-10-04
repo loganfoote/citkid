@@ -6,8 +6,9 @@ from .guess import guess_p0_responsivity_int_x0, get_bounds_responsivity_int_x0
 from .guess import guess_p0_responsivity_int_x0_fixed_R0
 from .guess import get_bounds_responsivity_int_x0_fixed_R0
 
-def fit_responsivity_int(power, x, f1, x_err = None, guess = None,
-                         guess_nfit = 3):
+def fit_responsivity_int(
+    power, x, f1, x_err = None, guess = None, guess_nfit = 3
+):
     """
     Fit x versus power data to the integrated responsivity equation.
     The fitter works best if there are at least three data points at P >> P_0.
@@ -105,7 +106,7 @@ def fit_responsivity_int(power, x, f1, x_err = None, guess = None,
 
 def fit_responsivity_int_x0(
     power, x, f1, x_err = None, guess = None, guess_nfit = 3,
-    ):
+):
     """
     Fit x versus power data to the integrated responsivity equation with
     c = 1 and a free offset x0 (responsivity_int_x0).
@@ -186,8 +187,9 @@ def fit_responsivity_int_x0(
     f0err = f1 * perr[2]
     return p0, popt, perr, f0, f0err
 
-def fit_responsivity_int_x0_fixed_R0(power, x, f1, R0, x_err = None,
-                                     guess = None, guess_nfit = 3):
+def fit_responsivity_int_x0_fixed_R0(
+    power, x, f1, R0, x_err = None, guess = None, guess_nfit = 3
+):
     """
     Fit x versus power data to the integrated responsivity equation with
     c = 1 (responsivity_int_x0), holding R0 fixed and fitting only P0 and x0.

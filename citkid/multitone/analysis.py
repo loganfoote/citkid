@@ -23,11 +23,13 @@ from rfmux.core.transferfunctions import compensate_psd_for_cics
 import matplotlib
 matplotlib.use('Agg')
 
-def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
-           constant_atten, temperature_index, temperature, rejected_points = [],
-           extra_fitdata_values = {}, plotq = False, plot_factor = 1,
-           downward = True, cut_to_qres = False, overwrite = False,
-           verbose = True, catch_exceptions = False):
+def fit_iq(
+    directory, out_directory, file_suffix, power_number, in_atten,
+    constant_atten, temperature_index, temperature, rejected_points = [],
+    extra_fitdata_values = {}, plotq = False, plot_factor = 1, downward = True,
+    cut_to_qres = False, overwrite = False, verbose = True,
+    catch_exceptions = False
+):
     """
     Fit all IQ loops in a target sweep
 
@@ -172,16 +174,15 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
         data.to_csv(out_path, index = False)
     return data
 
-def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
-                  plot_calq = False, plot_psdq = False,
-                  plot_timestreamq = False, plot_factor = 1, min_cal_points = 5,
-                  deglitch_nstd = 10, cr_nstd = 5, cr_width = 100e-6,
-                  cr_peak_spacing = 100e-6, cr_removal_time = 1e-3,
-                  circfit_npoints = None, correct_cic = False,
-                  overwrite = False, catch_exceptions = False,
-                  res_whitelist = None, xcal_weight_sigma = None,
-                  xcal_weight_theta0 = 0.0, circfit_mode = 'sequential',
-                  verbose = False):
+def analyze_noise(
+    main_out_directory, file_suffix, noise_index, tstart = 0, plot_calq = False,
+    plot_psdq = False, plot_timestreamq = False, plot_factor = 1,
+    min_cal_points = 5, deglitch_nstd = 10, cr_nstd = 5, cr_width = 100e-6,
+    cr_peak_spacing = 100e-6, cr_removal_time = 1e-3, circfit_npoints = None,
+    correct_cic = False, overwrite = False, catch_exceptions = False,
+    res_whitelist = None, xcal_weight_sigma = None, xcal_weight_theta0 = 0.0,
+    circfit_mode = 'sequential', verbose = False
+):
     """
     Analyze noise data to produce timestreams and PSDs
 
@@ -460,8 +461,9 @@ def plot_fits_batch(directory, file_suffix, plot_directory):
 ######################### Utility functions ####################################
 ################################################################################
 
-def make_cal_tones(fres, ares, qres, max_n_tones = 1000,
-                   res_indices = None, fcal_power = -55):
+def make_cal_tones(
+    fres, ares, qres, max_n_tones = 1000, res_indices = None, fcal_power = -55
+):
     '''
     Add calibration tones to the given resonator list. Fills in largest spaces
     between resonators, up to max_n_tones.

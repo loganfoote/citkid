@@ -1,9 +1,9 @@
 import warnings
 
-from ..signal.psd import bin_psd, filter_pt, get_csd, get_psd
+from ...signal.psd import bin_psd, filter_pt, get_csd, get_psd
 
 warnings.warn(
-    "citkid.noise.psd is deprecated. "
+    "citkid.primecam.noise.psd is deprecated. "
     "Please use citkid.signal.psd instead.",
     DeprecationWarning,
     stacklevel=2,

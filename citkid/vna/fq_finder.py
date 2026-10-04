@@ -473,19 +473,10 @@ class FqFinderWindow(QtWidgets.QMainWindow):
     _REJECT_REASONS = ["tone off resonance", "overlapping resonance", "bifurcated", "other"]
 
     def __init__(
-        self,
-        f: np.ndarray,
-        z: np.ndarray,
-        fres,
-        qres,
-        res_idxs,
-        zarr_group,
-        title: str = "FQ Finder",
-        ui_scale: float = 1.0,
-        fres_update_method: str = "none",
-        start_idx: int = 0,
-        rmv_gain_simple: bool = False,
-        load_saved: bool = False,
+        self, f: np.ndarray, z: np.ndarray, fres, qres, res_idxs, zarr_group,
+        title: str = "FQ Finder", ui_scale: float = 1.0,
+        fres_update_method: str = "none", start_idx: int = 0,
+        rmv_gain_simple: bool = False, load_saved: bool = False,
     ):
         """
         Initialize the window, prepare the data and zarr arrays, and build the
@@ -1521,16 +1512,8 @@ def _report_save_error(future):
 # ---------------------------------------------------------------------------
 
 def run_fqfinder(
-    f,
-    z,
-    fres,
-    qres,
-    res_idxs,
-    zarr_group,
-    title = "FQ Finder",
-    ui_scale = 1.0,
-    fres_update_method = "none",
-    rmv_gain_simple = False,
+    f, z, fres, qres, res_idxs, zarr_group, title = "FQ Finder", ui_scale = 1.0,
+    fres_update_method = "none", rmv_gain_simple = False,
 ):
     """
     Launch the interactive resonance frequency and Q-factor finder.
@@ -1567,7 +1550,7 @@ def run_fqfinder(
     fres_update_method (str): algorithm used to automatically update
         ``fres`` before the interactive session begins, passed to
         ``citkid.multitone.fres.update_fres``. Can be 'none' (default,
-        uses the input ``fres`` as the starting point), 'mins21' (minimum
+        uses the input ``fres`` as the starting point), 'minS21' (minimum
         of |S21| after subtracting a linear baseline), 'spacing' (point of
         maximum adjacent IQ spacing), or 'distance' (point furthest from the
         off-resonance IQ value). Saved values loaded from ``zarr_group`` are

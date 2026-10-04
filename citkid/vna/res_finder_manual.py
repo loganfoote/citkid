@@ -22,9 +22,7 @@ from ..qt_compat import (
 )
 
 
-def run_res_finder_manual(
-        f, z, fres_initial, zarr_grp, margin_factor = 0.15
-):
+def run_res_finder_manual(f, z, fres_initial, zarr_grp, margin_factor = 0.15):
     """
     Run the interactive manual resonance finder.
     
@@ -119,9 +117,7 @@ class ResFinder(QtCore.QObject):
     Interactive pyqtgraph GUI for manually adding and removing resonances
     in VNA sweep data, saving the result to a zarr group.
     """
-    def __init__(
-            self, f, z, fres_initial, zarr_grp, margin_factor = 0.15,
-        ):
+    def __init__(self, f, z, fres_initial, zarr_grp, margin_factor = 0.15):
         """
         Initialize the interactive resonance finder for VNA sweep data.
         
@@ -1148,8 +1144,9 @@ class ResFinder(QtCore.QObject):
                                   phase_center + phase_half,
                                   padding = 0)
 
-    def _compute_min_y_ranges(self, bin_count=100, min_bin_width=1e6,
-                              min_mag=1.0, min_phase=0.1):
+    def _compute_min_y_ranges(
+        self, bin_count=100, min_bin_width=1e6, min_mag=1.0, min_phase=0.1
+    ):
         """
         Estimate minimum y-range for magnitude (dB) and phase (rad) by
         computing the per-bin dynamic range across the full frequency

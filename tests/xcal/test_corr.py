@@ -25,8 +25,9 @@ m = "x,N_comp,N_iter,dt,lowpass_params,highpass_params,verbose"
     # N_comp = N
     (x, x.shape[0], 2, 0.1, (1.0, 4), (0.5, 2), False)
 ])
-def test_calc_cm(x, N_comp, N_iter, dt, lowpass_params,  highpass_params, 
-                 verbose):
+def test_calc_cm(
+    x, N_comp, N_iter, dt, lowpass_params, highpass_params, verbose
+):
     a, A, sig_iter, a_full = corr.calc_cm(x, N_comp, N_iter, dt, lowpass_params, 
                                           highpass_params, verbose)
     # check shapes
@@ -68,8 +69,9 @@ def test_calc_cm(x, N_comp, N_iter, dt, lowpass_params,  highpass_params,
     # negative N_iter
     (x, 2, -1, 0.1, (1.0, 4), (0.5, 2), False),
 ])
-def test_find_cm_invalid(x, N_comp, N_iter, dt, lowpass_params, highpass_params, 
-                         verbose):
+def test_find_cm_invalid(
+    x, N_comp, N_iter, dt, lowpass_params, highpass_params, verbose
+):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         with pytest.raises(Exception):
@@ -210,8 +212,9 @@ m = "z,theta,N_comp,N_iter,dt,lowpass_params,highpass_params,verbose"
     # complex64 input promoted to complex128
     (np.array(x, dtype = np.complex64), None, 2, 3, 0.1, (1.0, 4), (0.5, 2), False)
 ])
-def test_calc_cm_complex(z, theta, N_comp, N_iter, dt, lowpass_params, 
-                         highpass_params, verbose):
+def test_calc_cm_complex(
+    z, theta, N_comp, N_iter, dt, lowpass_params, highpass_params, verbose
+):
     aI, aQ, AI, AQ, sigI_iter, sigQ_iter, aI_full, aQ_full, theta_out = \
         corr.calc_cm_complex(z, theta, N_comp, N_iter, dt, lowpass_params, 
                              highpass_params, verbose)
@@ -266,8 +269,9 @@ m = "z,theta,N_comp,N_iter,dt,lowpass_params,highpass_params,verbose"
     # None highpass_params unsupported
     (x, None, 2, 3, 0.1, (1.0, 4), None, False),
 ])
-def test_calc_cm_complex_invalid(z, theta, N_comp, N_iter, dt, lowpass_params, 
-                                 highpass_params, verbose):
+def test_calc_cm_complex_invalid(
+    z, theta, N_comp, N_iter, dt, lowpass_params, highpass_params, verbose
+):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         with pytest.raises(Exception):

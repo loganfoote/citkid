@@ -10,9 +10,10 @@ import paramiko
 import numpy as np
 
 class RFSOC:
-    def __init__(self, out_directory, bid = 1, drid = 1,
-                 udp_ip = '192.168.3.40', noiseq = True,
-                 local_primecam_path = '~/github/primecam_readout/'):
+    def __init__(
+        self, out_directory, bid = 1, drid = 1, udp_ip = '192.168.3.40',
+        noiseq = True, local_primecam_path = '~/github/primecam_readout/'
+    ):
         """
         Send commands to the rfsoc and save the output data.
 
@@ -84,8 +85,9 @@ class RFSOC:
             response = self.alcoveCommand(com_num, bid = self.bid, drid = self.drid,
                                      all_boards=False, args=args)
 
-    def write_targ_comb_from_vna(self, f_filename = False, a_filename = False,
-                                 p_filename = False):
+    def write_targ_comb_from_vna(
+        self, f_filename = False, a_filename = False, p_filename = False
+    ):
         """
         Write a target comb from the most recent vna sweep
 
@@ -116,8 +118,9 @@ class RFSOC:
         if p_filename:
             self.pres = np.load(os.path.join(self.out_directory, p_filename))
 
-    def write_targ_comb_from_targ(self, f_filename = False, a_filename = False,
-                                  p_filename = False):
+    def write_targ_comb_from_targ(
+        self, f_filename = False, a_filename = False, p_filename = False
+    ):
         """
         Write a target comb from the most recent target sweep
 
@@ -276,8 +279,9 @@ class RFSOC:
         self.fres = np.load(file)
         self.transfer_file('f_res_vna', filename)
 
-    def find_targ_res(self, f_filename = False, a_filename = False,
-                      p_filename = False):
+    def find_targ_res(
+        self, f_filename = False, a_filename = False, p_filename = False
+    ):
         """
         Find resonators from the most recent target sweep using the built-in
         algorithm (I would reccomend doing this on your own instead)

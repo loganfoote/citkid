@@ -1,8 +1,6 @@
 import pytest 
 import numpy as np 
-from citkid.res import funcs 
-# not testing circle_objective, because is is legacy code. 
-# citkid.xcal.circle.circle_objective should be used instead.
+from citkid.res import funcs
 ################################################################################
 #################################### get_y #####################################
 ################################################################################
@@ -138,8 +136,9 @@ def test_nonlinear_iq_anl():
     ([0], 0., 0., 0., 0., 0., 0., 0., 0., False), # f is int 
     ([0.], np.nan, 0., 0., 0., 0., 0., 0., 0., False) # fr is nan
 ])
-def test_nonlinear_iq_invalid_input(f, fr, Qr, amp, phi, a, i0, q0, tau, 
-                                    downward):
+def test_nonlinear_iq_invalid_input(
+    f, fr, Qr, amp, phi, a, i0, q0, tau, downward
+):
     # nonlinear_iq
     with pytest.raises((TypeError, ValueError)):
         funcs.nonlinear_iq(f, fr, Qr, amp, phi, a, i0, q0, tau, downward)

@@ -22,9 +22,10 @@ _GAIN_ONLY_PANELS = [
 ]
 
 
-def run_gain_only_analysis(AR, start_idx=0, data_idxs=None,
-                            title="Gain Analysis",
-                            ui_scale=1.0, plot_scale=1.0):
+def run_gain_only_analysis(
+    AR, start_idx=0, data_idxs=None, title="Gain Analysis", ui_scale=1.0,
+    plot_scale=1.0
+):
     """
     Launch the interactive gain-only analysis window.
 

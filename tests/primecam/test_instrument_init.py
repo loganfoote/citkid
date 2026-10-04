@@ -65,9 +65,7 @@ class TestRFSOCInitSocket:
     ):
         assert hasattr(base_rfsoc_with_socket, 'sock')
 
-    def test_socket_bound_to_udp_ip(
-        self, mock_primecam_imports, tmp_path
-    ):
+    def test_socket_bound_to_udp_ip(self, mock_primecam_imports, tmp_path):
         from citkid.primecam.instrument import RFSOC
         mock_sock = MagicMock()
         with patch('os.getcwd', return_value=str(tmp_path)), \

@@ -31,8 +31,7 @@ def mock_crs_for_set_decimation(base_crs):
 
 @pytest.mark.asyncio
 async def test_set_decimation_explicit_parameters(
-    mock_crs_for_set_decimation,
-    capsys
+    mock_crs_for_set_decimation, capsys
 ):
     """Test set_decimation with all parameters explicitly provided."""
     crs = mock_crs_for_set_decimation
@@ -65,9 +64,7 @@ async def test_set_decimation_explicit_parameters(
 
 
 @pytest.mark.asyncio
-async def test_set_decimation_auto_short_small(
-    mock_crs_for_set_decimation
-):
+async def test_set_decimation_auto_short_small(mock_crs_for_set_decimation):
     """Test short is auto-set to True when max tones <= 128."""
     crs = mock_crs_for_set_decimation
     # 100 tones per module (< 128)
@@ -83,9 +80,7 @@ async def test_set_decimation_auto_short_small(
 
 
 @pytest.mark.asyncio
-async def test_set_decimation_auto_short_large(
-    mock_crs_for_set_decimation
-):
+async def test_set_decimation_auto_short_large(mock_crs_for_set_decimation):
     """Test short is auto-set to False when max tones > 128."""
     crs = mock_crs_for_set_decimation
     # 200 tones in one module (> 128)
@@ -210,8 +205,7 @@ async def test_set_decimation_no_sleep_when_unchanged(
 
 @pytest.mark.asyncio
 async def test_set_decimation_verbose_false_no_print(
-    mock_crs_for_set_decimation,
-    capsys
+    mock_crs_for_set_decimation, capsys
 ):
     """Test that verbose = False suppresses output."""
     crs = mock_crs_for_set_decimation
@@ -232,8 +226,7 @@ def test_suppress_dec_printout_default_before_configure(base_crs):
 
 @pytest.mark.asyncio
 async def test_set_decimation_before_configure_no_error(
-    mock_crs_for_set_decimation,
-    capsys
+    mock_crs_for_set_decimation, capsys
 ):
     """Test set_decimation works and is silent before configure_system."""
     crs = mock_crs_for_set_decimation
@@ -255,11 +248,7 @@ async def test_set_decimation_before_configure_no_error(
     (False, False, False),
 ])
 async def test_set_decimation_suppress_dec_printout(
-    mock_crs_for_set_decimation,
-    capsys,
-    suppress,
-    verbose,
-    printed
+    mock_crs_for_set_decimation, capsys, suppress, verbose, printed
 ):
     """Test suppress_dec_printout and verbose together control output."""
     crs = mock_crs_for_set_decimation
@@ -294,9 +283,7 @@ async def test_set_decimation_all_stages(mock_crs_for_set_decimation):
 ################################################################################
 
 @pytest.mark.asyncio
-async def test_set_decimation_dec_stage_not_int(
-    mock_crs_for_set_decimation
-):
+async def test_set_decimation_dec_stage_not_int(mock_crs_for_set_decimation):
     """Test that non-int dec_stage raises ValueError."""
     crs = mock_crs_for_set_decimation
     
@@ -308,9 +295,7 @@ async def test_set_decimation_dec_stage_not_int(
 
 
 @pytest.mark.asyncio
-async def test_set_decimation_dec_stage_negative(
-    mock_crs_for_set_decimation
-):
+async def test_set_decimation_dec_stage_negative(mock_crs_for_set_decimation):
     """Test that negative dec_stage raises ValueError."""
     crs = mock_crs_for_set_decimation
     
@@ -319,9 +304,7 @@ async def test_set_decimation_dec_stage_negative(
 
 
 @pytest.mark.asyncio
-async def test_set_decimation_dec_stage_too_large(
-    mock_crs_for_set_decimation
-):
+async def test_set_decimation_dec_stage_too_large(mock_crs_for_set_decimation):
     """Test that dec_stage > 6 raises ValueError."""
     crs = mock_crs_for_set_decimation
     
@@ -353,9 +336,7 @@ async def test_set_decimation_short_string(mock_crs_for_set_decimation):
 
 
 @pytest.mark.asyncio
-async def test_set_decimation_module_idxs_not_list(
-    mock_crs_for_set_decimation
-):
+async def test_set_decimation_module_idxs_not_list(mock_crs_for_set_decimation):
     """Test that non-list module_idxs raises TypeError."""
     crs = mock_crs_for_set_decimation
     

@@ -6,9 +6,10 @@ warnings.warn(
 )
 import numpy as np
 
-def make_cal_tones(fres, ares, qres, max_n_tones = 1000,
-                   res_indices = None, fcal_power = -55,
-                   fres_all = None):
+def make_cal_tones(
+    fres, ares, qres, max_n_tones = 1000, res_indices = None, fcal_power = -55,
+    fres_all = None
+):
     '''
     Add calibration tones to the given resonator list. Fills in largest spaces
     between resonators, up to max_n_tones.

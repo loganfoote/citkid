@@ -173,8 +173,10 @@ class TSSeriesWindow(IQSeriesWindow):
     # Mark Bad Above is for IQ series only.
     _MARK_BAD_ABOVE = False
 
-    def __init__(self, ARs, x=None, y='sxx_10', quantities=None, x_values=None, x_name=None,
-                 **kwargs):
+    def __init__(
+        self, ARs, x=None, y='sxx_10', quantities=None, x_values=None,
+        x_name=None, **kwargs
+    ):
         """
         Build the window. See the class docstring for parameters.
         """
@@ -265,26 +267,11 @@ class TSSeriesWindow(IQSeriesWindow):
 
 
 def run_ts_series(
-    make_custom_steps=None,
-    root=None,
-    n_series=None,
-    x=None,
-    y='sxx_10',
-    quantities=None,
-    cal_yaml_path='ts',
-    analysis_yaml_path='ts',
-    start_series_idx=0,
-    start_idx=None,
-    data_idxs=None,
-    title='TS Series',
-    ui_scale=1.0,
-    plot_scale=1.0,
-    xy_fit=None,
-    datasets=None,
-    x_values=None,
-    x_name=None,
-    xscale='linear',
-    yscale='linear',
+    make_custom_steps=None, root=None, n_series=None, x=None, y='sxx_10',
+    quantities=None, cal_yaml_path='ts', analysis_yaml_path='ts',
+    start_series_idx=0, start_idx=None, data_idxs=None, title='TS Series',
+    ui_scale=1.0, plot_scale=1.0, xy_fit=None, datasets=None, x_values=None,
+    x_name=None, xscale='linear', yscale='linear',
 ):
     """
     Build one AnalysisRunner per series index for the 'ts' analysis, then

@@ -54,8 +54,17 @@ async def test_crs_config(pytestconfig, capsys):
             await crs.set_analog_bank(analog_bank_high,
                                     full_scale_dbm)
             
-            # Check dac scale
-            assert crs.d.full_scale_dbm == full_scale_dbm
+            # Check dac scale and default module settings
+            bank = range(5, 9) if analog_bank_high else range(1, 5)
+            assert sorted(crs.module_cfg) == list(bank)
+            for cfg in crs.module_cfg.values():
+                assert np.isclose(cfg['full_scale_dbm'], full_scale_dbm,
+                                  atol = 0.1)
+                assert cfg['adc_attenuation_db'] == 0
+                assert cfg['nyquist_zone'] == 1
+                assert cfg['cable_length_m'] == 0
+                assert cfg['adc_calibration_mode'] == 'AUTO'
+                assert cfg['adc_autocal'] is True
 
     ### Test clock source 
     # should reset to VCXO and raise warning
@@ -415,10 +424,11 @@ async def test_sweep(pytestconfig, monkeypatch):
     assert np.all(np.isnan(z[0]))
 
 @pytest.mark.asyncio
-async def test_stream(pytestconfig, monkeypatch, tmp_path):
-    """ 
-    Tests whether streaming executes properly, and if the amplitue and phase 
-    matches sweep (just for a couple modules).
+@pytest.mark.parametrize("method", ['parser', 'memory'])
+async def test_stream(pytestconfig, monkeypatch, tmp_path, method):
+    """
+    Tests whether streaming executes properly, and if the amplitue and phase
+    matches sweep (just for a couple modules), for both stream methods.
     """
     ### Initialize board 
     crs = initialize_crs(pytestconfig)
@@ -448,7 +458,8 @@ async def test_stream(pytestconfig, monkeypatch, tmp_path):
         batch_size_mb = 1,
         chunk_size_mb = 1,
         delete_parser_data = True,
-        verbose = True
+        verbose = True,
+        method = method
     )
     _, zsweep = await crs.sweep_span(
         fres, ares, 1e3, 1, 100, 
@@ -902,7 +913,8 @@ async def validate_ch_maps(crs):
             atol = 1e-3
         )
         
-        ares_amp = 10 ** ((ares - crs.d.full_scale_dbm) / 20)
+        full_scale_dbm = crs.module_cfg[module_idx]['full_scale_dbm']
+        ares_amp = 10 ** ((ares - full_scale_dbm) / 20)
         assert np.allclose(
             ares_amp, 
             ares_meas[:N], 

@@ -7,8 +7,10 @@ warnings.warn(
 import numpy as np
 
 # Need to update docstrings, imports
-def update_ares_pscale(frequency, power_dbm, a_nl, dbm_change_high = 2,
-                       dbm_change_low = 2, a_target = 0.5, dbm_max = -50):
+def update_ares_pscale(
+    frequency, power_dbm, a_nl, dbm_change_high = 2, dbm_change_low = 2,
+    a_target = 0.5, dbm_max = -50
+):
     """
     Update the tone amplitude list to target the given value of a_nl by scaling
     the output power linearly with a_nl, or scales the power linearly if it
@@ -42,9 +44,10 @@ def update_ares_pscale(frequency, power_dbm, a_nl, dbm_change_high = 2,
     return power_dbm_updated
 update_ares_pscale = np.vectorize(update_ares_pscale)
 
-def update_ares_addonly(f, power_dbm, a_nl, dbm_change_high = 1,
-                        dbm_change_low = 1, a_target = 0.5, dbm_max = -50,
-                        threshold = 0.2):
+def update_ares_addonly(
+    f, power_dbm, a_nl, dbm_change_high = 1, dbm_change_low = 1, a_target = 0.5,
+    dbm_max = -50, threshold = 0.2
+):
     """
     Update the amplitude of a tone to within 80% of the target by adding or
     subtracting a fixed power in dB.

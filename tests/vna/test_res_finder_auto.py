@@ -227,8 +227,9 @@ class TestAutoResFinderResDetection:
     """Test res detection functionality."""
     
     @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
-    def test_res_detection_finds_resonances(self, mock_update,
-                                             synthetic_vna_data, tmp_path):
+    def test_res_detection_finds_resonances(
+        self, mock_update, synthetic_vna_data, tmp_path
+    ):
         """Test that resonance detection machinery works."""
         outpath = tmp_path / "test.h5"
         
@@ -250,8 +251,9 @@ class TestAutoResFinderResDetection:
         assert np.all(np.isfinite(finder.filtered_mag))
     
     @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
-    def test_frequency_range_limiting(self, mock_update, 
-                                       synthetic_vna_data, tmp_path):
+    def test_frequency_range_limiting(
+        self, mock_update, synthetic_vna_data, tmp_path
+    ):
         """Test that frequency range limits are respected."""
         outpath = tmp_path / "test.h5"
         
@@ -277,8 +279,7 @@ class TestAutoResFinderResDetection:
             assert np.all(fres_found <= 6.5e9)
     
     @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
-    def test_height_parameter(self, mock_update, 
-                               synthetic_vna_data, tmp_path):
+    def test_height_parameter(self, mock_update, synthetic_vna_data, tmp_path):
         """Test that height parameter affects number of peaks found."""
         outpath = tmp_path / "test.h5"
         
@@ -304,8 +305,9 @@ class TestAutoResFinderResDetection:
         assert n_peaks_strict <= n_peaks_loose
     
     @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
-    def test_distance_parameter(self, mock_update, 
-                                 dense_resonances_vna_data, tmp_path):
+    def test_distance_parameter(
+        self, mock_update, dense_resonances_vna_data, tmp_path
+    ):
         """Test that distance parameter prevents closely spaced peaks."""
         outpath = tmp_path / "test.h5"
         
@@ -336,8 +338,7 @@ class TestAutoResFinderFileIO:
     """Test file save/load functionality."""
     
     @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
-    def test_save_results(self, mock_update, 
-                          synthetic_vna_data, tmp_path):
+    def test_save_results(self, mock_update, synthetic_vna_data, tmp_path):
         """Test saving results to zarr group."""
         outpath = tmp_path / "results.h5"
         
@@ -368,8 +369,9 @@ class TestAutoResFinderFileIO:
         assert 'height' in grp.attrs
     
     @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
-    def test_save_empty_results(self, mock_update, 
-                                 no_resonance_vna_data, tmp_path):
+    def test_save_empty_results(
+        self, mock_update, no_resonance_vna_data, tmp_path
+    ):
         """Test saving when no peaks are found."""
         outpath = tmp_path / "empty_results.h5"
         
@@ -419,8 +421,9 @@ class TestAutoResFinderEdgeCases:
         assert len(finder.z) == 1
     
     @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
-    def test_no_peaks_in_data(self, mock_update, 
-                               no_resonance_vna_data, tmp_path):
+    def test_no_peaks_in_data(
+        self, mock_update, no_resonance_vna_data, tmp_path
+    ):
         """Test with data containing no resonances."""
         outpath = tmp_path / "test.h5"
         
@@ -504,8 +507,9 @@ class TestAutoResFinderQuit:
     """Save & Quit must behave exactly like closing the window."""
 
     @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')
-    def test_quit_and_save_closes_window_and_saves_once(self, mock_update,
-                                                        synthetic_vna_data, tmp_path):
+    def test_quit_and_save_closes_window_and_saves_once(
+        self, mock_update, synthetic_vna_data, tmp_path
+    ):
         outpath = tmp_path / "quit.h5"
         finder = AutoResFinder(
             synthetic_vna_data['f'],

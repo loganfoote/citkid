@@ -1,19 +1,21 @@
 import os
 import pandas as pd
 import numpy as np
-from ..util import save_fig
+from ...util import save_fig
 
 import warnings 
 
 warnings.warn(
-    "citkid.noise.data_io is deprecated and will be removed in version 1.0.0",
+    "citkid.primecam.noise.data_io is deprecated and will be removed in version 1.0.0",
     DeprecationWarning,
     stacklevel=2,
 )
 
-def save_psd(psd_onres, psd_offres, timestream_onres, timestream_offres,
-             cr_indices, theta_range, poly, xcal_data, figs, dt, dt_offres,
-             out_directory, plot_directory, prefix = '', iq_fit_row = None):
+def save_psd(
+    psd_onres, psd_offres, timestream_onres, timestream_offres, cr_indices,
+    theta_range, poly, xcal_data, figs, dt, dt_offres, out_directory,
+    plot_directory, prefix = '', iq_fit_row = None
+):
     """
     Save the output of .analysis.compute_psd
     

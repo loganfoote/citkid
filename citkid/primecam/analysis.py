@@ -2,15 +2,15 @@ import numpy as np
 import pandas as pd
 import os
 from tqdm.auto import tqdm
-from ..res.fitter import fit_nonlinear_iq_with_gain
-from ..res.gain import fit_and_remove_gain_phase
-from ..res.data_io import make_fit_row, separate_fit_row
+from .fitter import fit_nonlinear_iq_with_gain
+from .gain import fit_and_remove_gain_phase
+from .data_io import make_fit_row, separate_fit_row
 from ..util import save_fig
 from .update_ares import get_dbm
 import matplotlib.pyplot as plt
-from ..res.gain import remove_gain
-from ..noise.analysis import compute_psd
-from ..noise.data_io import save_psd
+from ..xcal.gain import remove_gain
+from .noise.analysis import compute_psd
+from .noise.data_io import save_psd
 from .data_io import import_iq_noise
 
 import warnings 
@@ -22,11 +22,12 @@ warnings.warn(
     stacklevel=2,
 )
 
-def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
-           constant_atten, temperature_index, temperature,
-           resonator_indices = None, extra_fitdata_values = {}, downward = True,
-           plotq = False, plot_factor = 1, overwrite = False, verbose = True,
-           catch_exceptions = False):
+def fit_iq(
+    directory, out_directory, file_suffix, power_number, in_atten,
+    constant_atten, temperature_index, temperature, resonator_indices = None,
+    extra_fitdata_values = {}, downward = True, plotq = False, plot_factor = 1,
+    overwrite = False, verbose = True, catch_exceptions = False
+):
     """
     Fit all IQ loops in a target scan
 
@@ -168,12 +169,13 @@ def fit_iq(directory, out_directory, file_suffix, power_number, in_atten,
         data.to_csv(out_path, index = False)
     return data
 
-def analyze_noise(main_out_directory, file_suffix, noise_index, tstart = 0,
-                  plot_calq = False, plot_psdq = False,
-                  plot_timestreamq = False, plot_factor = 1,
-                  deglitch_nstd = 10, cr_nstd = 5, cr_width = 100e-6,
-                  cr_peak_spacing = 100e-6, cr_removal_time = 1e-3,
-                  overwrite = False, verbose = False, catch_exceptions = False):
+def analyze_noise(
+    main_out_directory, file_suffix, noise_index, tstart = 0, plot_calq = False,
+    plot_psdq = False, plot_timestreamq = False, plot_factor = 1,
+    deglitch_nstd = 10, cr_nstd = 5, cr_width = 100e-6,
+    cr_peak_spacing = 100e-6, cr_removal_time = 1e-3, overwrite = False,
+    verbose = False, catch_exceptions = False
+):
     """
     Analyze noise data to produce timestreams and PSDs
 

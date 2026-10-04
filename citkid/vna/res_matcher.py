@@ -156,13 +156,9 @@ class SpinBoxEventFilter(QtCore.QObject):
 # Public API
 # ---------------------------------------------------------------------------
 def run_res_matcher(
-    f1, z1, fres1, res_idx1,
-    f2, z2, fres2, res_idx2,
-    zarr_grp,
-    new_res_start_idx: int = 2000,
-    init_match: str = 'sorted',
-    apply_filter: bool = False,
-    DS2_f_offset: Optional[float] = None,
+    f1, z1, fres1, res_idx1, f2, z2, fres2, res_idx2, zarr_grp,
+    new_res_start_idx: int = 2000, init_match: str = 'sorted',
+    apply_filter: bool = False, DS2_f_offset: Optional[float] = None,
 ):
     """
     Run the interactive resonance matcher.
@@ -281,14 +277,9 @@ class ResMatcher:
     # ------------------------------------------------------------------ init
 
     def __init__(
-        self,
-        f1, z1, fres1, res_idx1,
-        f2, z2, fres2, res_idx2,
-        zarr_grp,
-        new_res_start_idx: int = 2000,
-        init_match: str = 'sorted',
-        apply_filter: bool = False,
-        DS2_f_offset: Optional[float] = None,
+        self, f1, z1, fres1, res_idx1, f2, z2, fres2, res_idx2, zarr_grp,
+        new_res_start_idx: int = 2000, init_match: str = 'sorted',
+        apply_filter: bool = False, DS2_f_offset: Optional[float] = None,
     ):
         """
         Initialize the matcher, build the initial groups, and set up the UI.
@@ -1939,10 +1930,7 @@ class ResMatcher:
             )
 
     def _ask_reuse_res_idx(
-        self, 
-        new_freq: float, 
-        ds: int, 
-        removed_list: List[Tuple[float, int]]
+        self, new_freq: float, ds: int, removed_list: List[Tuple[float, int]]
     ):
         """
         Show a dialog asking user to choose from removed resonances or create new.

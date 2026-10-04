@@ -95,8 +95,9 @@ def calc_a(x, A):
 ################################################################################
 ####################### Iterative common mode algorithm ########################
 ################################################################################
-def calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params, 
-            verbose = True):
+def calc_cm(
+    x, N_comp, N_iter, dt, lowpass_params, highpass_params, verbose = True
+):
     """
     Iteratively find common modes in multiple timestreams. In each iteration,
     perform a PCA normalized by the variance of the timestreams with the

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import warnings
 
 from citkid.crs.instrument import CRS
+from .conftest import mock_module_settings
 
 
 @pytest.fixture
@@ -19,12 +20,7 @@ def mock_crs_for_set_analog_bank(base_crs):
     # Mock async methods
     crs.d.set_analog_bank = AsyncMock()
     crs.d.get_analog_bank = AsyncMock(return_value = False)
-    crs.d.set_dac_scale = AsyncMock()
-    crs.d.get_dac_scale = AsyncMock(return_value = 7)
-    
-    # Mock UNITS
-    crs.d.UNITS = MagicMock()
-    crs.d.UNITS.DBM = 'DBM'
+    mock_module_settings(crs.d, full_scale_dbm = 7)
     
     # Initialize the maps with some data
     crs.nco_freqs = {1: 4.5e9, 2: 5.0e9, 5: 6.0e9, 6: 6.5e9}
@@ -75,8 +71,9 @@ async def test_set_analog_bank_low_success(mock_crs_for_set_analog_bank):
     for module_idx in range(1, 5):
         crs.d.get_dac_scale.assert_any_call('DBM', module_idx)
     
-    # Verify full_scale_dbm was stored in self.d
-    assert crs.d.full_scale_dbm == 5
+    # Verify module settings were stored for the new bank's modules only
+    assert sorted(crs.module_cfg) == [1, 2, 3, 4]
+    assert all(cfg['full_scale_dbm'] == 5 for cfg in crs.module_cfg.values())
 
 
 @pytest.mark.asyncio
@@ -114,8 +111,9 @@ async def test_set_analog_bank_high_success(mock_crs_for_set_analog_bank):
     for module_idx in range(5, 9):
         crs.d.set_dac_scale.assert_any_call(6, 'DBM', module_idx)
     
-    # Verify full_scale_dbm was stored in self.d
-    assert crs.d.full_scale_dbm == 6
+    # Verify module settings were stored for the new bank's modules only
+    assert sorted(crs.module_cfg) == [5, 6, 7, 8]
+    assert all(cfg['full_scale_dbm'] == 6 for cfg in crs.module_cfg.values())
 
 
 @pytest.mark.asyncio
@@ -131,9 +129,7 @@ async def test_set_analog_bank_failed_to_set(mock_crs_for_set_analog_bank):
 
 
 @pytest.mark.asyncio
-async def test_set_analog_bank_dac_scale_mismatch(
-    mock_crs_for_set_analog_bank
-):
+async def test_set_analog_bank_dac_scale_mismatch(mock_crs_for_set_analog_bank):
     """Test that RuntimeError is raised when DAC scale fails to set."""
     crs = mock_crs_for_set_analog_bank
     crs.d.get_analog_bank = AsyncMock(return_value = False)
@@ -188,7 +184,7 @@ async def test_set_analog_bank_empty_maps(mock_crs_for_set_analog_bank):
     await crs.set_analog_bank(analog_bank_high = False, full_scale_dbm = 7)
     
     assert crs.analog_bank_high is False
-    assert crs.d.full_scale_dbm == 7
+    assert crs.module_cfg[1]['full_scale_dbm'] == pytest.approx(7, abs = 0.1)
 
 
 @pytest.mark.asyncio
@@ -204,7 +200,7 @@ async def test_set_analog_bank_dac_scale_within_tolerance(
     # Should not raise error
     await crs.set_analog_bank(analog_bank_high = False, full_scale_dbm = 5)
     
-    assert crs.d.full_scale_dbm == 5
+    assert crs.module_cfg[1]['full_scale_dbm'] == pytest.approx(5, abs = 0.1)
 
 
 ################################################################################
@@ -291,7 +287,7 @@ async def test_set_analog_bank_full_scale_float_valid(
     await crs.set_analog_bank(analog_bank_high = False,
                               full_scale_dbm = 5.5)
     
-    assert crs.d.full_scale_dbm == 5.5
+    assert crs.module_cfg[1]['full_scale_dbm'] == pytest.approx(5.5, abs = 0.1)
 
 
 ################################################################################

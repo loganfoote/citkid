@@ -118,8 +118,9 @@ def plot_gain_fit(f, z, mask, p_amp, p_phase, axs = None):
         )
     return fig, axs
 
-def plot_s21(f, z, zt = None, fg = None, zg = None, axs = None,
-             max_points = None):
+def plot_s21(
+    f, z, zt = None, fg = None, zg = None, axs = None, max_points = None
+):
     """
     Plot complex S21 sweep and optional timestream data in IQ plane and as
     |S21| vs frequency.
@@ -186,8 +187,9 @@ def plot_s21(f, z, zt = None, fg = None, zg = None, axs = None,
         )
     return fig, axs
 
-def plot_circfit(z, origin, radius, zt = None, mask = None, ax = None,
-                 max_points = None):
+def plot_circfit(
+    z, origin, radius, zt = None, mask = None, ax = None, max_points = None
+):
     """
     Plot IQ data with a circular fit.
 
@@ -296,9 +298,10 @@ def plot_sparper(f, spar, sper, nbins, fmin, ax = None):
         )
     return fig, ax
 
-def plot_xcal(thetaf, xf, zf_cent, xcal_mask, poly_x, thetat = None,
-              zt_cent = None, std_cutoff = None, axs = None,
-              max_points = None):
+def plot_xcal(
+    thetaf, xf, zf_cent, xcal_mask, poly_x, thetat = None, zt_cent = None,
+    std_cutoff = None, axs = None, max_points = None
+):
     """
     Plot x vs theta calibration data and IQ data with fit overlayed.
 

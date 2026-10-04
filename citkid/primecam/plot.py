@@ -45,3 +45,90 @@ def plot_ares_opt(a_nls, fcal_indices):
         percents.append(percent)
     ax_opt.plot(indices, percents, '--k')
     return fig_hist, fig_opt
+
+def plot_gain_fit(f0, dB0, f, dB, phase, p_amp, p_phase):
+    """
+    Plot the fit to gain amplitude and phase data.
+
+    Parameters:
+    f0 (np.array): Raw frequency data.
+    dB0 (np.array): Raw amplitude data.
+    f (np.array): Cut frequency data.
+    dB (np.array): Cut amplitude data.
+    phase (np.array): Cut phase data.
+    p_amp (list): Amplitude fit parameters.
+    p_phase (list): Phase fit parameters.
+
+    Returns:
+    fig, axs: Data and fit plot.
+    """
+    fmean = np.mean(f0)
+    fig, axs = plt.subplots(
+        1,
+        2,
+        figsize = [6, 2.8],
+        dpi = 200,
+        layout = 'tight',
+    )
+    axs[1].set_ylabel('Phase')
+    axs[1].set_xlabel(f'(f - {round(fmean / 1e9, 4)} GHz) (kHz)')
+    axs[0].set_ylabel('|S21| (dB)')
+    axs[0].set_xlabel(f'(f - {round(fmean / 1e9, 4)} GHz) (kHz)')
+
+    color = plt.cm.viridis(0.1)
+    color0 = plt.cm.viridis(0.99)
+    axs[0].plot(
+        (f0 - fmean) * 1e-3,
+        dB0,
+        '.',
+        color = color0,
+        label = 'Raw data',
+    )
+    axs[0].plot((f - fmean) * 1e-3, dB, '.', color = color, label='Fitted data')
+    fsamp = np.linspace(np.min(f0), np.max(f0), 100)
+    if ~np.any(np.isnan(p_amp)):
+        axs[0].plot(
+            (fsamp - fmean) * 1e-3,
+            np.polyval(p_amp, fsamp),
+            '--r',
+            label = 'Fit',
+        )
+
+    axs[1].plot([], [], '.', color = color0, label = 'Raw data')
+    axs[1].plot(
+        (f - fmean) * 1e-3,
+        phase,
+        '.',
+        color = color,
+        label = 'Fitted data',
+    )
+    if ~np.any(np.isnan(p_phase)):
+        axs[1].plot(
+            (fsamp - fmean) * 1e-3,
+            np.polyval(p_phase, fsamp),
+            '--r',
+            label = 'Fit',
+        )
+
+    # axs[1].legend(framealpha=1)
+    return fig, axs
+
+def plot_circle(z, A, B, R):
+    """
+    Plot IQ data with a circular fit.
+
+    Parameters:
+    z (np.array): Complex IQ data.
+    A, B (float, float): Circle origin.
+    R (float): Circle radius.
+
+    Returns:
+    fig, ax: Data and fit plot.
+    """
+    fig, ax = plt.subplots(figsize = (4, 4), dpi = 200)
+    ax.plot(np.real(z), np.imag(z), 'r.')
+    ax.set_aspect('equal', adjustable='datalim')
+    cir = plt.Circle((A, B), R, color='k', fill=False)
+    ax.add_patch(cir)
+    ax.set(xlabel = 'I', ylabel = 'Q')
+    return fig, ax

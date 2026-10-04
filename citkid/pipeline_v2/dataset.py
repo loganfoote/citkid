@@ -151,13 +151,8 @@ class DataSet:
     _SCHEMA_VERSION = 1
 
     def __init__(
-        self,
-        zarr_path,
-        cal_yaml_path=None,
-        custom_path=None,
-        zarr_mode="a",
-        custom_cal_steps=None,
-        custom_main_dir_overwrite=None,
+        self, zarr_path, cal_yaml_path=None, custom_path=None, zarr_mode="a",
+        custom_cal_steps=None, custom_main_dir_overwrite=None,
         write_buffer=False,
     ):
         """
@@ -1017,11 +1012,7 @@ class DataSet:
         return value
 
     def _collect_apply_cal_params(
-        self,
-        step,
-        data_idx,
-        local_values,
-        replacement_values,
+        self, step, data_idx, local_values, replacement_values,
         replacement_is_global,
     ):
         """
@@ -1273,15 +1264,8 @@ class DataSet:
         return params, param_is_global
 
     def _store_param(
-        self,
-        name,
-        value,
-        is_global,
-        data_idx=None,
-        pipeline_scope=None,
-        step_name=None,
-        step_index=None,
-        save=False,
+        self, name, value, is_global, data_idx=None, pipeline_scope=None,
+        step_name=None, step_index=None, save=False,
     ):
         """
         Store a parameter in memory and optionally write it to zarr.

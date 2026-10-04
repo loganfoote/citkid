@@ -31,8 +31,10 @@ _IQ_PANELS = [
 ]
 
 
-def run_iq_analysis(AR, start_idx=0, data_idxs=None, title="IQ Analysis",
-                    ui_scale=1.0, plot_scale=1.0):
+def run_iq_analysis(
+    AR, start_idx=0, data_idxs=None, title="IQ Analysis", ui_scale=1.0,
+    plot_scale=1.0
+):
     """
     Launch the interactive IQ analysis window.
 

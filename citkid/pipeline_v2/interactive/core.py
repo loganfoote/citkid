@@ -197,13 +197,8 @@ class StepPanel(QtWidgets.QWidget):
     run_from_here = QtCore.pyqtSignal()
 
     def __init__(
-        self,
-        AR: AnalysisRunner,
-        step_names: tuple,
-        data_idx=None,
-        ui_scale: float = 1.0,
-        plot_scale: float = 1.0,
-        parent=None,
+        self, AR: AnalysisRunner, step_names: tuple, data_idx=None,
+        ui_scale: float = 1.0, plot_scale: float = 1.0, parent=None,
     ):
         super().__init__(parent)
         self.AR = AR
@@ -703,8 +698,9 @@ class StepPanel(QtWidgets.QWidget):
     # Parameter initialisation helpers
     # ------------------------------------------------------------------
 
-    def _get_initial_user_param(self, step_name, param_name, data_idx,
-                                fallback=None):
+    def _get_initial_user_param(
+        self, step_name, param_name, data_idx, fallback=None
+    ):
         """
         Return the best available initial value for a user-controlled
         parameter.
@@ -1020,15 +1016,9 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
     _save_status_changed = QtCore.pyqtSignal(str)
 
     def __init__(
-        self,
-        AR: AnalysisRunner,
-        panels: list,
-        start_idx: int = 0,
-        data_idxs=None,
-        title: str = "Interactive Analysis",
-        ui_scale: float = 1.0,
-        plot_scale: float = 1.0,
-        parent=None,
+        self, AR: AnalysisRunner, panels: list, start_idx: int = 0,
+        data_idxs=None, title: str = "Interactive Analysis",
+        ui_scale: float = 1.0, plot_scale: float = 1.0, parent=None,
     ):
         super().__init__(parent)
         delete_on_close(self)  # destroy on the GUI thread when closed
@@ -1606,13 +1596,8 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
 ################################################################################
 
 def run_interactive(
-    AR,
-    panels=None,
-    start_idx=0,
-    data_idxs=None,
-    title="Interactive Analysis",
-    ui_scale=1.0,
-    plot_scale=1.0,
+    AR, panels=None, start_idx=0, data_idxs=None, title="Interactive Analysis",
+    ui_scale=1.0, plot_scale=1.0,
 ):
     """
     Build and show an InteractiveAnalysisWindow, then start the Qt event loop.

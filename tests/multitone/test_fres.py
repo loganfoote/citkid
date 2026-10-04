@@ -261,7 +261,7 @@ class TestUpdateFres:
         """Return (fs, zs) for M=3 resonators with known answers."""
         self.ks = [40, 80, 140]
         builders = {
-            'mins21':   _minS21_sweep,
+            'minS21':   _minS21_sweep,
             'spacing':  _spacing_sweep,
             'distance': _distance_sweep,
         }
@@ -295,7 +295,7 @@ class TestUpdateFres:
         with pytest.raises(ValueError, match="method must be"):
             update_fres(fs, zs, fres, fres, np.array([0]), method='bad')
 
-    @pytest.mark.parametrize("method", ["mins21", "spacing", "distance"])
+    @pytest.mark.parametrize("method", ["minS21", "spacing", "distance"])
     def test_all_resonators_updated(self, f1d, method):
         fs, zs = self._make_batch(f1d, method)
         fres = np.array([F0] * 3)
@@ -306,7 +306,7 @@ class TestUpdateFres:
             assert result[i] == pytest.approx(f1d[k]), \
                 f"method={method}, resonator {i}: expected f[{k}]={f1d[k]:.0f}, got {result[i]:.0f}"
 
-    @pytest.mark.parametrize("method", ["mins21", "spacing", "distance"])
+    @pytest.mark.parametrize("method", ["minS21", "spacing", "distance"])
     def test_cal_tones_not_updated(self, f1d, method):
         """Calibration tones (res_idxs < 0) must keep their input fres."""
         fs, zs = self._make_batch(f1d, method)
@@ -320,7 +320,7 @@ class TestUpdateFres:
         # Resonator updated
         assert result[1] == pytest.approx(f1d[self.ks[1]])
 
-    @pytest.mark.parametrize("method", ["mins21", "spacing", "distance"])
+    @pytest.mark.parametrize("method", ["minS21", "spacing", "distance"])
     def test_all_cal_tones(self, f1d, method):
         """If every entry is a calibration tone, fres is returned unchanged."""
         fs = np.stack([f1d] * 3)

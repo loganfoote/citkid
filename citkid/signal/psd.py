@@ -50,8 +50,10 @@ def get_csd(x1, x2, dt):
 ############################ Binning and filtering #############################
 ################################################################################
 
-def bin_psd(f, data, nbins=500, fmin=3, filter_pt_n=None,
-            pt_frequency=1.39296, statistic='mean'):
+def bin_psd(
+    f, data, nbins=500, fmin=3, filter_pt_n=None, pt_frequency=1.39296,
+    statistic='mean'
+):
     """
     Bin noise data logarithmically. Optionally filters pulse tubes before
     binning and leaves frequencies below fmin unbinned.

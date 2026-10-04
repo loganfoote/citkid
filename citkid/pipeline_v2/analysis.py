@@ -86,13 +86,8 @@ class AnalysisRunner:
             self.DS.set_analysis_step_names({index: step_dict["task"].name for index, step_dict in enumerate(self.path, start=1)})
 
     def execute_path(
-        self,
-        data_idx=None,
-        start_from_idx=0,
-        verbose=True,
-        save=True,
-        vectorize=True,
-        path_per_row=False,
+        self, data_idx=None, step_start_idx=0, step_end_idx=None, verbose=True,
+        save=True, vectorize=True, path_per_row=False,
     ):
         """
         Execute the loaded analysis path in order.
@@ -103,8 +98,13 @@ class AnalysisRunner:
         Parameters:
         data_idx (int, array-like, or None): Rows to process for per-row and
             vectorized steps. When None, all rows are processed.
-        start_from_idx (int): Zero-based index into ``self.path`` from which to
-            begin execution.
+        step_start_idx (int): Zero-based index into the analysis path
+            (``self.path``) of the first step to run. Default 0. This counts
+            steps, not data indices (rows are chosen with ``data_idx``).
+        step_end_idx (int or None): Zero-based index into ``self.path`` of
+            the step to stop before, like the end of a slice: steps
+            ``step_start_idx`` to ``step_end_idx - 1`` run. None (default) runs
+            to the last step.
         verbose (bool): If True, show a progress bar.
         save (bool): If True, persist each executed step after it finishes.
         vectorize (bool): If True (default), steps with ``func_type``
@@ -123,10 +123,18 @@ class AnalysisRunner:
         couldn't use it; the other rows continue.
 
         Raises:
+        ValueError: if ``step_start_idx`` and ``step_end_idx`` select no
+            steps.
         RuntimeError: if every requested row failed, with the first failure's
             traceback.
         """
-        path_steps = self.path[start_from_idx:]
+        path_steps = self.path[step_start_idx:step_end_idx]
+        if not path_steps:
+            raise ValueError(
+                f"step_start_idx={step_start_idx} and step_end_idx={step_end_idx} select no "
+                f"steps of the analysis path ({len(self.path)} steps, indices 0 to "
+                f"{len(self.path) - 1}). These count analysis steps, not data indices."
+            )
         self._validate_execute_path_scope(path_steps, data_idx)
         failed = {}  # data_idx -> (step name, traceback)
         if path_per_row:
@@ -236,13 +244,8 @@ class AnalysisRunner:
         )
 
     def execute_step(
-        self,
-        step,
-        data_idx=None,
-        user_params="from_yaml",
-        save=True,
-        vectorize=True,
-        allow_global_step_overwrite=False,
+        self, step, data_idx=None, user_params="from_yaml", save=True,
+        vectorize=True, allow_global_step_overwrite=False,
     ):
         """
         Execute a single analysis or calibration step.
@@ -534,7 +537,7 @@ class AnalysisRunner:
             return
         raise ValueError(
             f"Parameter '{param_name}' is produced by earlier analysis step '{producer_name}'. "
-            f"Run that step explicitly, or use execute_path(start_from_idx={producer_idx - 1}) "
+            f"Run that step explicitly, or use execute_path(step_start_idx={producer_idx - 1}) "
             f"after the required earlier analysis outputs have been created."
         )
 
@@ -725,17 +728,13 @@ class AnalysisRunner:
             raise ValueError(
                 f"Partial execute_path would execute {step.func_type} step '{step.name}', "
                 f"which can overwrite downstream products for rows outside data_idx. "
-                f"Run the global step for all rows, or rerun with start_from_idx={suggested_start} "
+                f"Run the global step for all rows, or rerun with step_start_idx={suggested_start} "
                 f"if that step has already been executed. If you need different values per row, "
                 f"refactor that step to be per-row instead of global."
             )
 
     def _validate_global_step_overwrite(
-        self,
-        step,
-        user_params,
-        pipeline_scope,
-        step_index,
+        self, step, user_params, pipeline_scope, step_index,
         allow_global_step_overwrite,
     ):
         """

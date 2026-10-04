@@ -3,8 +3,9 @@ import numpy as np
 ################################################################################
 ##################### Cut fine sweep for fitting x vs theta ####################
 ################################################################################
-def get_xcal_mask(ff, theta_f, theta_t, idx0_offset = 3, idx1_offset = 7,
-                  std_cutoff = 12):
+def get_xcal_mask(
+    ff, theta_f, theta_t, idx0_offset = 3, idx1_offset = 7, std_cutoff = 12
+):
     """
     Get mask of the fine s21 sweep over which x vs theta should be fit to 
     produce the x calibration. Chooses the indices where theta_f (after glitch 

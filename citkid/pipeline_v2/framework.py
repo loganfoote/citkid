@@ -291,8 +291,8 @@ class LazyAttr:
 ################################################################################
 class plStep:
     def __init__(
-            self, name, func, param_names, return_names, func_type = "per-row"
-            ):
+        self, name, func, param_names, return_names, func_type = "per-row"
+    ):
         """
         Class to represent a step in the analysis or calibration pipeline.
 

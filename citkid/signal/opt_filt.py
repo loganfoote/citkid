@@ -119,8 +119,9 @@ def create_nsd(s, nfft):
 ################################################################################
 ############################## Iterative Procedure #############################
 ################################################################################
-def iterate_of(s, j, start_idx, build_template, get_start_idx,
-               N_iter = 10, verbose = True):
+def iterate_of(
+    s, j, start_idx, build_template, get_start_idx, N_iter = 10, verbose = True
+):
     """
     Create an optimal filter template using a minimal iterative procedure.
 

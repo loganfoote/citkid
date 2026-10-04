@@ -495,8 +495,9 @@ def test_parser_to_zarr_invalid_input(kwargs, expected_error, tmp_path):
 ############################ Functional Tests ##################################
 ################################################################################
 
-def _create_mock_parser_files(tmp_path, crs_sn, module_idxs, max_ntones, 
-                               n_samples_per_file, dtype):
+def _create_mock_parser_files(
+    tmp_path, crs_sn, module_idxs, max_ntones, n_samples_per_file, dtype
+):
     """
     Create mock parser files with known data patterns.
     

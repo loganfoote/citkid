@@ -23,8 +23,7 @@ def mock_crs_for_set_clock(base_crs):
 
 
 @pytest.mark.asyncio
-async def test_set_clock_source_vcxo_success(mock_crs_for_set_clock,
-                                             capsys):
+async def test_set_clock_source_vcxo_success(mock_crs_for_set_clock, capsys):
     """Test setting clock source to VCXO successfully."""
     crs = mock_crs_for_set_clock
     crs.d.get_clock_source = AsyncMock(return_value = 'VCXO')
@@ -44,8 +43,7 @@ async def test_set_clock_source_vcxo_success(mock_crs_for_set_clock,
 
 
 @pytest.mark.asyncio
-async def test_set_clock_source_sma_success(mock_crs_for_set_clock,
-                                            capsys):
+async def test_set_clock_source_sma_success(mock_crs_for_set_clock, capsys):
     """Test setting clock source to SMA successfully."""
     crs = mock_crs_for_set_clock
     crs.d.get_clock_source = AsyncMock(return_value = 'SMA')
@@ -83,8 +81,7 @@ async def test_set_clock_source_fallback_warning(mock_crs_for_set_clock):
 
 @pytest.mark.asyncio
 async def test_set_clock_source_verbose_false_no_print(
-    mock_crs_for_set_clock,
-    capsys
+    mock_crs_for_set_clock, capsys
 ):
     """Test that verbose = False suppresses output."""
     crs = mock_crs_for_set_clock
@@ -99,8 +96,7 @@ async def test_set_clock_source_verbose_false_no_print(
 
 @pytest.mark.asyncio
 async def test_set_clock_source_verbose_true_with_warning(
-    mock_crs_for_set_clock,
-    capsys
+    mock_crs_for_set_clock, capsys
 ):
     """Test that print occurs even when warning is raised."""
     crs = mock_crs_for_set_clock

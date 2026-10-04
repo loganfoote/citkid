@@ -18,8 +18,9 @@ Q_vs_T_tls_labels = [r'$f_0$', r'$F\delta_0$', r'$\delta_z$']
 ################################################################################
 ############### Resonance shift from thermal QP density and TLS ################
 ################################################################################
-def make_fit_row_f_vs_T(p0, popt, perr, gamma, plot_path = '',
-                            prefix = 'f_vs_T'):
+def make_fit_row_f_vs_T(
+    p0, popt, perr, gamma, plot_path = '', prefix = 'f_vs_T'
+):
     """
     Wrap the output of fit_f_vs_T fitting into a pd.Series instance
 
@@ -80,8 +81,9 @@ def separate_fit_row_f_vs_T(row, prefix = 'f_vs_T'):
     gamma = row[prefix + 'gamma']
     return p0, popt, perr, gamma, plot_path
 
-def make_fit_row_Q_vs_T(p0, popt, perr, gamma, plot_path = '',
-                            prefix = 'Q_vs_T'):
+def make_fit_row_Q_vs_T(
+    p0, popt, perr, gamma, plot_path = '', prefix = 'Q_vs_T'
+):
     """
     Wrap the output of fit_Q_vs_T fitting into a pd.Series instance
 
@@ -145,8 +147,9 @@ def separate_fit_row_Q_vs_T(row, prefix = 'Q_vs_T'):
 ################################################################################
 ################### Resonance shift from thermal QP density ####################
 ################################################################################
-def make_fit_row_f_vs_T_qp(p0, popt, perr, gamma, plot_path = '',
-                                  prefix = 'f_vs_T_qp'):
+def make_fit_row_f_vs_T_qp(
+    p0, popt, perr, gamma, plot_path = '', prefix = 'f_vs_T_qp'
+):
     """
     Wrap the output of fit_f_vs_T_qp fitting into a pd.Series instance.
 
@@ -207,8 +210,9 @@ def separate_fit_row_f_vs_T_qp(row, prefix = 'f_vs_T_qp'):
     gamma = row[prefix + 'gamma']
     return p0, popt, perr, gamma, plot_path
 
-def make_fit_row_Q_vs_T_qp(p0, popt, perr, gamma, plot_path = '',
-                                 prefix = 'Q_vs_T_qp'):
+def make_fit_row_Q_vs_T_qp(
+    p0, popt, perr, gamma, plot_path = '', prefix = 'Q_vs_T_qp'
+):
     """
     Wrap the output of fit_Q_vs_T_qp fitting into a pd.Series instance.
 
@@ -272,8 +276,9 @@ def separate_fit_row_Q_vs_T_qp(row, prefix = 'Q_vs_T_qp'):
 ################################################################################
 ########################### Resonance shift from TLS ###########################
 ################################################################################
-def make_fit_row_f_vs_T_tls(p0, popt, perr, plot_path = '',
-                            prefix = 'f_vs_T_tls'):
+def make_fit_row_f_vs_T_tls(
+    p0, popt, perr, plot_path = '', prefix = 'f_vs_T_tls'
+):
     """
     Wrap the output of fit_f_vs_T_tls fitting into a pd.Series instance.
 
@@ -330,8 +335,9 @@ def separate_fit_row_f_vs_T_tls(row, prefix = 'f_vs_T_tls'):
     p0, popt, perr = np.array(p0), np.array(popt), np.array(perr)
     return p0, popt, perr, plot_path
 
-def make_fit_row_Q_vs_T_tls(p0, popt, perr, plot_path = '',
-                            prefix = 'Q_vs_T_tls'):
+def make_fit_row_Q_vs_T_tls(
+    p0, popt, perr, plot_path = '', prefix = 'Q_vs_T_tls'
+):
     """
     Wrap the output of fit_Q_vs_T_tls fitting into a pd.Series instance.
 

@@ -120,8 +120,10 @@ class NEPFitWindow(QtWidgets.QMainWindow):
     closes.
     """
 
-    def __init__(self, powers, neps, nu, p_min=None, nep_errs=None, names=None, group=None,
-                 data_idxs=None, title='NEP Fit', ui_scale=1.0, parent=None):
+    def __init__(
+        self, powers, neps, nu, p_min=None, nep_errs=None, names=None,
+        group=None, data_idxs=None, title='NEP Fit', ui_scale=1.0, parent=None
+    ):
         """
         Build the window. See the class docstring for parameters.
         """
@@ -533,8 +535,10 @@ class NEPFitWindow(QtWidgets.QMainWindow):
         super().closeEvent(event)
 
 
-def run_nep_fit(powers, neps, nu, p_min=None, nep_errs=None, names=None, group=None,
-                data_idxs=None, title='NEP Fit', ui_scale=1.0):
+def run_nep_fit(
+    powers, neps, nu, p_min=None, nep_errs=None, names=None, group=None,
+    data_idxs=None, title='NEP Fit', ui_scale=1.0
+):
     """
     Open the NEP fit window, wait until it is closed, and return the results.
 

@@ -194,8 +194,9 @@ m = "theta,A,radius,dt,get_freqs,freq_exp,spar_exp,sper_exp"
     (y, y, 1, 0.1, True, freq_exp, y_exp, y_exp),
     ([10], [1], -1, 0.5, True, [0], [20], [0]),  # negative radius symmetry
 ])
-def test_get_spar_sper(theta, A, radius, dt, get_freqs, 
-                       freq_exp, spar_exp, sper_exp):    
+def test_get_spar_sper(
+    theta, A, radius, dt, get_freqs, freq_exp, spar_exp, sper_exp
+):    
     freq, spar, sper = circle.get_spar_sper(theta, A, radius, dt, get_freqs)
 
     assert isinstance(spar, np.ndarray)

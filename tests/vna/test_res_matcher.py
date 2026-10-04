@@ -1120,8 +1120,9 @@ def _reopen_matcher(simple_data, grp_path, choice, **kwargs):
     ('load', 1.0e6, 1.0e6),       # explicit offset overrides saved one
     ('overwrite', None, 0.0),     # fresh start ignores saved offset
 ])
-def test_ds2_offset_saved_and_restored(matcher, simple_data, tmp_path,
-                                       choice, passed, expected):
+def test_ds2_offset_saved_and_restored(
+    matcher, simple_data, tmp_path, choice, passed, expected
+):
     """
     Save the DS2 display offset and restore it only on load without an
     explicit offset.

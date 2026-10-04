@@ -216,7 +216,32 @@ class TestVectorize:
                 ar.execute_path(data_idx=[0, 1], vectorize=False, path_per_row=path_per_row,
                                 verbose=False)
 
-    @pytest.mark.parametrize("old_kwarg", [{"execution_mode": "per-row"}, {"execute_per_row": True}])
+    @pytest.mark.parametrize("start, end, expected", [
+        (0, None, ["load_vector", "vec_mult", "row_add"]),
+        (1, None, ["vec_mult", "row_add"]),
+        (0, 2, ["load_vector", "vec_mult"]),
+        (1, 2, ["vec_mult"]),
+    ])
+    def test_execute_path_step_range(self, options_fixture, start, end, expected):
+        _, ar, _ = _make_runner(options_fixture)
+        if start > 0:
+            ar.execute_step(_step(ar, "load_vector"), save=True)
+        ran = []
+        original = ar.execute_step
+        ar.execute_step = lambda step, **kw: (ran.append(step.name), original(step, **kw))[1]
+
+        ar.execute_path(step_start_idx=start, step_end_idx=end, verbose=False)
+
+        assert ran == expected
+
+    @pytest.mark.parametrize("start, end", [(3, None), (2, 2), (5, 7)])
+    def test_execute_path_empty_step_range_raises(self, options_fixture, start, end):
+        _, ar, _ = _make_runner(options_fixture)
+        with pytest.raises(ValueError, match="select no steps.*not data indices"):
+            ar.execute_path(step_start_idx=start, step_end_idx=end, verbose=False)
+
+    @pytest.mark.parametrize("old_kwarg", [{"execution_mode": "per-row"}, {"execute_per_row": True},
+                                           {"start_from_idx": 1}])
     def test_old_keyword_names_are_rejected(self, options_fixture, old_kwarg):
         _, ar, _ = _make_runner(options_fixture)
 

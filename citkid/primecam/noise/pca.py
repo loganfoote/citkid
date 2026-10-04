@@ -3,7 +3,7 @@ import numpy as np
 import warnings 
 
 warnings.warn(
-    "citkid.noise.pca is deprecated and will be removed in version 1.0.0"
+    "citkid.primecam.noise.pca is deprecated and will be removed in version 1.0.0"
     "Please use citkid.xcal.corr module for correlated noise removal.",
     DeprecationWarning,
     stacklevel=2,

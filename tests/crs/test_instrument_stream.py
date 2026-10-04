@@ -26,16 +26,8 @@ def create_mock_zarr_group():
 
 
 def mock_validate_stream_return(
-    ts_duration_s,
-    dec_stage,
-    ch_map,
-    allow_missing,
-    tmp_directory,
-    data_directory,
-    batch_size_mb,
-    chunk_size_mb,
-    delete_parser_data,
-    verbose,
+    ts_duration_s, dec_stage, ch_map, allow_missing, tmp_directory,
+    data_directory, batch_size_mb, chunk_size_mb, delete_parser_data, verbose,
 ):
     """Create a return tuple for mocked _validate_stream_input."""
     return (
@@ -92,7 +84,7 @@ async def test_capture_ts_basic(base_crs, mock_write_system_cfg_to_zarr):
     
     # Verify channels cleared before write_tones
     assert crs._clear_channels.call_count == 2
-    assert crs._clear_channels.call_args_list[0] == call(range(1, 5))
+    assert crs._clear_channels.call_args_list[0] == call([1, 2, 3, 4])
     
     # Verify write_tones called with correct parameters
     crs.write_tones.assert_called_once()
@@ -114,11 +106,12 @@ async def test_capture_ts_basic(base_crs, mock_write_system_cfg_to_zarr):
         batch_size_mb = 1000.0,
         chunk_size_mb = 128.0,
         delete_parser_data = True,
-        verbose = False
+        verbose = False,
+        method = 'parser'
     )
-    
+
     # Verify channels cleared after stream (in finally)
-    assert crs._clear_channels.call_args_list[1] == call(range(1, 5))
+    assert crs._clear_channels.call_args_list[1] == call([1, 2, 3, 4])
 
     grp.require_group.assert_called_once_with('crs_config')
     mock_write_system_cfg_to_zarr.assert_called_once_with(
@@ -184,7 +177,7 @@ async def test_capture_ts_stream_parameters(base_crs):
     fres = np.array([4.0e9])
     ares = np.array([-50.0])
     ts_duration_s = 20.0
-    dec_stage = 7
+    dec_stage = 5
     grp = create_mock_zarr_group()
     tmp_directory = 'custom_tmp/'
     batch_size_mb = 500
@@ -214,7 +207,8 @@ async def test_capture_ts_stream_parameters(base_crs):
         batch_size_mb = float(batch_size_mb),
         chunk_size_mb = float(chunk_size_mb),
         delete_parser_data = delete_parser_data,
-        verbose = True
+        verbose = True,
+        method = 'parser'
     )
 
 
@@ -236,8 +230,8 @@ async def test_capture_ts_analog_bank_low(base_crs):
     
     # Should clear modules 1-4 (range(1, 5))
     assert crs._clear_channels.call_count == 2
-    assert crs._clear_channels.call_args_list[0] == call(range(1, 5))
-    assert crs._clear_channels.call_args_list[1] == call(range(1, 5))
+    assert crs._clear_channels.call_args_list[0] == call([1, 2, 3, 4])
+    assert crs._clear_channels.call_args_list[1] == call([1, 2, 3, 4])
 
 
 @pytest.mark.asyncio
@@ -258,8 +252,8 @@ async def test_capture_ts_analog_bank_high(base_crs):
     
     # Should clear modules 5-8 (range(5, 9))
     assert crs._clear_channels.call_count == 2
-    assert crs._clear_channels.call_args_list[0] == call(range(5, 9))
-    assert crs._clear_channels.call_args_list[1] == call(range(5, 9))
+    assert crs._clear_channels.call_args_list[0] == call([5, 6, 7, 8])
+    assert crs._clear_channels.call_args_list[1] == call([5, 6, 7, 8])
 
 
 @pytest.mark.asyncio
@@ -290,10 +284,10 @@ async def test_capture_ts_clears_before_write(base_crs):
         )
     
     # Verify order: clear, write, stream, clear
-    assert call_order[0] == ('clear', range(1, 5))
+    assert call_order[0] == ('clear', [1, 2, 3, 4])
     assert call_order[1] == 'write'
     assert call_order[2] == 'stream'
-    assert call_order[3] == ('clear', range(1, 5))
+    assert call_order[3] == ('clear', [1, 2, 3, 4])
 
 
 @pytest.mark.asyncio
@@ -351,13 +345,13 @@ async def test_capture_ts_clears_on_stream_failure(base_crs):
     
     # Verify channels cleared before and after (in finally block)
     assert crs._clear_channels.call_count == 2
-    assert crs._clear_channels.call_args_list[0] == call(range(1, 5))
-    assert crs._clear_channels.call_args_list[1] == call(range(1, 5))
+    assert crs._clear_channels.call_args_list[0] == call([1, 2, 3, 4])
+    assert crs._clear_channels.call_args_list[1] == call([1, 2, 3, 4])
 
 
 @pytest.mark.asyncio
 async def test_capture_ts_clears_on_write_failure(base_crs):
-    """Test that capture_ts doesn't clear again if write_tones fails."""
+    """Test that capture_ts clears channels again if write_tones fails."""
     crs = base_crs
     crs.analog_bank_high = False
     
@@ -374,9 +368,10 @@ async def test_capture_ts_clears_on_write_failure(base_crs):
                 10.0, 6, create_mock_zarr_group(), verbose = False
             )
     
-    # Only cleared once (before write_tones), stream never called
-    assert crs._clear_channels.call_count == 1
-    assert crs._clear_channels.call_args_list[0] == call(range(1, 5))
+    # Cleared before write_tones and again after the failure, stream never
+    # called
+    assert crs._clear_channels.call_count == 2
+    assert crs._clear_channels.call_args_list[0] == call([1, 2, 3, 4])
     crs.stream.assert_not_called()
 
 
@@ -1184,7 +1179,7 @@ async def test_stream_catches_system_exit(base_crs):
 
 @pytest.mark.asyncio
 async def test_stream_empty_fres_map(base_crs):
-    """Test stream handles empty fres_map correctly."""
+    """Test stream raises if no tones are written."""
     crs = base_crs
     crs.fres_map = {}  # Empty
     crs.ares_map = {}
@@ -1197,35 +1192,19 @@ async def test_stream_empty_fres_map(base_crs):
     grp = create_mock_zarr_group()
     crs.set_decimation = AsyncMock()
     
-    with patch('citkid.crs.instrument._validate_stream_input') as mock_validate, \
-         patch('citkid.crs.util.parser_to_zarr'), patch('rfmux.tools.parser', create = True) as mock_parser, \
-         patch('citkid.crs.util.parser_to_zarr'), \
-         patch('citkid.crs.instrument.shutil.rmtree'):
-        
+    with patch('citkid.crs.instrument._validate_stream_input') as mock_validate:
         mock_validate.return_value = mock_validate_stream_return(
-            10.0,
-            6,
-            crs.ch_map,
-            False,
-            '/tmp',
-            '/tmp/parser_data_00',
-            1000,
-            128,
-            True,
-            False,
+            10.0, 6, crs.ch_map, False, '/tmp', '/tmp/parser_data_00',
+            1000, 128, True, False,
         )
-        mock_parser.main = MagicMock(side_effect = SystemExit(0))
-        
-        await crs.stream(
-            ts_duration_s = 10.0,
-            dec_stage = 6,
-            grp = grp,
-            verbose = False
-        )
-        
-        # Verify parser arguments use max_ntones = 0
-        args = mock_parser.main.call_args[0]
-        assert args[5] == '1-0'  # chs = '1-0' when empty
+        with pytest.raises(RuntimeError, match = 'No tones are written'):
+            await crs.stream(
+                ts_duration_s = 10.0,
+                dec_stage = 6,
+                grp = grp,
+                verbose = False
+            )
+    crs.set_decimation.assert_not_called()
 
 
 @pytest.mark.asyncio

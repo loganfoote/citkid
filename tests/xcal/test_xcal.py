@@ -43,8 +43,9 @@ ffine2, tfine2 = np.flip(ffine), np.flip(tfine)
     (ffine, tfine1, tnoise, 0, 0, None, np.arange(39, 62, 1, dtype = np.int32)),
     ([], [], [2.5], 0, 0, None, np.array([], dtype = np.int32)),
 ])
-def test_get_xcal_mask(ffine, tfine, tnoise, ix0_offset, ix1_offset, 
-                      std_cutoff, ix_exp):
+def test_get_xcal_mask(
+    ffine, tfine, tnoise, ix0_offset, ix1_offset, std_cutoff, ix_exp
+):
     mask = xcal.get_xcal_mask(ffine, tfine, tnoise, 
                               ix0_offset, ix1_offset, std_cutoff)
     assert isinstance(mask, np.ndarray)
@@ -62,8 +63,9 @@ def test_get_xcal_mask(ffine, tfine, tnoise, ix0_offset, ix1_offset,
     ([1, 3, 2], [1, 2, 3], [2], 1, 1, 1),  # ffine not sorted
     (ffine2, tfine2, [20.5], 1, 1, None),  # ffine and tfine not sorted
 ])  
-def test_get_xcal_idx_invalid_input(ffine, tfine, tnoise, ix0_offset, 
-                                    ix1_offset, std_cutoff):
+def test_get_xcal_idx_invalid_input(
+    ffine, tfine, tnoise, ix0_offset, ix1_offset, std_cutoff
+):
     with pytest.raises(Exception):
         xcal.get_xcal_mask(ffine, tfine, tnoise, 
                            ix0_offset, ix1_offset, std_cutoff)
@@ -78,8 +80,9 @@ def test_get_xcal_idx_invalid_input(ffine, tfine, tnoise, ix0_offset,
     # NaN in tfine should also fail
     (ffine, [np.nan] * len(ffine), [20.5], 0, 0, None),
 ])
-def test_get_xcal_mask_additional_invalid(ffine, tfine, tnoise, ix0_offset, 
-                                          ix1_offset, std_cutoff):
+def test_get_xcal_mask_additional_invalid(
+    ffine, tfine, tnoise, ix0_offset, ix1_offset, std_cutoff
+):
     with pytest.raises(Exception):
         xcal.get_xcal_mask(ffine, tfine, tnoise, ix0_offset, ix1_offset, 
                            std_cutoff)

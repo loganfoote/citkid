@@ -1,19 +1,21 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from ..res.plot import plot_circle
+from ..plot import plot_circle
 from .psd import bin_psd
-from ..util import combine_figs_horz
+from ...util import combine_figs_horz
 
 import warnings 
 
 warnings.warn(
-    "citkid.noise.plot is deprecated and will be removed in version 1.0.0",
+    "citkid.primecam.noise.plot is deprecated and will be removed in version 1.0.0",
     DeprecationWarning,
     stacklevel=2,
 )
 
-def plot_cal(ffine, zfine, popt_circle, fnoise, znoise, znoise_offres,
-             theta_range, theta_fine, theta, poly, ixs):
+def plot_cal(
+    ffine, zfine, popt_circle, fnoise, znoise, znoise_offres, theta_range,
+    theta_fine, theta, poly, ixs
+):
     """
     Plot theta and x calibration. Left plot is the IQ loop with noise, and right
     plot is the theta to x calibration, if on-resonance noise is provided.
@@ -117,8 +119,9 @@ def plot_cal(ffine, zfine, popt_circle, fnoise, znoise, znoise_offres,
         fig = combine_figs_horz([fig, fig2])
     return fig
 
-def plot_timestream(dt, theta, theta_clean, dt_offres, theta_offres, x,
-                    cr_indices):
+def plot_timestream(
+    dt, theta, theta_clean, dt_offres, theta_offres, x, cr_indices
+):
     """
     Plot noise timestreams. If theta is None, plots only the off-resonance
     theta timestream. If theta_offres is None, plots only the on-resonance

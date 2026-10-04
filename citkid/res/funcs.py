@@ -180,25 +180,6 @@ def linear_iq(f, fr, Qr, amp, phi, i0, q0, tau):
     z = s21_readout * s21_res
     return z
 
-@njit(float64(float64[:], float64[:], float64[:]), cache = True)
-def circle_objective(params, x, y):
-    """
-    Compute the objective for circle fitting. Legacy code: use 
-    citkid.xcal.circle.circle_objective.
-
-    Parameters:
-    params (A: float, B: float, R: float): circle fit parameters. (A, B) is the
-        origin and R is the radius.
-    x (np.array): x data.
-    y (np.array): y data.
-
-    Returns:
-    error (float): error for minimization.
-    """
-    A, B, R = params
-    error = sum(((x - A) ** 2 + (y - B) ** 2 - R ** 2) ** 2)
-    return error
-
 ################################################################################
 ####################### nonlinear_iq for fitter ################################
 ################################################################################

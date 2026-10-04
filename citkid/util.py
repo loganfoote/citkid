@@ -9,8 +9,10 @@ import time
 import threading
 from tqdm.auto import tqdm
 
-def save_fig(fig, filename, plot_directory, ftype = 'png',
-             tight_layout = False, close_fig = True):
+def save_fig(
+    fig, filename, plot_directory, ftype = 'png', tight_layout = False,
+    close_fig = True
+):
     """
     Save a matplotlib figure to disk with standard settings.
 

@@ -321,10 +321,14 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
     xy_fit (SeriesXYFit or None): Optional fit of the series plot's y vs x
         data, one per resonator. Each resonator is fitted once its series points
         are pre-fitted, and again whenever its plotted x or y data changes.
-        The fitted curve is drawn on the series plot and the outputs shown in
-        its title. Fits are saved to ``xy_fit.group``, or to
+        The fitted curve is drawn on the series plot and the parameters shown
+        in its title. Fits are saved to ``xy_fit.group``, or to
         ``state_group/xy_fit`` if that is None (in memory if there is no
-        state group either). None (default) disables fitting.
+        state group either), as one ``popt`` array of shape (nrows, M) (see
+        ``SeriesXYFitStore``). If the fit ``uses_guess``, the guess used for
+        the open resonator is shown in inputs below the series plot; editing
+        them refits with that guess (kept for that resonator), and Reset
+        returns to the fit's own guess. None (default) disables fitting.
     panels (list of tuple or None): Step-name groups, one panel each, in
         order. None (default) uses the IQ panels ``[('fit_gain',),
         ('fit_iq',)]``.
@@ -360,27 +364,11 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
     """
 
     def __init__(
-        self,
-        ARs,
-        x_param_name,
-        x_name,
-        y_func,
-        y_name,
-        start_series_idx=0,
-        start_idx=None,
-        data_idxs=None,
-        title="IQ Series",
-        ui_scale=1.0,
-        plot_scale=1.0,
-        parent=None,
-        state_group=None,
-        xy_fit=None,
-        panels=None,
-        precompute_values=False,
-        background_fitting=False,
-        x_values=None,
-        xscale='linear',
-        yscale='linear',
+        self, ARs, x_param_name, x_name, y_func, y_name, start_series_idx=0,
+        start_idx=None, data_idxs=None, title="IQ Series", ui_scale=1.0,
+        plot_scale=1.0, parent=None, state_group=None, xy_fit=None, panels=None,
+        precompute_values=False, background_fitting=False, x_values=None,
+        xscale='linear', yscale='linear',
     ):
         """
         Build the window, toolbar, series plots and analysis panels.
@@ -616,7 +604,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         total = (self.width() - margins.left() - margins.right()
                  - self._splitter.handleWidth())
         # The splitter honours an explicit minimum width as well as the hint.
-        plots_min = max(self._gw.minimumSizeHint().width(), self._gw.minimumWidth())
+        plots = self._plots_widget
+        plots_min = max(plots.minimumSizeHint().width(), plots.minimumWidth())
         panels = max(round(0.6 * total), scroll_area_min_width(self._right_scroll))
         panels = min(panels, total - plots_min)
         return [total - panels, panels]
@@ -636,7 +625,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         """
         splitter_height = max(
             scroll_area_content_height(self._right_scroll, width=self._splitter_sizes()[1]),
-            max(self._gw.minimumSizeHint().height(), self._gw.minimumHeight()),
+            max(self._plots_widget.minimumSizeHint().height(), self._plots_widget.minimumHeight()),
         )
         return vbox_height_for_width(
             self.centralWidget().layout(), self.width(),
@@ -825,7 +814,43 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         scale_plot_fonts(self._ui_scale, self._plot_series, self._plot_waterfall)
 
         self._gw = gw
-        return gw
+        self._plots_widget = gw
+        self._guess_edits = []
+        if self._xy_fit is not None and self._xy_fit.uses_guess:
+            container = QtWidgets.QWidget()
+            column = QtWidgets.QVBoxLayout(container)
+            column.setContentsMargins(0, 0, 0, 0)
+            column.addWidget(gw, 1)
+            column.addWidget(self._build_guess_inputs())
+            self._plots_widget = container
+        return self._plots_widget
+
+    def _build_guess_inputs(self) -> QtWidgets.QWidget:
+        """
+        Build the inputs for the xy fit's guess, two parameters per row.
+
+        Returns:
+        widget (QWidget): the guess inputs, with a status label and a Reset
+            button.
+        """
+        box = QtWidgets.QWidget()
+        grid = QtWidgets.QGridLayout(box)
+        grid.setContentsMargins(4, 2, 4, 2)
+        self._guess_status = QtWidgets.QLabel('xy fit guess')
+        reset = QtWidgets.QPushButton('Reset')
+        reset.setToolTip("Refit with the fit's own guess")
+        reset.clicked.connect(self._reset_xy_guess)
+        grid.addWidget(self._guess_status, 0, 0, 1, 3)
+        grid.addWidget(reset, 0, 3)
+        for i, name in enumerate(self._xy_fit.param_names):
+            row, col = 1 + i // 2, 2 * (i % 2)
+            edit = QtWidgets.QLineEdit()
+            edit.setToolTip(f'Guess of {name}; press Enter to refit with it')
+            edit.editingFinished.connect(self._on_xy_guess_edited)
+            grid.addWidget(QtWidgets.QLabel(f'{name}:'), row, col)
+            grid.addWidget(edit, row, col + 1)
+            self._guess_edits.append(edit)
+        return box
 
     def eventFilter(self, obj, event):
         if event.type() == QtCore.QEvent.Type.KeyPress and self.isActiveWindow():
@@ -1575,16 +1600,16 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         """
         Ensure global-prefix analysis steps exist once, then run the per-row suffix.
         """
-        start_from_idx = self._global_prefix_length(AR)
-        for step_dict in AR.path[:start_from_idx]:
+        step_start_idx = self._global_prefix_length(AR)
+        for step_dict in AR.path[:step_start_idx]:
             step = step_dict['task']
             step_data_idx = None if step.func_type == 'global' else data_idx
             if self._step_outputs_exist(AR, step, data_idx=step_data_idx):
                 continue
             AR.execute_step(step, data_idx=None, save=True)
 
-        if start_from_idx < len(AR.path):
-            AR.execute_path(data_idx=data_idx, start_from_idx=start_from_idx, save=True, verbose=False)
+        if step_start_idx < len(AR.path):
+            AR.execute_path(data_idx=data_idx, step_start_idx=step_start_idx, save=True, verbose=False)
 
     def _start_background_initialize_remaining(self):
         """
@@ -2201,45 +2226,122 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         di = self._data_idx
         x = self._get_x_array(di).copy()
         y = self._get_y_array(di).copy()
-        outputs, error = self._fit_and_save_xy(di, x, y)
+        popt, p0, error = self._fit_and_save_xy(di, x, y)
+        self._show_xy_fit(x, popt, p0, error)
+
+    def _show_xy_fit(self, x, popt, p0, error):
+        """
+        Draw the open resonator's xy fit, its parameters, and its guess.
+
+        Parameters:
+        x (np.ndarray): plotted x values (for the curve's range).
+        popt (np.ndarray or None): fitted parameters, or None.
+        p0 (np.ndarray or None): guess used, or None.
+        error (str or None): error message if the fit raised.
+        """
         xs, ys = self._xy_fit.curve(
-            x, outputs, log_x=self._plot_series.ctrl.logXCheck.isChecked())
+            x, popt, log_x=self._plot_series.ctrl.logXCheck.isChecked())
         self._xy_fit_curve.setData([] if xs is None else xs, [] if ys is None else ys)
         if error is not None:
             detail = f'fit failed ({error})'
             self._apply_status_label.setText('xy fit failed')
-        elif outputs is None:
+        elif popt is None:
             detail = 'no fit'
         else:
-            detail = self._xy_fit.describe(outputs)
+            detail = self._xy_fit.describe(popt)
         self._plot_series.setTitle(f'Series  |  {self._xy_fit.name}: {detail}')
+        if self._guess_edits:
+            saved = self._xy_store.load(self._data_idx)
+            user = saved is not None and saved.p0_user
+            self._guess_status.setText(
+                'xy fit guess (yours; Reset for automatic)' if user else 'xy fit guess (automatic)')
+            for i, edit in enumerate(self._guess_edits):
+                edit.blockSignals(True)
+                edit.setText('' if p0 is None else f'{p0[i]:.6g}')
+                edit.blockSignals(False)
+            self._shown_guess = None if p0 is None else np.asarray(p0, dtype=float)
 
-    def _fit_and_save_xy(self, data_idx: int, x, y):
+    def _on_xy_guess_edited(self):
+        """
+        Refit the open resonator with the guess typed in the inputs.
+
+        Does nothing if the guess didn't change; shows an error (and restores
+        the shown guess) if an input isn't a number.
+        """
+        try:
+            p0 = np.array([float(edit.text()) for edit in self._guess_edits])
+        except ValueError:
+            self._apply_status_label.setText('xy fit guess: every input must be a number')
+            self._refresh_xy_fit()
+            return
+        shown = getattr(self, '_shown_guess', None)
+        if shown is not None and np.allclose(p0, shown, rtol=1e-6, atol=0):
+            return
+        self._refit_xy(p0=p0)
+
+    def _reset_xy_guess(self):
+        """
+        Refit the open resonator with the fit's own guess.
+        """
+        self._refit_xy(reset_guess=True)
+
+    def _refit_xy(self, p0=None, reset_guess=False):
+        """
+        Refit the open resonator with a given guess, or the fit's own, and show it.
+
+        Parameters:
+        p0 (np.ndarray or None): the user's guess, or None.
+        reset_guess (bool): If True, drop a saved user guess and use the
+            fit's own guess.
+        """
+        di = self._data_idx
+        x = self._get_x_array(di).copy()
+        y = self._get_y_array(di).copy()
+        popt, used, error = self._fit_and_save_xy(di, x, y, p0=p0, reset_guess=reset_guess)
+        self._show_xy_fit(x, popt, used, error)
+
+    def _fit_and_save_xy(self, data_idx: int, x, y, p0=None, reset_guess=False):
         """
         Fit one resonator's series data and save it, unless the saved fit used
-        the same inputs.
+        the same inputs (and no new guess is given).
 
+        A guess the user entered for the resonator is saved and reused when
+        it is refitted (e.g. after its data changed), until ``reset_guess``.
         Safe to call from the UI thread and the background worker.
 
         Parameters:
         data_idx (int): Resonator index.
         x (np.ndarray): x value of each series index (NaN if unavailable).
         y (np.ndarray): y value of each series index (NaN if unavailable).
+        p0 (np.ndarray or None): a new guess from the user, which forces a
+            refit; or None (default) to use the saved user guess, if any, or
+            the fit's own guess.
+        reset_guess (bool): If True, refit with the fit's own guess and
+            forget a saved user guess. Default False.
 
         Returns:
-        outputs (list of np.ndarray or None): Fit outputs, or None if the fit
+        popt (np.ndarray or None): fitted parameters, or None if the fit
             failed or there were too few points.
+        p0 (np.ndarray or None): guess used, or None.
         error (str or None): Error message if the fit raised, else None.
         """
         store = self._xy_store
-        if store.is_current(data_idx, x, y):
-            return store.load(data_idx)[2], None
+        saved = store.load(data_idx)
+        user = p0 is not None
+        if not user and not reset_guess:
+            if saved is not None and store.is_current(data_idx, x, y):
+                return saved.popt, saved.p0, None
+            if saved is not None and saved.p0_user and saved.p0 is not None:
+                p0, user = saved.p0, True
         try:
-            outputs, error = self._xy_fit.run(x, y), None
+            popt, used = self._xy_fit.run(x, y, p0=p0)
+            error = None
         except Exception as exc:
-            outputs, error = None, f'{type(exc).__name__}: {exc}'
-        store.save(data_idx, x, y, outputs)
-        return outputs, error
+            popt, used, error = None, None, f'{type(exc).__name__}: {exc}'
+        if used is None and user:
+            used = p0  # keep the user's guess even if the fit couldn't run
+        store.save(data_idx, x, y, popt, used, p0_user=user)
+        return popt, used, error
 
     def _fit_xy_in_background(self, worker_ars, data_idx: int, x=None, y=None):
         """
@@ -2256,7 +2358,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         if x is None or y is None:
             x, y = self._compute_row_values(worker_ars, data_idx, store=False)
         try:
-            _, error = self._fit_and_save_xy(data_idx, x, y)
+            _, _, error = self._fit_and_save_xy(data_idx, x, y)
             if error is not None:
                 print(f'[init-all] xy fit for data_idx={data_idx} failed: {error}')
         except Exception as exc:
@@ -2303,25 +2405,11 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 ################################################################################
 
 def run_iq_series(
-    make_custom_steps=None,
-    cal_yaml_path='iq',
-    analysis_yaml_path='iq',
-    root=None,
-    n_series=None,
-    x_param_name='ares',
-    x_name=None,
-    y_param_name='a',
-    start_series_idx=0,
-    start_idx=None,
-    data_idxs=None,
-    title="IQ Series",
-    ui_scale=1.0,
-    plot_scale=1.0,
-    xy_fit=None,
-    datasets=None,
-    x_values=None,
-    xscale='linear',
-    yscale='linear',
+    make_custom_steps=None, cal_yaml_path='iq', analysis_yaml_path='iq',
+    root=None, n_series=None, x_param_name='ares', x_name=None,
+    y_param_name='a', start_series_idx=0, start_idx=None, data_idxs=None,
+    title="IQ Series", ui_scale=1.0, plot_scale=1.0, xy_fit=None, datasets=None,
+    x_values=None, xscale='linear', yscale='linear',
 ):
     """
     Build one AnalysisRunner per series index, then launch the IQSeriesWindow.
@@ -2375,8 +2463,10 @@ def run_iq_series(
         ``y_param_name`` vs x data, one per resonator. Each resonator is
         fitted once all its series points are pre-fitted in the background, and
         again whenever its plotted data changes. Fits are saved to
-        ``xy_fit.group``, or ``root/xy_fit`` if that is None. None (default)
-        disables fitting.
+        ``xy_fit.group``, or ``root/xy_fit`` if that is None, as one ``popt``
+        array of shape (nrows, M) (and ``p0``, the guesses, if the fit
+        ``uses_guess``; the window then shows editable guess inputs). None
+        (default) disables fitting.
     datasets (list of DataSet or None): One existing DataSet per series
         point, in order, all with the same number of rows. Their stored
         data is used and extended; the background worker opens its own
@@ -2461,8 +2551,10 @@ def run_iq_series(
     return win
 
 
-def series_runners(make_custom_steps=None, datasets=None, cal_yaml_path='iq',
-                   analysis_yaml_path='iq', root=None, n_series=None):
+def series_runners(
+    make_custom_steps=None, datasets=None, cal_yaml_path='iq',
+    analysis_yaml_path='iq', root=None, n_series=None
+):
     """
     Build one AnalysisRunner per series point, from loading steps or DataSets.
 

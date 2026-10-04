@@ -459,6 +459,8 @@ class DummyFirmwareRelease:
         self.version = version
 
 
+from .conftest import default_module_cfg
+
 class DummyCRS:
     pass
 
@@ -480,6 +482,7 @@ def make_dummy_crs(**overrides):
     crs.serial_number = 27
     crs.rfmux_version = "1.3.2"
     crs.citkid_version = "1.0.0.dev0"
+    crs.module_cfg = {1: default_module_cfg()}
 
     for key, value in overrides.items():
         setattr(crs, key, value)
@@ -517,6 +520,14 @@ def test_write_system_cfg_to_zarr_writes_expected_arrays(tmp_path):
     assert grp.attrs["rfmux_version"] == "1.3.2"
     assert grp.attrs["citkid_version"] == "1.0.0.dev0"
 
+    # Per-module settings
+    assert grp.attrs["full_scale_dbm_module1"] == 7.0
+    assert grp.attrs["adc_attenuation_db_module1"] == 0.0
+    assert grp.attrs["nyquist_zone_module1"] == 1
+    assert grp.attrs["cable_length_m_module1"] == 0.0
+    assert grp.attrs["adc_calibration_mode_module1"] == "AUTO"
+    assert grp.attrs["adc_autocal_module1"] is True
+
 
 def test_write_system_cfg_to_zarr_invalid_crs_type(tmp_path):
     grp = zarr.open_group(tmp_path / "config.zarr", mode = "w")
@@ -547,6 +558,7 @@ def test_write_system_cfg_to_zarr_invalid_grp_type():
     "serial_number",
     "rfmux_version",
     "citkid_version",
+    "module_cfg",
 ])
 def test_write_system_cfg_to_zarr_missing_crs_attribute(tmp_path, missing_name):
     grp = zarr.open_group(tmp_path / "config.zarr", mode = "w")
@@ -567,6 +579,7 @@ def test_write_system_cfg_to_zarr_missing_crs_attribute(tmp_path, missing_name):
     "serial_number",
     "rfmux_version",
     "citkid_version",
+    "adc_attenuation_db_module1",
 ])
 def test_write_system_cfg_to_zarr_conflicting_dataset(tmp_path, conflict_name):
     grp = zarr.open_group(tmp_path / "config.zarr", mode = "w")
@@ -664,3 +677,15 @@ def test_write_acq_cfg_to_zarr_invalid_ch_map(tmp_path):
 
     with pytest.raises((TypeError, ValueError)):
         util.write_acq_cfg_to_zarr(crs, grp)
+
+
+def test_write_acq_cfg_to_zarr_unknown_short_and_modules(tmp_path):
+    """Test None dec_short and dec_module_idxs (no global control)."""
+    grp = zarr.open_group(tmp_path / "config.zarr", mode = "w")
+    crs = make_dummy_crs(dec_short = None, dec_module_idxs = None)
+
+    util.write_acq_cfg_to_zarr(crs, grp)
+
+    assert grp.attrs["dec_short"] is None
+    assert grp.attrs["dec_module_idxs"] is None
+    assert grp.attrs["dec_stage"] == 6

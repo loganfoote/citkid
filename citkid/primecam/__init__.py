@@ -1,9 +1,11 @@
-# instrument.py: stable, tested with mock and (future) hardware tests.
+# Legacy code for the Prime-Cam RFSoC readout, kept for existing users. This
+# package is meant to be self-contained: the rest of citkid must not import
+# from it, and it should not depend on other legacy citkid modules.
 #
-# The following modules are pending redesign and intentionally have no tests:
-#   procedures.py  - pending migration to zarr-based output (future release)
-#   update_ares.py - pending refactor to use multitone.ares (future release)
-#   update_fres.py - pending refactor to use multitone.fres (future release)
-#   analysis.py    - pending replacement by pipeline code (future release)
-#   data_io.py     - will follow analysis.py migration
-#   plot.py        - will follow analysis.py migration
+# instrument.py: stable, tested with mock and (future) hardware tests.
+# gain.py, fitter.py, and the fit-row functions in data_io.py: tested in
+#   tests/primecam/test_gain_fitter.py.
+#
+# The following modules intentionally have no tests:
+#   procedures.py, update_ares.py, update_fres.py, analysis.py, plot.py,
+#   the import functions in data_io.py, and noise/

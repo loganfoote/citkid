@@ -8,11 +8,12 @@ from .plot import plot_ares_opt
 from ..util import save_fig
 import os
 
-def take_iq_noise(rfsoc, fres, ares, qres, fcal_indices, file_suffix,
-                  noise_time = 200, fine_bw = 0.2, rough_bw = 0.2,
-                  take_rough_sweep = False, fres_update_method = 'distance',
-                  npoints_rough = 300, npoints_gain = 100, npoints_fine = 600,
-                  nnoise_timestreams = 1, N_accums = 5):
+def take_iq_noise(
+    rfsoc, fres, ares, qres, fcal_indices, file_suffix, noise_time = 200,
+    fine_bw = 0.2, rough_bw = 0.2, take_rough_sweep = False,
+    fres_update_method = 'distance', npoints_rough = 300, npoints_gain = 100,
+    npoints_fine = 600, nnoise_timestreams = 1, N_accums = 5
+):
     """
     Take IQ sweeps and noise. The LO frequency must already be set.
 
@@ -85,11 +86,12 @@ def take_iq_noise(rfsoc, fres, ares, qres, fcal_indices, file_suffix,
                 filename = f'noise{file_suffix}_{nindex:02d}.npy'
                 rfsoc.capture_save_noise(noise_time, filename)
 
-def optimize_ares(rfsoc, fres, ares, qres, fcal_indices, max_dbm = -50,
-                  a_target = 0.5, n_iterations = 10, n_addonly = 3,
-                  fine_bw = 0.2, fres_update_method = 'distance',
-                  npoints_gain = 50, npoints_fine = 400, plot_directory = None,
-                  verbose = False, N_accums = 5):
+def optimize_ares(
+    rfsoc, fres, ares, qres, fcal_indices, max_dbm = -50, a_target = 0.5,
+    n_iterations = 10, n_addonly = 3, fine_bw = 0.2,
+    fres_update_method = 'distance', npoints_gain = 50, npoints_fine = 400,
+    plot_directory = None, verbose = False, N_accums = 5
+):
     """
     Optimize tone powers using by iteratively fitting IQ loops and using a_nl
     of each fit to scale each tone power
@@ -173,9 +175,10 @@ def optimize_ares(rfsoc, fres, ares, qres, fcal_indices, max_dbm = -50,
 ################################################################################
 ######################### Utility functions ####################################
 ################################################################################
-def make_cal_tones(fres, ares, qres, max_n_tones = 1000,
-                   resonator_indices = None,
-                   new_resonator_indices_start = None):
+def make_cal_tones(
+    fres, ares, qres, max_n_tones = 1000, resonator_indices = None,
+    new_resonator_indices_start = None
+):
     '''
     Add calibration tones to the given resonator list. Fills in largest spaces
     between resonators, up to max_n_tones. If resonator_indices is provides,

@@ -1,22 +1,23 @@
 import numpy as np
-from ..xcal.circle import fit_iq_circle
+from ...xcal.circle import fit_iq_circle
 from .plot import plot_cal, plot_timestream, plot_psd
-from ..signal.psd import *
+from ...signal.psd import *
 from .cosmic_rays import remove_cosmic_rays
 import warnings
 
 warnings.warn(
-    "citkid.noise.analysis is deprecated and will be removed in version 1.0.0",
+    "citkid.primecam.noise.analysis is deprecated and will be removed in version 1.0.0",
     DeprecationWarning,
     stacklevel=2,
 )
 
-def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
-                znoise_offres = None, dt_offres = None, flag_crs = True,
-                deglitch_nstd = 5, plot_calq = True, plot_psdq = True,
-                plot_timestreamq = True, min_cal_points = 5, poly_deg = 3,
-                circfit_npoints = None, xcal_weight_sigma = None,
-                xcal_weight_theta0 = 0.0, **cr_kwargs):
+def compute_psd(
+    ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
+    znoise_offres = None, dt_offres = None, flag_crs = True, deglitch_nstd = 5,
+    plot_calq = True, plot_psdq = True, plot_timestreamq = True,
+    min_cal_points = 5, poly_deg = 3, circfit_npoints = None,
+    xcal_weight_sigma = None, xcal_weight_theta0 = 0.0, **cr_kwargs
+):
     """
     Compute parallel and perpendicular noise PSDs, as well as Sxx.
 
@@ -211,8 +212,9 @@ def compute_psd(ffine, zfine, fnoise, znoise, dt, fnoise_offres = None,
         figs,
     )
 
-def compute_psd_simple(ffine, zfine, fnoise, znoise, dt, deglitch_nstd = 5,
-                       offres = False):
+def compute_psd_simple(
+    ffine, zfine, fnoise, znoise, dt, deglitch_nstd = 5, offres = False
+):
     """
     Compute an approximation of parallel and perpendicular noise PSDs
     by rotating the noise data to 0, 0 and returning PSDs of I, Q
@@ -274,20 +276,9 @@ def compute_psd_simple(ffine, zfine, fnoise, znoise, dt, deglitch_nstd = 5,
 ################################################################################
 
 def calibrate_timestreams(
-    origin,
-    ffine,
-    zfine,
-    fnoise,
-    znoise,
-    dt,
-    deglitch_nstd,
-    flag_crs,
-    offres = False,
-    poly_deg = 3,
-    min_cal_points = 5,
-    xcal_weight_sigma = None,
-    xcal_weight_theta0 = 0.0,
-    **cr_kwargs,
+    origin, ffine, zfine, fnoise, znoise, dt, deglitch_nstd, flag_crs,
+    offres = False, poly_deg = 3, min_cal_points = 5, xcal_weight_sigma = None,
+    xcal_weight_theta0 = 0.0, **cr_kwargs,
 ):
     """
     Calculate theta and x timestreams given complex IQ noise timestreams.
@@ -377,9 +368,10 @@ def calibrate_timestreams(
         (ix0, ix1),
     )
 
-def calibrate_x(ffine, theta_fine, theta_clean, poly_deg = 3,
-                min_cal_points = 5, weight_sigma = None,
-                weight_theta0 = 0.0):
+def calibrate_x(
+    ffine, theta_fine, theta_clean, poly_deg = 3, min_cal_points = 5,
+    weight_sigma = None, weight_theta0 = 0.0
+):
     """
     Fit fine sweep frequency to phase
 

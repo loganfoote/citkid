@@ -304,8 +304,10 @@ def _assert_hints_wrap(win):
 
 
 class TestIQSeriesWindowV2:
-    def _make_window(self, qt_app, monkeypatch, nrows=2, data_idxs=None, start_idx=0,
-                     state_group=None, xy_fit=None):
+    def _make_window(
+        self, qt_app, monkeypatch, nrows=2, data_idxs=None, start_idx=0,
+        state_group=None, xy_fit=None
+    ):
         """
         Build a IQSeriesWindow over two mock series runners.
 
@@ -351,30 +353,35 @@ class TestIQSeriesWindowV2:
         )
 
     @staticmethod
-    def _line_fit(group=None, fail=False):
+    def _line_fit(group=None, fail=False, uses_guess=False):
         """
         Build a linear SeriesXYFit that counts its calls.
 
         Parameters:
         group (zarr.Group or None): Group to save fits to.
         fail (bool): If True, the fit raises.
+        uses_guess (bool): If True, the fit takes a guess p0 and returns
+            (popt, p0); its own guess is (1, 0).
 
         Returns:
         xy_fit (SeriesXYFit): The fit.
-        calls (list): One entry per fit call.
+        calls (list): One entry per fit call: (x, y), plus p0 if used.
         """
         calls = []
 
-        def fit(x, y):
-            calls.append((x.copy(), y.copy()))
+        def fit(x, y, *p0):
+            calls.append((x.copy(), y.copy(), *p0))
             if fail:
                 raise RuntimeError('bad fit')
-            return tuple(np.polyfit(x, y, 1))
+            popt = np.polyfit(x, y, 1)
+            if not uses_guess:
+                return popt
+            return popt, (np.array([1.0, 0.0]) if p0[0] is None else p0[0])
 
         xy_fit = iseries.SeriesXYFit(
-            fit=fit, output_names=['slope', 'intercept'],
+            fit=fit, param_names=['slope', 'intercept'],
             model=lambda xs, slope, intercept: slope * xs + intercept,
-            name='line', group=group,
+            name='line', group=group, uses_guess=uses_guess,
         )
         return xy_fit, calls
 
@@ -674,8 +681,7 @@ class TestIQSeriesWindowV2:
         win._update_series_scatter()
 
         assert len(calls) == 1
-        _, _, outputs = win._xy_store.load(0)
-        np.testing.assert_allclose([float(o) for o in outputs], [2.0, 1.0])
+        np.testing.assert_allclose(win._xy_store.load(0).popt, [2.0, 1.0])
         xs, ys = win._xy_fit_curve.getData()
         np.testing.assert_allclose(ys, 2.0 * xs + 1.0)
         assert 'line: slope = 2, intercept = 1' in win._plot_series.titleLabel.text
@@ -686,7 +692,7 @@ class TestIQSeriesWindowV2:
         win._y_cache[0] = np.array([3.0, 7.0])
         win._update_series_scatter()
         assert len(calls) == 2
-        assert float(win._xy_store.load(0)[2][0]) == pytest.approx(4.0)
+        assert win._xy_store.load(0).popt[0] == pytest.approx(4.0)
         self._close(win)
 
     def test_xy_fit_failure_is_shown_and_saved(self, qt_app, monkeypatch):
@@ -719,9 +725,9 @@ class TestIQSeriesWindowV2:
         assert prefit == [1, 1, 2, 2]
         assert list(np.flatnonzero(win._xy_store.fitted_rows())) == [1, 2, 3]
         for di in (1, 2, 3):
-            slope, intercept = win._xy_store.load(di)[2]
-            assert float(slope) == pytest.approx(2.0)
-            assert float(intercept) == pytest.approx(di)
+            slope, intercept = win._xy_store.load(di).popt
+            assert slope == pytest.approx(2.0)
+            assert intercept == pytest.approx(di)
         self._close(win)
 
     def test_background_revisits_attempted_rows_without_xy_fit(self, qt_app, monkeypatch):
@@ -729,7 +735,7 @@ class TestIQSeriesWindowV2:
         win = self._make_window(qt_app, monkeypatch, nrows=4, xy_fit=xy_fit)
         win._initialized_data_idxs = {0, 1, 2, 3}
         x = np.array([1.0, 2.0])
-        win._xy_store.save(2, x, x, xy_fit.run(x, x))
+        win._xy_store.save(2, x, x, xy_fit.run(x, x)[0])
         win._background_fitting = True
         win._make_worker_ars = MagicMock(return_value=[])
         visited = []
@@ -744,10 +750,10 @@ class TestIQSeriesWindowV2:
     @pytest.mark.parametrize('overwrite', [True, False])
     def test_xy_fit_definition_mismatch_asks(self, qt_app, monkeypatch, overwrite):
         group = zarr.open_group(zarr.storage.MemoryStore(), mode='w')
-        old = iseries.SeriesXYFit(fit=lambda x, y: y.mean(), output_names=['mean'],
+        old = iseries.SeriesXYFit(fit=lambda x, y: y.mean(), param_names=['mean'],
                                 model=lambda xs, m: xs, name='mean', group=group)
         x = np.array([1.0, 2.0])
-        iseries.SeriesXYFitStore(group, old, 2, 2).save(0, x, x, old.run(x, x))
+        iseries.SeriesXYFitStore(group, old, 2, 2).save(0, x, x, old.run(x, x)[0])
         asked = []
         monkeypatch.setattr(iseries, '_confirm_overwrite_xy_fit',
                             lambda message: asked.append(message) or overwrite)
@@ -755,7 +761,7 @@ class TestIQSeriesWindowV2:
 
         if overwrite:
             win = self._make_window(qt_app, monkeypatch, xy_fit=xy_fit)
-            assert 'mean' not in group
+            assert 'popt' not in group
             assert not win._xy_store.has_fit(0)
             self._close(win)
         else:
@@ -765,7 +771,7 @@ class TestIQSeriesWindowV2:
 
     def test_series_plot_range_ignores_fit_curve(self, qt_app, monkeypatch):
         xy_fit = iseries.SeriesXYFit(
-            fit=lambda x, y: (1.0,), output_names=['k'],
+            fit=lambda x, y: (1.0,), param_names=['k'],
             model=lambda xs, k: 1e6 * np.sin(xs),   # far outside the data
             name='wild',
         )
@@ -790,7 +796,59 @@ class TestIQSeriesWindowV2:
 
         win._update_series_scatter()
 
-        assert 'slope' in state_group['xy_fit']
+        assert state_group['xy_fit/popt'].shape == (2, 2)
+        self._close(win)
+
+    def test_xy_guess_inputs_show_and_take_the_guess(self, qt_app, monkeypatch):
+        xy_fit, calls = self._line_fit(uses_guess=True)
+        win = self._make_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit)
+        win._x_cache[0] = np.array([1.0, 2.0])
+        win._y_cache[0] = np.array([3.0, 5.0])
+
+        win._update_series_scatter()                  # the fit's own guess, shown
+
+        assert [e.text() for e in win._guess_edits] == ['1', '0']
+        assert calls[-1][2] is None
+        assert 'automatic' in win._guess_status.text()
+
+        win._guess_edits[0].setText('4')               # the user's guess refits
+        win._guess_edits[0].editingFinished.emit()
+        np.testing.assert_array_equal(calls[-1][2], [4.0, 0.0])
+        saved = win._xy_store.load(0)
+        np.testing.assert_array_equal(saved.p0, [4.0, 0.0])
+        assert saved.p0_user and 'yours' in win._guess_status.text()
+        n = len(calls)
+        win._guess_edits[0].editingFinished.emit()     # unchanged: no refit
+        assert len(calls) == n
+
+        win._y_cache[0] = np.array([3.0, 9.0])         # new data keeps the user's guess
+        win._update_series_scatter()
+        np.testing.assert_array_equal(calls[-1][2], [4.0, 0.0])
+
+        win._reset_xy_guess()                          # back to the fit's own guess
+        assert calls[-1][2] is None and not win._xy_store.load(0).p0_user
+        assert [e.text() for e in win._guess_edits] == ['1', '0']
+        self._close(win)
+
+    def test_xy_guess_input_rejects_text(self, qt_app, monkeypatch):
+        xy_fit, calls = self._line_fit(uses_guess=True)
+        win = self._make_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit)
+        win._x_cache[0] = np.array([1.0, 2.0])
+        win._y_cache[0] = np.array([3.0, 5.0])
+        win._update_series_scatter()
+
+        win._guess_edits[1].setText('abc')
+        win._guess_edits[1].editingFinished.emit()
+
+        assert 'must be a number' in win._apply_status_label.text()
+        assert win._guess_edits[1].text() == '0'
+        assert not win._xy_store.load(0).p0_user
+        self._close(win)
+
+    def test_no_guess_inputs_without_uses_guess(self, qt_app, monkeypatch):
+        xy_fit, _ = self._line_fit()
+        win = self._make_window(qt_app, monkeypatch, xy_fit=xy_fit)
+        assert win._guess_edits == [] and win._plots_widget is win._gw
         self._close(win)
 
     def test_closed_window_is_destroyed_but_keeps_python_state(self, qt_app, monkeypatch, tmp_path):
@@ -919,9 +977,9 @@ class TestIQSeriesWindowV2:
         assert ar.execute_step.call_count == 1
         ar.execute_step.assert_called_with(global_step, data_idx=None, save=True)
         assert ar.execute_path.call_count == 2
-        assert ar.execute_path.call_args_list[0].kwargs['start_from_idx'] == 1
+        assert ar.execute_path.call_args_list[0].kwargs['step_start_idx'] == 1
         assert ar.execute_path.call_args_list[0].kwargs['data_idx'] == 0
-        assert ar.execute_path.call_args_list[1].kwargs['start_from_idx'] == 1
+        assert ar.execute_path.call_args_list[1].kwargs['step_start_idx'] == 1
         assert ar.execute_path.call_args_list[1].kwargs['data_idx'] == 1
         with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
             win.close()
@@ -1179,8 +1237,9 @@ class TestIQSeriesWindowV2:
         (None, [0, 1], True),  # nothing selected: panels stay blank
         (0, [1], False),       # another point was marked: redraw the shown one
     ])
-    def test_mark_series_bad_redraws_or_blanks_panels(self, qt_app, monkeypatch,
-                                                      selected, marked, cleared):
+    def test_mark_series_bad_redraws_or_blanks_panels(
+        self, qt_app, monkeypatch, selected, marked, cleared
+    ):
         win = self._make_window(qt_app, monkeypatch)
         self._record_marks(win)
         for panel in win.panels:

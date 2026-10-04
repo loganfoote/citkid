@@ -1,8 +1,10 @@
 import numpy as np
 import os
 import rfmux
-import socket 
-import zarr 
+import psutil
+import socket
+import time
+import zarr
 from tqdm.auto import tqdm
 from typing import TYPE_CHECKING
 from .. import zarr_util
@@ -137,9 +139,10 @@ def get_sample_freq(dec_stage):
 ################################################################################
 ############################## parser processing ###############################
 ################################################################################
-def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones, 
-                   ch_map, ares_map, dt, batch_size_mb = 1_000,
-                   chunk_size_mb = 128):
+def parser_to_zarr(
+    path, grp, crs_sn, ntones, max_ntones, ch_map, ares_map, dt,
+    batch_size_mb = 1_000, chunk_size_mb = 128
+):
     """
     Import parser file data in batches and reformat for channels of interest. 
     Save to a Zarr file.
@@ -175,24 +178,7 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
     )
         
     ### Write scale_factor and dt
-    rfmux_scale = rfmux.core.transferfunctions.VOLTS_PER_ROC 
-    rfmux_scale = rfmux_scale / 256 / np.sqrt(2)
-    scale_factor = np.full(ntones, fill_value = np.nan) 
-
-    for module_idx in ch_map.keys():
-        # Use ares to modify scale_factor from dBm to dBc 
-        ares = ares_map[module_idx]
-        ch_idxs = ch_map[module_idx] 
-        pscale = 1 / 10 ** (ares / 20)
-        scale_factor[ch_idxs] = rfmux_scale * pscale
-
-    # Save scale_factor and dt  
-    zarr_util.write_single_array(
-        grp, 'counts_to_s21', scale_factor, dtype = np.float64
-    )
-    zarr_util.write_single_array(
-        grp, 'dt', dt, dtype = np.float64
-    )
+    _write_counts_to_s21_and_dt(grp, ntones, ch_map, ares_map, dt)
 
     ### Batch process parser file
     # Open files 
@@ -206,12 +192,9 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
     ] 
     files = [open(fp, 'rb') for fp in file_paths]
 
-    # Setup batches and initialize Zarr array 
+    # Setup batches and initialize Zarr array
     dtype = np.dtype([('i', np.int32), ('q', np.int32)])
     batch_size_bytes = int(batch_size_mb * (1024 ** 2))
-    chunk_size_bytes = int(
-        chunk_size_mb * (1024 ** 2)
-    )
     # Total bytes read per batch across all files is ~batch_size_mb
     # Each file stores max_ntones records per time sample
     read_count = max(
@@ -219,35 +202,14 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
         )
     # read_count must be multiple of max_ntones
     read_count = (read_count // max_ntones) * max_ntones
-    # Chunk length in time samples for output array (decoupled from read size)
-    chunk_N = max(
-        1,
-        chunk_size_bytes // (2 * ntones * np.dtype(np.int32).itemsize)
-    )
-    # Cap chunk length to total available samples to avoid oversized tail chunk
     samples_per_file = [
         (os.path.getsize(fp) // dtype.itemsize) // max_ntones
         for fp in file_paths
     ]
     total_samples = int(min(samples_per_file)) if samples_per_file else 0
-    if total_samples > 0:
-        chunk_N = min(chunk_N, total_samples)
-
-    # Shard covers all channels but only one chunk along the time axis,
-    # so each batch write lands in its own shard file without touching others.
-    if total_samples > 0:
-        z_shards = (2, ntones, chunk_N)
-    else:
-        z_shards = None
 
     # Initialize output Zarr array with full known shape
-    z_out = grp.create_array(
-        name = 'z', 
-        shape = (2, ntones, total_samples), 
-        chunks = (1, 1, chunk_N), 
-        shards = z_shards, 
-        dtype = np.int32
-    )
+    z_out, _ = _create_z_array(grp, ntones, total_samples, chunk_size_mb)
 
     # Process batches
     samples_per_batch = read_count // max_ntones
@@ -303,6 +265,314 @@ def parser_to_zarr(path, grp, crs_sn, ntones, max_ntones,
     finally:
         for f in files:
             f.close()
+
+def _write_counts_to_s21_and_dt(grp, ntones, ch_map, ares_map, dt):
+    """
+    Write the counts-to-S21 scale factors and the sample time to a Zarr group.
+
+    Parameters:
+    grp (zarr.Group): Zarr group to save data.
+    ntones (int): number of tones.
+    ch_map (dict): keys (int) are module indices and values (np.array int)
+        are channel indices.
+    ares_map (dict): keys (int) are module indices and values (np.array
+        float) are tone powers in dBm. Used to scale from CRS counts to dBc.
+    dt (float): sample time in seconds.
+
+    Returns:
+    None
+    """
+    rfmux_scale = rfmux.core.transferfunctions.VOLTS_PER_ROC
+    rfmux_scale = rfmux_scale / 256 / np.sqrt(2)
+    scale_factor = np.full(ntones, fill_value = np.nan)
+
+    for module_idx in ch_map.keys():
+        # Use ares to modify scale_factor from dBm to dBc
+        ares = ares_map[module_idx]
+        ch_idxs = ch_map[module_idx]
+        pscale = 1 / 10 ** (ares / 20)
+        scale_factor[ch_idxs] = rfmux_scale * pscale
+
+    # Save scale_factor and dt
+    zarr_util.write_single_array(
+        grp, 'counts_to_s21', scale_factor, dtype = np.float64
+    )
+    zarr_util.write_single_array(
+        grp, 'dt', dt, dtype = np.float64
+    )
+
+def _create_z_array(grp, ntones, total_samples, chunk_size_mb):
+    """
+    Create the int32 timestream array 'z' with shape (2, ntones,
+    total_samples) in a Zarr group.
+
+    Parameters:
+    grp (zarr.Group): Zarr group to save data.
+    ntones (int): number of tones.
+    total_samples (int): number of time samples.
+    chunk_size_mb (float): target size of each shard along the time axis, in
+        MB. The chunk length is capped to total_samples.
+
+    Returns:
+    z_out (zarr.Array): the created array.
+    chunk_N (int): chunk length along the time axis, in samples.
+    """
+    chunk_size_bytes = int(chunk_size_mb * (1024 ** 2))
+    chunk_N = max(
+        1,
+        chunk_size_bytes // (2 * ntones * np.dtype(np.int32).itemsize)
+    )
+    # Cap chunk length to total available samples to avoid oversized tail chunk
+    if total_samples > 0:
+        chunk_N = min(chunk_N, total_samples)
+
+    # Shard covers all channels but only one chunk along the time axis,
+    # so each batch write lands in its own shard file without touching others.
+    if total_samples > 0:
+        z_shards = (2, ntones, chunk_N)
+    else:
+        z_shards = None
+
+    z_out = grp.create_array(
+        name = 'z',
+        shape = (2, ntones, total_samples),
+        chunks = (1, 1, chunk_N),
+        shards = z_shards,
+        dtype = np.int32
+    )
+    return z_out, chunk_N
+
+################################################################################
+############################## memory streaming ################################
+################################################################################
+# Maximum fraction of the currently available memory that a memory stream may
+# use
+MEMORY_STREAM_MAX_FRACTION = 0.5
+
+def estimate_memory_stream_bytes(
+    nmodules, max_ntones, ntones, nframes, chunk_size_mb
+):
+    """
+    Estimate the peak memory used by a memory stream (``CRS.stream`` with
+    ``method = 'memory'``): the receive buffers plus the blocks used to write
+    to Zarr.
+
+    Parameters:
+    nmodules (int): number of streamed modules.
+    max_ntones (int): maximum number of tones on a module.
+    ntones (int): total number of tones.
+    nframes (int): number of time samples per module.
+    chunk_size_mb (float): Zarr chunk size along the time axis, in MB.
+
+    Returns:
+    int: estimated peak memory in bytes.
+    """
+    itemsize = 2 * np.dtype(np.int32).itemsize
+    buffers = nmodules * nframes * max_ntones * itemsize
+    # One block assembled in numpy, plus one being encoded by zarr
+    block = min(int(chunk_size_mb * 1024 ** 2), ntones * nframes * itemsize)
+    return int(buffers + 2 * block)
+
+def check_memory_for_stream(
+    nmodules, max_ntones, ntones, nframes, chunk_size_mb
+):
+    """
+    Check that a memory stream fits in the available memory with headroom.
+
+    The estimate from ``estimate_memory_stream_bytes`` must not exceed
+    ``MEMORY_STREAM_MAX_FRACTION`` of the currently available memory.
+
+    Parameters:
+    nmodules (int): number of streamed modules.
+    max_ntones (int): maximum number of tones on a module.
+    ntones (int): total number of tones.
+    nframes (int): number of time samples per module.
+    chunk_size_mb (float): Zarr chunk size along the time axis, in MB.
+
+    Returns:
+    int: estimated peak memory in bytes.
+
+    Raises:
+    MemoryError: if the estimate exceeds the allowed fraction of available
+        memory.
+    """
+    required = estimate_memory_stream_bytes(nmodules, max_ntones, ntones,
+                                            nframes, chunk_size_mb)
+    available = psutil.virtual_memory().available
+    allowed = MEMORY_STREAM_MAX_FRACTION * available
+    if required > allowed:
+        raise MemoryError(
+            f'The memory stream needs about {required / 1e9:.2f} GB, but only '
+            f'{allowed / 1e9:.2f} GB ({MEMORY_STREAM_MAX_FRACTION:.0%} of the '
+            f'{available / 1e9:.2f} GB available) may be used. Shorten the '
+            "timestream, use fewer tones, or use method = 'parser'."
+            )
+    return required
+
+def capture_to_memory(
+    interface, serial_number, module_idxs, max_ntones, nframes, timeout_s = 10.0
+):
+    """
+    Receive streamed readout packets into memory. Uses the same packet
+    receiver as the rfmux parser, and stores the same raw int32 I/Q values
+    that the parser writes to disk.
+
+    Stops when every module has nframes samples. Missing packets are not
+    filled in, so a module's samples are contiguous like the parser's.
+
+    Parameters:
+    interface (str): Ethernet interface identifier e.g., 'enp2s0'.
+    serial_number (int): CRS serial number. Packets from other boards are
+        ignored.
+    module_idxs (array-like int): modules to capture (1-8). Other modules are
+        ignored.
+    max_ntones (int): number of channels to keep per module (channels
+        1 to max_ntones).
+    nframes (int): number of time samples to capture per module.
+    timeout_s (float): raise an error if a module that is not finished
+        receives no packets for this long, in seconds.
+
+    Returns:
+    buffers (dict): keys (int) are module indices and values (np.array int32)
+        are arrays of shape (nframes, max_ntones, 2) with I and Q along the
+        last axis.
+    dropped (dict): keys (int) are module indices and values (int) are the
+        number of packets missing from the sequence.
+
+    Raises:
+    RuntimeError: if a module stops receiving packets, or packets have fewer
+        than max_ntones channels.
+    """
+    from rfmux import streamer
+    from rfmux.tools.parser import resolve_interface
+
+    # Input validation
+    module_idxs = [int(mi) for mi in module_idxs]
+    if not module_idxs or any(mi not in range(1, 9) for mi in module_idxs):
+        raise ValueError('module_idxs must be a non-empty list in [1, 8]')
+    if len(set((mi - 1) % 4 for mi in module_idxs)) != len(module_idxs):
+        raise ValueError('module_idxs must not contain the same module in '
+                         'both analog banks')
+    max_ntones, nframes = int(max_ntones), int(nframes)
+    if max_ntones <= 0 or nframes <= 0:
+        raise ValueError('max_ntones and nframes must be positive')
+    serial_number = int(serial_number)
+
+    # Allocate buffers
+    buffers = {mi: np.empty((nframes, max_ntones, 2), dtype = np.int32)
+               for mi in module_idxs}
+    counts = {mi: 0 for mi in module_idxs}
+    dropped = {mi: 0 for mi in module_idxs}
+    last_seq = {mi: None for mi in module_idxs}
+    # Packets number modules 0-3 within the active analog bank
+    packet_module_map = {(mi - 1) % 4: mi for mi in module_idxs}
+
+    interface_ip = resolve_interface(interface)
+    with streamer.get_multicast_socket(
+        crs_hostname = None,
+        port = streamer.STREAMER_PORT,
+        interface = interface_ip,
+        buffer_size = 67108864,
+    ) as sock:
+        receiver = streamer.ReadoutPacketReceiver(sock, reorder_window = 256)
+        start = time.monotonic()
+        last_packet = {mi: start for mi in module_idxs}
+        while any(counts[mi] < nframes for mi in module_idxs):
+            receiver.receive_batch(256, timeout_ms = 1000)
+            now = time.monotonic()
+            for serial, module, queue in receiver.get_all_queues():
+                mi = packet_module_map.get(module) \
+                    if serial == serial_number else None
+                while (packet := queue.try_pop()):
+                    # Packets from other boards and modules are discarded
+                    if mi is None or counts[mi] >= nframes:
+                        continue
+                    pkt = packet.to_python()
+                    if last_seq[mi] is not None:
+                        dropped[mi] += (pkt.seq - last_seq[mi] - 1) \
+                                       & 0xFFFFFFFF
+                    last_seq[mi] = pkt.seq
+                    raw = np.asarray(pkt.raw_samples)
+                    if raw.size < 2 * max_ntones:
+                        raise RuntimeError(
+                            f'Packets from module {mi} have {raw.size // 2} '
+                            f'channels, but {max_ntones} are needed. The CRS '
+                            'is streaming short packets.'
+                            )
+                    buffers[mi][counts[mi]] = \
+                        raw[:2 * max_ntones].reshape(max_ntones, 2)
+                    counts[mi] += 1
+                    last_packet[mi] = now
+            stalled = [mi for mi in module_idxs
+                       if counts[mi] < nframes and
+                       now - last_packet[mi] > timeout_s]
+            if stalled:
+                raise RuntimeError(
+                    f'No packets received from modules {stalled} for '
+                    f'{timeout_s} s. Check that they are streaming (see '
+                    'CRS.set_decimation).'
+                    )
+    return buffers, dropped
+
+def memory_to_zarr(
+    buffers, grp, ntones, max_ntones, ch_map, ares_map, dt, chunk_size_mb = 128
+):
+    """
+    Save timestreams captured by ``capture_to_memory`` to a Zarr group, in the
+    same format as ``parser_to_zarr``.
+
+    Parameters:
+    buffers (dict): keys (int) are module indices and values (np.array int32)
+        are arrays of shape (nframes, max_ntones, 2) with I and Q along the
+        last axis.
+    grp (zarr.Group): Zarr group to save data.
+    ntones (int): number of tones.
+    max_ntones (int): maximum number of tones per module.
+    ch_map (dict): channel index dictionary. Keys (int) are module indices.
+        Values are lists where values (int) are channel indices.
+    ares_map (dict): power dictionary. Keys (int) are module indices. Values
+        are arrays where values (float) are power in dBm. Used to create
+        scaling from CRS amplitude to dBc.
+    dt (float): sample time in seconds.
+    chunk_size_mb (float): target Zarr chunk size, in MB. The chunk length is
+        capped to the total available samples.
+
+    Returns:
+    None
+    """
+    ### Input validation
+    ch_map, ares_map, dt = _validate_zarr_output_inputs(
+        grp, ntones, max_ntones, ch_map, ares_map, dt
+        )
+    chunk_size_mb = float(chunk_size_mb)
+    if chunk_size_mb <= 0:
+        raise ValueError('chunk_size_mb must be a positive float')
+    module_idxs = [k for k in ch_map.keys() if len(ch_map[k]) > 0]
+    for mi in module_idxs:
+        if mi not in buffers:
+            raise ValueError(f'buffers does not contain module {mi}')
+        if buffers[mi].ndim != 3 or buffers[mi].shape[1:] != (max_ntones, 2):
+            raise ValueError(f'buffers[{mi}] must have shape '
+                             f'(nframes, {max_ntones}, 2)')
+
+    ### Write scale_factor and dt
+    _write_counts_to_s21_and_dt(grp, ntones, ch_map, ares_map, dt)
+
+    ### Write timestreams one shard at a time
+    total_samples = min(buffers[mi].shape[0] for mi in module_idxs) \
+        if module_idxs else 0
+    z_out, chunk_N = _create_z_array(grp, ntones, total_samples, chunk_size_mb)
+    block_buf = np.zeros((2, ntones, chunk_N), dtype = np.int32)
+    for t0 in range(0, total_samples, chunk_N):
+        N = min(chunk_N, total_samples - t0)
+        block = block_buf[:, :, :N]
+        block[...] = 0
+        for mi in module_idxs:
+            ch_idxs = ch_map[mi]
+            data = buffers[mi][t0:t0 + N, :len(ch_idxs)]
+            block[0, ch_idxs] = data[:, :, 0].T
+            block[1, ch_idxs] = data[:, :, 1].T
+        z_out[:, :, t0:t0 + N] = block
 
 def estimate_ts_data_size(dec_stage, total_time, nmodules, max_ntones, ntones):
     """
@@ -386,6 +656,8 @@ def write_acq_cfg_to_zarr(crs, grp):
     
     This includes parameters that typically change between measurements:
     decimation settings, sample frequency, and channel mapping.
+    ``dec_module_idxs`` and ``dec_short`` are saved as None if they are
+    unknown (sessions without global control).
 
     Parameters:
     crs (CRS): initialized CRS instrument class.
@@ -425,11 +697,18 @@ def write_acq_cfg_to_zarr(crs, grp):
             f"Zarr group already contains dataset '{conflict_name}'."
         )
 
-    # Save decimation parameters as attributes
-    grp.attrs['dec_module_idxs'] = np.asarray(
-        crs.dec_module_idxs, dtype=np.uint8
-    ).tolist()
-    grp.attrs['dec_short'] = bool(crs.dec_short)
+    # Save decimation parameters as attributes. dec_module_idxs and dec_short
+    # are None in sessions without global control, which can't read them
+    if crs.dec_module_idxs is None:
+        grp.attrs['dec_module_idxs'] = None
+    else:
+        grp.attrs['dec_module_idxs'] = np.asarray(
+            crs.dec_module_idxs, dtype=np.uint8
+        ).tolist()
+    if crs.dec_short is None:
+        grp.attrs['dec_short'] = None
+    else:
+        grp.attrs['dec_short'] = bool(crs.dec_short)
     grp.attrs['dec_stage'] = int(np.uint8(crs.dec_stage))
     grp.attrs['sample_freq'] = float(crs.sample_freq)
     
@@ -446,6 +725,8 @@ def write_system_cfg_to_zarr(crs, grp):
     
     This includes static system parameters that don't change during a measurement
     procedure: NCO frequencies, firmware version, analog bank settings, etc.
+    Per-module settings in ``crs.module_cfg`` are saved as
+    ``<setting>_module<idx>`` attributes, e.g. ``adc_attenuation_db_module1``.
 
     Parameters:
     crs (CRS): initialized CRS instrument class.
@@ -463,7 +744,7 @@ def write_system_cfg_to_zarr(crs, grp):
     for name in ['nco_freqs', 'firmware_release',
                  'analog_bank_high', 'bw', 'clock_source',
                  'extended_bw', 'serial_number',
-                 'rfmux_version', 'citkid_version']:
+                 'rfmux_version', 'citkid_version', 'module_cfg']:
         if not hasattr(crs, name):
             raise ValueError(f"crs is missing attribute '{name}'.")
         
@@ -478,9 +759,12 @@ def write_system_cfg_to_zarr(crs, grp):
         'serial_number', 'rfmux_version', 'citkid_version',
         'firmware_version'
     }
-    # Add nco_freqs module-specific attributes
+    # Add nco_freqs and module_cfg module-specific attributes
     for module_idx in crs.nco_freqs.keys():
         required_attrs.add(f'nco_module{module_idx:d}')
+    for module_idx, cfg in crs.module_cfg.items():
+        for key in cfg.keys():
+            required_attrs.add(f'{key}_module{module_idx:d}')
     
     conflicts = existing_attrs & required_attrs
     if conflicts:
@@ -494,6 +778,19 @@ def write_system_cfg_to_zarr(crs, grp):
     for module_idx, nco in crs.nco_freqs.items():
         grp.attrs[f'nco_module{module_idx:d}'] = float(nco)
     
+    # Save per-module settings as attributes (one per module and setting)
+    for module_idx, cfg in crs.module_cfg.items():
+        for key, value in cfg.items():
+            if isinstance(value, (bool, np.bool_)):
+                value = bool(value)
+            elif isinstance(value, (int, np.integer)):
+                value = int(value)
+            elif isinstance(value, (float, np.floating)):
+                value = float(value)
+            else:
+                value = str(value)
+            grp.attrs[f'{key}_module{module_idx:d}'] = value
+
     # Save other configuration as attributes
     grp.attrs['firmware_version'] = str(crs.firmware_release.version)
     grp.attrs['analog_bank_high'] = bool(crs.analog_bank_high)
@@ -540,8 +837,8 @@ def piecewise_geomspace(x0, x1, bw, npoints_per_ch, nchs = 1024):
 ########################### input validation ###################################
 ################################################################################ 
 def _validate_parser_to_zarr_inputs(
-    path, grp, crs_sn, ntones, max_ntones, ch_map, ares_map, dt, 
-    batch_size_mb, chunk_size_mb
+    path, grp, crs_sn, ntones, max_ntones, ch_map, ares_map, dt, batch_size_mb,
+    chunk_size_mb
 ):
     """Validate inputs for parser_to_zarr function."""
     if not isinstance(path, str):
@@ -549,7 +846,32 @@ def _validate_parser_to_zarr_inputs(
     path = os.path.normpath(path)
     if not os.path.isdir(path):
         raise ValueError(f'path {path} is not a valid directory')
-     
+
+    crs_sn = int(crs_sn)
+    if crs_sn < 0:
+        raise ValueError('crs_sn must be a positive int')
+
+    ch_map, ares_map, dt = _validate_zarr_output_inputs(
+        grp, ntones, max_ntones, ch_map, ares_map, dt
+        )
+
+    batch_size_mb, chunk_size_mb = _validate_batch_chunk_sizes(
+        batch_size_mb, chunk_size_mb
+    )
+    return path, crs_sn, ch_map, ares_map, dt, batch_size_mb, chunk_size_mb
+
+def _validate_zarr_output_inputs(grp, ntones, max_ntones, ch_map, ares_map, dt):
+    """
+    Validate the inputs shared by ``parser_to_zarr`` and ``memory_to_zarr``.
+
+    Parameters:
+    See docstring of parser_to_zarr for parameter descriptions.
+
+    Returns:
+    ch_map (dict): validated ch_map with int32 array values.
+    ares_map (dict): ares_map with float64 array values.
+    dt (float): sample time in seconds.
+    """
     if not isinstance(grp, zarr.core.group.Group):
         raise TypeError('grp must be a zarr.core.group.Group object')
     # Check that required names don't already exist in the group
@@ -558,11 +880,7 @@ def _validate_parser_to_zarr_inputs(
     conflicts = existing_names & required_names
     if conflicts:
         msg = f'grp already contains required names: {sorted(conflicts)}'
-        raise ValueError(msg) 
-    
-    crs_sn = int(crs_sn)
-    if crs_sn < 0:
-        raise ValueError('crs_sn must be a positive int')
+        raise ValueError(msg)
 
     if not isinstance(ntones, (int, np.integer)) or ntones < 0:
         raise ValueError('ntones must be a positive int')
@@ -586,11 +904,7 @@ def _validate_parser_to_zarr_inputs(
     dt = float(dt)
     if dt <= 0:
         raise ValueError('dt must be a positive float')
-    
-    batch_size_mb, chunk_size_mb = _validate_batch_chunk_sizes(
-        batch_size_mb, chunk_size_mb
-    )
-    return path, crs_sn, ch_map, ares_map, dt, batch_size_mb, chunk_size_mb
+    return ch_map, ares_map, dt
 
 def _validate_ch_map(ch_map):
     """

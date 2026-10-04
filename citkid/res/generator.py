@@ -23,9 +23,7 @@ sAA_white is the white level of amplitude noise in dBc / Hz.
     ),
     cache=True
 )
-def generate_noise(
-    n, fs, alpha, f_knee, tau_qp, tau_rd, sxx_white, sAA_white
-):
+def generate_noise(n, fs, alpha, f_knee, tau_qp, tau_rd, sxx_white, sAA_white):
     """
     Generate fractional frequency and amplitude noise timestreams, where the 
     noise PSD is given by 
@@ -117,12 +115,7 @@ def block_mean(x, nsamps, m):
     ],
     cache=True
 )
-def get_S21_from_xA(
-    f,
-    p,
-    x,
-    A
-):
+def get_S21_from_xA(f, p, x, A):
     """
     Calculate S21 from fractional frequency and amplitude noise timestreams.
 
@@ -154,17 +147,7 @@ def get_S21_from_xA(
                 float64, float64, int64, float64[:]), 
                 cache = True
 )
-def get_S21_vs_freq(
-    f,
-    alpha,
-    f_knee,
-    tau,
-    sxx_white,
-    sAA_white,
-    fs,
-    nsamps,
-    p
-):
+def get_S21_vs_freq(f, alpha, f_knee, tau, sxx_white, sAA_white, fs, nsamps, p):
     """
     Generate complex S21 data vs frequency. Applies realistic noise to the 
     sweep data.
@@ -206,17 +189,7 @@ def get_S21_vs_freq(
                 cache = True
 )
 def get_S21_vs_freq_dual(
-    f,
-    alpha,
-    f_knee,
-    tau,
-    sxx_white,
-    sAA_white,
-    fs,
-    nsamps,
-    p1,
-    p2,
-    fl_tau
+    f, alpha, f_knee, tau, sxx_white, sAA_white, fs, nsamps, p1, p2, fl_tau
 ):
     """
     Generate complex S21 data vs frequency for two resonators. Applies realistic
@@ -276,16 +249,7 @@ def get_S21_vs_freq_dual(
                  float64, float64, float64, float64, float64[:]), cache = True
 )
 def get_S21_noise_ts(
-    ft,
-    npoints,
-    alpha,
-    f_knee,
-    tau_qp,
-    tau_rd,
-    sxx_white,
-    sAA_white,
-    fs,
-    p
+    ft, npoints, alpha, f_knee, tau_qp, tau_rd, sxx_white, sAA_white, fs, p
 ):
     """
     Generate complex S21 noise timestream data.

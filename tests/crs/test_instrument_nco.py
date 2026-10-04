@@ -346,8 +346,7 @@ def mock_crs_for_set_nco_macro():
 
 
 @pytest.mark.asyncio
-async def test_set_nco_macro_basic_functionality(
-        mock_crs_for_set_nco_macro):
+async def test_set_nco_macro_basic_functionality(mock_crs_for_set_nco_macro):
     """Test _set_nco macro basic functionality."""
     from citkid.crs.instrument import _set_nco
     
@@ -367,7 +366,8 @@ async def test_set_nco_macro_basic_functionality(
 
 @pytest.mark.asyncio
 async def test_set_nco_macro_updates_dict_with_measured_value(
-        mock_crs_for_set_nco_macro):
+    mock_crs_for_set_nco_macro
+):
     """Test _set_nco updates nco_freqs with measured value."""
     from citkid.crs.instrument import _set_nco
     
@@ -385,7 +385,8 @@ async def test_set_nco_macro_updates_dict_with_measured_value(
 
 @pytest.mark.asyncio
 async def test_set_nco_macro_accepts_within_tolerance(
-        mock_crs_for_set_nco_macro):
+    mock_crs_for_set_nco_macro
+):
     """Test _set_nco accepts measured values within 1 Hz tolerance."""
     from citkid.crs.instrument import _set_nco
     
@@ -410,7 +411,8 @@ async def test_set_nco_macro_accepts_within_tolerance(
 
 @pytest.mark.asyncio
 async def test_set_nco_macro_raises_error_outside_tolerance(
-        mock_crs_for_set_nco_macro):
+    mock_crs_for_set_nco_macro
+):
     """Test _set_nco raises error if measured value outside 1 Hz."""
     from citkid.crs.instrument import _set_nco
     
@@ -425,7 +427,8 @@ async def test_set_nco_macro_raises_error_outside_tolerance(
 
 @pytest.mark.asyncio
 async def test_set_nco_macro_error_message_contains_values(
-        mock_crs_for_set_nco_macro):
+    mock_crs_for_set_nco_macro
+):
     """Test _set_nco error message contains requested and measured values."""
     from citkid.crs.instrument import _set_nco
     
@@ -446,7 +449,8 @@ async def test_set_nco_macro_error_message_contains_values(
 
 @pytest.mark.asyncio
 async def test_set_nco_macro_works_with_different_module_indices(
-        mock_crs_for_set_nco_macro):
+    mock_crs_for_set_nco_macro
+):
     """Test _set_nco works with different module indices."""
     from citkid.crs.instrument import _set_nco
     
@@ -490,7 +494,7 @@ def test_set_nco_macro_registered_to_readout_module():
 def mock_crs_for_disable_modules(base_crs):
     """Extend base_crs for disable_modules tests."""
     crs = base_crs
-    crs.nco_freqs = {0: 3.5e9, 1: 4.0e9, 2: 4.5e9, 5: 5.0e9}
+    crs.nco_freqs = {3: 3.5e9, 1: 4.0e9, 2: 4.5e9, 5: 5.0e9}
     
     # Mock _clear_channels
     crs._clear_channels = AsyncMock()
@@ -500,7 +504,8 @@ def mock_crs_for_disable_modules(base_crs):
 
 @pytest.mark.asyncio
 async def test_disable_modules_basic_functionality(
-        mock_crs_for_disable_modules):
+    mock_crs_for_disable_modules
+):
     """Test disable_modules clears channels and removes from nco_freqs."""
     crs = mock_crs_for_disable_modules
     
@@ -512,56 +517,53 @@ async def test_disable_modules_basic_functionality(
     
     # Check module 1 was removed from nco_freqs
     assert 1 not in crs.nco_freqs
-    assert 0 in crs.nco_freqs
+    assert 3 in crs.nco_freqs
     assert 2 in crs.nco_freqs
 
 
 @pytest.mark.asyncio
-async def test_disable_modules_multiple_modules(
-        mock_crs_for_disable_modules):
+async def test_disable_modules_multiple_modules(mock_crs_for_disable_modules):
     """Test disable_modules with multiple modules."""
     crs = mock_crs_for_disable_modules
     
-    # Disable modules 0 and 2
-    await crs.disable_modules([0, 2])
+    # Disable modules 3 and 2
+    await crs.disable_modules([3, 2])
     
     # Check _clear_channels was called with correct list
-    crs._clear_channels.assert_called_once_with([0, 2])
+    crs._clear_channels.assert_called_once_with([3, 2])
     
     # Check both modules were removed from nco_freqs
-    assert 0 not in crs.nco_freqs
+    assert 3 not in crs.nco_freqs
     assert 2 not in crs.nco_freqs
     assert 1 in crs.nco_freqs
     assert 5 in crs.nco_freqs
 
 
 @pytest.mark.asyncio
-async def test_disable_modules_all_modules(
-        mock_crs_for_disable_modules):
+async def test_disable_modules_all_modules(mock_crs_for_disable_modules):
     """Test disable_modules with all modules."""
     crs = mock_crs_for_disable_modules
     
     # Disable all modules
-    await crs.disable_modules([0, 1, 2, 5])
+    await crs.disable_modules([3, 1, 2, 5])
     
     # Check _clear_channels was called
-    crs._clear_channels.assert_called_once_with([0, 1, 2, 5])
+    crs._clear_channels.assert_called_once_with([3, 1, 2, 5])
     
     # Check all modules were removed
     assert len(crs.nco_freqs) == 0
 
 
 @pytest.mark.asyncio
-async def test_disable_modules_nonexistent_module(
-        mock_crs_for_disable_modules):
-    """Test disable_modules with module not in nco_freqs."""
+async def test_disable_modules_nonexistent_module(mock_crs_for_disable_modules):
+    """Test disable_modules with a module that has no NCO set."""
     crs = mock_crs_for_disable_modules
     
     # Disable module that doesn't exist in nco_freqs
-    await crs.disable_modules([10])
+    await crs.disable_modules([4])
     
     # Should still call _clear_channels
-    crs._clear_channels.assert_called_once_with([10])
+    crs._clear_channels.assert_called_once_with([4])
     
     # nco_freqs should be unchanged
     assert len(crs.nco_freqs) == 4
@@ -569,15 +571,16 @@ async def test_disable_modules_nonexistent_module(
 
 @pytest.mark.asyncio
 async def test_disable_modules_mixed_existing_nonexisting(
-        mock_crs_for_disable_modules):
+    mock_crs_for_disable_modules
+):
     """Test disable_modules with mix of existing and non-existing."""
     crs = mock_crs_for_disable_modules
     
-    # Disable mix of existing and non-existing modules
-    await crs.disable_modules([1, 10, 15])
+    # Disable mix of modules with and without NCOs
+    await crs.disable_modules([1, 4, 6])
     
     # Check _clear_channels was called with full list
-    crs._clear_channels.assert_called_once_with([1, 10, 15])
+    crs._clear_channels.assert_called_once_with([1, 4, 6])
     
     # Only module 1 should be removed
     assert 1 not in crs.nco_freqs
@@ -601,7 +604,8 @@ async def test_disable_modules_empty_list(mock_crs_for_disable_modules):
 
 @pytest.mark.asyncio
 async def test_disable_modules_validates_input_type(
-        mock_crs_for_disable_modules):
+    mock_crs_for_disable_modules
+):
     """Test disable_modules validates input is list of integers."""
     crs = mock_crs_for_disable_modules
     
@@ -611,8 +615,7 @@ async def test_disable_modules_validates_input_type(
 
 
 @pytest.mark.asyncio
-async def test_disable_modules_validates_floats(
-        mock_crs_for_disable_modules):
+async def test_disable_modules_validates_floats(mock_crs_for_disable_modules):
     """Test disable_modules rejects floats."""
     crs = mock_crs_for_disable_modules
     
@@ -622,7 +625,8 @@ async def test_disable_modules_validates_floats(
 
 @pytest.mark.asyncio
 async def test_disable_modules_accepts_numpy_integers(
-        mock_crs_for_disable_modules):
+    mock_crs_for_disable_modules
+):
     """Test disable_modules accepts numpy integers."""
     crs = mock_crs_for_disable_modules
     
@@ -636,7 +640,8 @@ async def test_disable_modules_accepts_numpy_integers(
 
 @pytest.mark.asyncio
 async def test_disable_modules_does_not_modify_input_list(
-        mock_crs_for_disable_modules):
+    mock_crs_for_disable_modules
+):
     """Test disable_modules doesn't modify the input list."""
     crs = mock_crs_for_disable_modules
     
@@ -647,3 +652,27 @@ async def test_disable_modules_does_not_modify_input_list(
     
     # Input list should be unchanged
     assert original_list == original_copy
+
+@pytest.mark.asyncio
+async def test_disable_modules_invalid_module_raises(
+    mock_crs_for_disable_modules
+):
+    """Test disable_modules raises for modules outside of [1, 8]."""
+    crs = mock_crs_for_disable_modules
+
+    with pytest.raises(ValueError, match = 'not owned by this session'):
+        await crs.disable_modules([1, 10])
+    crs._clear_channels.assert_not_called()
+    assert len(crs.nco_freqs) == 4
+
+
+@pytest.mark.asyncio
+async def test_disable_modules_not_owned_raises(mock_crs_for_disable_modules):
+    """Test disable_modules raises for modules owned by another session."""
+    crs = mock_crs_for_disable_modules
+    crs.module_idxs = [1, 2]
+
+    with pytest.raises(ValueError, match = r'Modules \[5\] are not owned'):
+        await crs.disable_modules([1, 5])
+    crs._clear_channels.assert_not_called()
+    assert len(crs.nco_freqs) == 4

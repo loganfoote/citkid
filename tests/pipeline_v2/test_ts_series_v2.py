@@ -33,8 +33,10 @@ class _Panel(StepPanel):
         return True
 
 
-def _make_window(qt_app, monkeypatch, quantities=None, x='p', y='a', nrows=4, n_series=3,
-                 **kwargs):
+def _make_window(
+    qt_app, monkeypatch, quantities=None, x='p', y='a', nrows=4, n_series=3,
+    **kwargs
+):
     """
     Build a TSSeriesWindow over mock runners with deterministic quantities.
 
@@ -484,7 +486,7 @@ def test_log_scale_survives_quantity_change(qt_app, monkeypatch):
 def test_xy_fit_curve_follows_x_scale(qt_app, monkeypatch, xscale, expected):
     from citkid.pipeline_v2.series_xy_fit import SeriesXYFit
 
-    xy_fit = SeriesXYFit(fit=lambda x, y: (1.0, 0.0), output_names=['slope', 'intercept'],
+    xy_fit = SeriesXYFit(fit=lambda x, y: (1.0, 0.0), param_names=['slope', 'intercept'],
                          model=lambda xs, m, c: m * xs + c, n_samples=3)
     win, _ = _make_window(qt_app, monkeypatch, xy_fit=xy_fit, xscale=xscale)  # x = p = 1, 2, 3
     win._update_series_scatter()

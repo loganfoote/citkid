@@ -9,21 +9,9 @@ if TYPE_CHECKING:
     from . import instrument as inst
 
 async def target_sweep(
-    crs,
-    fres,
-    ares,
-    qres,
-    res_idxs,
-    grp,
-    ch_map = None, 
-    gain_span_factor = 10,
-    npoints_fine = 500,
-    npoints_gain = 50,
-    npoints_rough = None,
-    nsamps = 100,
-    fres_update_method = 'spacing',
-    cable_delay = 0.0,
-    verbose = True,
+    crs, fres, ares, qres, res_idxs, grp, ch_map = None, gain_span_factor = 10,
+    npoints_fine = 500, npoints_gain = 50, npoints_rough = None, nsamps = 100,
+    fres_update_method = 'spacing', verbose = True,
 ):
     """
     Execute a target sweep procedure on the CRS instrument, consisting of
@@ -35,10 +23,11 @@ async def target_sweep(
     Parameters:
     crs (CRS): initialized CRS instrument class.
     fres (array-like float64): array of resonant frequencies in Hz.
-    ares (array-like float64): array of amplitudes in RFSoC units.
+    ares (array-like float64): array of tone powers in dBm.
     qres (array-like float64): array of span factors for cutting out of adjacent
         datasets. Resonances should span fres / qres.
-    res_idxs (array-like int32): Array of resonator indices.
+    res_idxs (array-like int32): Array of resonator indices. Negative indices
+        mark calibration tones, which are not updated after the rough sweep.
     grp (zarr.Group): Zarr group to which data is saved.
     ch_map (dict or None): Channel mapping dictionary. If None, crs.ch_map is 
         generated during the first sweep (rough or gain). 
@@ -50,9 +39,10 @@ async def target_sweep(
     npoints_rough (int or None): number of points per resonator in the 
         rough sweep.
     nsamps (int): number of samples to average over per sweep point. 
-    fres_update_method (str): method for updating the tone frequencies, if
-        take_rough_sweep is True. See .fres.update_fres for methods.
-    cable_delay (float): Cable delay estimate to improve frequency update.
+    fres_update_method (str): method for updating the tone frequencies after
+        the rough sweep, if npoints_rough is not None. Can be 'spacing'
+        (default), 'distance', or 'minS21'. See
+        ``citkid.multitone.fres.update_fres``.
     verbose (bool): If True, displays progress bars while taking data.
 
     Returns:
@@ -62,16 +52,16 @@ async def target_sweep(
     # Input validation 
     fres, ares, qres, res_idxs = _validate_target_sweep_inputs(
         crs, fres, ares, qres, res_idxs, grp, gain_span_factor, npoints_fine, 
-        npoints_gain, npoints_rough, nsamps, fres_update_method, 
-        cable_delay, verbose
+        npoints_gain, npoints_rough, nsamps, fres_update_method, verbose
     )
 
-    # Save input data 
+    # Save input data. System configuration is written first, since it
+    # checks its own attribute conflicts
+    util.write_system_cfg_to_zarr(crs, grp)
     grp.create_array(name = 'ares', data = ares)
     grp.create_array(name = 'qres', data = qres)
     grp.create_array(name = 'res_idxs', data = res_idxs)
     grp.attrs['nsamps'] = nsamps
-    util.write_system_cfg_to_zarr(crs, grp)
     
     if npoints_rough is not None:
         # Rough sweep 
@@ -94,22 +84,18 @@ async def target_sweep(
         _save_sweep_data(grpr, '', f_rough, z_rough)
         grpr.create_array(name = 'fres', data = fres_rough)
 
-        # Save fres update method and cable delay
-        grpr.attrs['fres_update_method'] = fres_update_method 
-        grpr.attrs['cable_delay'] = cable_delay
+        # Save fres update method
+        grpr.attrs['fres_update_method'] = fres_update_method
 
-        # Assign ch_map 
-        ch_map = crs.ch_map 
+        # Assign ch_map
+        ch_map = crs.ch_map
         # Is ch_map persistent after sweep? - it should be, but check
 
-        # Update fres based on rough sweep
+        # Update fres based on rough sweep. Calibration tones (res_idxs < 0)
+        # are not updated
         fres = update_fres(
-            f_rough, z_rough, 
-            fres, qres, 
-            fcal_indices = np.where(res_idxs < 0)[0], 
-            method = fres_update_method,
-            cable_delay = cable_delay,
-            plotq = False
+            f_rough, z_rough, fres, qres, res_idxs,
+            method = fres_update_method
             )
         # Some assertions until update_fres is well-tested
         assert isinstance(fres, np.ndarray)
@@ -203,20 +189,8 @@ def _save_sweep_data(grp, prefix, f, z):
 ########################### Input validation helpers ###########################
 ################################################################################
 def _validate_target_sweep_inputs(
-    crs,
-    fres,
-    ares,
-    qres, 
-    res_idxs,
-    grp,
-    gain_span_factor,
-    npoints_fine,
-    npoints_gain,
-    npoints_rough,
-    nsamps,
-    fres_update_method,
-    cable_delay,
-    verbose,
+    crs, fres, ares, qres, res_idxs, grp, gain_span_factor, npoints_fine,
+    npoints_gain, npoints_rough, nsamps, fres_update_method, verbose,
 ):
     """
     Validate inputs to target_sweep function.
@@ -263,10 +237,6 @@ def _validate_target_sweep_inputs(
         fres_update_method not in ['distance', 'spacing', 'minS21']:
         msg = "fres_update_method must be 'distance', 'spacing', or 'minS21'."
         raise ValueError(msg)
-    # cable_delay
-    if not isinstance(cable_delay, (float, np.floating)) or \
-        cable_delay < 0:
-        raise ValueError("cable_delay must be a positive number.") 
     # verbose
     if not isinstance(verbose, bool):
         raise TypeError("verbose must be a boolean.")
@@ -277,16 +247,16 @@ def _validate_target_sweep_inputs(
     def zarr_key_exists_check(grp, name):
         if name in grp:
             raise ValueError(f"Zarr group already contains dataset '{name}'.")
+    for name in ['ares', 'qres', 'res_idxs', 'fres']:
+        zarr_key_exists_check(grp, name)
     if npoints_rough is not None:
-        for name in ['s21_rough_f', 's21_rough_z', 'fres_rough']:
-            zarr_key_exists_check(grp, name)
+        zarr_key_exists_check(grp, 'rough_sweep')
     if npoints_gain is not None:
-        for name in ['s21_gain_f', 's21_gain_z']:
-            zarr_key_exists_check(grp, name)
+        zarr_key_exists_check(grp, 'gain_sweep')
     if npoints_fine is not None:
-        for name in ['s21_fine_f', 's21_fine_z']:
-            zarr_key_exists_check(grp, name) 
-    zarr_key_exists_check(grp, 'fres')       
+        zarr_key_exists_check(grp, 'fine_sweep')
+    if 'nsamps' in grp.attrs:
+        raise ValueError("Zarr group already contains attribute 'nsamps'.")
             
     # Return validated inputs
     return fres, ares, qres, res_idxs

@@ -184,8 +184,7 @@ def test_crs_init_interface_does_not_exist():
             CRS(serial_number=27, interface='fake_interface')
 
 
-def test_crs_init_device_query_chain(mock_rfmux_session,
-                                      mock_rfmux_device):
+def test_crs_init_device_query_chain(mock_rfmux_session, mock_rfmux_device):
     """Test that the device query chain is called correctly."""
     with patch('citkid.crs.instrument.rfmux') as mock_rfmux, \
          patch('citkid.crs.instrument.util.interface_exists',

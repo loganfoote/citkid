@@ -20,165 +20,201 @@ from citkid.crs.instrument import CRS
 def mock_crs_for_clear_channels(base_crs):
     """Extend base_crs for _clear_channels tests."""
     crs = base_crs
-    
+
     # Mock device clear_channels method
     crs.d.clear_channels = AsyncMock()
-    
+
     # Set up initial state with tones
     crs.fres_map = {
-        0: np.array([3.5e9, 3.501e9, 3.502e9]),
+        3: np.array([3.5e9, 3.501e9, 3.502e9]),
         1: np.array([4.0e9, 4.001e9]),
         2: np.array([4.5e9, 4.501e9, 4.502e9, 4.503e9])
     }
     crs.ares_map = {
-        0: np.array([-50, -51, -52]),
+        3: np.array([-50, -51, -52]),
         1: np.array([-50, -51]),
         2: np.array([-50, -51, -52, -53])
     }
     crs.ch_map = {
-        0: [0, 1, 2],
+        3: [0, 1, 2],
         1: [3, 4],
         2: [5, 6, 7, 8]
     }
     crs.ntones = 9  # Total of 3 + 2 + 4 channels
-    
+
     return crs
 
 
 @pytest.mark.asyncio
-async def test_clear_channels_basic_functionality(
-        mock_crs_for_clear_channels):
+async def test_clear_channels_basic_functionality(mock_crs_for_clear_channels):
     """Test _clear_channels clears device and updates maps."""
     crs = mock_crs_for_clear_channels
-    
+
     # Clear module 1
     await crs._clear_channels([1])
-    
+
     # Check device method was called
     crs.d.clear_channels.assert_called_once_with(module = 1)
-    
+
     # Check module 1 was removed from all maps
     assert 1 not in crs.fres_map
     assert 1 not in crs.ares_map
     assert 1 not in crs.ch_map
-    
+
     # Check other modules still exist
-    assert 0 in crs.fres_map
+    assert 3 in crs.fres_map
     assert 2 in crs.fres_map
-    
-    # Check ntones was decremented correctly
-    assert crs.ntones == 7  # 9 - 2
+
+    # ntones is the length of the channel indexing used by the remaining
+    # modules, so it is unchanged
+    assert crs.ntones == 9
 
 
 @pytest.mark.asyncio
-async def test_clear_channels_updates_ntones_correctly(
-        mock_crs_for_clear_channels):
-    """Test _clear_channels decrements ntones by channel count."""
+async def test_clear_channels_ntones_kept_until_all_cleared(
+    mock_crs_for_clear_channels
+):
+    """Test ntones is kept while channels remain and reset after."""
     crs = mock_crs_for_clear_channels
-    
-    # Clear module 0 (3 channels)
-    await crs._clear_channels([0])
-    assert crs.ntones == 6  # 9 - 3
-    
-    # Clear module 2 (4 channels)
+
+    await crs._clear_channels([3])
+    assert crs.ntones == 9
+
     await crs._clear_channels([2])
-    assert crs.ntones == 2  # 6 - 4
+    assert crs.ntones == 9
+
+    await crs._clear_channels([1])
+    assert crs.ntones == 0
 
 
 @pytest.mark.asyncio
-async def test_clear_channels_multiple_modules(
-        mock_crs_for_clear_channels):
+async def test_clear_channels_ntones_with_missing_channels(
+    mock_crs_for_clear_channels
+):
+    """Test ntones resets to 0 even if it includes missing channels."""
+    crs = mock_crs_for_clear_channels
+    # 9 mapped channels plus 2 missing channels
+    crs.ntones = 11
+
+    await crs._clear_channels([3, 1, 2])
+    assert crs.ntones == 0
+
+
+@pytest.mark.asyncio
+async def test_clear_channels_multiple_modules(mock_crs_for_clear_channels):
     """Test _clear_channels with multiple modules."""
     crs = mock_crs_for_clear_channels
-    
-    # Clear modules 0 and 2
-    await crs._clear_channels([0, 2])
-    
+
+    # Clear modules 3 and 2
+    await crs._clear_channels([3, 2])
+
     # Check device method was called twice
     assert crs.d.clear_channels.call_count == 2
-    crs.d.clear_channels.assert_any_call(module = 0)
+    crs.d.clear_channels.assert_any_call(module = 3)
     crs.d.clear_channels.assert_any_call(module = 2)
-    
+
     # Check both modules removed from maps
-    assert 0 not in crs.fres_map
+    assert 3 not in crs.fres_map
     assert 2 not in crs.fres_map
-    assert 0 not in crs.ares_map
+    assert 3 not in crs.ares_map
     assert 2 not in crs.ares_map
-    assert 0 not in crs.ch_map
+    assert 3 not in crs.ch_map
     assert 2 not in crs.ch_map
-    
-    # Check ntones updated (3 + 4 = 7 channels removed)
-    assert crs.ntones == 2  # 9 - 7
+
+    # Module 1 still has channels
+    assert crs.ntones == 9
 
 
 @pytest.mark.asyncio
 async def test_clear_channels_all_modules(mock_crs_for_clear_channels):
     """Test _clear_channels removes all modules."""
     crs = mock_crs_for_clear_channels
-    
+
     # Clear all modules
-    await crs._clear_channels([0, 1, 2])
-    
+    await crs._clear_channels([3, 1, 2])
+
     # Check all maps are empty
     assert len(crs.fres_map) == 0
     assert len(crs.ares_map) == 0
     assert len(crs.ch_map) == 0
-    
+
     # Check ntones is 0
     assert crs.ntones == 0
 
 
 @pytest.mark.asyncio
-async def test_clear_channels_nonexistent_module(
-        mock_crs_for_clear_channels):
-    """Test _clear_channels with module not in maps."""
+async def test_clear_channels_nonexistent_module(mock_crs_for_clear_channels):
+    """Test _clear_channels with a module not in the maps."""
     crs = mock_crs_for_clear_channels
-    
+
     # Clear module that doesn't exist in maps
-    await crs._clear_channels([10])
-    
+    await crs._clear_channels([4])
+
     # Should still call device method
-    crs.d.clear_channels.assert_called_once_with(module = 10)
-    
+    crs.d.clear_channels.assert_called_once_with(module = 4)
+
     # ntones should be unchanged (no channels to remove)
     assert crs.ntones == 9
-    
+
     # Maps should be unchanged
     assert len(crs.fres_map) == 3
 
 
 @pytest.mark.asyncio
 async def test_clear_channels_mixed_existing_nonexisting(
-        mock_crs_for_clear_channels):
+    mock_crs_for_clear_channels
+):
     """Test _clear_channels with mix of existing and non-existing."""
     crs = mock_crs_for_clear_channels
-    
+
     # Clear mix of existing and non-existing
-    await crs._clear_channels([1, 10, 15])
-    
+    await crs._clear_channels([1, 4, 6])
+
     # Check device called for all
     assert crs.d.clear_channels.call_count == 3
-    
+
     # Only module 1 should be removed from maps
     assert 1 not in crs.fres_map
-    assert 0 in crs.fres_map
+    assert 3 in crs.fres_map
     assert 2 in crs.fres_map
-    
-    # ntones should only decrement for module 1
-    assert crs.ntones == 7  # 9 - 2
+
+
+@pytest.mark.asyncio
+async def test_clear_channels_invalid_module_raises(
+    mock_crs_for_clear_channels
+):
+    """Test _clear_channels raises for modules outside of [1, 8]."""
+    crs = mock_crs_for_clear_channels
+
+    with pytest.raises(ValueError, match = 'not owned by this session'):
+        await crs._clear_channels([1, 10])
+    crs.d.clear_channels.assert_not_called()
+    assert len(crs.fres_map) == 3
+
+
+@pytest.mark.asyncio
+async def test_clear_channels_not_owned_raises(mock_crs_for_clear_channels):
+    """Test _clear_channels raises for modules owned by another session."""
+    crs = mock_crs_for_clear_channels
+    crs.module_idxs = [1, 2]
+
+    with pytest.raises(ValueError, match = r'Modules \[3\] are not owned'):
+        await crs._clear_channels([1, 3])
+    crs.d.clear_channels.assert_not_called()
+    assert len(crs.fres_map) == 3
 
 
 @pytest.mark.asyncio
 async def test_clear_channels_empty_list(mock_crs_for_clear_channels):
     """Test _clear_channels with empty list."""
     crs = mock_crs_for_clear_channels
-    
+
     # Clear with empty list
     await crs._clear_channels([])
-    
+
     # Device should not be called
     crs.d.clear_channels.assert_not_called()
-    
+
     # Everything should be unchanged
     assert crs.ntones == 9
     assert len(crs.fres_map) == 3
@@ -186,51 +222,51 @@ async def test_clear_channels_empty_list(mock_crs_for_clear_channels):
 
 @pytest.mark.asyncio
 async def test_clear_channels_ntones_never_negative(
-        mock_crs_for_clear_channels):
+    mock_crs_for_clear_channels
+):
     """Test ntones doesn't go negative."""
     crs = mock_crs_for_clear_channels
-    
+
     # Clear all modules
-    await crs._clear_channels([0, 1, 2])
+    await crs._clear_channels([3, 1, 2])
     assert crs.ntones == 0
-    
+
     # Try to clear again (modules already cleared)
-    await crs._clear_channels([0, 1, 2])
-    
+    await crs._clear_channels([3, 1, 2])
+
     # ntones should still be 0, not negative
     assert crs.ntones == 0
 
 
 @pytest.mark.asyncio
-async def test_clear_channels_validates_input_type(
-        mock_crs_for_clear_channels):
+async def test_clear_channels_validates_input_type(mock_crs_for_clear_channels):
     """Test _clear_channels validates input is list of integers."""
     crs = mock_crs_for_clear_channels
-    
+
     # Test with non-integer in list
     with pytest.raises(TypeError, match = 'must be a list of integers'):
         await crs._clear_channels([1, 'not_int', 3])
 
 
 @pytest.mark.asyncio
-async def test_clear_channels_validates_floats(
-        mock_crs_for_clear_channels):
+async def test_clear_channels_validates_floats(mock_crs_for_clear_channels):
     """Test _clear_channels rejects floats."""
     crs = mock_crs_for_clear_channels
-    
+
     with pytest.raises(TypeError, match = 'must be a list of integers'):
         await crs._clear_channels([1, 2.5, 3])
 
 
 @pytest.mark.asyncio
 async def test_clear_channels_accepts_numpy_integers(
-        mock_crs_for_clear_channels):
+    mock_crs_for_clear_channels
+):
     """Test _clear_channels accepts numpy integers."""
     crs = mock_crs_for_clear_channels
-    
+
     # Use numpy integers
     await crs._clear_channels([np.int32(1), np.int64(2)])
-    
+
     # Check both were cleared
     assert 1 not in crs.fres_map
     assert 2 not in crs.fres_map
@@ -238,20 +274,21 @@ async def test_clear_channels_accepts_numpy_integers(
 
 @pytest.mark.asyncio
 async def test_clear_channels_removes_from_all_three_maps(
-        mock_crs_for_clear_channels):
+    mock_crs_for_clear_channels
+):
     """Test _clear_channels removes from fres_map, ares_map, ch_map."""
     crs = mock_crs_for_clear_channels
-    
+
     module_idx = 1
-    
+
     # Verify module exists in all maps before clearing
     assert module_idx in crs.fres_map
     assert module_idx in crs.ares_map
     assert module_idx in crs.ch_map
-    
+
     # Clear the module
     await crs._clear_channels([module_idx])
-    
+
     # Verify removed from all three maps
     assert module_idx not in crs.fres_map
     assert module_idx not in crs.ares_map
@@ -259,37 +296,17 @@ async def test_clear_channels_removes_from_all_three_maps(
 
 
 @pytest.mark.asyncio
-async def test_clear_channels_with_different_ch_map_sizes(
-        mock_crs_for_clear_channels):
-    """Test _clear_channels correctly counts channels of different sizes."""
-    crs = mock_crs_for_clear_channels
-    
-    # Module 0 has 3 channels
-    initial_ntones = crs.ntones
-    await crs._clear_channels([0])
-    assert crs.ntones == initial_ntones - 3
-    
-    # Reset and test module 1 with 2 channels
-    crs.ntones = 9
-    crs.fres_map[0] = np.array([3.5e9, 3.501e9, 3.502e9])
-    crs.ares_map[0] = np.array([-50, -51, -52])
-    crs.ch_map[0] = [0, 1, 2]
-    
-    await crs._clear_channels([1])
-    assert crs.ntones == 7  # 9 - 2
-
-
-@pytest.mark.asyncio
 async def test_clear_channels_does_not_modify_input_list(
-        mock_crs_for_clear_channels):
+    mock_crs_for_clear_channels
+):
     """Test _clear_channels doesn't modify the input list."""
     crs = mock_crs_for_clear_channels
-    
+
     original_list = [1, 2]
     original_copy = original_list.copy()
-    
+
     await crs._clear_channels(original_list)
-    
+
     # Input list should be unchanged
     assert original_list == original_copy
 
@@ -363,8 +380,7 @@ async def test_write_tones_basic_functionality(mock_crs_for_write_tones):
 
 
 @pytest.mark.asyncio
-async def test_write_tones_validates_nco_freqs_set(
-        mock_crs_for_write_tones):
+async def test_write_tones_validates_nco_freqs_set(mock_crs_for_write_tones):
     """Test write_tones raises error if NCO frequencies not set."""
     crs, _, _, _, _ = mock_crs_for_write_tones
     
@@ -375,8 +391,7 @@ async def test_write_tones_validates_nco_freqs_set(
 
 
 @pytest.mark.asyncio
-async def test_write_tones_converts_to_numpy_arrays(
-        mock_crs_for_write_tones):
+async def test_write_tones_converts_to_numpy_arrays(mock_crs_for_write_tones):
     """Test write_tones converts inputs to numpy arrays."""
     crs, mock_create, _, _, _ = mock_crs_for_write_tones
     
@@ -395,8 +410,7 @@ async def test_write_tones_converts_to_numpy_arrays(
 
 
 @pytest.mark.asyncio
-async def test_write_tones_validates_matching_shapes(
-        mock_crs_for_write_tones):
+async def test_write_tones_validates_matching_shapes(mock_crs_for_write_tones):
     """Test write_tones validates fres and ares have same shape."""
     crs, _, _, _, _ = mock_crs_for_write_tones
     
@@ -417,8 +431,8 @@ async def test_write_tones_handles_empty_arrays(mock_crs_for_write_tones):
     
     result = await crs.write_tones(fres, ares)
     
-    # Should return 0 and not call other methods
-    assert result == 0
+    # Should return an empty array and not call other methods
+    assert isinstance(result, np.ndarray) and result.size == 0
     crs._clear_channels.assert_not_called()
 
 
@@ -444,7 +458,8 @@ async def test_write_tones_with_provided_ch_map(mock_crs_for_write_tones):
 
 @pytest.mark.asyncio
 async def test_write_tones_detects_missing_channels_with_ch_map(
-        mock_crs_for_write_tones):
+    mock_crs_for_write_tones
+):
     """Test write_tones detects missing channels when ch_map provided."""
     crs, _, _, _, _ = mock_crs_for_write_tones
     
@@ -459,7 +474,8 @@ async def test_write_tones_detects_missing_channels_with_ch_map(
 
 @pytest.mark.asyncio
 async def test_write_tones_missing_channels_with_allow_missing(
-        mock_crs_for_write_tones):
+    mock_crs_for_write_tones
+):
     """Test write_tones warns about missing channels with allow_missing."""
     crs, mock_create, _, _, _ = mock_crs_for_write_tones
     
@@ -483,7 +499,8 @@ async def test_write_tones_missing_channels_with_allow_missing(
 
 @pytest.mark.asyncio
 async def test_write_tones_missing_channels_raises_without_allow(
-        mock_crs_for_write_tones):
+    mock_crs_for_write_tones
+):
     """Test write_tones raises error for missing channels."""
     crs, mock_create, _, _, _ = mock_crs_for_write_tones
     
@@ -501,8 +518,7 @@ async def test_write_tones_missing_channels_raises_without_allow(
 
 
 @pytest.mark.asyncio
-async def test_write_tones_clears_existing_channels(
-        mock_crs_for_write_tones):
+async def test_write_tones_clears_existing_channels(mock_crs_for_write_tones):
     """Test write_tones clears existing channels before writing."""
     crs, mock_create, _, _, _ = mock_crs_for_write_tones
     
@@ -524,8 +540,7 @@ async def test_write_tones_clears_existing_channels(
 
 
 @pytest.mark.asyncio
-async def test_write_tones_updates_maps_correctly(
-        mock_crs_for_write_tones):
+async def test_write_tones_updates_maps_correctly(mock_crs_for_write_tones):
     """Test write_tones updates fres_map, ares_map, ch_map."""
     crs, mock_create, _, _, _ = mock_crs_for_write_tones
     
@@ -554,7 +569,8 @@ async def test_write_tones_updates_maps_correctly(
 
 @pytest.mark.asyncio
 async def test_write_tones_calls_safe_concatenate_frequencies(
-        mock_crs_for_write_tones):
+    mock_crs_for_write_tones
+):
     """Test write_tones calls dithering function for each module."""
     crs, _, _, _, mock_netanal = mock_crs_for_write_tones
     
@@ -569,7 +585,8 @@ async def test_write_tones_calls_safe_concatenate_frequencies(
 
 @pytest.mark.asyncio
 async def test_write_tones_skips_empty_modules_in_dithering(
-        mock_crs_for_write_tones):
+    mock_crs_for_write_tones
+):
     """Test write_tones skips empty modules in dithering."""
     crs, mock_create, _, _, mock_netanal = mock_crs_for_write_tones
     
@@ -590,7 +607,8 @@ async def test_write_tones_skips_empty_modules_in_dithering(
 
 @pytest.mark.asyncio
 async def test_write_tones_calls_get_modules_with_correct_indices(
-        mock_crs_for_write_tones):
+    mock_crs_for_write_tones
+):
     """Test write_tones calls get_modules with correct module indices."""
     crs, mock_create, mock_get_mods, _, _ = mock_crs_for_write_tones
     
@@ -613,8 +631,7 @@ async def test_write_tones_calls_get_modules_with_correct_indices(
 
 
 @pytest.mark.asyncio
-async def test_write_tones_calls_write_tones_macro(
-        mock_crs_for_write_tones):
+async def test_write_tones_calls_write_tones_macro(mock_crs_for_write_tones):
     """Test write_tones calls _write_tones macro with correct args."""
     crs, mock_create, _, mock_modules, _ = mock_crs_for_write_tones
     
@@ -650,8 +667,7 @@ async def test_write_tones_sets_ntones_correctly(mock_crs_for_write_tones):
 
 
 @pytest.mark.asyncio
-async def test_write_tones_validates_ch_map_format(
-        mock_crs_for_write_tones):
+async def test_write_tones_validates_ch_map_format(mock_crs_for_write_tones):
     """Test write_tones validates ch_map format."""
     crs, _, _, _, _ = mock_crs_for_write_tones
     
@@ -679,8 +695,7 @@ async def test_write_tones_validates_ch_map_keys(mock_crs_for_write_tones):
 
 
 @pytest.mark.asyncio
-async def test_write_tones_validates_ch_map_values(
-        mock_crs_for_write_tones):
+async def test_write_tones_validates_ch_map_values(mock_crs_for_write_tones):
     """Test write_tones validates ch_map values are lists of integers."""
     crs, _, _, _, _ = mock_crs_for_write_tones
     
@@ -695,8 +710,7 @@ async def test_write_tones_validates_ch_map_values(
 
 
 @pytest.mark.asyncio
-async def test_write_tones_preserves_original_ch_map(
-        mock_crs_for_write_tones):
+async def test_write_tones_preserves_original_ch_map(mock_crs_for_write_tones):
     """Test write_tones doesn't modify input ch_map."""
     crs, _, _, _, _ = mock_crs_for_write_tones
     
@@ -755,8 +769,7 @@ def mock_module_for_write_tones():
 
 
 @pytest.mark.asyncio
-async def test_write_tones_macro_converts_to_numpy(
-        mock_module_for_write_tones):
+async def test_write_tones_macro_converts_to_numpy(mock_module_for_write_tones):
     """Test _write_tones converts inputs to numpy arrays."""
     from citkid.crs.instrument import _write_tones
     
@@ -767,12 +780,14 @@ async def test_write_tones_macro_converts_to_numpy(
     ares_map = {1: [-50, -51]}  # Python list
     
     # Should not raise
-    await _write_tones(mock_module, nco_freqs, fres_map, ares_map)
+    await _write_tones(mock_module, nco_freqs, fres_map, ares_map,
+                       {1: mock_module.crs.full_scale_dbm})
 
 
 @pytest.mark.asyncio
 async def test_write_tones_macro_extracts_module_data(
-        mock_module_for_write_tones):
+    mock_module_for_write_tones
+):
     """Test _write_tones extracts data for specific module."""
     from citkid.crs.instrument import _write_tones
     
@@ -782,7 +797,8 @@ async def test_write_tones_macro_extracts_module_data(
     fres_map = {1: np.array([3.9e9, 4.1e9]), 2: np.array([5.1e9])}
     ares_map = {1: np.array([-50, -51]), 2: np.array([-52])}
     
-    await _write_tones(mock_module, nco_freqs, fres_map, ares_map)
+    await _write_tones(mock_module, nco_freqs, fres_map, ares_map,
+                       {1: mock_module.crs.full_scale_dbm})
     
     # Check that only module 1 data was used (2 calls)
     assert mock_ctx.set_frequency.call_count == 2
@@ -791,7 +807,8 @@ async def test_write_tones_macro_extracts_module_data(
 
 @pytest.mark.asyncio
 async def test_write_tones_macro_raises_if_nco_not_set(
-        mock_module_for_write_tones):
+    mock_module_for_write_tones
+):
     """Test _write_tones raises if NCO freq not set for module."""
     from citkid.crs.instrument import _write_tones
     
@@ -802,12 +819,14 @@ async def test_write_tones_macro_raises_if_nco_not_set(
     ares_map = {1: np.array([-50])}
     
     with pytest.raises(Exception, match = 'NCO frequency has not been set'):
-        await _write_tones(mock_module, nco_freqs, fres_map, ares_map)
+        await _write_tones(mock_module, nco_freqs, fres_map, ares_map,
+                       {1: mock_module.crs.full_scale_dbm})
 
 
 @pytest.mark.asyncio
 async def test_write_tones_macro_raises_if_ares_exceeds_full_scale(
-        mock_module_for_write_tones):
+    mock_module_for_write_tones
+):
     """Test _write_tones raises if ares exceeds full_scale_dbm."""
     from citkid.crs.instrument import _write_tones
     
@@ -819,12 +838,14 @@ async def test_write_tones_macro_raises_if_ares_exceeds_full_scale(
     ares_map = {1: np.array([-5])}  # Exceeds -10 dBm
     
     with pytest.raises(ValueError, match = 'ares must not exceed'):
-        await _write_tones(mock_module, nco_freqs, fres_map, ares_map)
+        await _write_tones(mock_module, nco_freqs, fres_map, ares_map,
+                       {1: mock_module.crs.full_scale_dbm})
 
 
 @pytest.mark.asyncio
 async def test_write_tones_macro_warns_low_power_few_tones(
-        mock_module_for_write_tones):
+    mock_module_for_write_tones
+):
     """Test _write_tones warns for low power with few tones."""
     from citkid.crs.instrument import _write_tones
     
@@ -836,14 +857,16 @@ async def test_write_tones_macro_warns_low_power_few_tones(
     
     with warnings.catch_warnings(record = True) as w:
         warnings.simplefilter('always')
-        await _write_tones(mock_module, nco_freqs, fres_map, ares_map)
+        await _write_tones(mock_module, nco_freqs, fres_map, ares_map,
+                       {1: mock_module.crs.full_scale_dbm})
         assert len(w) == 1
         assert 'digitization noise may occur' in str(w[0].message)
 
 
 @pytest.mark.asyncio
 async def test_write_tones_macro_no_warn_low_power_many_tones(
-        mock_module_for_write_tones):
+    mock_module_for_write_tones
+):
     """Test _write_tones does not warn for low power with many tones."""
     from citkid.crs.instrument import _write_tones
     
@@ -855,13 +878,15 @@ async def test_write_tones_macro_no_warn_low_power_many_tones(
     
     with warnings.catch_warnings(record = True) as w:
         warnings.simplefilter('always')
-        await _write_tones(mock_module, nco_freqs, fres_map, ares_map)
+        await _write_tones(mock_module, nco_freqs, fres_map, ares_map,
+                       {1: mock_module.crs.full_scale_dbm})
         assert len(w) == 0
 
 
 @pytest.mark.asyncio
 async def test_write_tones_macro_converts_ares_to_amplitude(
-        mock_module_for_write_tones):
+    mock_module_for_write_tones
+):
     """Test _write_tones converts ares from dBm to amplitude."""
     from citkid.crs.instrument import _write_tones
     
@@ -872,7 +897,8 @@ async def test_write_tones_macro_converts_ares_to_amplitude(
     fres_map = {1: np.array([3.9e9])}
     ares_map = {1: np.array([-6.0])}  # -6 dBm
     
-    await _write_tones(mock_module, nco_freqs, fres_map, ares_map)
+    await _write_tones(mock_module, nco_freqs, fres_map, ares_map,
+                       {1: mock_module.crs.full_scale_dbm})
     
     # Check amplitude conversion: 10^((-6 - 0) / 20) = 10^(-0.3) ≈ 0.5012
     call_args = mock_ctx.set_amplitude.call_args[0]
@@ -880,8 +906,7 @@ async def test_write_tones_macro_converts_ares_to_amplitude(
 
 
 @pytest.mark.asyncio
-async def test_write_tones_macro_clears_channels(
-        mock_module_for_write_tones):
+async def test_write_tones_macro_clears_channels(mock_module_for_write_tones):
     """Test _write_tones clears channels before writing."""
     from citkid.crs.instrument import _write_tones
     
@@ -891,14 +916,16 @@ async def test_write_tones_macro_clears_channels(
     fres_map = {1: np.array([3.9e9])}
     ares_map = {1: np.array([-50])}
     
-    await _write_tones(mock_module, nco_freqs, fres_map, ares_map)
+    await _write_tones(mock_module, nco_freqs, fres_map, ares_map,
+                       {1: mock_module.crs.full_scale_dbm})
     
     mock_crs.clear_channels.assert_called_once_with(module = 1)
 
 
 @pytest.mark.asyncio
 async def test_write_tones_macro_writes_frequencies_relative_to_nco(
-        mock_module_for_write_tones):
+    mock_module_for_write_tones
+):
     """Test _write_tones writes frequencies relative to NCO."""
     from citkid.crs.instrument import _write_tones
     
@@ -908,7 +935,8 @@ async def test_write_tones_macro_writes_frequencies_relative_to_nco(
     fres_map = {1: np.array([3.9e9, 4.1e9])}
     ares_map = {1: np.array([-50, -51])}
     
-    await _write_tones(mock_module, nco_freqs, fres_map, ares_map)
+    await _write_tones(mock_module, nco_freqs, fres_map, ares_map,
+                       {1: mock_module.crs.full_scale_dbm})
     
     # Check first call: 3.9e9 - 4.0e9 = -0.1e9
     call1 = mock_ctx.set_frequency.call_args_list[0]
@@ -925,7 +953,8 @@ async def test_write_tones_macro_writes_frequencies_relative_to_nco(
 
 @pytest.mark.asyncio
 async def test_write_tones_macro_writes_amplitudes_with_correct_channels(
-        mock_module_for_write_tones):
+    mock_module_for_write_tones
+):
     """Test _write_tones writes amplitudes with correct channels."""
     from citkid.crs.instrument import _write_tones
     
@@ -936,7 +965,8 @@ async def test_write_tones_macro_writes_amplitudes_with_correct_channels(
     fres_map = {1: np.array([3.9e9, 4.1e9])}
     ares_map = {1: np.array([-6.0, -12.0])}
     
-    await _write_tones(mock_module, nco_freqs, fres_map, ares_map)
+    await _write_tones(mock_module, nco_freqs, fres_map, ares_map,
+                       {1: mock_module.crs.full_scale_dbm})
     
     # Check first call
     call1 = mock_ctx.set_amplitude.call_args_list[0]
@@ -951,7 +981,8 @@ async def test_write_tones_macro_writes_amplitudes_with_correct_channels(
 
 @pytest.mark.asyncio
 async def test_write_tones_macro_calls_tuber_context(
-        mock_module_for_write_tones):
+    mock_module_for_write_tones
+):
     """Test _write_tones calls tuber context and executes."""
     from citkid.crs.instrument import _write_tones
     
@@ -961,7 +992,8 @@ async def test_write_tones_macro_calls_tuber_context(
     fres_map = {1: np.array([3.9e9])}
     ares_map = {1: np.array([-50])}
     
-    await _write_tones(mock_module, nco_freqs, fres_map, ares_map)
+    await _write_tones(mock_module, nco_freqs, fres_map, ares_map,
+                       {1: mock_module.crs.full_scale_dbm})
     
     # Check tuber_context was used
     mock_crs.tuber_context.assert_called_once()
@@ -971,7 +1003,8 @@ async def test_write_tones_macro_calls_tuber_context(
 
 @pytest.mark.asyncio
 async def test_write_tones_macro_handles_multiple_tones(
-        mock_module_for_write_tones):
+    mock_module_for_write_tones
+):
     """Test _write_tones handles multiple tones correctly."""
     from citkid.crs.instrument import _write_tones
     
@@ -983,7 +1016,8 @@ async def test_write_tones_macro_handles_multiple_tones(
     fres_map = {1: fres}
     ares_map = {1: ares}
     
-    await _write_tones(mock_module, nco_freqs, fres_map, ares_map)
+    await _write_tones(mock_module, nco_freqs, fres_map, ares_map,
+                       {1: mock_module.crs.full_scale_dbm})
     
     # Check 4 frequencies and 4 amplitudes were set
     assert mock_ctx.set_frequency.call_count == 4
@@ -995,3 +1029,67 @@ async def test_write_tones_macro_handles_multiple_tones(
         amp_call = mock_ctx.set_amplitude.call_args_list[i]
         assert freq_call[1]['channel'] == i + 1
         assert amp_call[1]['channel'] == i + 1
+
+@pytest.mark.asyncio
+async def test_write_tones_macro_raises_if_module_not_configured(
+    mock_module_for_write_tones
+):
+    """Test _write_tones raises if the module has no full scale."""
+    from citkid.crs.instrument import _write_tones
+
+    mock_module, _, _ = mock_module_for_write_tones
+
+    with pytest.raises(RuntimeError, match = 'has not been configured'):
+        await _write_tones(mock_module, {1: 4.0e9}, {1: np.array([3.9e9])},
+                           {1: np.array([-50.])}, {2: 7.0})
+
+
+@pytest.mark.asyncio
+async def test_write_tones_macro_uses_module_full_scale(
+    mock_module_for_write_tones
+):
+    """Test _write_tones scales amplitudes by the module's full scale."""
+    from citkid.crs.instrument import _write_tones
+
+    mock_module, _, mock_ctx = mock_module_for_write_tones
+
+    await _write_tones(mock_module, {1: 4.0e9}, {1: np.array([3.9e9])},
+                       {1: np.array([-13.])}, {1: 7.0, 2: 0.0})
+
+    amp = mock_ctx.set_amplitude.call_args[0][0]
+    assert amp == pytest.approx(0.1)
+
+
+@pytest.mark.asyncio
+async def test_write_tones_macro_warns_total_power_above_full_scale(
+    mock_module_for_write_tones
+):
+    """Test _write_tones warns when the summed tone power clips the DAC."""
+    from citkid.crs.instrument import _write_tones
+
+    mock_module, _, _ = mock_module_for_write_tones
+
+    # 200 tones at -20 dBm is about +3 dBm total, above 0 dBm full scale
+    fres = np.linspace(3.9e9, 4.1e9, 200)
+    ares = np.full(200, -20.)
+    with pytest.warns(UserWarning, match = 'DAC output will clip'):
+        await _write_tones(mock_module, {1: 4.0e9}, {1: fres}, {1: ares},
+                           {1: 0.0})
+
+
+@pytest.mark.asyncio
+async def test_write_tones_macro_no_total_power_warning_below_full_scale(
+    mock_module_for_write_tones
+):
+    """Test _write_tones does not warn when the summed power is low."""
+    from citkid.crs.instrument import _write_tones
+
+    mock_module, _, _ = mock_module_for_write_tones
+
+    # 50 tones at -20 dBm is about -3 dBm total, below 0 dBm full scale
+    fres = np.linspace(3.9e9, 4.1e9, 50)
+    ares = np.full(50, -20.)
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        await _write_tones(mock_module, {1: 4.0e9}, {1: fres}, {1: ares},
+                           {1: 0.0})

@@ -40,7 +40,6 @@ def valid_inputs():
         'npoints_rough': 100,
         'nsamps': 100,
         'fres_update_method': 'spacing',
-        'cable_delay': 0.0,
         'verbose': True,
     }
 
@@ -220,22 +219,12 @@ class TestValidateTargetSweepInputs:
             )
             assert isinstance(fres, np.ndarray)
     
-    def test_cable_delay_negative(self, mock_crs, valid_inputs):
-        """Test that negative cable_delay raises ValueError."""
-        valid_inputs['cable_delay'] = -1.0
-        with pytest.raises(
-            ValueError, match = "cable_delay must be a positive number"
-            ):
-            _validate_target_sweep_inputs(mock_crs, **valid_inputs)
-    
-    def test_cable_delay_zero_accepted(self, mock_crs, valid_inputs):
-        """Test that cable_delay = 0 is accepted."""
+    def test_cable_delay_not_accepted(self, mock_crs, valid_inputs):
+        """Test that the removed cable_delay parameter is rejected."""
         valid_inputs['cable_delay'] = 0.0
-        fres, ares, qres, res_idxs = _validate_target_sweep_inputs(
-            mock_crs, **valid_inputs
-        )
-        assert isinstance(fres, np.ndarray)
-    
+        with pytest.raises(TypeError, match = 'cable_delay'):
+            _validate_target_sweep_inputs(mock_crs, **valid_inputs)
+
     def test_verbose_not_bool(self, mock_crs, valid_inputs):
         """Test that non-boolean verbose raises TypeError."""
         valid_inputs['verbose'] = "True"
@@ -262,44 +251,46 @@ class TestValidateTargetSweepInputs:
             _validate_target_sweep_inputs(mock_crs, **valid_inputs)
     
     def test_zarr_group_with_existing_rough_sweep_data(self, mock_crs, valid_inputs):
-        """Test that existing rough sweep data raises ValueError."""
+        """Test that an existing rough sweep group raises ValueError."""
         grp = zarr.group()
-        grp.create_array(name = 's21_rough_f', data = np.array([1, 2, 3]))
+        grp.create_group('rough_sweep')
         valid_inputs['grp'] = grp
         valid_inputs['npoints_rough'] = 100
         
         with pytest.raises(
-            ValueError, match = "already contains dataset 's21_rough_f'"
+            ValueError, match = "already contains dataset 'rough_sweep'"
             ):
             _validate_target_sweep_inputs(mock_crs, **valid_inputs)
     
     def test_zarr_group_with_existing_gain_sweep_data(self, mock_crs, valid_inputs):
-        """Test that existing gain sweep data raises ValueError."""
+        """Test that an existing gain sweep group raises ValueError."""
         grp = zarr.group()
-        grp.create_array(name = 's21_gain_z', data = np.array([1+1j, 2+2j]))
+        grp.create_group('gain_sweep')
         valid_inputs['grp'] = grp
         valid_inputs['npoints_gain'] = 50
         
         with pytest.raises(
-            ValueError, match = "already contains dataset 's21_gain_z'"
+            ValueError, match = "already contains dataset 'gain_sweep'"
             ):
             _validate_target_sweep_inputs(mock_crs, **valid_inputs)
     
-    def test_zarr_group_with_existing_fine_sweep_data(self, mock_crs, 
-                                                      valid_inputs):
-        """Test that existing fine sweep data raises ValueError."""
+    def test_zarr_group_with_existing_fine_sweep_data(
+        self, mock_crs, valid_inputs
+    ):
+        """Test that an existing fine sweep group raises ValueError."""
         grp = zarr.group()
-        grp.create_array(name = 's21_fine_f', data = np.array([1, 2, 3]))
+        grp.create_group('fine_sweep')
         valid_inputs['grp'] = grp
         valid_inputs['npoints_fine'] = 500
         
         with pytest.raises(
-            ValueError, match = "already contains dataset 's21_fine_f'"
+            ValueError, match = "already contains dataset 'fine_sweep'"
             ):
             _validate_target_sweep_inputs(mock_crs, **valid_inputs)
     
-    def test_zarr_group_conflicts_skipped_when_npoints_none(self, mock_crs, 
-                                                            valid_inputs):
+    def test_zarr_group_conflicts_skipped_when_npoints_none(
+        self, mock_crs, valid_inputs
+    ):
         """
         Test that Zarr conflicts are ignored when sweep is disabled 
         (npoints = None).
@@ -334,7 +325,6 @@ class TestValidateTargetSweepInputs:
     def test_numpy_float_types_accepted(self, mock_crs, valid_inputs):
         """Test that numpy float types are accepted for float parameters."""
         valid_inputs['gain_span_factor'] = np.float64(10.0)
-        valid_inputs['cable_delay'] = np.float32(0.5)
         
         fres, ares, qres, res_idxs = _validate_target_sweep_inputs(
             mock_crs, **valid_inputs
@@ -398,8 +388,10 @@ def mock_crs_for_target_sweep():
     crs.ch_map = {'mock': 'ch_map'}
     
     # Mock sweep_qres to return frequency and S21 data
-    async def mock_sweep_qres(fres, ares, qres, npoints, nsamps, ch_map, 
-                               dec_grp, verbose, pbar_description):
+    async def mock_sweep_qres(
+        fres, ares, qres, npoints, nsamps, ch_map, dec_grp, verbose,
+        pbar_description
+    ):
         """Mock sweep that returns frequency and S21 arrays."""
         nres = len(fres)
         # Create frequency arrays for each resonator
@@ -436,15 +428,17 @@ def mock_update_fres():
     """Mock the update_fres function to return modified frequencies."""
     from unittest.mock import patch
     
-    def mock_update(f, z, fres, qres, fcal_indices, method, cable_delay, plotq):
+    def mock_update(fs, zs, fres, qres, res_idxs, method = 'distance'):
         """Mock update that slightly shifts frequencies."""
         fres_updated = fres.copy()
         # Simulate frequency update by shifting slightly
         fres_updated = fres_updated * 1.0001
         return fres_updated
-    
+
+    # autospec makes calls fail if they don't match the real signature
     with patch(
-        'citkid.crs.procedures.update_fres', side_effect = mock_update
+        'citkid.crs.procedures.update_fres', autospec = True,
+        side_effect = mock_update
         ) as mock:
         yield mock
 
@@ -465,7 +459,6 @@ def target_sweep_inputs():
         'npoints_rough': 100,
         'nsamps': 100,
         'fres_update_method': 'spacing',
-        'cable_delay': 0.0,
         'verbose': True,
     }
 
@@ -474,10 +467,10 @@ def target_sweep_inputs():
 class TestTargetSweep:
     """Tests for target_sweep function."""
     
-    async def test_all_sweeps_enabled(self, mock_crs_for_target_sweep, 
-                                       target_sweep_inputs, 
-                                       mock_util_write_system_cfg,
-                                       mock_update_fres):
+    async def test_all_sweeps_enabled(
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test target_sweep with all three sweeps enabled."""
         from citkid.crs.procedures import target_sweep
         
@@ -505,9 +498,10 @@ class TestTargetSweep:
         # Check update_fres was called once (after rough sweep)
         mock_update_fres.assert_called_once()
     
-    async def test_sweep_order(self, mock_crs_for_target_sweep, 
-                               target_sweep_inputs,
-                               mock_util_write_system_cfg, mock_update_fres):
+    async def test_sweep_order(
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test that sweeps are executed in correct order: rough, gain, fine."""
         from citkid.crs.procedures import target_sweep
         
@@ -519,10 +513,10 @@ class TestTargetSweep:
         
         assert call_descs == ['Rough sweep', 'Gain sweep', 'Fine sweep']
     
-    async def test_rough_sweep_parameters(self, mock_crs_for_target_sweep, 
-                                          target_sweep_inputs, 
-                                          mock_util_write_system_cfg,
-                                          mock_update_fres):
+    async def test_rough_sweep_parameters(
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test that rough sweep receives correct parameters."""
         from citkid.crs.procedures import target_sweep
         
@@ -547,9 +541,10 @@ class TestTargetSweep:
         assert kwargs['verbose'] == target_sweep_inputs['verbose']
         assert kwargs['pbar_description'] == 'Rough sweep'
     
-    async def test_gain_sweep_parameters(self, mock_crs_for_target_sweep, 
-                                         target_sweep_inputs, mock_util_write_system_cfg,
-                                         mock_update_fres):
+    async def test_gain_sweep_parameters(
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """
         Test that gain sweep receives correct parameters, especially 
         qres/gain_span_factor.
@@ -580,10 +575,10 @@ class TestTargetSweep:
         assert kwargs['verbose'] == target_sweep_inputs['verbose']
         assert kwargs['pbar_description'] == 'Gain sweep'
     
-    async def test_fine_sweep_parameters(self, mock_crs_for_target_sweep, 
-                                         target_sweep_inputs,
-                                         mock_util_write_system_cfg,
-                                         mock_update_fres):
+    async def test_fine_sweep_parameters(
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test that fine sweep receives correct parameters."""
         from citkid.crs.procedures import target_sweep
         
@@ -612,8 +607,9 @@ class TestTargetSweep:
         assert kwargs['pbar_description'] == 'Fine sweep'
     
     async def test_only_rough_sweep(
-            self, mock_crs_for_target_sweep, target_sweep_inputs,
-            mock_util_write_system_cfg, mock_update_fres):
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test with only rough sweep enabled."""
         from citkid.crs.procedures import target_sweep
         
@@ -635,8 +631,9 @@ class TestTargetSweep:
         assert isinstance(ch_map_out, dict)
     
     async def test_only_gain_sweep(
-            self, mock_crs_for_target_sweep, target_sweep_inputs,
-            mock_util_write_system_cfg, mock_update_fres):
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test with only gain sweep enabled (no rough, no fine)."""
         from citkid.crs.procedures import target_sweep
         
@@ -659,8 +656,9 @@ class TestTargetSweep:
             )
     
     async def test_only_fine_sweep(
-            self, mock_crs_for_target_sweep, target_sweep_inputs,
-            mock_util_write_system_cfg, mock_update_fres):
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test with only fine sweep enabled."""
         from citkid.crs.procedures import target_sweep
         
@@ -681,8 +679,9 @@ class TestTargetSweep:
         np.testing.assert_array_almost_equal(fres_out, target_sweep_inputs['fres'])
     
     async def test_rough_and_gain_only(
-            self, mock_crs_for_target_sweep, target_sweep_inputs,
-            mock_util_write_system_cfg, mock_update_fres):
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test with rough and gain sweeps, but no fine sweep."""
         from citkid.crs.procedures import target_sweep
         
@@ -701,8 +700,9 @@ class TestTargetSweep:
         assert call_descs == ['Rough sweep', 'Gain sweep']
     
     async def test_gain_and_fine_only(
-            self, mock_crs_for_target_sweep, target_sweep_inputs,
-            mock_util_write_system_cfg, mock_update_fres):
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test with gain and fine sweeps, but no rough sweep."""
         from citkid.crs.procedures import target_sweep
         
@@ -728,8 +728,9 @@ class TestTargetSweep:
         assert b.kwargs['ch_map'] == {'mock': 'ch_map'}
     
     async def test_ch_map_provided(
-            self, mock_crs_for_target_sweep, target_sweep_inputs,
-            mock_util_write_system_cfg, mock_update_fres):
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """
         Test that provided ch_map is used in first sweep, then updated from 
         crs.ch_map.
@@ -755,8 +756,9 @@ class TestTargetSweep:
         assert ch_map_out == {'mock': 'ch_map'}
     
     async def test_output_data_shapes(
-            self, mock_crs_for_target_sweep, target_sweep_inputs,
-            mock_util_write_system_cfg, mock_update_fres):
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test that sweep outputs have correct shapes."""
         from citkid.crs.procedures import target_sweep
         
@@ -789,8 +791,9 @@ class TestTargetSweep:
         assert grpf['z'].dtype == np.complex128
     
     async def test_zarr_group_structure(
-            self, mock_crs_for_target_sweep, target_sweep_inputs,
-            mock_util_write_system_cfg, mock_update_fres):
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test that zarr group has correct structure and saved data."""
         from citkid.crs.procedures import target_sweep
         
@@ -819,7 +822,7 @@ class TestTargetSweep:
         assert 'fres' in grpr  # fres_rough saved here
         a = grpr.attrs['fres_update_method']
         assert a == target_sweep_inputs['fres_update_method']
-        assert grpr.attrs['cable_delay'] == target_sweep_inputs['cable_delay']
+        assert 'cable_delay' not in grpr.attrs
         
         # Check gain and fine sweep subgroups
         for sweep_name in ['gain_sweep', 'fine_sweep']:
@@ -828,8 +831,9 @@ class TestTargetSweep:
             assert 'z' in grps
     
     async def test_zarr_saved_values(
-            self, mock_crs_for_target_sweep, target_sweep_inputs,
-            mock_util_write_system_cfg, mock_update_fres):
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test that correct values are saved to zarr."""
         from citkid.crs.procedures import target_sweep
         
@@ -855,9 +859,9 @@ class TestTargetSweep:
         )
     
     async def test_update_fres_called_with_correct_params(
-            self, mock_crs_for_target_sweep, target_sweep_inputs,
-            mock_util_write_system_cfg, mock_update_fres
-            ):
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test that update_fres is called with correct parameters."""
         from citkid.crs.procedures import target_sweep
         
@@ -880,21 +884,21 @@ class TestTargetSweep:
         np.testing.assert_array_almost_equal(
             args[3], target_sweep_inputs['qres'])
         
-        # Check fcal_indices (should be empty for res_idxs = [0, 1, 2])
-        np.testing.assert_array_equal(kwargs['fcal_indices'], np.array([]))
-        
-        # Check other kwargs
-        assert kwargs['method'] == target_sweep_inputs['fres_update_method']
-        assert kwargs['cable_delay'] == target_sweep_inputs['cable_delay']
-        assert kwargs['plotq'] is False
+        # Check res_idxs is passed to identify calibration tones
+        np.testing.assert_array_equal(
+            args[4], target_sweep_inputs['res_idxs'])
+
+        # Check the only keyword argument is the method
+        assert kwargs == {
+            'method': target_sweep_inputs['fres_update_method']}
     
     async def test_update_fres_with_calibration_tones(
-            self, mock_crs_for_target_sweep, target_sweep_inputs,
-            mock_util_write_system_cfg, mock_update_fres
-            ):
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """
-        Test that fcal_indices correctly identifies calibration tones 
-        (negative res_idxs).
+        Test that res_idxs with calibration tones (negative indices) is
+        passed to update_fres.
         """
         from citkid.crs.procedures import target_sweep
         
@@ -907,15 +911,14 @@ class TestTargetSweep:
         
         await target_sweep(mock_crs_for_target_sweep, **target_sweep_inputs)
         
-        # Check fcal_indices identifies indices 0 and 2
-        call_args = mock_update_fres.call_args
-        kwargs = call_args[1]
-        np.testing.assert_array_equal(kwargs['fcal_indices'], np.array([0, 2]))
+        # Check res_idxs, including the calibration tones, is passed
+        args = mock_update_fres.call_args[0]
+        np.testing.assert_array_equal(args[4], np.array([-1, 0, -2, 1, 2]))
     
-    async def test_all_fres_update_methods(self, mock_crs_for_target_sweep, 
-                                           target_sweep_inputs,
-                                           mock_util_write_system_cfg, 
-                                           mock_update_fres):
+    async def test_all_fres_update_methods(
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test that all valid fres_update_method values work."""
         from citkid.crs.procedures import target_sweep
         
@@ -931,8 +934,9 @@ class TestTargetSweep:
             assert call_args[1]['method'] == method
     
     async def test_no_sweeps_enabled(
-            self, mock_crs_for_target_sweep, target_sweep_inputs,
-            mock_util_write_system_cfg, mock_update_fres):
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test behavior when all sweeps are disabled."""
         from citkid.crs.procedures import target_sweep
         
@@ -955,8 +959,9 @@ class TestTargetSweep:
         assert ch_map_out is None
     
     async def test_different_npoints_values(
-            self, mock_crs_for_target_sweep, target_sweep_inputs,
-            mock_util_write_system_cfg, mock_update_fres):
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test with different npoints values for each sweep."""
         from citkid.crs.procedures import target_sweep
         
@@ -975,8 +980,9 @@ class TestTargetSweep:
         assert grp['fine_sweep']['f'].shape == (nres, 1000)
     
     async def test_different_gain_span_factors(
-            self, mock_crs_for_target_sweep, target_sweep_inputs,
-            mock_util_write_system_cfg, mock_update_fres):
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test with different gain_span_factor values."""
         from citkid.crs.procedures import target_sweep
         
@@ -994,8 +1000,9 @@ class TestTargetSweep:
                 gain_call.args[2], expected_qres)
     
     async def test_single_resonator(
-            self, mock_crs_for_target_sweep, target_sweep_inputs,
-            mock_util_write_system_cfg, mock_update_fres):
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test with a single resonator."""
         from citkid.crs.procedures import target_sweep
         
@@ -1021,8 +1028,9 @@ class TestTargetSweep:
             )
     
     async def test_many_resonators(
-            self, mock_crs_for_target_sweep, target_sweep_inputs,
-            mock_util_write_system_cfg, mock_update_fres):
+        self, mock_crs_for_target_sweep, target_sweep_inputs,
+        mock_util_write_system_cfg, mock_update_fres
+    ):
         """Test with many resonators."""
         from citkid.crs.procedures import target_sweep
         
@@ -1335,3 +1343,29 @@ class TestSaveSweepData:
         assert grp['fine_f'].chunks == (1, npts)
         assert grp['fine_z'].chunks == (1, npts)
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ['distance', 'spacing', 'minS21'])
+async def test_target_sweep_rough_update_with_real_update_fres(
+    mock_crs_for_target_sweep, target_sweep_inputs,
+    mock_util_write_system_cfg, method
+):
+    """
+    Test the rough sweep update with the real update_fres: calibration tones
+    are unchanged and resonators move within the rough sweep span.
+    """
+    from citkid.crs.procedures import target_sweep
+
+    target_sweep_inputs['res_idxs'] = np.array([-1, 0, 1])
+    target_sweep_inputs['fres_update_method'] = method
+    fres_in = target_sweep_inputs['fres'].copy()
+    qres = target_sweep_inputs['qres']
+
+    fres, _ = await target_sweep(
+        mock_crs_for_target_sweep, **target_sweep_inputs)
+
+    assert fres.dtype == np.float64
+    assert fres[0] == fres_in[0]
+    assert np.all(np.abs(fres - fres_in) <= fres_in / qres / 2)
+    np.testing.assert_array_equal(target_sweep_inputs['grp']['fres'][:], fres)

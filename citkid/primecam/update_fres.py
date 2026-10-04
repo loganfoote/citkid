@@ -9,8 +9,10 @@ warnings.warn(
     stacklevel=2,
 )
 
-def update_fres(f, z, npoints, fcal_indices = [], method = 'mins21',
-                    cut_other_resonators = False, fres = None, Qres = None):
+def update_fres(
+    f, z, npoints, fcal_indices = [], method = 'mins21',
+    cut_other_resonators = False, fres = None, Qres = None
+):
     """
     Return the updated resonance frequencies, given a multitone rough sweep
     dataset

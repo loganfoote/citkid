@@ -33,8 +33,9 @@ def mock_crs_for_configure(base_crs):
 
 
 @pytest.mark.asyncio
-async def test_configure_system_default_parameters(mock_crs_for_configure,
-                                                    capsys):
+async def test_configure_system_default_parameters(
+    mock_crs_for_configure, capsys
+):
     """Test configure_system with default parameters."""
     crs = mock_crs_for_configure
     
@@ -65,7 +66,7 @@ async def test_configure_system_default_parameters(mock_crs_for_configure,
         mock_set_bw.assert_called_once_with(False)
         mock_set_bank.assert_called_once_with(False, 7)
         mock_set_dec.assert_called_once_with(
-            6, short = False, module_idxs = None, verbose = True
+            6, short = False, module_idxs = [1, 2, 3, 4], verbose = True
         )
         
         # Verify ntones was set
@@ -89,7 +90,10 @@ async def test_configure_system_custom_parameters(mock_crs_for_configure):
                       new_callable = AsyncMock) as mock_set_bank, \
          patch.object(crs, 'set_decimation',
                       new_callable = AsyncMock) as mock_set_dec:
-        
+        async def set_bank(analog_bank_high, full_scale_dbm):
+            crs.analog_bank_high = analog_bank_high
+        mock_set_bank.side_effect = set_bank
+
         await crs.configure_system(
             clock_source = 'SMA',
             full_scale_dbm = 5,
@@ -101,14 +105,12 @@ async def test_configure_system_custom_parameters(mock_crs_for_configure):
         mock_set_clock.assert_called_once_with('SMA', verbose = False)
         mock_set_bank.assert_called_once_with(True, 5)
         mock_set_dec.assert_called_once_with(
-            6, short = False, module_idxs = None, verbose = False
+            6, short = False, module_idxs = [5, 6, 7, 8], verbose = False
         )
 
 
 @pytest.mark.asyncio
-async def test_configure_system_timestamp_port_not_set(
-    mock_crs_for_configure
-):
+async def test_configure_system_timestamp_port_not_set(mock_crs_for_configure):
     """Test that timestamp port is set when just_booted is True."""
     crs = mock_crs_for_configure
     
@@ -152,9 +154,7 @@ async def test_configure_system_timestamp_port_already_set(
 
 
 @pytest.mark.asyncio
-async def test_configure_system_wrong_firmware_version(
-    mock_crs_for_configure
-):
+async def test_configure_system_wrong_firmware_version(mock_crs_for_configure):
     """Test that wrong firmware version raises RuntimeError."""
     crs = mock_crs_for_configure
     
@@ -174,8 +174,7 @@ async def test_configure_system_wrong_firmware_version(
 
 @pytest.mark.asyncio
 async def test_configure_system_verbose_false_no_print(
-    mock_crs_for_configure,
-    capsys
+    mock_crs_for_configure, capsys
 ):
     """Test that verbose = False suppresses output."""
     crs = mock_crs_for_configure
@@ -203,9 +202,7 @@ async def test_configure_system_verbose_false_no_print(
     ({'suppress_dec_printout': False}, False),
 ])
 async def test_configure_system_suppress_dec_printout_stored(
-    mock_crs_for_configure,
-    kwargs,
-    expected
+    mock_crs_for_configure, kwargs, expected
 ):
     """Test that suppress_dec_printout is stored on the CRS object."""
     crs = mock_crs_for_configure
@@ -221,10 +218,7 @@ async def test_configure_system_suppress_dec_printout_stored(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("suppress,printed", [(True, False), (False, True)])
 async def test_configure_system_suppress_dec_printout_output(
-    mock_crs_for_configure,
-    capsys,
-    suppress,
-    printed
+    mock_crs_for_configure, capsys, suppress, printed
 ):
     """Test the decimation printout during configure_system itself."""
     crs = mock_crs_for_configure
@@ -235,7 +229,7 @@ async def test_configure_system_suppress_dec_printout_output(
         await crs.configure_system(suppress_dec_printout = suppress)
 
     crs.d.set_decimation.assert_called_once_with(6, short = False,
-                                                 module = [])
+                                                 module = [1, 2, 3, 4])
     captured = capsys.readouterr()
     assert ('Decimation set' in captured.out) == printed
     assert 'System configured' in captured.out
@@ -246,9 +240,7 @@ async def test_configure_system_suppress_dec_printout_output(
 ################################################################################
 
 @pytest.mark.asyncio
-async def test_configure_system_invalid_clock_source(
-    mock_crs_for_configure
-):
+async def test_configure_system_invalid_clock_source(mock_crs_for_configure):
     """Test that invalid clock_source raises ValueError."""
     crs = mock_crs_for_configure
     
@@ -260,9 +252,7 @@ async def test_configure_system_invalid_clock_source(
 
 
 @pytest.mark.asyncio
-async def test_configure_system_clock_source_not_string(
-    mock_crs_for_configure
-):
+async def test_configure_system_clock_source_not_string(mock_crs_for_configure):
     """Test that non-string clock_source raises ValueError."""
     crs = mock_crs_for_configure
     
@@ -313,9 +303,7 @@ async def test_configure_system_full_scale_dbm_above_range(
 
 
 @pytest.mark.asyncio
-async def test_configure_system_full_scale_dbm_float(
-    mock_crs_for_configure
-):
+async def test_configure_system_full_scale_dbm_float(mock_crs_for_configure):
     """Test that float full_scale_dbm is accepted."""
     crs = mock_crs_for_configure
     
@@ -363,8 +351,7 @@ async def test_configure_system_verbose_not_bool(mock_crs_for_configure):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("value", [1, 0, 'True', None])
 async def test_configure_system_suppress_dec_printout_not_bool(
-    mock_crs_for_configure,
-    value
+    mock_crs_for_configure, value
 ):
     """Test that non-bool suppress_dec_printout raises TypeError."""
     crs = mock_crs_for_configure

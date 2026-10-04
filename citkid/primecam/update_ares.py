@@ -2,8 +2,10 @@ import os
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
-def update_ares_pscale(f, a, a_nl, dbm_change_high = 2, dbm_change_low = 2,
-                       a_target = 0.5, a_max = 1000):
+def update_ares_pscale(
+    f, a, a_nl, dbm_change_high = 2, dbm_change_low = 2, a_target = 0.5,
+    a_max = 1000
+):
     """
     Update the amplitude of a tone to target a_nl  by scaling the output
     power of the RFSoC linearly with a_nl. If a_nl < a_target * 0.1 / 0.5 or
@@ -38,8 +40,10 @@ def update_ares_pscale(f, a, a_nl, dbm_change_high = 2, dbm_change_low = 2,
     return a_new
 update_ares_pscale = np.vectorize(update_ares_pscale)
 
-def update_ares_addonly(f, a, a_nl, dbm_change_high = 1, dbm_change_low = 1,
-                        a_target = 0.5, a_max = 1000):
+def update_ares_addonly(
+    f, a, a_nl, dbm_change_high = 1, dbm_change_low = 1, a_target = 0.5,
+    a_max = 1000
+):
     """
     Update the amplitude of a tone to target 0.4 < a_nl < 0.6 by adding or
     subtracting a fixed power in dB.

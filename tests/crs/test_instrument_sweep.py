@@ -52,12 +52,7 @@ async def test_sweep_basic(base_crs):
             
             # Mock the _sweep to populate output dicts
             async def mock_sweep_impl(
-                nco_freqs,
-                fres_map,
-                ares_map,
-                sweep_f,
-                sweep_z,
-                **kwargs
+                nco_freqs, fres_map, ares_map, sweep_f, sweep_z, **kwargs
             ):
                 # Populate sweep_f and sweep_z as _sweep would
                 for mod_idx, freqs in fres_map.items():
@@ -107,12 +102,7 @@ async def test_sweep_with_ch_map(base_crs):
     mock_modules._sweep = AsyncMock()
     
     async def mock_sweep_impl(
-        nco_freqs,
-        fres_map,
-        ares_map,
-        sweep_f,
-        sweep_z,
-        **kwargs
+        nco_freqs, fres_map, ares_map, sweep_f, sweep_z, **kwargs
     ):
         for mod_idx, freqs in fres_map.items():
             sweep_f[mod_idx] = freqs
@@ -169,12 +159,7 @@ async def test_sweep_allow_missing_true(base_crs):
         )  # Channel 1 is missing
         
         async def mock_sweep_impl(
-            nco_freqs,
-            fres_map,
-            ares_map,
-            sweep_f,
-            sweep_z,
-            **kwargs
+            nco_freqs, fres_map, ares_map, sweep_f, sweep_z, **kwargs
         ):
             for mod_idx, freqs in fres_map.items():
                 sweep_f[mod_idx] = freqs
@@ -259,12 +244,7 @@ async def test_sweep_clears_channels_before_sweep(base_crs):
         mock_create_ch_map.return_value = ({1: [0]}, [])
         
         async def mock_sweep_impl(
-            nco_freqs,
-            fres_map,
-            ares_map,
-            sweep_f,
-            sweep_z,
-            **kwargs
+            nco_freqs, fres_map, ares_map, sweep_f, sweep_z, **kwargs
         ):
             for mod_idx, freqs in fres_map.items():
                 sweep_f[mod_idx] = freqs
@@ -303,12 +283,7 @@ async def test_sweep_updates_fres_ares_maps(base_crs):
     captured_ares_map = {}
     
     async def mock_sweep_impl(
-        nco_freqs,
-        fres_map,
-        ares_map,
-        sweep_f,
-        sweep_z,
-        **kwargs
+        nco_freqs, fres_map, ares_map, sweep_f, sweep_z, **kwargs
     ):
         captured_fres_map.update(fres_map)
         captured_ares_map.update(ares_map)
@@ -360,12 +335,7 @@ async def test_sweep_dithers_frequencies(base_crs):
     captured_fres_map = {}
     
     async def mock_sweep_impl(
-        nco_freqs,
-        fres_map,
-        ares_map,
-        sweep_f,
-        sweep_z,
-        **kwargs
+        nco_freqs, fres_map, ares_map, sweep_f, sweep_z, **kwargs
     ):
         captured_fres_map.update({k: v.copy() for k, v in fres_map.items()})
         for mod_idx, freqs in fres_map.items():
@@ -423,12 +393,7 @@ async def test_sweep_sets_decimation_to_6(base_crs):
         mock_create_ch_map.return_value = ({1: [0]}, [])
         
         async def mock_sweep_impl(
-            nco_freqs,
-            fres_map,
-            ares_map,
-            sweep_f,
-            sweep_z,
-            **kwargs
+            nco_freqs, fres_map, ares_map, sweep_f, sweep_z, **kwargs
         ):
             for mod_idx, freqs in fres_map.items():
                 sweep_f[mod_idx] = freqs
@@ -463,12 +428,7 @@ async def test_sweep_clears_fres_ares_maps_after(base_crs):
     mock_modules = MagicMock()
     
     async def mock_sweep_impl(
-        nco_freqs,
-        fres_map,
-        ares_map,
-        sweep_f,
-        sweep_z,
-        **kwargs
+        nco_freqs, fres_map, ares_map, sweep_f, sweep_z, **kwargs
     ):
         for mod_idx, freqs in fres_map.items():
             sweep_f[mod_idx] = freqs
@@ -518,12 +478,7 @@ async def test_sweep_concatenates_results_via_ch_map(base_crs):
     mock_modules = MagicMock()
     
     async def mock_sweep_impl(
-        nco_freqs,
-        fres_map,
-        ares_map,
-        sweep_f,
-        sweep_z,
-        **kwargs
+        nco_freqs, fres_map, ares_map, sweep_f, sweep_z, **kwargs
     ):
         # Simulate _sweep returning data for each module
         for mod_idx, freqs in fres_map.items():
@@ -582,12 +537,7 @@ async def test_sweep_converts_to_dbc(base_crs):
     mock_modules = MagicMock()
     
     async def mock_sweep_impl(
-        nco_freqs,
-        fres_map,
-        ares_map,
-        sweep_f,
-        sweep_z,
-        **kwargs
+        nco_freqs, fres_map, ares_map, sweep_f, sweep_z, **kwargs
     ):
         for mod_idx, freqs in fres_map.items():
             sweep_f[mod_idx] = freqs
@@ -684,12 +634,7 @@ async def test_sweep_passes_nsamps_to_macro(base_crs):
         mock_create_ch_map.return_value = ({1: [0]}, [])
         
         async def mock_sweep_impl(
-            nco_freqs,
-            fres_map,
-            ares_map,
-            sweep_f,
-            sweep_z,
-            **kwargs
+            nco_freqs, fres_map, ares_map, sweep_f, sweep_z, **kwargs
         ):
             assert kwargs['nsamps'] == nsamps
             for mod_idx, freqs in fres_map.items():
@@ -727,12 +672,7 @@ async def test_sweep_passes_verbose_and_description(base_crs):
         mock_create_ch_map.return_value = ({1: [0]}, [])
         
         async def mock_sweep_impl(
-            nco_freqs,
-            fres_map,
-            ares_map,
-            sweep_f,
-            sweep_z,
-            **kwargs
+            nco_freqs, fres_map, ares_map, sweep_f, sweep_z, **kwargs
         ):
             assert kwargs['verbose'] == True
             assert kwargs['pbar_description'] == "Custom Sweep"
@@ -786,12 +726,7 @@ async def test_sweep_calls_write_acq_cfg_to_zarr_when_dec_grp_provided(base_crs)
     mock_modules._sweep = AsyncMock()
     
     async def mock_sweep_impl(
-        nco_freqs,
-        fres_map,
-        ares_map,
-        sweep_f,
-        sweep_z,
-        **kwargs
+        nco_freqs, fres_map, ares_map, sweep_f, sweep_z, **kwargs
     ):
         for mod_idx, freqs in fres_map.items():
             sweep_f[mod_idx] = freqs
@@ -837,12 +772,7 @@ async def test_sweep_does_not_call_write_acq_cfg_to_zarr_when_dec_grp_none(base_
     mock_modules._sweep = AsyncMock()
     
     async def mock_sweep_impl(
-        nco_freqs,
-        fres_map,
-        ares_map,
-        sweep_f,
-        sweep_z,
-        **kwargs
+        nco_freqs, fres_map, ares_map, sweep_f, sweep_z, **kwargs
     ):
         for mod_idx, freqs in fres_map.items():
             sweep_f[mod_idx] = freqs
@@ -891,12 +821,7 @@ async def test_sweep_preserves_ch_map_when_provided(base_crs):
     mock_modules._sweep = AsyncMock()
     
     async def mock_sweep_impl(
-        nco_freqs,
-        fres_map,
-        ares_map,
-        sweep_f,
-        sweep_z,
-        **kwargs
+        nco_freqs, fres_map, ares_map, sweep_f, sweep_z, **kwargs
     ):
         for mod_idx, freqs in fres_map.items():
             sweep_f[mod_idx] = freqs
