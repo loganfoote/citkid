@@ -1071,7 +1071,7 @@ class CRS:
             z[chs, :] = sweep_z[module_idx]
 
         # Convert to dBc and return
-        z /= 10 ** (ares[:, np.newaxis] / 20)
+        z /= util.dbm_to_vrms(ares)[:, np.newaxis]
         return f, z
 
     async def sweep_span(
@@ -1697,7 +1697,7 @@ async def _sweep(
         sweep_z (dict): output parameter. keys (int) are module indices and
             values (M X N array-like complex) are arrays where the first index M
             is the channel index and the second index N is the complex S21 data
-            in V for each frequency in f.
+            as an RMS voltage in V for each frequency in f.
         nsamps (int): number of samples to average per point.
         verbose (bool): If True, displays a progress bar while sweeping.
         pbar_description (str): description for the progress bar.

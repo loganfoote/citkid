@@ -12,6 +12,16 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend for tests
 
+# Loopback |S21| level checks. With short SMA loopback cables, the median
+# |S21| between S21_LEVEL_FMIN and S21_LEVEL_FMAX should be near 0 dB. The mean
+# over modules is checked tightly to catch unit changes (e.g. a missed factor
+# of 4.47 is 13 dB), and each module loosely to catch hardware problems. The
+# measured mean is about -3.3 dB (DAC, cable, and ADC front end losses).
+S21_LEVEL_FMIN = 50e6
+S21_LEVEL_FMAX = 1.5e9
+S21_MEAN_LEVEL_TOL_DB = 4.5
+S21_LEVEL_TOL_DB = 6
+
 ################################################################################
 # Fixtures
 ################################################################################
@@ -488,7 +498,16 @@ async def test_stream(pytestconfig, monkeypatch, tmp_path, method):
     z_avg = np.mean(z, axis = 1) 
     zsweep = zsweep[:, 0]
 
-    abs_tol = 1e-2
+    # Absolute level: loopback S21 should be near 0 dB for the sweep and the
+    # stream. Catches unit changes in rfmux.
+    for zi, name in [(zsweep, 'sweep'), (z_avg, f'stream ({method})')]:
+        level_db = np.median(20 * np.log10(np.abs(zi)))
+        assert abs(level_db) < S21_LEVEL_TOL_DB, (
+            f"{name} median |S21| = {level_db:.2f} dB is not within "
+            f"{S21_LEVEL_TOL_DB} dB of 0 dB"
+        )
+
+    abs_tol = 5e-2
     abs_diff = np.abs(zsweep - z_avg)
     flat_idx = np.nanargmax(abs_diff)
     max_idx = np.unravel_index(flat_idx, abs_diff.shape)
@@ -718,16 +737,46 @@ async def test_loopback(pytestconfig, tmp_path):
             tmp_path / 'loopback_profile_status.txt',
             artifact_dir / 'loopback_profile_status.txt'
         ]
+        # Median loopback |S21| at low frequencies in the first Nyquist zone
+        levels_db = {
+            module_idx: np.median(20 * np.log10(np.abs(
+                zi[(fi > S21_LEVEL_FMIN) & (fi < S21_LEVEL_FMAX)]
+            )))
+            for module_idx, (fi, zi) in data.items()
+        }
+        mean_level_db = np.mean(list(levels_db.values()))
+        level_lines = [
+            f"S21 level ({S21_LEVEL_FMIN / 1e9:g} - {S21_LEVEL_FMAX / 1e9:g} "
+            f"GHz median): mean = {mean_level_db:.2f} dB "
+            f"(tol = {S21_MEAN_LEVEL_TOL_DB} dB), per module tol = "
+            f"{S21_LEVEL_TOL_DB} dB"
+        ] + [f"Module {mi}: S21 level = {lvl:.2f} dB"
+             for mi, lvl in levels_db.items()]
+        results = []
         try:
-            # Confirms that streamed noise matches IQ to within 0.01
-            results = []
+            # Absolute level: loopback S21 should be near 0 dB. The mean over
+            # modules catches unit changes in rfmux, and each module catches
+            # hardware problems.
+            if abs(mean_level_db) > S21_MEAN_LEVEL_TOL_DB:
+                raise AssertionError(
+                    f"Mean loopback |S21| level {mean_level_db:.2f} dB is not "
+                    f"within {S21_MEAN_LEVEL_TOL_DB} dB of 0 dB"
+                )
+            for mi, lvl in levels_db.items():
+                if abs(lvl) > S21_LEVEL_TOL_DB:
+                    raise AssertionError(
+                        f"Module {mi} loopback |S21| level {lvl:.2f} dB is "
+                        f"not within {S21_LEVEL_TOL_DB} dB of 0 dB"
+                    )
+
+            # Confirms that streamed noise matches IQ to within abs_tol
+            abs_tol = 5e-2
             max_abs_overall = -np.inf
             max_abs_module = None
             max_abs_idx = None
             for module_idx, (_, zsweep) in data.items():
                 zt = data_ts[module_idx][1] 
                 z_avg = np.array([np.mean(zi) for zi in zt])
-                abs_tol = 1e-2
                 abs_diff = np.abs(zsweep - z_avg)
                 flat_idx = np.nanargmax(abs_diff)
                 max_idx = np.unravel_index(flat_idx, abs_diff.shape)
@@ -757,7 +806,7 @@ async def test_loopback(pytestconfig, tmp_path):
                         f"idx = {max_idx}, zsweep = {zs_val}, z_avg = {za_val}, "
                         f"abs_diff = {max_abs} (tol = {abs_tol})"
                     )
-            lines = ["PASS"]
+            lines = ["PASS"] + level_lines
             lines.append(
                 f"init_s = {init_s:.3f} configure_s = {configure_s:.3f}"
             )
@@ -808,7 +857,7 @@ async def test_loopback(pytestconfig, tmp_path):
             for status_path in status_paths:
                 status_path.write_text(status_text)
         except AssertionError as exc:
-            lines = [f"FAIL: {exc}"]
+            lines = [f"FAIL: {exc}"] + level_lines
             if results:
                 lines.append(
                     f"init_s = {init_s:.3f} configure_s = {configure_s:.3f}"
@@ -865,7 +914,167 @@ async def test_loopback(pytestconfig, tmp_path):
             shutil.rmtree(zarr_path, ignore_errors = True)
         if ts_path is not None and os.path.exists(ts_path):
             shutil.rmtree(ts_path, ignore_errors = True)
-        
+
+@pytest.mark.asyncio
+async def test_s21_vs_ntones(pytestconfig, tmp_path):
+    """
+    Tests that the S21 measured at a few probe frequencies on every module
+    does not depend on the number of tones written to the module. Each
+    module has 4 probe tones, plus filler tones spread across the module
+    bandwidth up to 1024 total tones.
+
+    To separate drift from a dependence on the number of tones, the larger
+    numbers of tones are measured in shuffled order, with a probe-only
+    reference measurement before and after each one. Each measurement is
+    compared to the mean of the two references around it. Drift of the
+    references is plotted and reported, but not checked.
+    """
+    ### Initialize board
+    crs = initialize_crs(pytestconfig)
+    full_scale_dbm = 7
+    await crs.configure_system(
+        clock_source = "VCXO", full_scale_dbm = full_scale_dbm,
+        analog_bank_high = False, verbose = False
+    )
+
+    # Measurement parameters. A different NCO on each module of a bank
+    # covers more of the first Nyquist zone.
+    ncos = np.array([0.5, 1.0, 1.5, 2.0], dtype = np.float64) * 1e9
+    probe_offsets = np.array([-180.3, -60.7, 60.1, 180.9]) * 1e6
+    ntones_list = [16, 64, 256, 1024] # reference has only the probe tones
+    amplitude = -50
+    nsamps = 100
+    rtol = 0.15 # max |z - z_ref| / |z_ref|
+    min_separation = 50e3 # min filler-probe separation in Hz
+    nprobe = len(probe_offsets)
+    rng = np.random.default_rng(0)
+    order = rng.permutation(len(ntones_list))
+    # Reference, then each number of tones followed by a reference
+    sequence = [nprobe]
+    for ntones_idx in order:
+        sequence += [ntones_list[ntones_idx], nprobe]
+
+    # data[module_idx] = [probe frequencies, times (s),
+    #                     z (nprobe X len(sequence))]
+    data = {}
+    t0 = time.perf_counter()
+    for analog_bank_high in [False, True]:
+        await crs.set_analog_bank(analog_bank_high, full_scale_dbm)
+        all_modules = list(range(5, 9) if analog_bank_high else range(1, 5))
+        await crs.set_nco(dict(zip(all_modules, ncos)), verbose = False)
+        for module_idx in all_modules:
+            nco = crs.nco_freqs[module_idx]
+            data[module_idx] = [nco + probe_offsets,
+                                np.full(len(sequence), np.nan),
+                                np.full((nprobe, len(sequence)), np.nan,
+                                        dtype = np.complex128)]
+
+        for seq_idx, ntones in enumerate(sequence):
+            # Probe tones first on each module, then filler tones
+            fres, ch_map = [], {}
+            for module_idx in all_modules:
+                nco = crs.nco_freqs[module_idx]
+                margin = 10e6
+                filler = np.linspace(nco - crs.bw / 2 + margin,
+                                     nco + crs.bw / 2 - margin,
+                                     ntones - nprobe)
+                probes = data[module_idx][0]
+                for probe in probes:
+                    filler[np.abs(filler - probe) < min_separation] += \
+                        2 * min_separation
+                ch_map[module_idx] = list(range(len(fres),
+                                                len(fres) + ntones))
+                fres.extend(probes)
+                fres.extend(filler)
+            fres = np.array(fres, dtype = np.float64)
+            ares = amplitude * np.ones(len(fres))
+
+            f, z = await crs.sweep(
+                fres[:, np.newaxis], ares, nsamps, ch_map = ch_map,
+                allow_missing = False, verbose = False
+            )
+            t = time.perf_counter() - t0
+            assert np.allclose(f[:, 0], fres, atol = 100)
+            for module_idx, chs in ch_map.items():
+                data[module_idx][1][seq_idx] = t
+                data[module_idx][2][:, seq_idx] = z[chs[:nprobe], 0]
+
+    # Ratio of each number of tones to the mean of the references around it,
+    # in the order of ntones_list, and of each reference to the first one
+    ratios, ref_ratios = {}, {}
+    for module_idx, (_, _, z) in data.items():
+        z_ref = z[:, ::2]
+        ratio = z[:, 1::2] / (0.5 * (z_ref[:, :-1] + z_ref[:, 1:]))
+        ratios[module_idx] = ratio[:, np.argsort(order)]
+        ref_ratios[module_idx] = z_ref / z_ref[:, :1]
+    deviations = {mi: np.abs(r - 1) for mi, r in ratios.items()}
+    drifts = {mi: np.abs(r - 1) for mi, r in ref_ratios.items()}
+
+    ### Plot magnitude and phase change vs number of tones and reference drift
+    artifact_dir = pytestconfig.rootpath / 'crs_test_data'
+    artifact_dir.mkdir(parents = True, exist_ok = True)
+    colors = plt.cm.cividis(np.linspace(0, 0.9, nprobe))
+    for name, xlabel, xscale in [
+        ('s21_vs_ntones', 'Number of tones per module', 'log'),
+        ('s21_ref_drift', 'Time (s)', 'linear')
+    ]:
+        fig, axs = plt.subplots(
+            4, 4, figsize = [16, 12], sharex = True, layout = 'tight'
+        )
+        for i, (module_idx, (fprobe, t, _)) in enumerate(data.items()):
+            ax_db = axs[2 * (i // 4), i % 4]
+            ax_ph = axs[2 * (i // 4) + 1, i % 4]
+            if name == 's21_vs_ntones':
+                x, r = ntones_list, ratios[module_idx]
+            else:
+                x, r = t[::2] - t[0], ref_ratios[module_idx]
+            ddb = 20 * np.log10(np.abs(r))
+            dph = np.degrees(np.angle(r))
+            for fi, ddbi, dphi, c in zip(fprobe, ddb, dph, colors):
+                ax_db.plot(x, ddbi, 'o-', color = c,
+                           label = f'{fi / 1e9:.4f} GHz')
+                ax_ph.plot(x, dphi, 'o-', color = c)
+            ax_db.axhline(0, color = 'k', lw = 0.5)
+            ax_ph.axhline(0, color = 'k', lw = 0.5)
+            ax_db.set(title = f'Module: {module_idx:d}', xscale = xscale)
+            ax_db.legend(loc = 'best', fontsize = 'small')
+            ax_ph.set(xscale = xscale)
+        for ax in axs[::2, 0]:
+            ax.set(ylabel = r'$\Delta |S_{21}|$ (dB)')
+        for ax in axs[1::2, 0]:
+            ax.set(ylabel = r'$\Delta$ Phase (deg)')
+        for ax in axs[-1, :]:
+            ax.set(xlabel = xlabel)
+        fname = f'{name}.png'
+        for fig_path in [tmp_path / fname, artifact_dir / fname]:
+            fig.savefig(fig_path, dpi = 150)
+        plt.close(fig)
+
+    ### Write status and check tolerance
+    max_dev = max(np.nanmax(dev) for dev in deviations.values())
+    max_drift = max(np.nanmax(drift) for drift in drifts.values())
+    passed = np.isfinite(max_dev) and max_dev <= rtol
+    lines = [
+        "PASS" if passed else "FAIL",
+        f"rtol = {rtol:.4f} max_rel_dev = {max_dev:.6f} "
+        f"max_ref_drift = {max_drift:.6f}",
+        f"ntones = {ntones_list} amplitude = {amplitude} nsamps = {nsamps}",
+        f"sequence = {sequence}",
+        f"duration_s = {time.perf_counter() - t0:.1f}",
+    ]
+    for module_idx, dev in deviations.items():
+        fprobe = data[module_idx][0]
+        for fi, devi, drifti in zip(fprobe, dev, drifts[module_idx]):
+            devs = ' '.join(f'{d:.6f}' for d in devi)
+            drifts_str = ' '.join(f'{d:.6f}' for d in drifti)
+            lines.append(f"Module {module_idx}, {fi / 1e9:.4f} GHz: "
+                         f"rel_dev = {devs} ref_drift = {drifts_str}")
+    status_text = "\n".join(lines) + "\n"
+    fname = 's21_vs_ntones_status.txt'
+    for status_path in [tmp_path / fname, artifact_dir / fname]:
+        status_path.write_text(status_text)
+    assert passed, status_text
+
 
 ################################################################################
 # Helper functions

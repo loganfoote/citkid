@@ -258,6 +258,40 @@ def test_get_modules_empty_indices(monkeypatch):
     assert result == []
 
 ################################################################################
+################################## dbm_to_vrms #################################
+################################################################################
+def test_dbm_to_vrms():
+    # 0 dBm across 50 Ohms is sqrt(50 * 1e-3) V RMS
+    assert np.isclose(util.dbm_to_vrms(0), np.sqrt(0.05))
+    p_dbm = np.array([-50., -20., 7.])
+    vrms = util.dbm_to_vrms(p_dbm)
+    assert np.allclose(10 * np.log10(vrms ** 2 / 50 * 1e3), p_dbm)
+
+def test_counts_to_s21_matches_rfmux_dbm():
+    """
+    A received tone at the same power as the written tone has |S21| = 1 for
+    both the sweep conversion and the streamed counts_to_s21, using rfmux's
+    conversion from readout counts to dBm.
+    """
+    import rfmux.core.transferfunctions as tf
+    ares = np.array([-50., -30.])
+    # Readout counts of a received tone with power ares
+    roc = np.sqrt(2) * util.dbm_to_vrms(ares) / tf.VOLTS_PER_ROC
+    assert np.allclose(tf.convert_roc_to_dbm(roc), ares)
+
+    # Sweep: counts -> RMS volts in _sweep, then / dbm_to_vrms in CRS.sweep
+    s21_sweep = roc * tf.VOLTS_PER_ROC / np.sqrt(2) / util.dbm_to_vrms(ares)
+    assert np.allclose(s21_sweep, 1)
+
+    # Streaming: stream counts are 256x readout counts
+    grp = zarr.group()
+    util._write_counts_to_s21_and_dt(
+        grp, 2, {1: np.array([0, 1])}, {1: ares}, 1e-3
+    )
+    s21_stream = 256 * roc * np.array(grp['counts_to_s21'])
+    assert np.allclose(s21_stream, 1)
+
+################################################################################
 ################################ get_sample_freq ###############################
 ################################################################################
 def test_get_sample_freq():

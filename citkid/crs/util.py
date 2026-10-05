@@ -119,6 +119,21 @@ def get_modules(d, module_idxs):
     modules = d.modules.filter(modules_generic)
     return modules
 
+def dbm_to_vrms(p_dbm):
+    """
+    Return the RMS voltage of a tone with the given power across the rfmux
+    termination (50 Ohms). Dividing a measured RMS voltage by this value gives
+    S21 relative to the tone power, so that 20 * log10(|S21|) is in dBc.
+
+    Parameters:
+    p_dbm (float or array-like float): tone power in dBm.
+
+    Returns:
+    float or np.array: RMS voltage in V.
+    """
+    p_w = 1e-3 * 10 ** (np.asarray(p_dbm, dtype = np.float64) / 10)
+    return np.sqrt(rfmux.core.transferfunctions.TERMINATION * p_w)
+
 def get_sample_freq(dec_stage):
     """
     Return the sample frequency in Hz given the decimation stage index.
@@ -287,11 +302,10 @@ def _write_counts_to_s21_and_dt(grp, ntones, ch_map, ares_map, dt):
     scale_factor = np.full(ntones, fill_value = np.nan)
 
     for module_idx in ch_map.keys():
-        # Use ares to modify scale_factor from dBm to dBc
+        # Use ares to convert from RMS voltage to dBc
         ares = ares_map[module_idx]
         ch_idxs = ch_map[module_idx]
-        pscale = 1 / 10 ** (ares / 20)
-        scale_factor[ch_idxs] = rfmux_scale * pscale
+        scale_factor[ch_idxs] = rfmux_scale / dbm_to_vrms(ares)
 
     # Save scale_factor and dt
     zarr_util.write_single_array(

@@ -503,16 +503,13 @@ async def test_sweep_concatenates_results_via_ch_map(base_crs):
         # Verify results are concatenated correctly
         assert f.shape == frequencies.shape
         assert z.shape == frequencies.shape
-        
-# The sweep method divides by 10**(ares/20), so we need to account for that
-        # Expected: original_value / 10**(ares/20)
-# Module 1 (rows 0,1): 1.0 / 10**(-50/20) = 1.0 / 10**(-2.5) = 1.0 * 10**(2.5) =
-        # 316.227...
-        # Module 2 (rows 2,3): 2.0 / 10**(-52/20) = 2.0 * 10**(2.6) = 795.775...
-        expected_0 = 1.0 / 10**(-50.0/20)
-        expected_1 = 1.0 / 10**(-51.0/20)
-        expected_2 = 2.0 / 10**(-52.0/20)
-        expected_3 = 2.0 / 10**(-53.0/20)
+        # The sweep method divides by the RMS voltage of the tone, so we need to
+        # account for that
+        # Expected: original_value / RMS voltage of the tone across 50 Ohms
+        expected_0 = 1.0 / np.sqrt(50e-3 * 10**(-50.0/10))
+        expected_1 = 1.0 / np.sqrt(50e-3 * 10**(-51.0/10))
+        expected_2 = 2.0 / np.sqrt(50e-3 * 10**(-52.0/10))
+        expected_3 = 2.0 / np.sqrt(50e-3 * 10**(-53.0/10))
         
         assert np.allclose(z[0, :].real, expected_0)
         assert np.allclose(z[1, :].real, expected_1)
@@ -559,10 +556,10 @@ async def test_sweep_converts_to_dbc(base_crs):
         )
         
         # Verify conversion to dBc
-        # z should be divided by 10 ** (ares / 20)
-        # For ares = -50.0: 10 ** (-50 / 20) = 10 ** -2.5 ≈ 0.003162
-        # So z = 10.0 / 0.003162 ≈ 3162.3
-        expected = 10.0 / (10 ** (-50.0 / 20))
+        # z should be divided by the RMS voltage of the tone across 50 Ohms
+        # For ares = -50.0: sqrt(50 * 1e-3 * 10 ** -5) ≈ 7.071e-4 V
+        # So z = 10.0 / 7.071e-4 ≈ 14142
+        expected = 10.0 / np.sqrt(50 * 1e-3 * 10 ** (-50.0 / 10))
         assert np.allclose(np.abs(z), expected, rtol = 1e-5)
 
 

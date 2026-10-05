@@ -690,8 +690,9 @@ def test_parser_to_zarr_counts_to_s21_mapping(tmp_path):
     for module_idx in ch_map.keys():
         ares = ares_map[module_idx]
         ch_idxs = ch_map[module_idx]
-        pscale = 1 / 10 ** (ares / 20)
-        expected_scale[ch_idxs] = rfmux_scale * pscale
+        # RMS voltage of each tone across 50 Ohms
+        vrms = np.sqrt(50 * 1e-3 * 10 ** (ares / 10))
+        expected_scale[ch_idxs] = rfmux_scale / vrms
     
     # Verify
     np.testing.assert_allclose(grp['counts_to_s21'][:], expected_scale)
