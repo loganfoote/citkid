@@ -95,3 +95,31 @@ def test_per_set_powers():
     assert per_set_powers([power, power[:2]], [0, 0])[1].shape == (2,)   # ragged: per set
     two_d = per_set_powers(np.zeros((2, 3)), np.zeros((2, 3)))
     assert len(two_d) == 2 and np.shape(two_d[0]) == (3,)
+
+
+def test_check_sets_accepts_matching_sets():
+    """
+    Check that matching lengths and shapes pass, with and without errors.
+    """
+    from citkid.nep.batch import check_sets
+
+    powers = [np.ones(3), np.ones(5)]
+    neps = [np.ones(3), np.ones(5)]
+    check_sets(powers, neps)
+    check_sets(powers, neps, nep_errs=[np.ones(3), np.ones(5)])
+
+
+@pytest.mark.parametrize('powers, neps, errs, match', [
+    ([np.ones(3)], [np.ones(3), np.ones(3)], None, 'same number of sets'),
+    ([np.ones(3)], [np.ones(3)], [np.ones(3), np.ones(3)], 'one entry'),
+    ([np.ones(3)], [np.ones(4)], None, 'set 0'),
+    ([np.ones(3)], [np.ones(3)], [np.ones(2)], 'set 0'),
+])
+def test_check_sets_rejects_mismatches(powers, neps, errs, match):
+    """
+    Check that set-count and per-set shape mismatches raise ValueError.
+    """
+    from citkid.nep.batch import check_sets
+
+    with pytest.raises(ValueError, match=match):
+        check_sets(powers, neps, nep_errs=errs)

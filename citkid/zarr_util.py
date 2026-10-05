@@ -1,15 +1,15 @@
 import numpy as np
-import zarr
 import copy
 
 def create_zarr_param(root, name, value, nres, dtype = None):
     """
-    Create a Zarr array suitable for row-wise writes along the last axis.
+    Create a Zarr array suitable for row-wise writes along the first axis.
  
     Parameters:
     root (zarr.core.group.Group): zarr file root.
     name (str): parameter name.
-    value (np.ndarray): data to write, corresponding to idx.
+    value (np.ndarray): one row of data; sets the row shape and default
+        dtype. Nothing is written.
     nres (int): number of resonators in the dataset.
     dtype (type or None): data type, or None to inherit the data type from
         value.
@@ -90,16 +90,13 @@ def write_single_array(root, name, value, dtype = None):
     Parameters:
     root (zarr.core.group.Group): zarr file root.
     name (str): parameter name.
-    value (np.ndarray): data to write, corresponding to idx.
+    value (array-like): data to write.
     dtype (type or None): data type, or None to inherit the data type from
         value.
  
     Returns:
     None
     """
-    if dtype is None:
-        dtype = value.dtype
- 
     value = np.asarray(value, dtype = dtype)
  
     if name in root:

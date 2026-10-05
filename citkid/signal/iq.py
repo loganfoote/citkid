@@ -77,4 +77,3 @@ def density_subsample_idx(z, n_keep=5000, n_bins=100, seed=0):
 
     rng  = np.random.default_rng(seed)
     return rng.choice(len(z), size=n_keep, replace=False, p=weights)
-    return z[isub]

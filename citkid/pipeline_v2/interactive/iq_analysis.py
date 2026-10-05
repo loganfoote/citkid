@@ -1,22 +1,16 @@
 """
-Pre-assembled interactive session for the IQ analysis pipeline.
+Launch an interactive session for the IQ analysis pipeline.
 
-This module wires together the panels registered for the steps defined in
-``pipeline_v2/templates/iq_analysis.yaml``:
+The panels match the steps in ``pipeline_v2/templates/iq_analysis.yaml``:
 
-    1. fit_gain  →  :class:`~.gain.GainFitPanel`
-    2. fit_iq    →  :class:`~.fit_iq.FitIQPanel`
+    1. ``fit_gain`` -> ``GainFitPanel``
+    2. ``fit_iq`` -> ``FitIQPanel``
 
-Usage
------
-::
+``run_iq_analysis`` is ``core.run_interactive`` with this panel grouping.
 
-    from citkid.pipeline_v2.interactive.iq_analysis import run_iq_analysis
-    run_iq_analysis(AR, data_idx=0)
-
-The function is equivalent to calling :func:`~.core.run_interactive` with
-the correct panel grouping for the IQ analysis YAML, but gives a cleaner
-one-liner interface.
+Examples:
+    from citkid.pipeline_v2 import run_iq_analysis
+    run_iq_analysis(AR, start_idx=0)
 """
 
 from .core import run_interactive
@@ -38,25 +32,22 @@ def run_iq_analysis(
     """
     Launch the interactive IQ analysis window.
 
-    This is a convenience wrapper for run_interactive that pre-sets the panel
-    grouping to match pipeline_v2/templates/iq_analysis.yaml.
+    This wraps ``run_interactive`` with the panel grouping that matches
+    ``pipeline_v2/templates/iq_analysis.yaml``.
 
-    Parameters
-    ----------
-    AR : AnalysisRunner
-        The analysis runner whose DS already has the calibration pipeline
-        loaded and whose analysis_steps include fit_gain and fit_iq.
-    start_idx : int, optional
-        Index into ``data_idxs`` to start at. Default 0.
-    data_idxs : list of int or None, optional
-        Ordered sequence of data indices to step through with the navigation
-        buttons. None (default) uses all rows (0 to num_rows - 1).
-    title : str, optional
-        Window title. Default 'IQ Analysis'.
-    ui_scale : float, optional
-        Scaling factor for UI elements. Default 1.0.
-    plot_scale : float, optional
-        Scaling factor for plot heights. Default 1.0.
+    Parameters:
+    AR (AnalysisRunner): runner whose ``DS`` has the calibration pipeline
+        loaded and whose ``analysis_steps`` include ``fit_gain`` and ``fit_iq``.
+    start_idx (int): index into ``data_idxs`` to start at. Default is 0.
+    data_idxs (list of int or None): data indices to step through with the
+        navigation buttons, in order. None (default) uses every row.
+    title (str): window title. Default is 'IQ Analysis'.
+    ui_scale (float): scaling factor for UI elements. Default is 1.0.
+    plot_scale (float): scaling factor for plot heights. Default is 1.0.
+
+    Returns:
+    window (InteractiveAnalysisWindow): the window, returned after it is
+        closed (the Qt event loop blocks until then).
     """
     return run_interactive(
         AR,

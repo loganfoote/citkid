@@ -1,1 +1,3 @@
 include citkid/primecam/cal_data/*
+recursive-include citkid/pipeline_v2/templates *.yaml *.py
+global-exclude .DS_Store

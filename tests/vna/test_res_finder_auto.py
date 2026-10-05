@@ -12,7 +12,6 @@ Tests cover:
 
 import pytest
 import numpy as np
-import h5py
 import zarr
 import os
 import tempfile

@@ -620,6 +620,7 @@ def estimate_ts_data_size(dec_stage, total_time, nmodules, max_ntones, ntones):
         
     print(f'Raw parser data size: {s} {unit}')
     size_processed /= 1e6
+    unit = 'MB'
     s = f'{size_processed:.0f}'
     if size_processed // 1000:
         size_processed /= 1e3

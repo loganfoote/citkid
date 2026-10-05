@@ -106,6 +106,38 @@ def test_rerunning_step_invalidates_downstream_outputs(pipeline_v2_files):
         _ = ds.z
 
 
+def test_storing_one_row_keeps_other_rows_invalidated(pipeline_v2_files):
+    """
+    Check that writing one row after an all-row invalidation keeps the rest
+    of the rows unavailable instead of exposing stale zarr data.
+    """
+    files = pipeline_v2_files
+    ds = DataSet(
+        zarr_path=str(files["zarr_path"]),
+        cal_yaml_path=str(files["cal_yaml"]),
+        custom_path=str(files["cal_custom"]),
+    )
+    ar = AnalysisRunner(
+        ds,
+        analysis_yaml_path=str(files["analysis_yaml"]),
+        custom_path=str(files["analysis_custom"]),
+    )
+    import_step = next(s for s in ds.cal_steps if s.name == "import_base")
+    ar.execute_step(import_step, user_params={"base_value": 5}, save=True)
+    for di in range(3):
+        ar.execute_path(data_idx=di, verbose=False, save=True)
+    assert ds.z[1] == 32
+
+    ds.invalidate_memory_params(["z"])
+    assert ds._invalidated_rows["z"] is None
+    ds._store_param("z", 99, is_global=False, data_idx=0)
+
+    assert ds.z[0] == 99
+    assert ds._invalidated_rows["z"] == {1, 2}
+    with pytest.raises(Exception):
+        _ = ds.z[1]
+
+
 def test_embedded_definitions_allow_reload_without_paths(pipeline_v2_files):
     files = pipeline_v2_files
     ds = DataSet(
@@ -1170,3 +1202,89 @@ def test_copy_of_dataset_built_from_custom_cal_steps(tmp_path):
     assert int(copy.nrows) == 4
     assert copy.x[2] == 6.0
     assert copy.write_buffer is False
+
+
+def test_analysis_yaml_with_misspelled_key_is_rejected(pipeline_v2_files):
+    """
+    Check that a typo such as ``parms:`` raises instead of being ignored.
+    """
+    files = pipeline_v2_files
+    ds = DataSet(
+        zarr_path=str(files["zarr_path"]),
+        cal_yaml_path=str(files["cal_yaml"]),
+        custom_path=str(files["cal_custom"]),
+    )
+    bad_yaml = files["analysis_yaml"].with_name("bad.yaml")
+    bad_yaml.write_text(
+        "ANALYSIS_STEPS:\n"
+        "  1:\n"
+        "    task: step1\n"
+        "  2:\n"
+        "    task: step2\n"
+        "    parms:\n"
+        "      offset: 10\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="parms"):
+        AnalysisRunner(
+            ds,
+            analysis_yaml_path=str(bad_yaml),
+            custom_path=str(files["analysis_custom"]),
+        )
+
+
+def test_analysis_runner_has_no_failures_before_running(pipeline_v2_files):
+    """
+    Check that ``_last_failures`` exists (empty) before any step has run.
+    """
+    files = pipeline_v2_files
+    ds = DataSet(
+        zarr_path=str(files["zarr_path"]),
+        cal_yaml_path=str(files["cal_yaml"]),
+        custom_path=str(files["cal_custom"]),
+    )
+    ar = AnalysisRunner(
+        ds,
+        analysis_yaml_path=str(files["analysis_yaml"]),
+        custom_path=str(files["analysis_custom"]),
+    )
+    assert ar._last_failures == {}
+
+
+@pytest.mark.parametrize("cal_alias, analysis_alias, template", [
+    ("ts", "ts", "custom_steps_template.py"),
+    ("ts_offres", "ts_offres", "custom_steps_template.py"),
+    ("iq", "iq", "custom_steps_iqonly_template.py"),
+])
+def test_every_template_pair_builds_a_runner(
+    tmp_path, cal_alias, analysis_alias, template
+):
+    """
+    Check that each shipped YAML alias pair and its custom-steps template
+    parse, pass the structure checks, and build a DataSet and runner.
+    """
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    nrows, npts = 2, 5
+    raw = zarr.open_group(str(raw_dir / "example.zarr"), mode="w")
+    raw.create_array("f", data=np.ones((nrows, npts)))
+    raw.create_array("z", data=np.ones((2, nrows, npts)))
+    for name in ("fres", "fres_all", "ares", "qres"):
+        raw.create_array(name, data=np.ones(nrows))
+    raw.create_array("res_idxs", data=np.arange(nrows))
+    raw.create_array("ts_00/dt", data=np.array(1e-3))
+    (raw_dir / "fres_init").mkdir()
+    np.save(raw_dir / "fres_init" / "fres.npy", np.ones(nrows))
+
+    templates = Path(dataset_module.__file__).parent / "templates"
+    DS = DataSet(
+        zarr_path=str(raw_dir / "output.zarr"),
+        cal_yaml_path=cal_alias,
+        custom_path=str(templates / template),
+        custom_main_dir_overwrite=str(raw_dir),
+    )
+    AR = AnalysisRunner(DS, analysis_yaml_path=analysis_alias)
+
+    assert DS.nrows == nrows
+    assert [s["task"].name for s in AR.path][:2] == [
+        "make_fr_spans", "fit_gain"]

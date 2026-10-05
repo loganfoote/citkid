@@ -1,5 +1,5 @@
 """
-Interactive panel for the gain fitting steps (make_fr_spans + fit_gain).
+Interactive panel for the gain fitting step (fit_gain).
 
 Plots
 -----
@@ -22,7 +22,7 @@ subsequent panels (e.g. FitIQPanel) are automatically updated.
 
 import numpy as np
 import pyqtgraph as pg
-from pyqtgraph.Qt import QtWidgets, QtCore
+from pyqtgraph.Qt import QtWidgets
 
 from .core import register_panel, StepPanel
 

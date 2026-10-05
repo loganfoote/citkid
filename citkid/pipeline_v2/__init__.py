@@ -1,25 +1,32 @@
-"""Simplified single-version pipeline API.
+"""
+Provide the single-version calibration and analysis pipeline.
 
-This package provides a replacement for :mod:`citkid.pipeline` that removes
-run history and dependency backtracking.  The public interface mirrors the
-original high-level entry points:
-
-``DataSet``
-	Zarr-backed parameter store plus calibration-pipeline execution.
-
-``AnalysisRunner``
-	Analysis-pipeline executor built on top of a :class:`DataSet`.
+``DataSet``: zarr-backed parameter store plus calibration-pipeline execution.
+``AnalysisRunner``: analysis-pipeline executor built on top of a ``DataSet``.
+``plStep``: definition of one pipeline step.
+``run_*``: interactive launchers from ``citkid.pipeline_v2.interactive``.
 """
 
 from .dataset import DataSet
 from .analysis import AnalysisRunner
-from .framework import plStep 
-from .interactive import run_ts_analysis, run_iq_analysis
+from .framework import plStep
+from .interactive import (
+    run_interactive,
+    run_iq_analysis,
+    run_ts_analysis,
+    run_gain_only_analysis,
+    run_iq_series,
+    run_ts_series,
+)
 
 __all__ = [
-    "DataSet", 
-    "AnalysisRunner", 
+    "DataSet",
+    "AnalysisRunner",
     "plStep",
+    "run_interactive",
+    "run_iq_analysis",
     "run_ts_analysis",
-    "run_iq_analysis"
-    ]
+    "run_gain_only_analysis",
+    "run_iq_series",
+    "run_ts_series",
+]

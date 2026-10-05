@@ -1442,3 +1442,92 @@ def test_series_window_refuses_to_close_while_busy(qt_app, monkeypatch):
     win._confirm_stale_downstream_before_leave.assert_not_called()
     monkeypatch.setattr(iseries, 'responsive_busy', lambda: False)
     assert win.close() is True
+
+
+def test_xcal_panel_loads_outputs_missing_from_prefetch_cache(qt_app):
+    """
+    Check that cache entries prefetched before a step ran (None) fall back
+    to the DataSet instead of raising in ``update_plots``.
+    """
+    import importlib
+    from types import SimpleNamespace
+
+    importlib.import_module('citkid.pipeline_v2.interactive.xcal')
+    steps = ('get_xcal_mask', 'fit_x_theta')
+    ar, _ = _make_ar(*steps)
+    n = 20
+    ff = np.linspace(1e9, 1e9 + 1e5, n)
+    zf = np.exp(1j * np.linspace(0, np.pi, n))
+    mask = np.zeros(n, dtype=bool)
+    mask[5:15] = True
+    ar.DS = SimpleNamespace(
+        nrows=1, ff=[ff], zf_rmv=[zf], zf_cent=[zf],
+        xcal_mask=[mask], thetaf=[np.linspace(-1, 1, n)],
+        xf=[np.linspace(0, 1e-4, n)], poly_x=[np.array([1e-5, 0.0])],
+        thetat=[np.zeros(50)], zt_cent=[np.zeros(50, dtype=complex)],
+    )
+    panel = icore.get_panel_class(steps)(ar, steps, data_idx=0)
+    panel._plot_cache[0] = dict(
+        ff=ff, ff_plot=(ff - ff.mean()) * 1e-3, f_center=float(ff.mean()),
+        zf_rmv=zf, zf_cent=zf, amp_db=20 * np.log10(np.abs(zf)),
+        xcal_mask=None, zt_cent_bulk=None, zt_cent_tail=None,
+        thetaf=None, xf=None, poly_x=None, theta_grid=None, fit_y=None,
+        t_bulk=None, x_bulk=None, t_tail=None, x_tail=None,
+        idx0_base=None, idx1_base=None,
+    )
+
+    panel.update_plots()
+
+    assert len(panel._amp_data.getData()[0]) == mask.sum()
+    assert len(panel._amp_excl.getData()[0]) == n - mask.sum()
+    assert len(panel._xcal_inc.getData()[0]) == mask.sum()
+    assert len(panel._xcal_fit.getData()[0]) == 500
+
+
+def test_package_exports_every_launcher():
+    """
+    Check the launchers the notebooks import from ``citkid.pipeline_v2``.
+    """
+    import citkid.pipeline_v2 as pl
+    import citkid.pipeline_v2.interactive as inter
+
+    for name in pl.__all__:
+        assert hasattr(pl, name), name
+    for name in ('run_interactive', 'run_iq_analysis', 'run_ts_analysis',
+                 'run_gain_only_analysis', 'run_iq_series', 'run_ts_series'):
+        assert getattr(pl, name) is getattr(inter, name)
+    for name in inter.__all__:
+        assert hasattr(inter, name), name
+
+
+@pytest.mark.parametrize('module, func, panels', [
+    ('gain_only_analysis', 'run_gain_only_analysis', [('fit_gain',)]),
+    ('iq_analysis', 'run_iq_analysis', [('fit_gain',), ('fit_iq',)]),
+    ('ts_analysis', 'run_ts_analysis', [
+        ('fit_gain',),
+        ('fit_iq_circle', 'get_idx_t', 'get_theta_phase_offset'),
+        ('get_xcal_mask', 'fit_x_theta'),
+    ]),
+])
+def test_launchers_pass_their_panels_to_run_interactive(module, func, panels):
+    """
+    Check that each launcher forwards its panel grouping and arguments, and
+    that every grouping has a registered panel class.
+    """
+    import importlib
+
+    mod = importlib.import_module(f'citkid.pipeline_v2.interactive.{module}')
+    ar = object()
+    with patch.object(mod, 'run_interactive', return_value='win') as run:
+        out = getattr(mod, func)(
+            ar, start_idx=2, data_idxs=[1, 3, 5], ui_scale=0.8)
+
+    assert out == 'win'
+    args, kwargs = run.call_args
+    assert args == (ar,)
+    assert kwargs['panels'] == panels
+    assert kwargs['start_idx'] == 2
+    assert kwargs['data_idxs'] == [1, 3, 5]
+    assert kwargs['ui_scale'] == 0.8
+    for group in panels:
+        assert icore.get_panel_class(group) is not icore.DefaultStepPanel

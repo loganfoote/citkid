@@ -204,3 +204,34 @@ class TestWriteSingleArray:
         write_single_array(root, 'arr', np.array([1.0, 2.0, 3.0]))
         # write_single_array is intentionally un-chunked: shards should be None
         assert root['arr'].shards is None
+
+
+def test_write_single_array_accepts_list():
+    """
+    Check that list input is converted to an array (it used to raise).
+    """
+    root = zarr.group()
+    write_single_array(root, 'arr', [1.0, 2.0, 3.0])
+    np.testing.assert_array_equal(root['arr'][...], [1.0, 2.0, 3.0])
+    assert root['arr'].dtype == np.float64
+
+
+################################################################################
+############################### deep_union tests ###############################
+################################################################################
+def test_deep_union_merges_nested_dicts_without_mutating_inputs():
+    """
+    Check that nested dicts are merged, b wins on conflicts, and a is copied.
+    """
+    from citkid.zarr_util import deep_union
+
+    a = {'x': 1, 'sub': {'p': 1, 'q': 2}, 'keep': [1]}
+    b = {'y': 2, 'sub': {'q': 3, 'r': 4}, 'x': {'now': 'dict'}}
+    out = deep_union(a, b)
+
+    assert out == {
+        'x': {'now': 'dict'}, 'y': 2, 'keep': [1],
+        'sub': {'p': 1, 'q': 3, 'r': 4},
+    }
+    assert a == {'x': 1, 'sub': {'p': 1, 'q': 2}, 'keep': [1]}
+    assert out['keep'] is not a['keep']

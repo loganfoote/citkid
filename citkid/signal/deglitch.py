@@ -1,5 +1,6 @@
-### Functions for finding and removing glitches from timestreams, 
-### e.g. from cosmic ray impacts.
+"""
+Find and remove glitches from timestreams, e.g. from cosmic ray impacts.
+"""
 
 import numpy as np
 from scipy.signal import find_peaks
@@ -45,6 +46,8 @@ def find_glitch_idxs(ts, dt, dtbin, nstd, distance, width, nrounds, i0, i1):
     dtbin (float): Sample time to bin the data to for subtraction.
     nstd (float): Minimum peak amplitude in units of number of timestream standard deviations.
     distance (int): Minimum number of sample points between peaks.
+    width (int, array-like, or None): Required peak width in samples, passed
+        to ``scipy.signal.find_peaks``. None places no requirement.
     nrounds (int): Number of rounds of peak finding to do. Must be >= 1.
     i0 (int): Number of sample points before each peak to remove.
     i1 (int): Number of sample points after each peak to remove.
@@ -83,8 +86,9 @@ def replace_glitches_with_gaussian_noise(ts, idxs, i0, i1):
     i1 (int): Number of points after each sample point to remove.
     
     Returns:
-    ts_clean (float, array-like): The timestream with points replaced by
-        Gaussian noise.
+    ts_clean (float, array-like): The median-subtracted timestream with
+        points replaced by Gaussian noise.
+    idxs_masked (np.array, int): Sorted sample indices that were replaced.
     """
     idxs_masked = np.array([], dtype=int)
     ts_clean = np.copy(ts)

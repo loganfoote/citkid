@@ -410,3 +410,50 @@ def test_run_responsive_reraises_and_runs_directly_off_main_thread(qapp):
     worker.start()
     worker.join()
     assert seen == [worker.name]              # nested in a thread: no new thread
+
+
+# ---------------------------------------------------------------------------
+# Layout sizing helpers
+# ---------------------------------------------------------------------------
+
+def test_scroll_area_min_width_adds_scrollbar_and_frame(qapp):
+    """
+    Check the width is the content's minimum plus scrollbar and frame, and
+    0 without content.
+    """
+    from pyqtgraph.Qt import QtWidgets
+    from citkid.qt_compat import scroll_area_min_width
+
+    scroll = QtWidgets.QScrollArea()
+    assert scroll_area_min_width(scroll) == 0
+    content = QtWidgets.QWidget()
+    QtWidgets.QVBoxLayout(content).addWidget(QtWidgets.QLabel('x' * 40))
+    scroll.setWidget(content)
+    extra = (scroll.verticalScrollBar().sizeHint().width()
+             + 2 * scroll.frameWidth())
+    assert scroll_area_min_width(scroll) == (
+        content.minimumSizeHint().width() + extra)
+
+
+def test_vbox_height_for_width_wraps_text_and_uses_overrides(qapp):
+    """
+    Check that wrapped labels get taller at narrow widths and overrides
+    replace measured heights.
+    """
+    from pyqtgraph.Qt import QtWidgets
+    from citkid.qt_compat import vbox_height_for_width
+
+    widget = QtWidgets.QWidget()
+    layout = QtWidgets.QVBoxLayout(widget)
+    label = QtWidgets.QLabel(' '.join(['word'] * 60))
+    label.setWordWrap(True)
+    fixed = QtWidgets.QWidget()
+    fixed.setFixedHeight(40)
+    layout.addWidget(label)
+    layout.addWidget(fixed)
+
+    narrow = vbox_height_for_width(layout, 150)
+    wide = vbox_height_for_width(layout, 2000)
+    assert narrow > wide
+    overridden = vbox_height_for_width(layout, 2000, overrides={fixed: 140})
+    assert overridden == wide + 100

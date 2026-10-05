@@ -388,57 +388,117 @@ class TestLazyAttrSetitem:
 ################################ Utility Functions #############################
 ################################################################################
 
-class TestFindPlPath:
-    """Tests for find_pl_path utility function"""
+def _tree_steps():
+    """
+    Build a small calibration tree with a nested sequence.
 
-    def test_find_pl_path_basic(self):
-        """Test find_pl_path with basic pipeline structure."""
-        cal_pl = {
-            1: {'step1': 'file1'},
-            2: {'step2': 'file2'},
-        }
-        
-        # find_pl_path should return the directory containing the step
-        # Exact behavior depends on implementation, but should not crash
-        try:
-            result = pf.find_pl_path(cal_pl, [1, 'step1'])
-            # If it returns something, verify it's a string
-            if result is not None:
-                assert isinstance(result, str)
-        except (KeyError, ValueError):
-            # May raise if structure doesn't match expected format
-            pass
+    Returns:
+    tree (dict): tree with ``CAL_STEPS`` -> load (with ``X_STEPS`` child,
+        sib) -> after.
+    steps (dict): plStep instances by name.
+    """
+    steps = {
+        'load': pf.plStep('load', lambda: 1, [], ['a'], 'global'),
+        'child': pf.plStep('child', lambda a: a, ['a'], ['b'], 'per-row'),
+        'sib': pf.plStep('sib', lambda a: a, ['a'], ['c'], 'per-row'),
+        'after': pf.plStep('after', lambda a: a, ['a'], ['d'], 'per-row'),
+    }
+    tree = {'CAL_STEPS': {
+        1: {'task': steps['load'], 'X_STEPS': {
+            1: {'task': steps['child']},
+            2: {'task': steps['sib']},
+        }},
+        2: {'task': steps['after']},
+    }}
+    return tree, steps
 
 
-class TestCheckPlTreeStructure:
-    """Tests for check_pl_tree_structure utility function"""
+@pytest.mark.parametrize('name, expected', [
+    ('a', ['load']),
+    ('b', ['load', 'child']),
+    ('c', ['load', 'child', 'sib']),
+    ('d', ['load', 'after']),
+])
+def test_find_pl_path_returns_steps_in_execution_order(name, expected):
+    """
+    Check that the path includes ancestors and earlier siblings in order.
+    """
+    tree, steps = _tree_steps()
+    path = pf.find_pl_path(tree, name)
+    assert [step.name for step in path] == expected
+    assert all(step is steps[step.name] for step in path)
 
-    def test_check_pl_tree_structure_valid(self):
-        """Test check_pl_tree_structure with valid structure."""
-        # A basic zarr-like structure
-        tree = {
-            'run_1': {
-                'param1': 'some_data',
-                'param2': 'some_data',
-            }
-        }
-        
-        # Should not raise
-        try:
-            pf.check_pl_tree_structure(tree)
-        except Exception:
-            # Implementation-specific, may or may not raise
-            pass
 
-    def test_check_pl_tree_structure_empty(self):
-        """Test check_pl_tree_structure with empty structure."""
-        tree = {}
-        
-        # Should handle empty tree
-        try:
-            pf.check_pl_tree_structure(tree)
-        except Exception:
-            pass
+def test_find_pl_path_unknown_output_returns_none():
+    """
+    Check that an output no step produces gives None.
+    """
+    tree, _ = _tree_steps()
+    assert pf.find_pl_path(tree, 'missing') is None
+
+
+@pytest.mark.parametrize('tree, name', [
+    ({'CAL_STEPS': {}}, ['a']),
+    ({'CAL': {}}, 'a'),
+])
+def test_find_pl_path_rejects_bad_input(tree, name):
+    """
+    Check that a non-string name or a root key without _STEPS raises.
+    """
+    with pytest.raises(ValueError):
+        pf.find_pl_path(tree, name)
+
+
+def test_check_pl_tree_structure_accepts_valid_trees():
+    """
+    Check that valid calibration and analysis trees pass.
+    """
+    tree, steps = _tree_steps()
+    pf.check_pl_tree_structure(tree, cal=True)
+    pf.check_pl_tree_structure({})
+    analysis = {'ANALYSIS_STEPS': {1: {
+        'task': steps['child'], 'params': {'k': 1.5, 'm': None},
+        'delete_input': ['a'],
+    }}}
+    pf.check_pl_tree_structure(analysis, cal=False)
+
+
+def _bad_trees():
+    """
+    Build invalid trees, each paired with a substring of its error message.
+
+    Returns:
+    cases (list): tuples (tree, cal, match).
+    """
+    _, s = _tree_steps()
+    node = {'task': s['child']}
+    return [
+        ({'CAL_STEPS': {1: node, 3: node}}, False, 'start from 1'),
+        ({'CAL_STEPS': {1: node, 'X': node}}, False, 'other key types'),
+        ({'CAL_STEPS': {1: {'params': {}}}}, False, '"task" key'),
+        ({'CAL_STEPS': {1: {'task': 'child'}}}, False, 'not a valid'),
+        ({'CAL_STEPS': {1: {'task': s['child'], 'parms': {}}}}, False,
+         'invalid key: parms'),
+        ({'CAL_STEPS': {1: {'task': s['child'], 'params': {}}}}, True,
+         'not allowed'),
+        ({'CAL_STEPS': {1: {'task': s['child'], 'params': {'k': [1]}}}},
+         False, 'simple type'),
+        ({'CAL_STEPS': {1: {'task': s['child'], 'delete_input': ['z']}}},
+         False, 'not found'),
+        ({'CAL_STEPS': {1: {'task': s['child'], 'delete_input': 'some'}}},
+         False, 'not a valid list'),
+        ([], False, 'must be a dict'),
+    ]
+
+
+@pytest.mark.parametrize('case', range(len(_bad_trees())))
+def test_check_pl_tree_structure_rejects_invalid_trees(case):
+    """
+    Check that each structural error raises with a descriptive message.
+    """
+    tree, cal, match = _bad_trees()[case]
+    with pytest.raises(ValueError, match=match):
+        pf.check_pl_tree_structure(tree, cal=cal)
 
 
 @pytest.mark.parametrize("func", [

@@ -371,6 +371,31 @@ def test_estimate_ts_data_size_outputs_gb(capsys):
     )
 
 
+def test_estimate_ts_data_size_gb_raw_mb_processed(capsys):
+    """
+    Check that each size gets its own unit when raw is GB and processed is MB.
+    """
+    args = dict(
+        dec_stage = 0, total_time = 10, nmodules = 4, max_ntones = 1024,
+        ntones = 1
+    )
+    util.estimate_ts_data_size(**args)
+
+    out = capsys.readouterr().out.strip().splitlines()
+    _, raw_val, raw_unit = _parse_size_line(out[0])
+    _, proc_val, proc_unit = _parse_size_line(out[1])
+
+    assert raw_unit == 'GB'
+    assert proc_unit == 'MB'
+    exp_raw_mb, exp_proc_mb = _expected_sizes_mb(**args)
+    assert np.isclose(
+        _to_mb(raw_val, raw_unit), exp_raw_mb, rtol = 0.02, atol = 0.1
+    )
+    assert np.isclose(
+        _to_mb(proc_val, proc_unit), exp_proc_mb, rtol = 0.2, atol = 0.5
+    )
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [

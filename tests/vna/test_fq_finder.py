@@ -176,15 +176,15 @@ class TestEnsureZarrArrays:
 
     def test_only_one_array_raises_runtime_error(self):
         zg = _make_zarr()
-        zg.create_dataset("fres_opt", shape=(3,), dtype=np.float64, fill_value=np.nan)
+        zg.create_array("fres_opt", shape=(3,), dtype=np.float64, fill_value=np.nan)
         with pytest.raises(RuntimeError, match="inconsistent state"):
             _ensure_zarr_arrays(zg, 3)
 
     def test_resume_without_reject_reason_creates_it(self):
         """Legacy zarr group missing reject_reason → created on resume."""
         zg = _make_zarr()
-        zg.create_dataset("fres_opt", shape=(4,), dtype=np.float64, fill_value=np.nan)
-        zg.create_dataset("qres_opt", shape=(4,), dtype=np.float64, fill_value=np.nan)
+        zg.create_array("fres_opt", shape=(4,), dtype=np.float64, fill_value=np.nan)
+        zg.create_array("qres_opt", shape=(4,), dtype=np.float64, fill_value=np.nan)
         assert "reject_reason" not in zg
         _ensure_zarr_arrays(zg, 4)
         assert "reject_reason" in zg

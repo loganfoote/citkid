@@ -112,3 +112,32 @@ def test_nonlinear_iq_fit_plot_with_failed_fit():
     x = axs[1].lines[0].get_xdata()
     assert np.all(np.isfinite(x)) and abs(np.mean(x)) < 1
     plt.close(fig)
+
+
+################################################################################
+################################# plot_sparper #################################
+################################################################################
+def test_plot_sparper_draws_both_psds():
+    """
+    Check that both binned PSDs are drawn into the given axes.
+    """
+    f = np.linspace(0.1, 1000, 5000)
+    spar = -90 - 10 * np.log10(f)
+    sper = np.full_like(f, -100.0)
+    fig0, ax0 = plt.subplots()
+    fig, ax = plot.plot_sparper(f, spar, sper, nbins=50, fmin=0.5, ax=ax0)
+    assert fig is fig0 and ax is ax0
+    assert len(ax.get_lines()) >= 2
+    plt.close(fig)
+
+
+@pytest.mark.parametrize("f, spar, sper", [
+    (np.array([1.0, 2.0]), np.zeros(3), np.zeros(2)),
+    (np.array([2.0, 1.0]), np.zeros(2), np.zeros(2)),
+])
+def test_plot_sparper_rejects_bad_input(f, spar, sper):
+    """
+    Check shape mismatches and unsorted frequencies raise ValueError.
+    """
+    with pytest.raises(ValueError):
+        plot.plot_sparper(f, spar, sper, nbins=5, fmin=0.1)

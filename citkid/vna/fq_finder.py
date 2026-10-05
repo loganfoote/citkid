@@ -161,9 +161,9 @@ def _ensure_zarr_arrays(zarr_group, n: int) -> bool:
                     f"zarr_group[{name!r}] has shape {zarr_group[name].shape}, "
                     f"expected ({n},) to match the input data."
                 )
-        # Resume mode: ensure reject_reason exists (may be absent in legacy groups)
+        # Resume mode: older groups may lack reject_reason
         if "reject_reason" not in zarr_group:
-            zarr_group.create_dataset(
+            zarr_group.create_array(
                 "reject_reason",
                 shape=(n,),
                 dtype=str,
@@ -173,13 +173,13 @@ def _ensure_zarr_arrays(zarr_group, n: int) -> bool:
         return True
     # Create fresh arrays
     for name in ("fres_opt", "qres_opt"):
-        zarr_group.create_dataset(
+        zarr_group.create_array(
             name,
             shape=(n,),
             dtype=np.float64,
             fill_value=np.nan,
         )
-    zarr_group.create_dataset(
+    zarr_group.create_array(
         "reject_reason",
         shape=(n,),
         dtype=str,

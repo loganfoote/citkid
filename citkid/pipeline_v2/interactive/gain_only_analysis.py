@@ -1,16 +1,12 @@
 """
-Pre-assembled interactive session for gain fitting only.
+Launch an interactive session for gain fitting only.
 
-This module provides a single-panel launcher that runs only the gain fitting
-step (fit_gain → :class:`~.gain.GainFitPanel`), with no IQ or x-calibration
-panels.
+The window has a single panel, ``fit_gain`` (``GainFitPanel``), with no IQ or
+x-calibration panels.
 
-Usage
------
-::
-
-    from citkid.pipeline_v2.interactive.gain_only_analysis import run_gain_only_analysis
-    run_gain_only_analysis(AR, data_idx=0)
+Examples:
+    from citkid.pipeline_v2 import run_gain_only_analysis
+    run_gain_only_analysis(AR, start_idx=0)
 """
 
 from .core import run_interactive
@@ -29,25 +25,22 @@ def run_gain_only_analysis(
     """
     Launch the interactive gain-only analysis window.
 
-    Only the gain fitting panel (fit_gain) is shown; IQ and x-calibration
+    Only the gain fitting panel (``fit_gain``) is shown; IQ and x-calibration
     panels are omitted.
 
-    Parameters
-    ----------
-    AR : AnalysisRunner
-        Runner whose DS already has the calibration pipeline
-        loaded and whose analysis_steps include fit_gain.
-    start_idx : int, optional
-        Index into ``data_idxs`` to start at. Default 0.
-    data_idxs : list of int or None, optional
-        Ordered sequence of data indices to step through with the navigation
-        buttons. None (default) uses all rows (0 to num_rows - 1).
-    title : str, optional
-        Window title. Default 'Gain Analysis'.
-    ui_scale : float, optional
-        Scaling factor for UI elements. Default 1.0.
-    plot_scale : float, optional
-        Scaling factor for plot heights. Default 1.0.
+    Parameters:
+    AR (AnalysisRunner): runner whose ``DS`` has the calibration pipeline
+        loaded and whose ``analysis_steps`` include ``fit_gain``.
+    start_idx (int): index into ``data_idxs`` to start at. Default is 0.
+    data_idxs (list of int or None): data indices to step through with the
+        navigation buttons, in order. None (default) uses every row.
+    title (str): window title. Default is 'Gain Analysis'.
+    ui_scale (float): scaling factor for UI elements. Default is 1.0.
+    plot_scale (float): scaling factor for plot heights. Default is 1.0.
+
+    Returns:
+    window (InteractiveAnalysisWindow): the window, returned after it is
+        closed (the Qt event loop blocks until then).
     """
     return run_interactive(
         AR,

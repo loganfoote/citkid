@@ -1,14 +1,20 @@
 # Kinetic Inductance Detector data acquisition and analysis
-Collection of Kinetic Inductance Detector (KID) data acquisition and analysis code. Currently implemented analyses are:
+Collection of Kinetic Inductance Detector (KID) data acquisition and analysis code. Packages:
 <ul>
- <li> <b> citkid.res </b>: nonlinear resonance model fitting  </li>
- <li> <b> citkid.noise </b>: noise analysis </li>
- <li> <b> citkid.responsivity </b>: optical responsivity fitting  </li>
+ <li> <b> citkid.res </b>: nonlinear resonance model fitting and S21 generation </li>
+ <li> <b> citkid.xcal </b>: gain removal, circle fitting, and fractional frequency (x) calibration </li>
+ <li> <b> citkid.signal </b>: PSDs, filtering, and optimal filtering of timestreams </li>
+ <li> <b> citkid.nep </b>: photon-noise NEP fitting </li>
+ <li> <b> citkid.responsivity </b>: Mattis-Bardeen responsivity model fitting </li>
  <li> <b> citkid.res_vs_temp </b>: Mattis-Bardeen model fitting of resonance frequencies and quality factors versus temperature </li>
- <li> <b> citkid.multitone </b>: general multitone data acquisition and analysis procedures </li>
- <li> <b> citkid.primecam </b>: PrimeCam readout interface software and measurement procedures </li>
+ <li> <b> citkid.vna </b>: interactive resonance finding, matching, and target sweep frequency/span selection </li>
  <li> <b> citkid.crs </b>: t0.technology CRS readout interface software and measurement procedures </li>
+ <li> <b> citkid.pipeline_v2 </b>: zarr-backed calibration and analysis pipeline with interactive review windows. To be renamed to "pipeline" </li>
+ <li> <b> citkid.multitone </b>: resonance frequency updates for multitone readouts (other modules are legacy) </li>
+ <li> <b> citkid.primecam </b>: PrimeCam readout interface software and measurement procedures (legacy) </li>
 </ul>
+
+Example notebooks are in `notebooks/`, and derivations are in `documents/`.
 
 ## Installation with conda environment setup
 1. Clone this repository: `git clone https://github.com/loganfoote/citkid`

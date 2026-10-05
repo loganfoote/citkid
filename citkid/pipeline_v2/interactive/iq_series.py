@@ -53,7 +53,6 @@ Shift+N     run panel N only
 """
 
 import concurrent.futures
-import sys
 import threading
 import numpy as np
 import zarr
@@ -276,10 +275,6 @@ def dataset_quantity(name):
 ################################################################################
 
 class IQSeriesWindow(QtWidgets.QMainWindow):
-    _prefetch_status_changed = QtCore.pyqtSignal(str)
-    _marks_saved = QtCore.pyqtSignal(str)
-    # Offer Mark Bad Above (button and Ctrl+Shift+B).
-    _MARK_BAD_ABOVE = True
     """
     Main window for interactive IQ fitting across a parameter series.
 
@@ -312,7 +307,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
     ui_scale (float): Font and widget size multiplier. Default 1.0.
     plot_scale (float): Plot area height multiplier. Default 1.0.
     parent (QWidget or None): Parent widget.
-    state_group (zarr.Group or None): Group whose ``iq_series`` attribute
+    state_group (zarr.Group or None): Group whose ``series_state`` attribute
         stores session state, so a later session can resume: the data
         indices the user has viewed (left by navigating away, or open when
         the window was closed) and the rows already pre-fitted (including
@@ -362,6 +357,11 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
     RuntimeError: If the xy fit group holds fits from a different fit
         definition and the user cancels the overwrite popup.
     """
+
+    _prefetch_status_changed = QtCore.pyqtSignal(str)
+    _marks_saved = QtCore.pyqtSignal(str)
+    # Offer Mark Bad Above (button and Ctrl+Shift+B).
+    _MARK_BAD_ABOVE = True
 
     def __init__(
         self, ARs, x_param_name, x_name, y_func, y_name, start_series_idx=0,
@@ -1178,7 +1178,6 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         """
         Pre-compute read-only caches for the next resonator.
         """
-        import threading as _threading
         next_pos = self._nav_pos + 1
         if next_pos >= len(self._data_idxs):
             return
@@ -1216,7 +1215,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                 self._prefetch_status_changed.emit('')
                 print(f'[prefetch] data_idx={next_di} failed: {exc}')
 
-        self._prefetch_thread = _threading.Thread(
+        self._prefetch_thread = threading.Thread(
             target=_worker, daemon=True, name=f'prefetch-{next_di}'
         )
         self._prefetch_thread.start()

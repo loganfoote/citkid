@@ -134,7 +134,8 @@ class ResFinder(QtCore.QObject):
         """
         super().__init__()
         self.f = np.asarray(f, dtype = np.float64)
-        self.z = np.asarray(z, dtype = np.complex128)
+        # Copy so the phase detrend below doesn't modify the caller's array
+        self.z = np.array(z, dtype = np.complex128)
         self.fres = list(np.asarray(fres_initial, dtype = np.float64))
         self.margin_factor = margin_factor
 
@@ -154,9 +155,8 @@ class ResFinder(QtCore.QObject):
         except Exception:
             self._saved_xlims = None
 
-        # Unwrap phase and remove 3rd order polynomial trend
+        # Unwrap phase and remove a 1st order polynomial trend
         unwrapped_phase = np.unwrap(np.angle(self.z))
-        # Fit 1st order polynomial to remove trend
         p = np.polyfit(self.f, unwrapped_phase, 1)
         phase_trend = np.polyval(p, self.f)
         self.z *= np.exp(-1j * phase_trend)

@@ -1291,13 +1291,15 @@ class DataSet:
         rows = self._normalize_rows(data_idx)
         lazy_attr = self._get_lazy_attr(name)
         row_values = _normalize_row_values(value, rows)
-        invalid_rows = self._invalidated_rows.get(name)
-        if invalid_rows is None:
-            invalid_rows = set()
-            self._invalidated_rows[name] = invalid_rows
-        if invalid_rows is not None:
+        if name in self._invalidated_rows:
+            # None means every row is invalid; expand it before storing rows
+            invalid_rows = self._invalidated_rows[name]
+            if invalid_rows is None:
+                invalid_rows = set(range(int(self.nrows)))
             invalid_rows.difference_update(int(di) for di in rows)
-            if not invalid_rows:
+            if invalid_rows:
+                self._invalidated_rows[name] = invalid_rows
+            else:
                 self._invalidated_rows.pop(name, None)
         for di, row_value in zip(rows, row_values):
             lazy_attr._cache[int(di)] = row_value

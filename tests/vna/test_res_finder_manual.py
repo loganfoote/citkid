@@ -12,7 +12,6 @@ Tests cover:
 
 import pytest
 import numpy as np
-import h5py
 import zarr
 import os
 from unittest.mock import Mock, patch, MagicMock
@@ -72,7 +71,19 @@ class TestResFinderInit:
         # The detrending removes 1st order polynomial trend
         assert hasattr(finder, 'mag_db')
         assert hasattr(finder, 'phase')
-    
+
+    def test_init_does_not_modify_input_z(self, synthetic_vna_data, tmp_path):
+        """Phase detrending must not change the caller's complex128 array."""
+        z = np.asarray(synthetic_vna_data['z'], dtype=np.complex128)
+        z_before = z.copy()
+
+        finder = ResFinder(
+            synthetic_vna_data['f'], z, [], str(tmp_path / "test.zarr")
+        )
+
+        np.testing.assert_array_equal(z, z_before)
+        assert not np.shares_memory(finder.z, z)
+
     def test_init_file_exists_overwrite_false(self, synthetic_vna_data, tmp_path):
         """Test that ResFinder allows loading when fres_manual exists in zarr group."""
         zarr_path = tmp_path / "existing.zarr"

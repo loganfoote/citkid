@@ -68,6 +68,7 @@ class AnalysisRunner:
             if step.name not in [s.name for s in self.analysis_steps]:
                 self.analysis_steps.append(step)
         self._step_state = {}
+        self._last_failures = {}
 
         self.path = []
         self.step_indices = {}
@@ -76,6 +77,7 @@ class AnalysisRunner:
             self.analysis_pl = _convert_yaml_to_steps(yaml_dict, self.analysis_steps)
             if list(self.analysis_pl.keys()) != ["ANALYSIS_STEPS"]:
                 raise ValueError("analysis YAML must contain only 'ANALYSIS_STEPS' key")
+            pf.check_pl_tree_structure(self.analysis_pl, cal=False)
             path_dict = self.analysis_pl["ANALYSIS_STEPS"]
             max_task = _validate_task_idxs(path_dict.keys())
             self.path = [path_dict[i] for i in range(1, max_task + 1)]

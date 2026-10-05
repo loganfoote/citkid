@@ -1,16 +1,13 @@
-"""Modular, stackable interactive analysis framework for pipeline_v2 steps.
+"""
+Provide the stackable interactive analysis framework for pipeline_v2 steps.
 
-This module is adapted from pipeline.interactive to work with pipeline_v2's
-simplified single-output model. The key difference is that re-running a step
-deletes (rather than marks as NaN) any downstream outputs.
+Re-running a step deletes (rather than marks as NaN) any downstream outputs.
 
-Core concepts  are the same as pipeline.interactive:
-- StepPanel: one "card" in the stacked UI
-- register_panel: decorator to bind panels to step names  
-- InteractiveAnalysisWindow: main window that stacks panels
-- run_interactive: convenience entry point
-
-See pipeline.interactive for full documentation.
+Core concepts:
+- ``StepPanel``: one "card" in the stacked UI.
+- ``register_panel``: decorator that binds panels to step names.
+- ``InteractiveAnalysisWindow``: main window that stacks panels.
+- ``run_interactive``: convenience entry point.
 """
 
 import concurrent.futures
@@ -44,16 +41,19 @@ _PANEL_REGISTRY: dict[tuple, type] = {}
 
 def register_panel(*step_names):
     """
-    Class decorator that registers a StepPanel subclass for a group of step
-    names.
+    Make a class decorator that registers a StepPanel subclass for a group of
+    step names.
 
     Parameters:
     *step_names (str): One or more pipeline step names this panel handles,
         in execution order.
 
-    Example::
+    Returns:
+    decorator (callable): class decorator that registers the class and
+        returns it unchanged.
 
-        @register_panel('make_fr_spans', 'fit_gain')
+    Examples:
+        @register_panel('fit_gain')
         class GainFitPanel(StepPanel):
             ...
     """
@@ -1620,7 +1620,8 @@ def run_interactive(
         independently of text. 1.0 is the default.
 
     Returns:
-    win (InteractiveAnalysisWindow): The created (and already shown) window.
+    win (InteractiveAnalysisWindow): The window, returned after it is closed
+        (the Qt event loop blocks until then).
     """
     app = get_qapp(title)
 
