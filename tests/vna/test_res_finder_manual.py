@@ -1606,3 +1606,19 @@ class TestResFinderQuit:
         app_quit.assert_not_called()
         grp = zarr.open_group(str(outpath), mode='r')
         np.testing.assert_array_almost_equal(sorted(grp['fres_manual'][:]), [4.5e9, 5.2e9])
+
+
+def test_log_after_the_panel_is_deleted_prints(capsys):
+    """While the window closes and saves, the log panel may already be gone."""
+    from types import SimpleNamespace
+    from PyQt5 import sip
+    from pyqtgraph.Qt import QtWidgets
+    from citkid.vna.res_finder_manual import ResFinder
+
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    panel = QtWidgets.QTextEdit()
+    sip.delete(panel)
+
+    ResFinder.log(SimpleNamespace(log_text=panel), 'Saved 3 resonances')
+
+    assert 'Saved 3 resonances' in capsys.readouterr().out

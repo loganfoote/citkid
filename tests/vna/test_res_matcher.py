@@ -1215,3 +1215,19 @@ class TestResMatcherQuit:
         assert not matcher.win.isVisible()
         save.assert_called_once()
         app_quit.assert_not_called()
+
+
+def test_log_after_the_panel_is_deleted_prints(capsys):
+    """While the window closes and saves, the log panel may already be gone."""
+    from types import SimpleNamespace
+    from PyQt5 import sip
+    from pyqtgraph.Qt import QtWidgets
+    from citkid.vna.res_matcher import ResMatcher
+
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    panel = QtWidgets.QTextEdit()
+    sip.delete(panel)
+
+    ResMatcher.log(SimpleNamespace(log_text=panel), 'Saved 3 resonances')
+
+    assert 'Saved 3 resonances' in capsys.readouterr().out

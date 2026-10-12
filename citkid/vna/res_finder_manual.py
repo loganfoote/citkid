@@ -361,16 +361,22 @@ class ResFinder(QtCore.QObject):
         """
         Append a message to the log display.
 
+        Prints the message instead if the log panel was already deleted
+        (e.g. while the window closes and saves).
+
         Parameters:
         message (str): Message to display in the log.
         """
         if not hasattr(self, 'log_text'):
             return  # UI not initialized
-        self.log_text.append(message)
-        # Auto-scroll to bottom
-        self.log_text.verticalScrollBar().setValue(
-            self.log_text.verticalScrollBar().maximum()
-        )
+        try:
+            self.log_text.append(message)
+            self.log_text.verticalScrollBar().setValue(
+                self.log_text.verticalScrollBar().maximum()
+            )
+        except RuntimeError:
+            # The panel was deleted (e.g. while the window closes and saves).
+            print(message)
         
     def setup_plots(self):
         """

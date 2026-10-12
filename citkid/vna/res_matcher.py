@@ -3068,17 +3068,23 @@ class ResMatcher:
         """
         Append a message to the log panel and scroll to the bottom.
 
-        Does nothing if the log panel has not been created yet.
+        Does nothing if the log panel has not been created yet, and prints
+        the message instead if it was already deleted (e.g. while the window
+        closes and saves).
 
         Parameters:
         message (str): text to append.
         """
         if not hasattr(self, 'log_text'):
             return
-        self.log_text.append(message)
-        self.log_text.verticalScrollBar().setValue(
-            self.log_text.verticalScrollBar().maximum()
-        )
+        try:
+            self.log_text.append(message)
+            self.log_text.verticalScrollBar().setValue(
+                self.log_text.verticalScrollBar().maximum()
+            )
+        except RuntimeError:
+            # The panel was deleted (e.g. while the window closes and saves).
+            print(message)
 
     # ================================================================ help
 
