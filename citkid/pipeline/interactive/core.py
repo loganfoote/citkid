@@ -1,58 +1,13 @@
-"""Modular, stackable interactive analysis framework for pipeline steps.
+"""
+Provide the stackable interactive analysis framework for pipeline steps.
 
-Core concepts
--------------
-StepPanel
-    One "card" in the stacked UI.  Owns one or more consecutive pipeline
-    steps and the widgets needed to control their parameters and display
-    their outputs.  Sub-class and override :meth:`~StepPanel.setup_ui`,
-    :meth:`~StepPanel.get_params_for_step`, and
-    :meth:`~StepPanel.update_plots` to create custom panels.
+Re-running a step deletes (rather than marks as NaN) any downstream outputs.
 
-register_panel
-    Class decorator that binds a :class:`StepPanel` subclass to a tuple of
-    step names so the framework can look it up automatically.
-
-InteractiveAnalysisWindow
-    :class:`~PyQt5.QtWidgets.QMainWindow` that stacks panels top-to-bottom
-    inside a scroll area.  When panel *i* emits
-    :attr:`~StepPanel.downstream_rerun`, panels *i+1*, *i+2*, … are
-    re-run in order (stopping on the first failure).
-
-run_interactive
-    Convenience entry point: builds the window, shows it, and starts the
-    Qt event loop.
-
-Typical usage
--------------
-Run with default (unregistered) panels — every step gets a simple
-"Run" button::
-
-    from citkid.pipeline.interactive import run_interactive
-    run_interactive(AR, panels=[('make_fr_spans', 'fit_gain'), ('fit_iq',)],
-                    data_idx=0)
-
-Register a custom panel for gain fitting::
-
-    from citkid.pipeline.interactive import register_panel, StepPanel
-
-    @register_panel('make_fr_spans', 'fit_gain')
-    class GainFitPanel(StepPanel):
-        def setup_ui(self):
-            ...
-        def get_params_for_step(self, step):
-            if step.name == 'fit_gain':
-                return {'span_mult': self._span_spin.value()}
-            return {}
-        def update_plots(self):
-            ...
-
-Cascade behaviour
------------------
-* User changes ``span_mult`` in GainFitPanel → ``run_steps()`` is called →
-  on success the panel calls ``trigger_downstream()`` → the window reruns
-  every panel below GainFitPanel.
-* Changing the ``data_idx`` spinner reruns every per-row panel from the top.
+Core concepts:
+- ``StepPanel``: one "card" in the stacked UI.
+- ``register_panel``: decorator that binds panels to step names.
+- ``InteractiveAnalysisWindow``: main window that stacks panels.
+- ``run_interactive``: convenience entry point.
 """
 
 import concurrent.futures
@@ -63,8 +18,17 @@ from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 import threading
 
 from ..analysis import AnalysisRunner
-from ...qt_compat import Qt as _Qt
-from ..dependencies import get_most_recent_run
+from ...qt_compat import (
+    responsive_busy,
+    run_responsive,
+    TITLE_BAR_MARGIN,
+    Qt as _Qt,
+    delete_on_close,
+    fit_window_to_screen,
+    get_qapp,
+    scroll_area_content_height,
+    vbox_height_for_width,
+)
 from ...signal.iq import density_subsample as _density_subsample
 
 
@@ -77,16 +41,19 @@ _PANEL_REGISTRY: dict[tuple, type] = {}
 
 def register_panel(*step_names):
     """
-    Class decorator that registers a StepPanel subclass for a group of step
-    names.
+    Make a class decorator that registers a StepPanel subclass for a group of
+    step names.
 
     Parameters:
     *step_names (str): One or more pipeline step names this panel handles,
         in execution order.
 
-    Example::
+    Returns:
+    decorator (callable): class decorator that registers the class and
+        returns it unchanged.
 
-        @register_panel('make_fr_spans', 'fit_gain')
+    Examples:
+        @register_panel('fit_gain')
         class GainFitPanel(StepPanel):
             ...
     """
@@ -119,8 +86,88 @@ def get_panel_class(step_names):
 
 
 ################################################################################
+# Fonts
+################################################################################
+
+# Base font sizes in points at ui_scale = 1. Fonts are always set explicitly,
+# so text size depends only on ui_scale, not on the system default font.
+WIDGET_FONT_PT = 10
+TICK_FONT_PT = 9
+LABEL_FONT_PT = 11
+
+
+def widget_font_stylesheet(ui_scale):
+    """
+    Return a stylesheet that sets the font size of every widget.
+
+    Parameters:
+    ui_scale (float): Font size multiplier.
+
+    Returns:
+    stylesheet (str): ``'* { font-size: Npt; }'`` with
+        N = ``WIDGET_FONT_PT * ui_scale`` (at least 6).
+    """
+    return f"* {{ font-size: {max(6, round(WIDGET_FONT_PT * ui_scale))}pt; }}"
+
+
+def scale_plot_fonts(ui_scale, *plot_items):
+    """
+    Set tick, axis-label and title fonts of pyqtgraph plots from ui_scale.
+
+    Plot text isn't affected by widget stylesheets, so it is set here.
+
+    Parameters:
+    ui_scale (float): Font size multiplier.
+    *plot_items (pg.PlotItem): Plots to style.
+    """
+    tick_font = QtGui.QFont()
+    tick_font.setPointSize(max(6, round(TICK_FONT_PT * ui_scale)))
+    label_font = QtGui.QFont()
+    label_font.setPointSize(max(7, round(LABEL_FONT_PT * ui_scale)))
+    for plot in plot_items:
+        for ax_name in ('bottom', 'left', 'top', 'right'):
+            ax = plot.getAxis(ax_name)
+            ax.setStyle(tickFont=tick_font)
+            ax.label.setFont(label_font)
+        plot.titleLabel.item.setFont(label_font)
+
+
+################################################################################
 # Base panel
 ################################################################################
+
+class NanOutputsWrite:
+    """
+    The zarr side of marking one row of one DataSet bad.
+
+    Built by ``StepPanel._store_nan_outputs`` after the bad values are in
+    memory, so it can run later (e.g. in a background thread).
+
+    Attributes:
+    DS (DataSet): Dataset to write to.
+    rows (np.ndarray): Rows affected.
+    delete (list of str): Parameters whose saved rows are deleted.
+    write (list of str): Parameters whose in-memory rows are written.
+    """
+
+    def __init__(self, DS, rows, delete, write):
+        """
+        Store the work. See the class docstring for parameters.
+        """
+        self.DS = DS
+        self.rows = rows
+        self.delete = list(delete)
+        self.write = list(write)
+
+    def run(self):
+        """
+        Delete, then write. One delete call, so the zarr store is listed once.
+        """
+        if self.delete:
+            self.DS.delete_saved_params(self.delete, data_idx=self.rows)
+        for name in self.write:
+            self.DS._write_per_row_param(name, data_idx=self.rows)
+
 
 class StepPanel(QtWidgets.QWidget):
     """
@@ -132,8 +179,8 @@ class StepPanel(QtWidgets.QWidget):
     Signals:
     downstream_rerun (pyqtSignal(object)): Emitted (with self as payload) when
         trigger_downstream is called after a successful run.
-        InteractiveAnalysisWindow connects to this to cascade re-runs through
-        all panels below this one.
+        InteractiveAnalysisWindow connects to this to clear and mark all
+        downstream panels as needing a re-run.
 
     Parameters:
     AR (AnalysisRunner): The analysis runner whose execute_step will be called.
@@ -150,13 +197,8 @@ class StepPanel(QtWidgets.QWidget):
     run_from_here = QtCore.pyqtSignal()
 
     def __init__(
-        self,
-        AR: AnalysisRunner,
-        step_names: tuple,
-        data_idx=None,
-        ui_scale: float = 1.0,
-        plot_scale: float = 1.0,
-        parent=None,
+        self, AR: AnalysisRunner, step_names: tuple, data_idx=None,
+        ui_scale: float = 1.0, plot_scale: float = 1.0, parent=None,
     ):
         super().__init__(parent)
         self.AR = AR
@@ -168,6 +210,7 @@ class StepPanel(QtWidgets.QWidget):
         self._has_run = False
         self._last_error: Exception | None = None
         self._dirty: bool = False  # True after run_steps succeeds; cleared after save
+        self._needs_run: bool = False  # True when an upstream panel invalidated this panel
         self._autorange_next: bool = True  # auto-scale plots on first update_plots per index
 
         # Resolve plStep objects from the runner
@@ -230,11 +273,54 @@ class StepPanel(QtWidgets.QWidget):
         Blank all plot displays without re-running steps.
 
         Override in subclasses to set all plot curves to empty data, reset
-        status labels, etc.  Called by the sweep fitter when the user
+        status labels, etc.  Called by the series windows when the user
         navigates to a different resonator so the panels do not show stale
         results.
         """
         pass
+
+    def refresh_plots(self):
+        """
+        Call ``update_plots``, then blank curves that have no finite points.
+
+        Data marked bad is NaN. An all-NaN curve has no bounds, so pyqtgraph
+        autoscaling would warn ("All-NaN slice encountered"); an empty curve
+        is simply skipped.
+        """
+        self.update_plots()
+        self._blank_nonfinite_items()
+
+    def blank_plots(self):
+        """
+        Call ``clear_plots``, then drop data pyqtgraph keeps for empty curves.
+        """
+        self.clear_plots()
+        self._blank_nonfinite_items()
+
+    def _blank_nonfinite_items(self):
+        """
+        Empty every plot data item in this panel with no finite (x, y) point.
+
+        Notes:
+        Given empty data, a pyqtgraph 0.13 ``PlotDataItem`` only hides its
+        symbol scatter, which keeps the old points. Qt still asks that hidden
+        scatter for its bounds, so old all-NaN points warn too. The scatter is
+        therefore cleared as well.
+        """
+        views = self.findChildren(pg.GraphicsLayoutWidget) + self.findChildren(pg.PlotWidget)
+        for view in views:
+            plots = view.ci.items if isinstance(view, pg.GraphicsLayoutWidget) else [view.getPlotItem()]
+            for plot in plots:
+                if not hasattr(plot, 'listDataItems'):
+                    continue
+                for item in plot.listDataItems():
+                    x, y = item.getData()
+                    if x is not None and len(x):
+                        finite = np.isfinite(np.asarray(x, dtype=float)) & np.isfinite(np.asarray(y, dtype=float))
+                        if finite.any():
+                            continue
+                        item.setData([], [])
+                    item.scatter.clear()
 
     def _scale_plot_fonts(self, *plot_items):
         """
@@ -242,22 +328,11 @@ class StepPanel(QtWidgets.QWidget):
         of the supplied pyqtgraph PlotItem objects.
 
         Call at the end of setup_ui after all plots have been created.
-        No-op when ui_scale == 1.0.
+
+        Parameters:
+        *plot_items (pg.PlotItem): Plots to style.
         """
-        if self.ui_scale == 1.0:
-            return
-        tick_pt  = max(6, round(9  * self.ui_scale))
-        label_pt = max(7, round(11 * self.ui_scale))
-        tick_font  = QtGui.QFont()
-        tick_font.setPointSize(tick_pt)
-        label_font = QtGui.QFont()
-        label_font.setPointSize(label_pt)
-        for plot in plot_items:
-            for ax_name in ('bottom', 'left', 'top', 'right'):
-                ax = plot.getAxis(ax_name)
-                ax.setStyle(tickFont=tick_font)
-                ax.label.setFont(label_font)
-            plot.titleLabel.item.setFont(label_font)
+        scale_plot_fonts(self.ui_scale, *plot_items)
 
     # ------------------------------------------------------------------
     # Core execution
@@ -276,44 +351,89 @@ class StepPanel(QtWidgets.QWidget):
 
         Returns:
         ok (bool): True if all steps succeeded, False if any step raised.
+
+        Notes:
+        The steps run in a worker thread (``run_responsive``) so the window
+        keeps responding during long fits; widget values are read before and
+        the plots updated after.
         """
-        for step in self.steps:
-            step_di = (
-                None
-                if step.func_type in ("global", "global-res")
-                else self.data_idx
+        # Read the widgets here, on the GUI thread.
+        plan = [
+            (step,
+             None if step.func_type in ("global", "global-res") else self.data_idx,
+             self.get_params_for_step(step))
+            for step in self.steps
+        ]
+
+        def execute():
+            """
+            Run the steps in order, stopping at the first error or failed row.
+
+            Returns:
+            step (plStep or None): step that failed, or None.
+            exc (Exception or None): the exception it raised.
+            failures (dict or None): its failed rows, ``{data_idx: traceback}``.
+            """
+            for step, step_di, params in plan:
+                try:
+                    self.AR.execute_step(
+                        step, data_idx=step_di, user_params=params, save=save
+                    )
+                except Exception as exc:
+                    return step, exc, None
+                failures = getattr(self.AR, '_last_failures', None)
+                if failures:
+                    return step, None, dict(failures)
+            return None, None, None
+
+        step, exc, failures = run_responsive(execute)
+        if exc is not None:
+            self._last_error = exc
+            self._on_step_error(step, exc)
+            return False
+        if failures:
+            failed_idxs = sorted(failures.keys())
+            err = RuntimeError(
+                f"Step '{step.name}' failed for row(s): {failed_idxs}"
             )
-            params = self.get_params_for_step(step)
-            try:
-                self.AR.execute_step(
-                    step, data_idx=step_di, user_params=params, save=save
-                )
-            except Exception as exc:
-                self._last_error = exc
-                self._on_step_error(step, exc)
-                return False
-            failures = getattr(self.AR, '_last_failures', None)
-            if failures:
-                failed_idxs = sorted(failures.keys())
-                err = RuntimeError(
-                    f"Step '{step.name}' failed for row(s): {failed_idxs}"
-                )
-                self._last_error = err
-                msg = f"Error in '{step.name}': {err}"
-                if hasattr(self, "_status_label"):
-                    self._status_label.setText(msg)
-                for di, tb_str in sorted(failures.items()):
-                    print(f"--- Row {di} ---\n{tb_str}")
-                return False
+            self._last_error = err
+            msg = f"Error in '{step.name}': {err}"
+            if hasattr(self, "_status_label"):
+                self._status_label.setText(msg)
+            for di, tb_str in sorted(failures.items()):
+                print(f"--- Row {di} ---\n{tb_str}")
+            return False
 
         self._has_run = True
         self._last_error = None
         self._dirty = True
+        self._needs_run = False
         try:
-            self.update_plots()
+            self.refresh_plots()
         except Exception as exc:
             print(f"Warning: update_plots() raised in {self.step_names}: {exc}")
         return True
+
+    def run_current(self, save=False):
+        """
+        Run only this panel and mark downstream panels stale.
+
+        Parameters:
+        save (bool): Passed through to run_steps.
+
+        Returns:
+        bool: True when the panel ran successfully.
+        """
+        self.prepare_run()
+        if hasattr(self, "_status_label"):
+            self._status_label.setText("Running…")
+            QtWidgets.QApplication.processEvents()
+        ok = self.run_steps(save=save)
+        if ok:
+            if hasattr(self, "_status_label"):
+                self._status_label.setText("Done ✓")
+            self.trigger_downstream()
+        return ok
 
     def prepare_run(self):
         """
@@ -335,11 +455,11 @@ class StepPanel(QtWidgets.QWidget):
 
     def trigger_downstream(self):
         """
-        Emit downstream_rerun to ask the window to re-run all panels that
-        come after this one.
+        Emit downstream_rerun to ask the window to mark all following panels
+        stale because their outputs were invalidated by this panel.
 
         Call this at the end of a user-triggered action (e.g. button click
-        or parameter change) after run_steps succeeds.
+        after run_steps succeeds.
         """
         self.downstream_rerun.emit(self)
 
@@ -348,67 +468,203 @@ class StepPanel(QtWidgets.QWidget):
         Persist the most recent in-memory outputs of every step owned by this
         panel to the zarr file. Does not re-run the steps. Raises if any step
         has no cached results yet.
+
+        The widgets are read here; the zarr writes run in a worker thread
+        (``run_responsive``), so the window keeps responding on slow drives.
         """
-        for step in self.steps:
-            step_di = (
-                None
-                if step.func_type in ("global", "global-res")
-                else self.data_idx
-            )
-            self.AR.save_step_outputs(step, data_idx=step_di)
+        AR = self.AR
+        plan = [
+            (step,
+             None if step.func_type in ("global", "global-res") else self.data_idx,
+             self.get_params_for_step(step))
+            for step in self.steps
+        ]
+
+        def write():
+            """
+            Save the user parameters, then the outputs (no Qt calls).
+            """
+            for step, step_di, user_params in plan:
+                if not user_params:
+                    continue
+                pipeline_scope, step_index = AR._resolve_step_scope(step)
+                AR._add_user_params(
+                    step,
+                    user_params,
+                    data_idx=step_di,
+                    save=True,
+                    pipeline_scope=pipeline_scope,
+                    step_index=step_index,
+                )
+            for step, step_di, _ in plan:
+                AR.save_step_outputs(step, data_idx=step_di)
+
+        run_responsive(write)
         self._dirty = False
 
-    def _write_nan_outputs(self):
+    def _write_nan_outputs(self, redraw=True, save=False, keep=()):
         """
-        Write NaN-filled placeholder values for every per-row output of this
-        panel's steps, then mark the panel dirty.
+        Write placeholder "bad data" outputs for the current row only.
 
-        Sub-classes must override _nan_outputs to return the dict of
-        {return_name: nan_value} appropriate for their step(s).
+        Everything computed from these outputs for the row is invalidated
+        too, as when the step is rerun: later analysis outputs and
+        calibration products (e.g. ``xt`` and ``sxx_*`` from ``poly_x``), in
+        memory and in zarr. Otherwise stale values (e.g. a series-plot point)
+        would survive the bad mark.
+
+        Sub-classes should override _nan_outputs to return the dict of
+        {return_name: bad_value} appropriate for their step(s).
+
+        Parameters:
+        redraw (bool): If True (default), redraw the plots afterwards. The
+            series windows pass False when marking several series points,
+            and redraw once at the end.
+        save (bool): If True, write the bad outputs to zarr now. If False
+            (default), they are held in memory and the panel is marked dirty,
+            to be saved with the panel's other outputs.
+        keep (iterable of str): Downstream names not to delete from zarr,
+            because the caller writes them next (e.g. the bad outputs of the
+            later panels).
 
         Returns:
         ok (bool): True on success, False if no override is provided or an
             error occurs.
         """
-        nan_vals = self._nan_outputs()
-        if not nan_vals:
+        job = self._store_nan_outputs(save=save, keep=keep)
+        if job is None:
             return False
         try:
-            import numpy as np
-            DS = self.AR.DS
-            di = self.data_idx
-            data_idx_arr = np.atleast_1d(np.asarray(di, dtype=np.int32))
-            if di not in DS.deps_maps:
-                DS.deps_maps[di] = {}
-            for name, val in nan_vals.items():
-                # next run after whatever is already stored (0 if nothing yet)
-                run_idx = get_most_recent_run(name, DS.deps_maps[di]) + 1
-                DS._store_param(
-                    name, [val], run_idx, deps={},
-                    is_global=False, data_idx=data_idx_arr,
-                )
-            self._has_run = True
-            self._dirty = True
-            try:
-                self.update_plots()
-            except Exception:
-                pass
-            return True
+            job.run()
         except Exception as exc:
             print(f"_write_nan_outputs failed in {self.step_names}: {exc}")
             return False
+        if redraw:
+            try:
+                self.refresh_plots()
+            except Exception:
+                pass
+        return True
+
+    def _store_nan_outputs(self, save=False, keep=()):
+        """
+        Mark the current row bad in memory, and return the matching zarr work.
+
+        The bad outputs are stored in memory, and everything computed from
+        them for the row is invalidated in memory (see ``_write_nan_outputs``).
+        Invalidated rows are never read back from zarr, so the returned job
+        can run later, e.g. in a background thread.
+
+        Parameters:
+        save (bool): If True, the job writes the bad outputs to zarr and the
+            panel is not marked dirty. If False (default), the job deletes the
+            saved outputs and the panel is marked dirty, to save the bad
+            outputs with the panel's other outputs.
+        keep (iterable of str): Downstream names the job doesn't delete,
+            because the caller writes them (e.g. the bad outputs of the later
+            panels).
+
+        Returns:
+        job (NanOutputsWrite or None): The zarr deletes and writes, or None if
+            no override of ``_nan_outputs`` is provided or an error occurs.
+        """
+        nan_vals = self._nan_outputs()
+        if not nan_vals:
+            return None
+        try:
+            DS = self.AR.DS
+            di = int(self.data_idx)
+            data_idx_arr = np.atleast_1d(np.asarray([di], dtype=np.int32))
+            producers = {name: self._find_output_step(name) for name in nan_vals}
+            outputs = [name for name, step in producers.items() if step is not None]
+            downstream, delete = self._downstream_of(list(nan_vals), data_idx_arr)
+            DS.invalidate_memory_params(sorted(downstream) + outputs, data_idx=data_idx_arr)
+            for name in outputs:
+                producer, value = producers[name], nan_vals[name]
+                pipeline_scope, step_index = self.AR._resolve_step_scope(producer)
+                DS._store_param(
+                    name,
+                    [value],
+                    is_global=False,
+                    data_idx=data_idx_arr,
+                    pipeline_scope=pipeline_scope,
+                    step_name=producer.name,
+                    step_index=step_index,
+                    save=False,
+                )
+            delete.difference_update(keep)
+            self._has_run = True
+            self._dirty = not save
+            self._needs_run = False
+            # Saved outputs are overwritten when saving, so they are only
+            # deleted when the bad values stay in memory for now.
+            return NanOutputsWrite(
+                DS, data_idx_arr,
+                delete=sorted(delete) + ([] if save else outputs),
+                write=outputs if save else [],
+            )
+        except Exception as exc:
+            print(f"_write_nan_outputs failed in {self.step_names}: {exc}")
+            return None
+
+    def _downstream_of(self, names, data_idx_arr):
+        """
+        Find everything computed from some outputs, for some rows.
+
+        Uses the same invalidation plan as rerunning the producing steps:
+        later analysis outputs and dependent calibration products.
+
+        Parameters:
+        names (list of str): Output names being replaced.
+        data_idx_arr (np.ndarray): Rows affected.
+
+        Returns:
+        downstream (set of str): Names to drop from memory, excluding
+            ``names``.
+        delete (set of str): Names to delete from zarr, excluding ``names``.
+        """
+        downstream, delete = set(), set()
+        producers = {}
+        for name in names:
+            step = self._find_output_step(name)
+            if step is not None:
+                producers[step.name] = step
+        for step in producers.values():
+            pipeline_scope, step_index = self.AR._resolve_step_scope(step)
+            plan = self.AR._build_invalidation_plan(
+                step, {}, data_idx_arr, pipeline_scope, step_index)
+            downstream.update(plan["memory_invalidate"])
+            delete.update(plan["zarr_delete"])
+        downstream.difference_update(names)
+        delete.difference_update(names)
+        return downstream, delete
 
     def _nan_outputs(self):
         """
-        Return a dict {return_name: nan_array} for each per-row output.
+        Return a dict {return_name: bad_value} for each per-row output.
 
         Base implementation returns {} (no-op). Sub-classes should override
-        this to provide NaN-filled arrays of the correct shape.
+        this to provide placeholder values of the correct shape and dtype.
 
         Returns:
-        nan_vals (dict): Mapping of output name to NaN array.
+        dict: Mapping of output name to placeholder bad-data value.
         """
         return {}
+
+    def mark_stale(self):
+        """
+        Mark this panel stale after an upstream rerun invalidated its outputs.
+        """
+        self._has_run = False
+        self._dirty = False
+        self._needs_run = True
+        self._last_error = None
+        self._autorange_next = True
+        try:
+            self.clear_plots()
+        except Exception:
+            pass
+        if hasattr(self, "_status_label"):
+            self._status_label.setText("Needs run")
 
     def prefetch_plot_data(self, di):
         """
@@ -442,8 +698,9 @@ class StepPanel(QtWidgets.QWidget):
     # Parameter initialisation helpers
     # ------------------------------------------------------------------
 
-    def _get_initial_user_param(self, step_name, param_name, data_idx,
-                                fallback=None):
+    def _get_initial_user_param(
+        self, step_name, param_name, data_idx, fallback=None
+    ):
         """
         Return the best available initial value for a user-controlled
         parameter.
@@ -480,6 +737,15 @@ class StepPanel(QtWidgets.QWidget):
         """Set a new data index and immediately re-run the panel."""
         self.data_idx = data_idx
         self.run_steps()
+
+    def _find_output_step(self, output_name):
+        """
+        Return the step in this panel that produces output_name.
+        """
+        for step in self.steps:
+            if output_name in step.return_names:
+                return step
+        return None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -526,7 +792,7 @@ class StepPanel(QtWidgets.QWidget):
         """
         self._ensure_global_prerequisites()
         if self._outputs_exist():
-            self.update_plots()
+            self.refresh_plots()
         else:
             self.run_steps(save=False)
 
@@ -566,7 +832,7 @@ class StepPanel(QtWidgets.QWidget):
                     break
             if not already_done:
                 try:
-                    self.AR.execute_step(step, data_idx=None, save=False)
+                    run_responsive(self.AR.execute_step, step, data_idx=None, save=False)
                 except Exception as exc:
                     print(
                         f"Warning: auto-prerequisite '{step.name}' failed: {exc}"
@@ -587,6 +853,31 @@ class StepPanel(QtWidgets.QWidget):
             traceback.format_exception(type(exc), exc, exc.__traceback__)
         )
         print(tb)
+
+    def _on_save_clicked(self):
+        window = self.window()
+        if hasattr(window, '_confirm_stale_downstream_before_save'):
+            if not window._confirm_stale_downstream_before_save(self):
+                return
+        try:
+            self.save_outputs()
+            self._status_label.setText("Saved ✓")
+        except Exception as exc:
+            self._status_label.setText("Save error ✗")
+            print(f"Save error: {exc}")
+
+    def _on_run_clicked(self):
+        self.run_current()
+
+    def _on_bad_data_clicked(self):
+        self._status_label.setText("Marking bad…")
+        QtWidgets.QApplication.processEvents()
+        ok = self._write_nan_outputs()
+        if ok:
+            self._status_label.setText("Bad data marked ✓")
+            self.trigger_downstream()
+        else:
+            self._status_label.setText("Bad data failed ✗")
 
 
 ################################################################################
@@ -609,6 +900,10 @@ class DefaultStepPanel(StepPanel):
         layout.addWidget(QtWidgets.QLabel(f"<i>{names_str}</i>"))
         layout.addStretch()
 
+        self._run_btn = QtWidgets.QPushButton("Run")
+        self._run_btn.clicked.connect(self._on_run_clicked)
+        layout.addWidget(self._run_btn)
+
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setToolTip("Run this panel and all following panels")
         self._run_through_btn.clicked.connect(lambda: self.run_from_here.emit())
@@ -623,12 +918,7 @@ class DefaultStepPanel(StepPanel):
         layout.addWidget(self._status_label)
 
     def _on_save_clicked(self):
-        try:
-            self.save_outputs()
-            self._status_label.setText("Saved ✓")
-        except Exception as exc:
-            self._status_label.setText("Save error ✗")
-            print(f"Save error: {exc}")
+        super()._on_save_clicked()
 
     def _on_step_error(self, step, exc: Exception):
         msg = f"Error in '{step.name}': {exc}"
@@ -726,17 +1016,12 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
     _save_status_changed = QtCore.pyqtSignal(str)
 
     def __init__(
-        self,
-        AR: AnalysisRunner,
-        panels: list,
-        start_idx: int = 0,
-        data_idxs=None,
-        title: str = "Interactive Analysis",
-        ui_scale: float = 1.0,
-        plot_scale: float = 1.0,
-        parent=None,
+        self, AR: AnalysisRunner, panels: list, start_idx: int = 0,
+        data_idxs=None, title: str = "Interactive Analysis",
+        ui_scale: float = 1.0, plot_scale: float = 1.0, parent=None,
     ):
         super().__init__(parent)
+        delete_on_close(self)  # destroy on the GUI thread when closed
         self.AR = AR
         self._ui_scale = ui_scale
         self._plot_scale = plot_scale
@@ -775,7 +1060,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         outer.setContentsMargins(4, 4, 4, 4)
         outer.setSpacing(4)
 
-        # Toolbar: data_idx selector + navigation + "Run All" button
+        # Toolbar: data_idx selector + navigation
         outer.addWidget(self._build_toolbar(start_di))
 
         # Scrollable panel area
@@ -787,11 +1072,10 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         self._panel_layout.setSpacing(6)
         scroll.setWidget(self._container)
         outer.addWidget(scroll)
+        self._scroll = scroll
 
         # Apply font scaling via stylesheet
-        if ui_scale != 1.0:
-            base_pt = round(10 * ui_scale)
-            central.setStyleSheet(f"* {{ font-size: {base_pt}pt; }}")
+        central.setStyleSheet(widget_font_stylesheet(ui_scale))
 
         # Build panels
         self.panels: list[StepPanel] = []
@@ -817,15 +1101,16 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         _sc_r = QtGui.QShortcut(QtGui.QKeySequence("R"), self)
         _sc_r.activated.connect(self._autoscale_all)
 
-        # Number keys 1-9: run panel and all following (1-indexed)
+        # Number keys 1-9: run panel N and all following ("Run +", 1-indexed).
+        # Shift+N: run panel N only.
         for idx in range(1, 10):
             seq = str(idx)
             _sc = QtGui.QShortcut(QtGui.QKeySequence(seq), self)
             _sc.activated.connect(lambda _i=idx-1: self._run_through_panel(_i))
             _sc_shift = QtGui.QShortcut(QtGui.QKeySequence(f"Shift+{seq}"), self)
-            _sc_shift.activated.connect(lambda _i=idx-1: self._run_through_panel(_i))
+            _sc_shift.activated.connect(lambda _i=idx-1: self._run_panel_by_index(_i))
 
-        self.resize(round(1200 * ui_scale), round(900 * ui_scale))
+        self._fit_to_screen(round(1200 * ui_scale))
         # Initialise panels in order once the event loop is running so that
         # the window is fully laid out and panels are initialised sequentially
         # (guaranteeing upstream data is ready before downstream panels run).
@@ -834,8 +1119,54 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
     # Build helpers
     # ------------------------------------------------------------------
 
+    def _fit_to_screen(self, width: int):
+        """
+        Size the window to show every panel without scrolling, and center it.
+
+        The width is set first, since word-wrapped toolbar text makes the
+        needed height depend on it. The height is capped at the screen height,
+        beyond which the panels scroll.
+
+        Parameters:
+        width (int): Preferred width in logical pixels (shrunk to fit the
+            screen).
+        """
+        # Apply styles and fonts, and the layout's minimum size, before
+        # measuring; otherwise a hidden window measures text at the wrong
+        # font and width.
+        self.ensurePolished()
+        self.layout().activate()
+        fit_window_to_screen(self, frac=0.9, size=(width, 1), height_margin=TITLE_BAR_MARGIN)
+        fit_window_to_screen(self, frac=0.9, size=(self.width(), self._content_height()),
+                             height_margin=TITLE_BAR_MARGIN)
+
+    def _scroll_width(self) -> int:
+        """
+        Return the width the panel scroll area gets at the current window width.
+
+        Returns:
+        width (int): Window width minus the central layout's margins, in
+            logical pixels.
+        """
+        margins = self.centralWidget().layout().contentsMargins()
+        return self.width() - margins.left() - margins.right()
+
+    def _content_height(self) -> int:
+        """
+        Return the window height that shows every panel without scrolling,
+        at the window's current width.
+
+        Returns:
+        height (int): Height of the toolbar (wrapped at the current width)
+            plus the full height of the panels, in logical pixels.
+        """
+        return vbox_height_for_width(
+            self.centralWidget().layout(), self.width(),
+            {self._scroll: scroll_area_content_height(self._scroll, width=self._scroll_width())},
+        )
+
     def _build_toolbar(self, data_idx) -> QtWidgets.QWidget:
-        """Build the top toolbar with navigation, a ``data_idx`` spinbox, and Run All."""
+        """Build the top toolbar with navigation and a ``data_idx`` spinbox."""
         w = QtWidgets.QWidget()
         layout = QtWidgets.QHBoxLayout(w)
         layout.setContentsMargins(4, 2, 4, 2)
@@ -885,12 +1216,13 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         layout.addSpacing(8)
 
         _hints = QtWidgets.QLabel(
-            "[\u2190/A  \u2192/D] navigate    [R] rescale    [N] run+following"
+            "[\u2190/A  \u2192/D] navigate    [R] rescale    [N] run+following    [\u21e7N] run panel only"
         )
+        # Word wrap lets the hints shrink so the toolbar never forces the
+        # window wider than the screen.
+        _hints.setWordWrap(True)
         _hints.setStyleSheet("color: palette(mid); font-style: italic;")
-        layout.addWidget(_hints)
-
-        layout.addStretch()
+        layout.addWidget(_hints, 1)
 
         self._prefetch_label = QtWidgets.QLabel("")
         self._prefetch_label.setMinimumWidth(110)
@@ -903,10 +1235,6 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         self._save_label.setMinimumWidth(90)
         self._save_label.setToolTip("Background save status")
         layout.addWidget(self._save_label)
-
-        run_all_btn = QtWidgets.QPushButton("Run All")
-        run_all_btn.clicked.connect(self.run_all)
-        layout.addWidget(run_all_btn)
 
         return w
 
@@ -952,6 +1280,8 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         A background save would race against ``_on_data_idx_changed`` which
         overwrites the memory cache for the new index.
         """
+        if not self._confirm_stale_downstream_before_leave():
+            return
         for panel in self.panels:
             if not panel._dirty:
                 continue
@@ -996,13 +1326,11 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
 
     def _run_panel_by_index(self, index: int):
-        """Run the panel at position *index* (0-based). Triggers downstream."""
+        """Run only the panel at position *index* (0-based)."""
         if index >= len(self.panels):
             return
         panel = self.panels[index]
-        ok = panel.run_steps()
-        if ok:
-            panel.trigger_downstream()
+        panel.run_current()
 
     def _autoscale_all(self):
         """Auto-range every plot in every panel."""
@@ -1035,15 +1363,13 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_panel_rerun(self, source_panel: StepPanel):
-        """Re-run every panel that comes after *source_panel*."""
+        """Mark every panel that comes after *source_panel* as needing a rerun."""
         try:
             src_idx = self.panels.index(source_panel)
         except ValueError:
             return
         for panel in self.panels[src_idx + 1:]:
-            ok = panel.run_steps()
-            if not ok:
-                break
+            panel.mark_stale()
 
     def _auto_initialize_all(self):
         """Initialise every panel in order so upstream data is always ready."""
@@ -1061,6 +1387,23 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         If the next index was fully pre-computed by the background prefetch
         thread, panels skip ``run_steps`` and go straight to ``update_plots``.
         """
+        current_di = self._data_idxs[self._nav_pos] if self._data_idxs else value
+        if value != current_di and not self._confirm_stale_downstream_before_leave():
+            self._idx_spin.blockSignals(True)
+            self._idx_spin.setValue(current_di)
+            self._idx_spin.blockSignals(False)
+            return
+
+        if value != current_di:
+            for panel in self.panels:
+                if not panel._dirty:
+                    continue
+                panel._dirty = False
+                try:
+                    panel.save_outputs()
+                except Exception as exc:
+                    print(f"Warning: save failed for {panel.step_names}: {exc}")
+
         # Sync nav position when spinbox is changed manually
         if value in self._data_idxs:
             self._nav_pos = self._data_idxs.index(value)
@@ -1090,7 +1433,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
                     # Do not mark dirty here: prefetch is read-only and should
                     # not create new unsaved pipeline outputs.
                     panel._has_run = True
-                    panel.update_plots()
+                    panel.refresh_plots()
                 else:
                     ok = panel.run_steps()
                     if not ok:
@@ -1098,17 +1441,6 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
 
         # Kick off prefetch of the next index in the navigation sequence.
         QtCore.QTimer.singleShot(200, self._prefetch_next)
-
-    # ------------------------------------------------------------------
-    # Public
-    # ------------------------------------------------------------------
-
-    def run_all(self):
-        """Run all panels from top to bottom, stopping on the first failure."""
-        for panel in self.panels:
-            ok = panel.run_steps()
-            if not ok:
-                break
 
     # ------------------------------------------------------------------
     # Prefetch
@@ -1169,9 +1501,9 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         self._prefetch_label.setText(msg)
         # Auto-clear the "done" message after 4 seconds.
         if msg.startswith("✓"):
-            QtCore.QTimer.singleShot(
-                4000, lambda: self._prefetch_label.setText("")
-            )
+            # A bound slot (not a lambda) ties the timer to the label, so it
+            # is cancelled if the window is deleted first.
+            QtCore.QTimer.singleShot(4000, self._prefetch_label.clear)
 
     def _on_save_status(self, msg: str):
         """Update the save status label (always called on the UI thread via signal)."""
@@ -1179,6 +1511,12 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event):
         """Submit any remaining dirty panels, then flush all background saves."""
+        if responsive_busy():
+            event.ignore()  # work in progress; close when it has finished
+            return
+        if not self._confirm_stale_downstream_before_leave():
+            event.ignore()
+            return
         for panel in self.panels:
             if not panel._dirty:
                 continue
@@ -1193,9 +1531,64 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             orig_title = self.windowTitle()
             self.setWindowTitle(f"{orig_title} — flushing saves…")
             QtWidgets.QApplication.processEvents()
-        self._save_executor.shutdown(wait=True)
+        # Wait in a worker thread so the window keeps responding.
+        run_responsive(self._save_executor.shutdown, wait=True)
         self._save_executor = None
+        # The window (and its panels) is deleted right after it closes, so
+        # let a running prefetch finish first.
+        prefetch = getattr(self, '_prefetch_thread', None)
+        while prefetch is not None and prefetch.is_alive():
+            prefetch.join(timeout=0.05)
+            QtWidgets.QApplication.processEvents()
         super().closeEvent(event)
+
+    def _stale_panels_after(self, source_panel=None):
+        """
+        Return panels whose outputs were invalidated and have not been rerun.
+        """
+        start_index = 0
+        if source_panel is not None:
+            try:
+                start_index = self.panels.index(source_panel) + 1
+            except ValueError:
+                start_index = 0
+        return [panel for panel in self.panels[start_index:] if panel._needs_run]
+
+    def _confirm_stale_downstream_before_save(self, source_panel):
+        """
+        Ask before saving when later panels remain stale.
+        """
+        stale = self._stale_panels_after(source_panel)
+        if not stale:
+            return True
+        names = ", ".join(" + ".join(panel.step_names) for panel in stale)
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Downstream Panels Need Run",
+            "Saving now will keep later panel outputs missing for this data index.\n\n"
+            f"Panels needing a rerun: {names}\n\nContinue saving?",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        return reply == QtWidgets.QMessageBox.StandardButton.Yes
+
+    def _confirm_stale_downstream_before_leave(self):
+        """
+        Ask before leaving a data index or closing while panels remain stale.
+        """
+        stale = self._stale_panels_after()
+        if not stale:
+            return True
+        names = ", ".join(" + ".join(panel.step_names) for panel in stale)
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Panels Need Run",
+            "Earlier panel changes invalidated later panel outputs for this data index.\n\n"
+            f"Panels needing a rerun: {names}\n\nLeave anyway?",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        return reply == QtWidgets.QMessageBox.StandardButton.Yes
 
 
 ################################################################################
@@ -1203,13 +1596,8 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
 ################################################################################
 
 def run_interactive(
-    AR,
-    panels=None,
-    start_idx=0,
-    data_idxs=None,
-    title="Interactive Analysis",
-    ui_scale=1.0,
-    plot_scale=1.0,
+    AR, panels=None, start_idx=0, data_idxs=None, title="Interactive Analysis",
+    ui_scale=1.0, plot_scale=1.0,
 ):
     """
     Build and show an InteractiveAnalysisWindow, then start the Qt event loop.
@@ -1232,11 +1620,10 @@ def run_interactive(
         independently of text. 1.0 is the default.
 
     Returns:
-    win (InteractiveAnalysisWindow): The created (and already shown) window.
+    win (InteractiveAnalysisWindow): The window, returned after it is closed
+        (the Qt event loop blocks until then).
     """
-    app = QtWidgets.QApplication.instance()
-    if app is None:
-        app = pg.mkQApp(title)
+    app = get_qapp(title)
 
     # Default: one panel per step, derived from AR.path when available
     if panels is None:

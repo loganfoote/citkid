@@ -16,13 +16,13 @@ get_panel_class(step_names)
 InteractiveAnalysisWindow
     Main window that stacks panels and orchestrates cascade re-runs.
 
-run_interactive(AR, panels, data_idx, title)
+run_interactive(AR, panels, start_idx, data_idxs, title, ...)
     Build and show a window, then start the Qt event loop.
 
 Built-in panels
 ---------------
 :class:`~.gain.GainFitPanel`
-    Handles *make_fr_spans* + *fit_gain*.
+    Handles *fit_gain*.
 
 :class:`~.fit_iq.FitIQPanel`
     Handles *fit_iq* with interactive mask selection.
@@ -58,12 +58,14 @@ from . import fit_iq    # noqa: F401
 from . import circ      # noqa: F401
 from . import xcal      # noqa: F401
 
-from .sweep_fitter import SweepFitterWindow, run_sweep_fitter
+from .iq_series import IQSeriesWindow, SeriesValues, SeriesXYFit
 
 # Pipeline-specific assemblers
 from .iq_analysis import run_iq_analysis  # noqa: F401
 from .ts_analysis import run_ts_analysis  # noqa: F401
 from .gain_only_analysis import run_gain_only_analysis  # noqa: F401
+from .iq_series import run_iq_series  # noqa: F401
+from .ts_series import TSSeriesWindow, run_ts_series  # noqa: F401
 
 __all__ = [
     # framework
@@ -82,4 +84,10 @@ __all__ = [
     "run_iq_analysis",
     "run_gain_only_analysis",
     "run_ts_analysis",
+    "run_iq_series",
+    "run_ts_series",
+    "IQSeriesWindow",
+    "TSSeriesWindow",
+    "SeriesXYFit",
+    "SeriesValues",
 ]

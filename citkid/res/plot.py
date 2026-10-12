@@ -16,7 +16,7 @@ def plot_nonlinear_iq(f, z, popt, p0, downward = True, plot_guess = False):
     Plot IQ data and the nonlinear IQ fit, in IQ space and as |S21| vs
     frequency.
 
-    Drawn for speed, like the ``pipeline_v2`` quick plots: the axes have a
+    Drawn for speed, like the ``pipeline`` quick plots: the axes have a
     fixed layout (no layout engine), the figure is 72 dpi, lines are not
     antialiased, and the fit is drawn at 500 frequencies. Frequencies are
     centered on the fitted resonance frequency, or on the mean frequency if

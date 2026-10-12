@@ -10,7 +10,7 @@ import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
-from ..pipeline_v2.interactive.core import scale_plot_fonts, widget_font_stylesheet
+from ..pipeline.interactive.core import scale_plot_fonts, widget_font_stylesheet
 from ..qt_compat import TITLE_BAR_MARGIN, delete_on_close, fit_window_to_screen, get_qapp
 from .batch import check_sets, per_set_powers, per_set_values
 from .fitter import fit_nep_photon

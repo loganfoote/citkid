@@ -93,6 +93,11 @@ class CircleFitPanel(StepPanel):
         self._reset_btn.clicked.connect(self._reset_mask)
         ctrl.addWidget(self._reset_btn)
 
+        self._run_btn = QtWidgets.QPushButton("Run")
+        self._run_btn.setFixedWidth(50)
+        self._run_btn.clicked.connect(self._on_run_clicked)
+        ctrl.addWidget(self._run_btn)
+
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setFixedWidth(55)
         self._run_through_btn.setToolTip("Run this panel and all following panels")
@@ -127,7 +132,6 @@ class CircleFitPanel(StepPanel):
         self._plot_amp.setLabel('left', '|S21| (dB)')
         self._plot_amp.setLabel('bottom', 'Frequency (Hz)')
         self._plot_amp.showGrid(x=True, y=True, alpha=0.3)
-        self._plot_amp.setDownsampling(auto=True, mode='peak')
 
         self._plot_iq = self._gw.addPlot(row=0, col=1, title="IQ Loop")
         self._plot_iq.setLabel('left', 'Q (Im)')
@@ -207,6 +211,15 @@ class CircleFitPanel(StepPanel):
         """Rebuild mask from the current region before running."""
         if self._ff_cache is not None:
             self._build_mask(self._ff_cache)
+
+    def clear_plots(self):
+        """
+        Blank every data curve and reset the status label.
+        """
+        for curve in (self._amp_data, self._amp_excl, self._iq_data, self._iq_excl,
+                      self._circle_fit, self._idx_t_amp, self._idx_t_iq, self._zt_iq):
+            curve.setData([], [])
+        self._status_label.setText("—")
 
     def get_params_for_step(self, step) -> dict:
         """Only ``fit_iq_circle`` takes a user parameter (``circ_mask``)."""
@@ -344,39 +357,13 @@ class CircleFitPanel(StepPanel):
     # Execution helpers
     # ------------------------------------------------------------------
     
-    def _on_save_clicked(self):
-        try:
-            self.save_outputs()
-            self._status_label.setText("Saved \u2713")
-        except Exception as exc:
-            self._status_label.setText("Save error \u2717")
-            print(f"Save error: {exc}")
-
-    def save_outputs(self):
-        """Save step outputs AND the ``circ_mask`` user param to zarr."""
-        circ_step = next(s for s in self.steps if s.name == 'fit_iq_circle')
-        user_params = self.get_params_for_step(circ_step)
-        if user_params:
-            self.AR._add_user_params(
-                user_params, circ_step.func_type,
-                self.data_idx, save=True
-            )
-        super().save_outputs()
-
     def _on_step_error(self, step, exc):
         msg = f"'{step.name}' failed: {exc}"
         self._status_label.setText(msg)
         print(msg)
 
     def _on_bad_data_clicked(self):
-        self._status_label.setText("Marking bad\u2026")
-        QtWidgets.QApplication.processEvents()
-        ok = self._write_nan_outputs()
-        if ok:
-            self._status_label.setText("Bad data marked \u2713")
-            self.trigger_downstream()
-        else:
-            self._status_label.setText("Bad data failed \u2717")
+        super()._on_bad_data_clicked()
 
     def prefetch_plot_data(self, di: int):
         """Pre-compute numpy arrays for *di* in the background prefetch thread."""
@@ -428,8 +415,8 @@ class CircleFitPanel(StepPanel):
 
     def _nan_outputs(self) -> dict:
         return {
-            'circ_origin':        np.complex128(np.nan + 1j * np.nan),
-            'circ_radius':        np.nan,
-            'idx_t':              np.int64(0),
+            'circ_origin': np.complex128(np.nan + 1j * np.nan),
+            'circ_radius': np.nan,
+            'idx_t': np.int64(0),
             'theta_phase_offset': np.nan,
         }

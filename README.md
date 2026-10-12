@@ -9,7 +9,7 @@ Collection of Kinetic Inductance Detector (KID) data acquisition and analysis co
  <li> <b> citkid.res_vs_temp </b>: Mattis-Bardeen model fitting of resonance frequencies and quality factors versus temperature </li>
  <li> <b> citkid.vna </b>: interactive resonance finding, matching, and target sweep frequency/span selection </li>
  <li> <b> citkid.crs </b>: t0.technology CRS readout interface software and measurement procedures </li>
- <li> <b> citkid.pipeline_v2 </b>: zarr-backed calibration and analysis pipeline with interactive review windows. To be renamed to "pipeline" </li>
+ <li> <b> citkid.pipeline </b>: zarr-backed calibration and analysis pipeline with interactive review windows. To be renamed to "pipeline" </li>
  <li> <b> citkid.multitone </b>: resonance frequency updates for multitone readouts (other modules are legacy) </li>
  <li> <b> citkid.primecam </b>: PrimeCam readout interface software and measurement procedures (legacy) </li>
 </ul>

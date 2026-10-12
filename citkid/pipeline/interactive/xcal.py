@@ -25,7 +25,7 @@ User parameters
 
 import numpy as np
 import pyqtgraph as pg
-from pyqtgraph.Qt import QtWidgets, QtCore
+from pyqtgraph.Qt import QtWidgets
 
 from .core import register_panel, StepPanel, _density_subsample
 from citkid.xcal.xcal import get_xcal_mask as _compute_xcal_mask
@@ -93,6 +93,11 @@ class XCalPanel(StepPanel):
         )
         ctrl.addWidget(self._std_spin)
 
+        self._run_btn = QtWidgets.QPushButton("Run")
+        self._run_btn.setFixedWidth(50)
+        self._run_btn.clicked.connect(self._on_run_clicked)
+        ctrl.addWidget(self._run_btn)
+
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setFixedWidth(55)
         self._run_through_btn.setToolTip("Run this panel and all following panels")
@@ -130,7 +135,6 @@ class XCalPanel(StepPanel):
         self._plot_amp.setLabel('left', '|S21| (dB)')
         self._plot_amp.setLabel('bottom', 'Frequency (Hz)')
         self._plot_amp.showGrid(x=True, y=True, alpha=0.3)
-        self._plot_amp.setDownsampling(auto=True, mode='peak')
 
         self._plot_iq = self._gw.addPlot(row=0, col=1, title="IQ Loop")
         self._plot_iq.setLabel('left', 'Q (Im)')
@@ -257,6 +261,12 @@ class XCalPanel(StepPanel):
         # Use pre-computed numpy arrays from the prefetch cache when available.
         cache = self._plot_cache.pop(di, None)
 
+        def cached(key, load):
+            # The prefetch stores None for outputs that didn't exist yet
+            if cache and cache.get(key) is not None:
+                return cache[key]
+            return load()
+
         # Raw sweep data
         try:
             ff      = cache['ff']      if cache else np.asarray(DS.ff[di],      dtype=np.float64)
@@ -295,7 +305,8 @@ class XCalPanel(StepPanel):
 
         # Load xcal_mask if available; fall back to all-True
         try:
-            xcal_mask = cache['xcal_mask'] if cache else np.asarray(DS.xcal_mask[di], dtype=bool)
+            xcal_mask = cached(
+                'xcal_mask', lambda: np.asarray(DS.xcal_mask[di], dtype=bool))
         except Exception:
             xcal_mask = np.ones(len(ff), dtype=bool)
             # All-included before step has run — render without mask coloring
@@ -335,8 +346,9 @@ class XCalPanel(StepPanel):
 
         # x vs theta calibration plot (needs cal-step outputs thetaf, xf)
         try:
-            thetaf = cache['thetaf'] if cache else np.asarray(DS.thetaf[di], dtype=np.float64)
-            xf     = cache['xf']     if cache else np.asarray(DS.xf[di],     dtype=np.float64)
+            thetaf = cached(
+                'thetaf', lambda: np.asarray(DS.thetaf[di], dtype=np.float64))
+            xf = cached('xf', lambda: np.asarray(DS.xf[di], dtype=np.float64))
         except Exception:
             # Cal outputs not yet available — leave cal plot empty
             self._xcal_inc.setData([], [])
@@ -350,9 +362,14 @@ class XCalPanel(StepPanel):
 
             # Polynomial fit line + timestream overlay (needs poly_x from step 7)
             try:
-                poly_x = cache['poly_x'] if cache else np.asarray(DS.poly_x[di], dtype=np.float64)
-                theta_grid = cache['theta_grid'] if cache else np.linspace(thetaf.min(), thetaf.max(), 500)
-                fit_y      = cache['fit_y']      if cache else np.polyval(poly_x, theta_grid)
+                poly_x = cached(
+                    'poly_x',
+                    lambda: np.asarray(DS.poly_x[di], dtype=np.float64))
+                theta_grid = cached(
+                    'theta_grid',
+                    lambda: np.linspace(thetaf.min(), thetaf.max(), 500))
+                fit_y = cached(
+                    'fit_y', lambda: np.polyval(poly_x, theta_grid))
                 self._xcal_fit.setData(theta_grid, fit_y)
 
                 # Timestream xt split into bulk/tail — reuse _bulk_mask_early when available
@@ -469,44 +486,26 @@ class XCalPanel(StepPanel):
         self._idx0_spin.blockSignals(False)
         self._idx1_spin.blockSignals(False)
 
+    def clear_plots(self):
+        """
+        Blank every data curve and reset the status label.
+        """
+        for curve in (self._amp_data, self._amp_excl, self._iq_data, self._iq_excl,
+                      self._zt_iq, self._zt_iq_cut, self._xcal_fit, self._xcal_inc,
+                      self._xcal_exc, self._xcal_ts, self._xcal_ts_cut):
+            curve.setData([], [])
+        self._status_label.setText("—")
+
     # ------------------------------------------------------------------
     # Execution helpers
     # ------------------------------------------------------------------
-
-
-    def _on_save_clicked(self):
-        try:
-            self.save_outputs()
-            self._status_label.setText("Saved \u2713")
-        except Exception as exc:
-            self._status_label.setText("Save error \u2717")
-            print(f"Save error: {exc}")
-
-    def save_outputs(self):
-        """Save step outputs AND user params (offsets, cutoff) to zarr."""
-        for step in self.steps:
-            user_params = self.get_params_for_step(step)
-            if user_params:
-                self.AR._add_user_params(
-                    user_params, step.func_type,
-                    self.data_idx, save=True
-                )
-        super().save_outputs()
-
     def _on_step_error(self, step, exc):
         msg = f"'{step.name}' failed: {exc}"
         self._status_label.setText(msg)
         print(msg)
 
     def _on_bad_data_clicked(self):
-        self._status_label.setText("Marking bad\u2026")
-        QtWidgets.QApplication.processEvents()
-        ok = self._write_nan_outputs()
-        if ok:
-            self._status_label.setText("Bad data marked \u2713")
-            self.trigger_downstream()
-        else:
-            self._status_label.setText("Bad data failed \u2717")
+        super()._on_bad_data_clicked()
 
     def prefetch_plot_data(self, di: int):
         """Pre-compute numpy arrays for *di* in the background prefetch thread."""
@@ -611,5 +610,5 @@ class XCalPanel(StepPanel):
             ff_len = 1
         return {
             'xcal_mask': np.zeros(ff_len, dtype=bool),
-            'poly_x':    np.full(3 + 1, np.nan),
+            'poly_x': np.full(4, np.nan),
         }

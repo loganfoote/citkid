@@ -1,11 +1,88 @@
+import inspect
+import os
+
 import numpy as np
-from citkid.pipeline.dependencies import get_most_recent_run
+
+
+def describe_value(value):
+    """
+    Summarize a value for error messages: type, shape and dtype, not data.
+
+    Parameters:
+    value: any value.
+
+    Returns:
+    text (str): e.g. ``'ndarray (400,) complex128'``, ``'int 3'`` or
+        ``'list of 2'``.
+    """
+    if isinstance(value, np.ndarray):
+        text = f"ndarray {value.shape} {value.dtype}"
+        if value.size == 1:
+            text += f" = {value.ravel()[0]!r}"
+        return text
+    if isinstance(value, (bool, int, float, complex, np.generic)):
+        return f"{type(value).__name__} {value!r}"
+    if isinstance(value, str):
+        return f"str {value[:40]!r}"
+    if value is None:
+        return "None"
+    if isinstance(value, (list, tuple)):
+        return f"{type(value).__name__} of {len(value)}"
+    return type(value).__name__
+
+
+def function_location(func):
+    """
+    Describe where a step's function is defined.
+
+    Parameters:
+    func (callable): the function.
+
+    Returns:
+    text (str): e.g. ``'load_data_f (custom_steps.py:42)'``.
+    """
+    name = getattr(func, "__qualname__", None) or getattr(func, "__name__", repr(func))
+    try:
+        path = inspect.getsourcefile(func)
+        line = inspect.getsourcelines(func)[1]
+        return f"{name} ({os.path.basename(path)}:{line})"
+    except (TypeError, OSError):
+        module = getattr(func, "__module__", None)
+        return f"{name} ({module})" if module else name
+
+
+def step_context(step, params, rows=None, scope=None):
+    """
+    Describe a step call for an error note: step, function, rows and inputs.
+
+    Parameters:
+    step (plStep): the step.
+    params (list or None): the values passed for ``step.param_names``, or
+        None if they weren't collected yet.
+    rows (array-like or None): rows of the call, or None for global steps.
+    scope (str or None): 'cal' or 'analysis', or None if unknown.
+
+    Returns:
+    text (str): multi-line description.
+    """
+    kind = {"cal": "calibration step", "analysis": "analysis step"}.get(scope, "step")
+    where = "" if rows is None else f", data_idx {list(np.atleast_1d(rows))}"
+    lines = [f"In {kind} '{step.name}' ({step.func_type}; function "
+             f"{function_location(step.func)}){where}."]
+    if params is not None:
+        lines.append("Inputs:")
+        width = max((len(n) for n in step.param_names), default=0)
+        for name, value in zip(step.param_names, params):
+            lines.append(f"  {name:<{width}} = {describe_value(value)}")
+    lines.append(f"Expected outputs (in order): {', '.join(step.return_names) or 'none'}")
+    return "\n".join(lines)
+
 
 ################################################################################
 ############################### Lazy Attribute #################################
 ################################################################################
 class LazyAttr:
-    def __init__(self, DS, name, run_idx):
+    def __init__(self, DS, name):
         """
         Class to represent a lazily-loaded attribute of a DataSet.
         Provides lazy row-wise indexing that delegates to DataSet for data 
@@ -14,18 +91,14 @@ class LazyAttr:
         Parameters:
         DS (DataSet): The DataSet instance this attribute belongs to.
         name (str): The name of the attribute.
-        run_idx (int): The run index corresponding to the version of the 
-            attribute to load when fetching data.
         """
         # Input validation 
         if not isinstance(name, str):
             raise ValueError("name must be a string")
-        run_idx = int(run_idx)
 
         # store DS and name for later use, and initialize cache
         self.DS = DS
         self.name = name
-        self.run_idx = run_idx
         self._cache = {}        # maps row -> np.ndarray
         self._shape = ()        # computed shape cache
 
@@ -104,15 +177,14 @@ class LazyAttr:
         missing = [r for r in rows if r not in self._cache]
         if missing:
             # Delegate to DataSet to fetch the missing rows
-            fetched_data = self.DS._fetch_rows(
-                self.name, self.run_idx, missing
-                )
+            fetched_data = self.DS._fetch_rows(self.name, missing)
             # Update cache with fetched data
             for r, data in zip(missing, fetched_data):
                 self._cache[r] = data
             # Update shape if first time loading
             if self._shape == () and len(fetched_data) > 0:
-                self._shape = (self.DS.nrows, *fetched_data[0].shape)
+                first_shape = np.asarray(fetched_data[0]).shape
+                self._shape = (self.DS.nrows, *first_shape)
         
         # Retrieve from cache
         out = [self._cache[r] for r in rows]
@@ -213,330 +285,14 @@ class LazyAttr:
         return s
 
 
-################################################################################
-######################### Lazy Attribute Collection ############################
-################################################################################
-class LazyAttrCollection:
-    """
-    Collection of LazyAttr objects for a single parameter across multiple runs.
-    
-    Manages access to per-row parameters that may exist at different run indices
-    for different data indices. Provides convenient access to the most recent
-    run for each data_idx, while also allowing access to specific historical runs.
-    
-    Typical usage:
-        # Get most recent run for data indices 0 and 1
-        data = DS.x[[0, 1]]
-        
-        # Access specific historical run
-        data = DS.x.at_run(5)[[0, 1]]
-    
-    Attributes:
-        DS (DataSet): The DataSet instance this collection belongs to.
-        name (str): The name of the parameter.
-        _lazy_attrs (dict): Maps run_idx → LazyAttr for that run.
-    """
-    
-    def __init__(self, DS, name):
-        """
-        Initialize a LazyAttrCollection for tracking parameter versions.
-        
-        Parameters:
-            DS (DataSet): The DataSet instance this collection belongs to.
-            name (str): The name of the parameter being tracked.
-        """
-        self.DS = DS
-        self.name = name
-        self._lazy_attrs = {}  # {run_idx: LazyAttr}
-        
-    def _normalize_index(self, key):
-        """
-        Normalize various key types to array of data indices.
-        
-        Handles slices, negative indices, boolean masks, scalar ints, and arrays.
-        
-        Parameters:
-            key (int, slice, list, np.ndarray): Index or indices to normalize.
-        
-        Returns:
-            tuple: (data_idx_arr, is_scalar) where data_idx_arr is np.ndarray of 
-                   int32, and is_scalar indicates if input was scalar.
-        """
-        is_scalar = False
-        
-        # Handle slices
-        if isinstance(key, slice):
-            indices = list(range(*key.indices(self.DS.nrows)))
-            data_idx_arr = np.array(indices, dtype=np.int32)
-        
-        # Handle boolean masks
-        elif isinstance(key, (list, np.ndarray)):
-            arr = np.asarray(key)
-            if arr.dtype == bool:
-                # Boolean indexing
-                if len(arr) != self.DS.nrows:
-                    raise IndexError(
-                        f"Boolean index length {len(arr)} doesn't match nrows {self.DS.nrows}"
-                    )
-                indices = np.where(arr)[0]
-                data_idx_arr = np.array(indices, dtype=np.int32)
-            else:
-                # Integer array indexing
-                data_idx_arr = np.asarray(arr, dtype=np.int32)
-        
-        # Handle scalar integer
-        elif isinstance(key, (int, np.integer)):
-            data_idx_arr = np.array([int(key)], dtype=np.int32)
-            is_scalar = True
-        
-        else:
-            raise TypeError(
-                f"Invalid index type: {type(key)}. "
-                f"Expected int, slice, list, or array."
-            )
-        
-        # Handle negative indices
-        data_idx_arr = np.where(
-            data_idx_arr < 0, 
-            data_idx_arr + self.DS.nrows, 
-            data_idx_arr
-        )
-        
-        # Validate bounds
-        if np.any((data_idx_arr < 0) | (data_idx_arr >= self.DS.nrows)):
-            raise IndexError(
-                f"Index out of bounds [0, {self.DS.nrows})"
-            )
-        
-        return data_idx_arr, is_scalar
-        
-    def __getitem__(self, data_idx):
-        """
-        Get data from the most recent run for each requested data_idx.
-        
-        For each data_idx, determines which run_idx is most recent according to
-        the dependency maps, then retrieves data from that run's LazyAttr.
-        Different data indices may return data from different runs.
-        
-        If the parameter doesn't exist yet for a data_idx (run_idx == -1),
-        the data will be produced and stored in run 1 (run 0 is reserved).
-        
-        Parameters:
-            data_idx (int, slice, list, array): Data index or indices to retrieve.
-                Supports numpy-like indexing: scalars, slices, lists, arrays, 
-                boolean masks, and negative indices.
-        
-        Returns:
-            scalar or np.ndarray: Data from most recent runs. Returns scalar if
-                input was scalar, array if input was array-like.
-        
-        Raises:
-            KeyError: If no run exists for a required run_idx.
-            IndexError: If indices are out of bounds.
-            
-        Examples:
-            >>> collection[0]           # Single index
-            >>> collection[-1]          # Negative index
-            >>> collection[0:5]         # Slice
-            >>> collection[[0, 1, 5]]   # List of indices
-            >>> collection[mask]        # Boolean mask
-        """
-        # Handle tuple for sub-indexing: collection[row_key, inner_key]
-        inner_key = None
-        if isinstance(data_idx, tuple):
-            inner_key = data_idx[1:] if len(data_idx) > 2 else data_idx[1]
-            data_idx = data_idx[0]
-
-        # Normalize input to array of indices
-        data_idx_arr, is_scalar = self._normalize_index(data_idx)
-
-        # Ensure loaded 
-        self.DS._ensure_loaded(self.name, data_idx_arr)
-
-        # Map each data_idx to its run_idx and preserve order
-        run_idx_to_data_idx = {}
-        di_to_position = {}  # Track original position
-        for pos, di in enumerate(data_idx_arr):
-            if di not in self.DS.deps_maps:
-                self.DS.deps_maps[di] = {}
-            run_idx = get_most_recent_run(self.name, self.DS.deps_maps[di])
-            # If parameter doesn't exist yet for this data_idx, default to run 1
-            # (run 0 is reserved as a special case)
-            if run_idx == -1:
-                run_idx = 1
-                # Ensure run 1 LazyAttr exists in the collection
-                if run_idx not in self._lazy_attrs:
-                    self._lazy_attrs[run_idx] = LazyAttr(
-                        self.DS, self.name, run_idx
-                        )
-            if run_idx not in run_idx_to_data_idx:
-                run_idx_to_data_idx[run_idx] = []
-            run_idx_to_data_idx[run_idx].append(di)
-            di_to_position[di] = pos
-        
-        # Fetch data in groups
-        results = [None] * len(data_idx_arr)  # Pre-allocate in correct order
-        for run_idx, data_idxs in run_idx_to_data_idx.items():
-            if run_idx not in self._lazy_attrs:
-                self._lazy_attrs[run_idx] = LazyAttr(
-                    self.DS, self.name, run_idx
-                    )
-            lazy_attr = self._lazy_attrs[run_idx]
-            fetched = lazy_attr[data_idxs]  # Batch call - returns 2D array
-            # fetched is always 2D: (n_rows, ...), iterate through rows
-            for i, di in enumerate(data_idxs):
-                results[di_to_position[di]] = fetched[i]
-        
-        # Return scalar or array based on input
-        if is_scalar:
-            result_val = results[0]
-            if inner_key is not None:
-                return result_val[inner_key]
-            return result_val
-        result_arr = np.array(results)
-        if inner_key is not None:
-            if isinstance(inner_key, tuple):
-                return result_arr[(slice(None),) + inner_key]
-            else:
-                return result_arr[(slice(None), inner_key)]
-        return result_arr
-        
-    def at_run(self, run_idx):
-        """
-        Access the LazyAttr for a specific run index.
-        
-        Useful for accessing historical versions of a parameter when multiple
-        runs exist. The returned LazyAttr can be indexed normally.
-        
-        Parameters:
-            run_idx (int): The run index to access.
-        
-        Returns:
-            LazyAttr: The LazyAttr object for the specified run.
-        
-        Raises:
-            KeyError: If the specified run_idx doesn't exist.
-            
-        Examples:
-            >>> collection.at_run(5)[0]        # Get data_idx 0 from run 5
-            >>> collection.at_run(3)[[0, 1]]   # Get multiple indices from run 3
-        """
-        return self._lazy_attrs[run_idx]
-        
-    def add_run(self, run_idx, lazy_attr):
-        """
-        Register a LazyAttr for a specific run index.
-        
-        Called internally when new data is produced or loaded from zarr.
-        Should not typically be called by users directly.
-        
-        Parameters:
-        run_idx (int): The run index being registered.
-        lazy_attr (LazyAttr): The LazyAttr object for this run.
-        
-        Raises:
-        ValueError: If run_idx already exists (prevents accidental 
-            overwrites).
-        """
-        if run_idx in self._lazy_attrs:
-            raise ValueError(
-                f"Run {run_idx} already exists for parameter '{self.name}'"
-            )
-        self._lazy_attrs[run_idx] = lazy_attr
-    
-    @property
-    def shape(self):
-        """
-        Return the shape ``(nrows, *inner_shape)`` of this parameter.
-
-        Scans runs from highest to lowest run_idx and returns the first
-        non-empty shape found.  All runs are expected to have the same
-        inner shape; the most recent one is authoritative.
-
-        Returns () if no runs exist or none have been populated yet.
-        """
-        if not self._lazy_attrs:
-            return ()
-        for run_idx in sorted(self._lazy_attrs.keys(), reverse=True):
-            s = self._lazy_attrs[run_idx].shape
-            if s != ():
-                return s
-        return ()
-    
-    def __array__(self, dtype=None, copy=None):
-        """
-        Convert to a numpy array, filling each index with the most recent data.
-        
-        Fetches the most recent run's data for every data index in the dataset
-        and stacks them into a single numpy array.  Raises an error if any data
-        index has no data in any run.
-        
-        Parameters:
-            dtype: Optional numpy dtype to cast the result to.
-        
-        Returns:
-            np.ndarray: Array of shape (nrows, *inner_shape).
-        
-        Raises:
-            ValueError: If any data index has no data in any run.
-        """
-        all_indices = np.arange(self.DS.nrows, dtype=np.int32)
-
-        # Ensure data is loaded from storage
-        self.DS._ensure_loaded(self.name, all_indices)
-
-        # Check that every index has data in at least one run
-        missing = []
-        for di in all_indices:
-            if di not in self.DS.deps_maps:
-                self.DS.deps_maps[di] = {}
-            run_idx = get_most_recent_run(self.name, self.DS.deps_maps[di])
-            if run_idx == -1:
-                missing.append(int(di))
-        if missing:
-            raise ValueError(
-                f"Parameter '{self.name}' does not exist for data "
-                f"indices: {missing}"
-            )
-
-        result = self[:]
-        if dtype is not None:
-            result = result.astype(dtype)
-        if copy is False:
-            return result
-        return result.copy() if copy else result
-
-    def __len__(self):
-        """
-        Return the number of data indices (nrows) in the dataset.
-        """
-        return self.DS.nrows
-    
-    def __repr__(self):
-        """
-        Return a concise string representation showing parameter name and 
-        available runs.
-        """
-        runs = sorted(self._lazy_attrs.keys())
-        return f"LazyAttrCollection({self.name}, runs={runs})"
-    
-    def __str__(self):
-        """
-        Return a detailed string representation.
-        """
-        runs = sorted(self._lazy_attrs.keys())
-        s = f"Lazy Attribute Collection: {self.name}\n"
-        s += f"\tAvailable runs: {runs}\n"
-        s += f"\tNumber of data indices: {self.DS.nrows}"
-        return s
 
 ################################################################################
 #################################### Steps #####################################
 ################################################################################
 class plStep:
     def __init__(
-            self, name, func, param_names, return_names, func_type = "per-row"
-            ):
+        self, name, func, param_names, return_names, func_type = "per-row"
+    ):
         """
         Class to represent a step in the analysis or calibration pipeline.
 
@@ -646,10 +402,23 @@ class plStep:
 
             # For vectorized, confirm that output length matches expected length
             if self.func_type == 'vectorized':
-                for res in results:
-                    if len(res) != nrows:
-                        raise ValueError("Vectorized function output length "
-                                         "does not match parameter length.")
+                if len(results) != len(self.return_names):
+                    raise ValueError(
+                        f"Step '{self.name}' returned {len(results)} output(s) "
+                        f"but has {len(self.return_names)} return names "
+                        f"{self.return_names}. Return a tuple in return_names "
+                        f"order."
+                    )
+                for name, res in zip(self.return_names, results):
+                    length = len(res) if np.ndim(res) > 0 else None
+                    if length != nrows:
+                        raise ValueError(
+                            f"Vectorized step '{self.name}' was called for "
+                            f"{nrows} row(s) but output '{name}' is "
+                            f"{describe_value(res)}. A vectorized step must "
+                            f"return one entry per requested row along axis 0 "
+                            f"(e.g. shape ({nrows}, ...)), even for one row."
+                        )
 
         else: # per-row
             results = [[] for _ in self.return_names]
@@ -665,9 +434,18 @@ class plStep:
                     params_i.append(p)
                 # execute function 
                 results_i = self.func(*params_i)
-                # collect results 
+                # collect results
                 if not isinstance(results_i, tuple):
                     results_i = (results_i,)
+                # Check every call: otherwise a wrong count (e.g. a dict taken
+                # as one output) leaves the other outputs silently empty.
+                if len(results_i) != len(self.return_names):
+                    raise ValueError(
+                        f"Step '{self.name}' returned {len(results_i)} output(s) "
+                        f"but has {len(self.return_names)} return names "
+                        f"{self.return_names}. Return a tuple in return_names "
+                        f"order."
+                    )
                 for r, v in enumerate(results_i):
                     results[r].append(v) 
             results = tuple([np.array(r) for r in results])
@@ -675,8 +453,11 @@ class plStep:
         # Confirm that output length matches return_names length, and assign 
         # to output dict
         if len(self.return_names) != len(results):
-            raise ValueError("Function return length does not match "
-                             "number of return names.")
+            raise ValueError(
+                f"Step '{self.name}' returned {len(results)} output(s) but has "
+                f"{len(self.return_names)} return names {self.return_names}. "
+                f"Return a tuple in return_names order."
+            )
         
         out = {}
         for name, val in zip(self.return_names, results):

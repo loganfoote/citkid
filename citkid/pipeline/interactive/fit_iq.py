@@ -88,6 +88,11 @@ class FitIQPanel(StepPanel):
         self._reset_btn.clicked.connect(self._reset_mask)
         ctrl.addWidget(self._reset_btn)
 
+        self._run_btn = QtWidgets.QPushButton("Run")
+        self._run_btn.setFixedWidth(50)
+        self._run_btn.clicked.connect(self._on_run_clicked)
+        ctrl.addWidget(self._run_btn)
+
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setFixedWidth(55)
         self._run_through_btn.setToolTip("Run this panel and all following panels")
@@ -122,7 +127,6 @@ class FitIQPanel(StepPanel):
         self._plot_amp.setLabel('left', '|S21| (dB)')
         self._plot_amp.setLabel('bottom', 'Frequency (Hz)')
         self._plot_amp.showGrid(x=True, y=True, alpha=0.3)
-        self._plot_amp.setDownsampling(auto=True, mode='peak')
 
         self._plot_iq = self._gw.addPlot(row=0, col=1, title="IQ Loop")
         self._plot_iq.setLabel('left', 'Q (Im)')
@@ -359,33 +363,17 @@ class FitIQPanel(StepPanel):
         if self._ff_cache is not None:
             self._build_mask(self._ff_cache)
 
-    def _on_save_clicked(self):
-        try:
-            self.save_outputs()
-            self._status_label.setText("Saved ✓")
-        except Exception as exc:
-            self._status_label.setText("Save error ✗")
-            print(f"Save error: {exc}")
-
     def _on_step_error(self, step, exc):
         msg = f"'{step.name}' failed: {exc}"
         self._status_label.setText(msg)
         print(msg)
 
     def _on_bad_data_clicked(self):
-        self._status_label.setText("Marking bad…")
-        QtWidgets.QApplication.processEvents()
-        ok = self._write_nan_outputs()
-        if ok:
-            self._status_label.setText("Bad data marked ✓")
-            self.trigger_downstream()
-        else:
-            self._status_label.setText("Bad data failed ✗")
+        super()._on_bad_data_clicked()
 
     def _nan_outputs(self) -> dict:
-        import numpy as np
         return {
-            'iq_p0':   np.full(8, np.nan),
+            'iq_p0': np.full(8, np.nan),
             'iq_popt': np.full(8, np.nan),
             'iq_nrmse': np.nan,
         }

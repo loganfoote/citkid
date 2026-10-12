@@ -1,5 +1,5 @@
 """
-Interactive panel for the gain fitting steps (make_fr_spans + fit_gain).
+Interactive panel for the gain fitting step (fit_gain).
 
 Plots
 -----
@@ -22,7 +22,7 @@ subsequent panels (e.g. FitIQPanel) are automatically updated.
 
 import numpy as np
 import pyqtgraph as pg
-from pyqtgraph.Qt import QtWidgets, QtCore
+from pyqtgraph.Qt import QtWidgets
 
 from .core import register_panel, StepPanel
 
@@ -59,6 +59,11 @@ class GainFitPanel(StepPanel):
         self._span_spin.setValue(float(initial_span))
         self._span_spin.setFixedWidth(80)
         ctrl.addWidget(self._span_spin)
+
+        self._run_btn = QtWidgets.QPushButton("Run")
+        self._run_btn.setFixedWidth(50)
+        self._run_btn.clicked.connect(self._on_run_clicked)
+        ctrl.addWidget(self._run_btn)
 
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setFixedWidth(55)
@@ -99,13 +104,11 @@ class GainFitPanel(StepPanel):
         self._plot_amp.setLabel('left', '|S21| (dB)')
         self._plot_amp.setLabel('bottom', 'Frequency (Hz)')
         self._plot_amp.showGrid(x=True, y=True, alpha=0.3)
-        self._plot_amp.setDownsampling(auto=True, mode='peak')
 
         self._plot_phase = self._gw.addPlot(row=0, col=1, title="Gain Phase")
         self._plot_phase.setLabel('left', 'Phase (rad)')
         self._plot_phase.setLabel('bottom', 'Frequency (Hz)')
         self._plot_phase.showGrid(x=True, y=True, alpha=0.3)
-        self._plot_phase.setDownsampling(auto=True, mode='peak')
 
         self._scale_plot_fonts(self._plot_amp, self._plot_phase)
 
@@ -225,51 +228,23 @@ class GainFitPanel(StepPanel):
             curve.setData([], [])
         self._status_label.setText("—")
 
-    def _on_save_clicked(self):
-        try:
-            self.save_outputs()
-            self._status_label.setText("Saved ✓")
-        except Exception as exc:
-            self._status_label.setText("Save error ✗")
-            print(f"Save error: {exc}")
-
-    def save_outputs(self):
-        """Save step outputs AND the span_mult user param to zarr."""
-        fit_gain_step = next(s for s in self.steps if s.name == 'fit_gain')
-        user_params = self.get_params_for_step(fit_gain_step)
-        if user_params:
-            self.AR._add_user_params(
-                user_params, fit_gain_step.func_type,
-                self.data_idx, save=True
-            )
-        super().save_outputs()
-
     def _on_step_error(self, step, exc):
         msg = f"'{step.name}' failed: {exc}"
         self._status_label.setText(msg)
         print(msg)
 
     def _on_bad_data_clicked(self):
-        self._status_label.setText("Marking bad…")
-        QtWidgets.QApplication.processEvents()
-        ok = self._write_nan_outputs()
-        if ok:
-            self._status_label.setText("Bad data marked ✓")
-            self.trigger_downstream()
-        else:
-            self._status_label.setText("Bad data failed ✗")
+        super()._on_bad_data_clicked()
 
     def _nan_outputs(self) -> dict:
-        import numpy as np
         DS = self.AR.DS
         di = self.data_idx
-        # Determine gain_mask shape from fg
         try:
             fg_len = len(np.asarray(DS.fg[di]))
         except Exception:
             fg_len = 1
         return {
-            'p_amp':     np.full(3, np.nan),       # 2nd-order poly → 3 coeffs
-            'p_phase':   np.full(2, np.nan),       # 1st-order poly → 2 coeffs
-            'gain_mask': np.zeros(fg_len, dtype=bool),  # all masked out
+            'p_amp': np.full(3, np.nan),
+            'p_phase': np.full(2, np.nan),
+            'gain_mask': np.zeros(fg_len, dtype=bool),
         }
