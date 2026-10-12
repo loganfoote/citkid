@@ -1,5 +1,44 @@
 import numpy as np
 import copy
+import re
+
+# Sweep series (power sweeps, blackbody sweeps, ...) save one target sweep per
+# series point in groups named f'{SET_PREFIX}{idx}'
+SET_PREFIX = 'set'
+
+def set_name(set_idx, prefix = SET_PREFIX):
+    """
+    Return the group name of one series point.
+
+    Parameters:
+    set_idx (int): series point index.
+    prefix (str): group name prefix. Default 'set'.
+
+    Returns:
+    name (str): group name, e.g. 'set3'.
+    """
+    set_idx = int(set_idx)
+    if set_idx < 0:
+        raise ValueError('set_idx must be a non-negative integer')
+    return f'{prefix}{set_idx:d}'
+
+def list_sets(root, prefix = SET_PREFIX):
+    """
+    Return the indices of the series point groups in a zarr group.
+
+    Only child groups named exactly ``prefix`` followed by an integer count,
+    so other groups (e.g. 'fits', 'fq_sweep') and arrays are ignored.
+
+    Parameters:
+    root (zarr.core.group.Group): group holding the series point groups.
+    prefix (str): group name prefix. Default 'set'.
+
+    Returns:
+    set_idxs (list of int): sorted indices, e.g. [0, 1, 2, 10].
+    """
+    pattern = re.compile(rf'^{re.escape(prefix)}(\d+)$')
+    matches = (pattern.match(key) for key in root.group_keys())
+    return sorted(int(m.group(1)) for m in matches if m is not None)
 
 def create_zarr_param(root, name, value, nres, dtype = None):
     """

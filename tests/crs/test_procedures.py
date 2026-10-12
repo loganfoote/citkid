@@ -1345,6 +1345,108 @@ class TestSaveSweepData:
 
 
 
+################################################################################
+########################### power_sweep tests ##################################
+################################################################################
+
+@pytest.mark.asyncio
+class TestPowerSweep:
+    """Tests for power_sweep."""
+
+    async def test_one_set_per_power(
+        self, mock_crs_for_target_sweep, mock_util_write_system_cfg,
+        mock_update_fres
+    ):
+        """Test that each power is saved to set{i} with the right ares."""
+        from citkid.crs.procedures import power_sweep
+
+        root = zarr.group()
+        fres = np.array([1e9, 2e9])
+        powers = np.array([-50., -45., -40.])
+        await power_sweep(
+            mock_crs_for_target_sweep, fres, powers, [1e3, 1e3], [0, 1], root,
+            npoints_rough = None, npoints_gain = 5, npoints_fine = 7,
+            nsamps = 10,
+        )
+        assert sorted(root.group_keys()) == ['set0', 'set1', 'set2']
+        for i, power in enumerate(powers):
+            np.testing.assert_array_equal(root[f'set{i}/ares'][:], [power] * 2)
+            assert root[f'set{i}/fine_sweep/f'].shape == (2, 7)
+        assert mock_crs_for_target_sweep.sweep_qres.call_count == 6
+
+    async def test_ch_map_and_fres_carried_forward(
+        self, mock_crs_for_target_sweep, mock_util_write_system_cfg,
+        mock_update_fres
+    ):
+        """
+        Test that later sets reuse the channel map and start from the
+        previous set's updated fres.
+        """
+        from citkid.crs.procedures import power_sweep
+
+        fres = np.array([1e9, 2e9])
+        fres_out, ch_map = await power_sweep(
+            mock_crs_for_target_sweep, fres, [-50., -40.], [1e3, 1e3], [0, 1],
+            zarr.group(), npoints_rough = 5, npoints_gain = None,
+            npoints_fine = 5,
+        )
+        calls = mock_crs_for_target_sweep.sweep_qres.call_args_list
+        # calls: rough0, fine0, rough1, fine1
+        assert calls[0].kwargs['ch_map'] is None
+        assert calls[2].kwargs['ch_map'] == {'mock': 'ch_map'}
+        np.testing.assert_allclose(calls[2].args[0], fres * 1.0001)
+        np.testing.assert_allclose(fres_out, fres * 1.0001 ** 2)
+        assert ch_map == {'mock': 'ch_map'}
+
+    async def test_2d_aress_and_shuffle(
+        self, mock_crs_for_target_sweep, mock_util_write_system_cfg,
+        mock_update_fres
+    ):
+        """
+        Test per-tone powers, and that shuffle reorders each tone's powers
+        independently.
+        """
+        from citkid.crs.procedures import power_sweep
+
+        nsets, ntones = 6, 4
+        aress = np.repeat(np.arange(nsets, dtype = float)[:, None], ntones, 1)
+        root = zarr.group()
+        await power_sweep(
+            mock_crs_for_target_sweep, np.linspace(1e9, 2e9, ntones), aress,
+            np.full(ntones, 1e3), np.arange(ntones), root, shuffle = True,
+            seed = 0, npoints_rough = None, npoints_gain = None,
+            npoints_fine = 3,
+        )
+        saved = np.array([root[f'set{i}/ares'][:] for i in range(nsets)])
+        np.testing.assert_array_equal(np.sort(saved, axis = 0), aress)
+        assert not np.all(saved == saved[:, :1])  # tones were shuffled apart
+
+    async def test_existing_set_rejected_before_sweeping(
+        self, mock_crs_for_target_sweep, mock_util_write_system_cfg
+    ):
+        """Test that an existing set group raises before any data is taken."""
+        from citkid.crs.procedures import power_sweep
+
+        root = zarr.group()
+        root.create_group('set1')
+        with pytest.raises(ValueError, match = 'set1'):
+            await power_sweep(
+                mock_crs_for_target_sweep, [1e9], [-50., -40.], [1e3], [0],
+                root,
+            )
+        assert mock_crs_for_target_sweep.sweep_qres.call_count == 0
+
+    async def test_aress_shape_mismatch(self, mock_crs_for_target_sweep):
+        """Test that aress with the wrong number of tones raises."""
+        from citkid.crs.procedures import power_sweep
+
+        with pytest.raises(ValueError, match = 'aress must have shape'):
+            await power_sweep(
+                mock_crs_for_target_sweep, [1e9, 2e9], np.zeros((3, 3)),
+                [1e3, 1e3], [0, 1], zarr.group(),
+            )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ['distance', 'spacing', 'minS21'])
 async def test_target_sweep_rough_update_with_real_update_fres(

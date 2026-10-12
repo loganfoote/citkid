@@ -9,7 +9,33 @@ from citkid.zarr_util import (
     write_zarr_row,
     write_zarr,
     write_single_array,
+    set_name,
+    list_sets,
 )
+
+
+################################################################################
+########################## set_name / list_sets tests ##########################
+################################################################################
+
+def test_set_name_formats_index():
+    assert set_name(3) == 'set3'
+    assert set_name(np.int64(12)) == 'set12'
+    assert set_name(0, prefix = 'amp') == 'amp0'
+
+
+def test_set_name_rejects_negative_index():
+    with pytest.raises(ValueError, match = 'non-negative'):
+        set_name(-1)
+
+
+def test_list_sets_sorts_numerically_and_ignores_other_children():
+    root = zarr.group()
+    for name in ['set10', 'set2', 'set0', 'fits', 'fq_sweep', 'set1x', 'amp3']:
+        root.create_group(name)
+    root.create_array('set5', data = np.ones(2))  # arrays don't count
+    assert list_sets(root) == [0, 2, 10]
+    assert list_sets(root, prefix = 'amp') == [3]
 
 
 ################################################################################

@@ -153,7 +153,7 @@ class DataSet:
     def __init__(
         self, zarr_path, cal_yaml_path=None, custom_path=None, zarr_mode="a",
         custom_cal_steps=None, custom_main_dir_overwrite=None,
-        write_buffer=False,
+        write_buffer=False, custom_source=None,
     ):
         """
         Initialize the dataset and load its calibration definition.
@@ -189,6 +189,12 @@ class DataSet:
             readers that open the zarr arrays directly only see consolidated
             rows. If False (default), rows are written straight to the
             sharded arrays.
+        custom_source (str or None): Source code defining
+            ``custom_cal_steps``, used like the contents of a ``custom_path``
+            file (embedded on first use and checked against the embedded
+            source afterwards). E.g. from
+            ``citkid.pipeline_v2.loaders.target_sweep_source``. Can't be
+            combined with ``custom_path`` or ``custom_cal_steps``.
 
         Raises:
         TypeError: If the supplied path arguments have invalid types.
@@ -196,6 +202,10 @@ class DataSet:
         """
         if custom_path is not None and not isinstance(custom_path, str):
             raise TypeError("custom_path must be a string or None")
+        if custom_source is not None and not isinstance(custom_source, str):
+            raise TypeError("custom_source must be a string or None")
+        if custom_source is not None and (custom_path is not None or custom_cal_steps is not None):
+            raise ValueError("custom_source can't be combined with custom_path or custom_cal_steps")
         if cal_yaml_path is not None and not isinstance(cal_yaml_path, str):
             raise TypeError("cal_yaml_path must be a string or None")
         if custom_main_dir_overwrite is not None and not isinstance(custom_main_dir_overwrite, str):
@@ -237,6 +247,7 @@ class DataSet:
             custom_path=custom_path,
             custom_cal_steps=custom_cal_steps,
             custom_main_dir_overwrite=custom_main_dir_overwrite,
+            custom_source=custom_source,
         )
         self.cal_yaml_path = cal_def["yaml_path"]
         self.custom_path = cal_def["custom_path"]
@@ -1577,7 +1588,8 @@ class DataSet:
             return False
         return bool(np.all(exists[rows]))
 
-    def _resolve_cal_definition(self, cal_yaml_path, custom_path, custom_cal_steps, custom_main_dir_overwrite):
+    def _resolve_cal_definition(self, cal_yaml_path, custom_path, custom_cal_steps, custom_main_dir_overwrite,
+                                custom_source=None):
         """
         Resolve the calibration definition from inputs and embedded metadata.
 
@@ -1596,6 +1608,8 @@ class DataSet:
         custom_main_dir_overwrite (str or None): Replacement for the
             top-level ``main_dir`` assignment in the custom source, or None to
             keep it.
+        custom_source (str or None): Custom step source, used in place of
+            reading ``custom_path``.
 
         Returns:
         dict: Definition with keys ``yaml_path`` (path read this session, or
@@ -1628,7 +1642,7 @@ class DataSet:
             }
 
         yaml_text = None
-        custom_source = None
+        source_given = custom_path is not None or custom_source is not None
         yaml_path = None
         resolved_custom_path = None
 
@@ -1646,14 +1660,14 @@ class DataSet:
         if custom_path is not None:
             resolved_custom_path = os.path.abspath(custom_path)
             custom_source = _read_text_file(resolved_custom_path)
-        elif stored_custom is not None:
+        elif custom_source is None:
             custom_source = stored_custom
 
         if stored_yaml is not None and yaml_text != stored_yaml:
             raise ValueError("Provided calibration YAML does not match the dataset definition")
         if (
             stored_custom is not None
-            and custom_path is not None
+            and source_given
             and not _custom_sources_match(custom_source, stored_custom)
         ):
             raise ValueError("Provided calibration custom steps do not match the dataset definition")

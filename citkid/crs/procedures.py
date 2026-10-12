@@ -2,8 +2,10 @@ import numpy as np
 import zarr
 from datetime import datetime
 from typing import TYPE_CHECKING
+from tqdm.auto import tqdm
 from citkid.multitone.fres import update_fres
 from . import util
+from ..zarr_util import set_name
 
 if TYPE_CHECKING:
     from . import instrument as inst
@@ -142,7 +144,75 @@ async def target_sweep(
             )
         _save_sweep_data(grpf, '', f_fine, z_fine)
 
-    # return updated fres and ch_map 
+    # return updated fres and ch_map
+    return fres, ch_map
+
+async def power_sweep(
+    crs, fres, aress, qres, res_idxs, root, ch_map = None, shuffle = False,
+    seed = None, verbose = True, **target_sweep_kwargs
+):
+    """
+    Execute a target sweep at each of a series of tone powers. Sweep i is
+    saved to the group root/set{i} (see ``citkid.zarr_util.set_name``), in
+    the target_sweep format.
+
+    The channel map from the first sweep is reused for every later sweep, so
+    tones stay on the same module and channel. If the rough sweep is enabled
+    (npoints_rough is not None), each sweep starts from the fres found by the
+    previous one.
+
+    Parameters:
+    crs (CRS): initialized CRS instrument class.
+    fres (array-like float64): array of resonant frequencies in Hz.
+    aress (array-like float64): tone powers in dBm. Either 1D, of shape
+        (n_sets,), to sweep every tone at the same powers, or 2D, of shape
+        (n_sets, ntones), to give each tone its own powers.
+    qres (array-like float64): array of span factors. See target_sweep.
+    res_idxs (array-like int32): array of resonator indices. Negative indices
+        mark calibration tones. See target_sweep.
+    root (zarr.Group): Zarr group to which the set groups are saved. It must
+        not already contain any of the set groups.
+    ch_map (dict or None): Channel mapping dictionary for the first sweep. If
+        None, it is generated during the first sweep.
+    shuffle (bool): If True, each tone's powers are randomly reordered across
+        the sets, so that set i doesn't sweep every tone at the same power.
+        The powers actually used are saved in each set's 'ares'.
+    seed (int or None): random seed for shuffle.
+    verbose (bool): If True, displays progress bars while taking data.
+    **target_sweep_kwargs: other target_sweep parameters, e.g. npoints_fine,
+        npoints_gain, npoints_rough, nsamps, gain_span_factor,
+        fres_update_method.
+
+    Returns:
+    fres (np.ndarray, float64): resonant frequencies after the last sweep.
+    ch_map (dict): channel mapping dictionary after the sweeps.
+    """
+    fres = np.asarray(fres, dtype = np.float64)
+    aress = np.asarray(aress, dtype = np.float64)
+    if fres.ndim != 1:
+        raise ValueError("fres must be a 1D array.")
+    if aress.ndim == 1:
+        aress = np.repeat(aress[:, np.newaxis], len(fres), axis = 1)
+    if aress.ndim != 2 or aress.shape[1] != len(fres) or not len(aress):
+        raise ValueError(
+            "aress must have shape (n_sets,) or (n_sets, len(fres)).")
+    if not isinstance(root, zarr.core.group.Group):
+        raise TypeError("root must be a zarr Group instance.")
+    names = [set_name(set_idx) for set_idx in range(len(aress))]
+    existing = [name for name in names if name in root]
+    if existing:
+        raise ValueError(f"root already contains {existing}.")
+    if shuffle:
+        rng = np.random.default_rng(seed)
+        aress = rng.permuted(aress, axis = 0)
+
+    pbar = tqdm(names, desc = 'Power sweep', leave = False,
+                disable = not verbose)
+    for name, ares in zip(pbar, aress):
+        fres, ch_map = await target_sweep(
+            crs, fres, ares, qres, res_idxs, root.require_group(name),
+            ch_map = ch_map, verbose = verbose, **target_sweep_kwargs
+        )
     return fres, ch_map
 
 ################################################################################
