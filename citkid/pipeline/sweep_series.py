@@ -339,28 +339,43 @@ def run_series_analysis(
 ################################# Series fits ##################################
 ################################################################################
 
-def a_vs_power_fit(a_max = 0.8, name = 'a_vs_power', group = None):
+def a_vs_power_fit(
+    a_max = 0.8, a_min = 0, name = 'a_vs_power', group = None
+):
     """
     Return a fit of the nonlinearity parameter a versus tone power, linear in
     tone amplitude: a = a_slope * 10 ** (P / 20) + a_offset, with P in dBm.
 
     Points from the first one with a > a_max on are left out, since the IQ
-    fit is unreliable past bifurcation.
+    fit is unreliable past bifurcation. Points before the first one with
+    a >= a_min are left out too (e.g. low powers where a is too small to
+    measure). Points are in order of increasing power.
 
     Parameters:
     a_max (float): highest a to include in the fit. Default 0.8.
+    a_min (float): the fit starts at the first point with a >= a_min.
+        Default 0 keeps the low-power points (a is never below 0).
     name (str): fit name. Default 'a_vs_power'.
     group (zarr.Group or None): group to save the fits to. None (default)
         uses ``root/xy_fit`` in ``run_iq_series``.
 
     Returns:
     xy_fit (SeriesXYFit): fit for ``run_iq_series(x_param_name = 'ares',
-        y_param_name = 'a', xy_fit = ...)``. Parameters [a_slope, a_offset].
+        y_param_name = 'a', xy_fit = ...)``. Parameters [a_slope, a_offset];
+        NaN if fewer than 2 points are left.
+
+    Raises:
+    ValueError: If ``a_min`` is not below ``a_max``.
     """
+    if a_min >= a_max:
+        raise ValueError(f'a_min ({a_min}) must be below a_max ({a_max})')
+
     def fit(x, y):
         above = np.where(y > a_max)[0]
-        if len(above):
-            x, y = x[:above[0]], y[:above[0]]
+        end = above[0] if len(above) else len(y)
+        past_min = np.where(y >= a_min)[0]
+        start = past_min[0] if len(past_min) else len(y)
+        x, y = x[start:end], y[start:end]
         if len(x) < 2:
             return [np.nan, np.nan]
         return np.polyfit(10 ** (x / 20), y, 1)

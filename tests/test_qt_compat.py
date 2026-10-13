@@ -457,3 +457,12 @@ def test_vbox_height_for_width_wraps_text_and_uses_overrides(qapp):
     assert narrow > wide
     overridden = vbox_height_for_width(layout, 2000, overrides={fixed: 140})
     assert overridden == wide + 100
+
+
+def test_describe_display_reports_screens_and_fonts(qapp, capsys):
+    from citkid import qt_compat
+    report = qt_compat.describe_display()
+    assert report == capsys.readouterr().out.rstrip('\n')
+    for text in ('Qt platform plugin', 'screen', 'logical DPI', 'default font', 'palette'):
+        assert text in report
+    assert qt_compat.describe_display(print_report=False) == report

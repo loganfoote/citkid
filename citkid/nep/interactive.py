@@ -10,7 +10,9 @@ import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
-from ..pipeline.interactive.core import scale_plot_fonts, widget_font_stylesheet
+from ..pipeline.interactive.core import (
+    hint_label, scale_plot_fonts, toggle_help_dialog, widget_font_stylesheet,
+)
 from ..qt_compat import TITLE_BAR_MARGIN, delete_on_close, fit_window_to_screen, get_qapp
 from .batch import check_sets, per_set_powers, per_set_values
 from .fitter import fit_nep_photon
@@ -287,13 +289,13 @@ class NEPFitWindow(QtWidgets.QMainWindow):
         bar.addWidget(self._p_min_spin)
         bar.addWidget(self._bad_btn)
         bar.addWidget(self._all_btn)
-        bar.addSpacing(12)
-        hints = QtWidgets.QLabel('[←/A  →/D] navigate    [B] bad    '
-                                 '[⇧A] p_min to all    [R] rescale    drag line: p_min')
-        hints.setWordWrap(True)
-        hints.setStyleSheet('color: palette(mid); font-style: italic;')
-        bar.addWidget(hints, 1)
+        bar.addStretch(1)
         layout.addLayout(bar)
+        # Own row, so the hints always have the full width to wrap in
+        self._hints_label = hint_label(
+            '[←/A  →/D] navigate    [B] bad    [⇧A] p_min to all    '
+            '[R] rescale    drag line: p_min    [H] help')
+        layout.addWidget(self._hints_label)
 
         self._plot_widget = pg.PlotWidget()
         self._plot = self._plot_widget.getPlotItem()
@@ -322,9 +324,49 @@ class NEPFitWindow(QtWidgets.QMainWindow):
                            (('Right', 'D'), lambda: self._go(1)),
                            (('B',), self._toggle_bad),
                            (('Shift+A',), self._apply_p_min_to_all),
-                           (('R',), self._plot.autoRange)):
+                           (('R',), self._plot.autoRange),
+                           (('H',), self._toggle_help)):
             for key in keys:
                 QtGui.QShortcut(QtGui.QKeySequence(key), self, activated=slot)
+
+    def _help_sections(self):
+        """
+        Return the help dialog's contents (see ``toggle_help_dialog``).
+
+        Returns:
+        sections (list): ``(heading, [(keys, description), ...])`` pairs.
+        """
+        return [
+            ('Keyboard', [
+                ('A / D  or  Left / Right', 'Previous / next set'),
+                ('B', 'Mark the set bad (NaN results), or unmark it'),
+                ('Shift+A', "Apply this set's p_min to every set and refit"),
+                ('R', 'Rescale the plot'),
+                ('H', 'Show / hide this help'),
+            ]),
+            ('Toolbar', [
+                ('◀ / ▶, set', 'Previous / next set, or type a set index'),
+                ('p_min', 'Lowest power in the fit (0 fits every point); '
+                          'the fit updates as you change it'),
+                ('Mark bad', 'Same as B'),
+                ('p_min to all', 'Same as Shift+A'),
+            ]),
+            ('Plot', [
+                ('Dashed line', 'Drag to set p_min; the fit updates'),
+                ('Blue / grey points', 'Fitted / left out (below p_min)'),
+                ('Red curve', 'Photon-noise NEP for the fitted efficiency'),
+                ('Scroll / drag', 'Zoom / pan'),
+                ('Right-click', 'Plot menu (axes, export)'),
+            ]),
+            ('Saving', [
+                ('', 'Results are saved when you leave a set, mark it bad '
+                     'or apply p_min to all, and when the window closes'),
+            ]),
+        ]
+
+    def _toggle_help(self):
+        """Show or hide the help dialog (H key)."""
+        toggle_help_dialog(self, self.windowTitle(), self._help_sections())
 
     def _show_set(self, rescale=True):
         """

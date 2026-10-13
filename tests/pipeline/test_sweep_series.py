@@ -253,6 +253,33 @@ def test_a_vs_power_fit_recovers_line_and_cuts_bifurcated():
     assert np.all(np.isnan(popt))
 
 
+def test_a_vs_power_fit_a_min_drops_low_power_points():
+    """
+    Check that the fit starts at the first point with a >= a_min.
+    """
+    x = np.array([-50., -46., -42., -38., -34.])
+    y = a_true(x)
+    y[:2] = [0.05, -0.3]  # unmeasurable low-power points, left out
+    popt, _ = a_vs_power_fit(a_min = 0.15, a_max = 0.8).run(x, y)
+    assert y[2] > 0.15
+    np.testing.assert_allclose(popt, [0.1 * 10 ** 2.5, 0.0], atol = 1e-9)
+    # nothing above a_min, or only one point left: no fit
+    popt, _ = a_vs_power_fit(a_min = 5.0, a_max = 8.0).run(x, y)
+    assert np.all(np.isnan(popt))
+    with pytest.raises(ValueError, match = 'a_min'):
+        a_vs_power_fit(a_min = 0.8, a_max = 0.8)
+
+
+def test_a_vs_power_fit_default_a_min_keeps_points_at_zero():
+    """
+    a = 0 (the IQ fit's lower bound) at low power is kept by default.
+    """
+    x = np.array([-60., -50., -46., -42.])
+    y = np.array([0.0, 0.1, 0.16, 0.25])
+    popt, _ = a_vs_power_fit().run(x, y)
+    np.testing.assert_allclose(popt, np.polyfit(10 ** (x / 20), y, 1))
+
+
 def test_ares_for_a_inverts_fit():
     popt = np.array([[0.1 * 10 ** 2.5, 0.0], [np.nan, np.nan], [1.0, 1.0]])
     ares = ares_for_a(popt, 0.4)
@@ -340,3 +367,48 @@ def test_power_tuning_end_to_end(data_dir, tmp_path):
     ares_opt, opt_idxs = pick_optimal_ares(datasets, a_max = 0.3)
     np.testing.assert_array_equal(ares_opt, [-42., -42.])
     np.testing.assert_array_equal(opt_idxs, [2, 2])
+
+
+################################################################################
+######################## Stores deleted behind DataSets ########################
+################################################################################
+
+def test_clear_cache_after_the_store_was_deleted(data_dir, tmp_path):
+    out_path = str(tmp_path / 'out.zarr')
+    datasets = open_series_datasets(data_dir, 'sweep.zarr', out_path)
+    run_series_analysis(datasets[:1], 'iq', verbose = False)
+    DS = datasets[0]
+    assert DS.saved_row_mask('iq_popt').all()
+    shutil.rmtree(out_path)
+
+    DS.clear_cache()
+
+    assert not DS.saved_row_mask('iq_popt').any()
+    with pytest.raises(AttributeError):
+        DS.fr_spans
+    # The definition is written again, so the store can be reopened
+    reopened = DataSet(zarr.open_group(out_path)['set0'])
+    assert reopened.cal_custom_source == DS.cal_custom_source
+    assert reopened.ff[0].shape == (NPTS,)
+
+
+def test_series_runners_rerun_after_the_store_was_deleted(data_dir, tmp_path):
+    """
+    Reusing DataSets after deleting their store must not look like an
+    overwrite of the old (now deleted) results.
+    """
+    from citkid.pipeline.interactive.iq_series import series_runners
+    out_path = str(tmp_path / 'out.zarr')
+    datasets = open_series_datasets(data_dir, 'sweep.zarr', out_path)
+    for AR in series_runners(datasets = datasets[:2]):
+        AR.execute_path(data_idx = 0, verbose = False)
+    shutil.rmtree(out_path)
+
+    for AR in series_runners(datasets = datasets[:2]):
+        AR.execute_step(AR.path[0]['task'])
+        AR.execute_path(data_idx = 0, step_start_idx = 1, verbose = False)
+        assert AR.DS.saved_row_mask('iq_popt')[0]
+    np.testing.assert_allclose(
+        DataSet(zarr.open_group(out_path)['set1']).iq_popt[0][4],
+        a_true(POWERS[1]), rtol = 0.05, atol = 0.01)
+

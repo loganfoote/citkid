@@ -57,6 +57,25 @@ def _io_lock_for(group):
         return _IO_LOCKS[key]
 
 
+def reopen_group(group):
+    """
+    Open a zarr group again, to read its current state from the store.
+
+    A ``zarr.Group`` object keeps the attributes it read when it was opened,
+    so it doesn't see later changes made through other objects, or the group
+    being deleted. The reopened group is created again if it was deleted
+    (unless the store is read-only).
+
+    Parameters:
+    group (zarr.Group): The group.
+
+    Returns:
+    group (zarr.Group): A new object for the same group.
+    """
+    mode = "r" if group.store.read_only else "a"
+    return zarr.open_group(store=group.store, path=group.path, mode=mode)
+
+
 def _row_masks(group):
     """
     Read the saved-row masks of a per-row parameter group.
@@ -861,6 +880,35 @@ class DataSet:
                 continue
             for di in rows:
                 lazy_attr._cache.pop(int(di), None)
+
+    def clear_cache(self):
+        """
+        Drop every in-memory value and reread the parameter list from zarr.
+
+        Afterwards the DataSet matches what is saved: saved values are
+        reloaded on the next access, and anything that was only in memory
+        (unsaved outputs, calibration products) is recomputed when needed.
+        Use this when the zarr store may have changed behind this DataSet,
+        e.g. it was deleted and recreated while this object stayed open. The
+        root group is reopened, and if the store lost this DataSet's
+        definition (calibration and analysis), it is written again.
+        """
+        with self._io_lock:
+            self.root = reopen_group(self.root)
+            stored = self._read_metadata()
+            if not self.root.store.read_only:
+                self.root.require_group("_failures")
+        if not stored and self._metadata and not self.root.store.read_only:
+            self._write_metadata(self._metadata)
+        elif stored:
+            self._metadata = stored
+        self._global_cache.clear()
+        self._per_row_cache.clear()
+        self._param_meta.clear()
+        self._invalidated_globals.clear()
+        self._invalidated_rows.clear()
+        self._step_failures.clear()
+        self._load_param_registry()
 
     def _normalize_rows(self, data_idx):
         """

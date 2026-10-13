@@ -238,3 +238,21 @@ def test_resume_with_data_idxs(qt_app):
 def test_bad_data_idxs_raise(qt_app, data_idxs, match):
     with pytest.raises(ValueError, match=match):
         _window(qt_app, data_idxs=data_idxs)
+
+
+def test_h_toggles_the_help_dialog(qt_app):
+    from pyqtgraph.Qt import QtGui, QtWidgets
+    win = _window(qt_app)
+    keys = [sc.key().toString() for sc in win.findChildren(QtGui.QShortcut)]
+    assert 'H' in keys
+    assert '[H] help' in win._hints_label.text()
+
+    win._toggle_help()
+    dlg = win._help_dialog
+    assert dlg.isVisible()
+    text = dlg.findChild(QtWidgets.QLabel).text()
+    for item in ('Shift+A', 'p_min to all', 'Dashed line', 'Results are saved'):
+        assert item in text
+    win._toggle_help()
+    assert not dlg.isVisible()
+    win.close()

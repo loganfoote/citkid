@@ -12,6 +12,7 @@ Core concepts:
 
 import concurrent.futures
 import traceback
+from html import escape
 import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
@@ -23,6 +24,7 @@ from ...qt_compat import (
     run_responsive,
     TITLE_BAR_MARGIN,
     Qt as _Qt,
+    available_screen_geometry,
     delete_on_close,
     fit_window_to_screen,
     get_qapp,
@@ -96,6 +98,27 @@ TICK_FONT_PT = 9
 LABEL_FONT_PT = 11
 
 
+def font_px(point_size, ui_scale=1.0, minimum=8):
+    """
+    Convert a font size in points to logical pixels.
+
+    Fonts are set in logical pixels, like every window and widget size, so
+    text keeps the same size relative to the window on every system. In
+    points, text grows with the system's text scaling (e.g. a larger
+    Xft.dpi on Linux) while the windows don't. On Windows (96 logical DPI)
+    the result is the same size as the point size.
+
+    Parameters:
+    point_size (float): size in points at ui_scale = 1.
+    ui_scale (float): font size multiplier. Default 1.0.
+    minimum (int): smallest size returned, in pixels. Default 8.
+
+    Returns:
+    px (int): size in logical pixels (point_size * ui_scale * 96 / 72).
+    """
+    return max(int(minimum), round(point_size * ui_scale * 96 / 72))
+
+
 def widget_font_stylesheet(ui_scale):
     """
     Return a stylesheet that sets the font size of every widget.
@@ -104,10 +127,238 @@ def widget_font_stylesheet(ui_scale):
     ui_scale (float): Font size multiplier.
 
     Returns:
-    stylesheet (str): ``'* { font-size: Npt; }'`` with
-        N = ``WIDGET_FONT_PT * ui_scale`` (at least 6).
+    stylesheet (str): ``'* { font-size: Npx; }'`` with
+        N = ``font_px(WIDGET_FONT_PT, ui_scale)``.
     """
-    return f"* {{ font-size: {max(6, round(WIDGET_FONT_PT * ui_scale))}pt; }}"
+    return f"* {{ font-size: {font_px(WIDGET_FONT_PT, ui_scale)}px; }}"
+
+
+def compact_combo(combo, n_chars=14):
+    """
+    Make a combo box only as wide as ``n_chars`` characters.
+
+    By default a combo box is as wide as its longest item, so long items
+    (e.g. quantity names) can make a toolbar wider than the screen. The
+    drop-down list still shows the full items.
+
+    Parameters:
+    combo (QComboBox): the combo box.
+    n_chars (int): width in characters. Default 14.
+
+    Returns:
+    combo (QComboBox): the same combo box.
+    """
+    policy = QtWidgets.QComboBox.SizeAdjustPolicy
+    combo.setSizeAdjustPolicy(policy.AdjustToMinimumContentsLengthWithIcon)
+    combo.setMinimumContentsLength(int(n_chars))
+    return combo
+
+
+def hint_label(text):
+    """
+    Return a label for keyboard-shortcut hints.
+
+    The text word-wraps, so put the label on a row of its own (full width);
+    beside other widgets it can be squeezed to nothing. Its color is a mix
+    of the theme's text and background colors, so it is muted but readable
+    with any theme (``palette(mid)`` can match the background on some Linux
+    themes).
+
+    Parameters:
+    text (str): the hints.
+
+    Returns:
+    label (QLabel): the label.
+    """
+    label = QtWidgets.QLabel(text)
+    label.setWordWrap(True)
+    palette = label.palette()
+    fg = palette.color(QtGui.QPalette.ColorRole.WindowText)
+    bg = palette.color(QtGui.QPalette.ColorRole.Window)
+    pairs = ((fg.red(), bg.red()), (fg.green(), bg.green()),
+             (fg.blue(), bg.blue()))
+    r, g, b = [round(0.65 * f + 0.35 * b) for f, b in pairs]
+    label.setStyleSheet(f"color: rgb({r}, {g}, {b}); font-style: italic;")
+    return label
+
+
+def help_html(title, sections):
+    """
+    Format a help dialog's text as HTML.
+
+    Parameters:
+    title (str): heading.
+    sections (list): ``(heading, items)`` pairs, where items is a list of
+        ``(keys, description)`` string pairs; an empty ``keys`` shows the
+        description alone. Plain text: ``<``, ``>`` and ``&`` are escaped.
+
+    Returns:
+    html (str): the help text.
+    """
+    parts = [f'<h3>{escape(title)}</h3>']
+    for heading, items in sections:
+        parts.append(f'<p><b>{escape(heading)}</b></p><ul>')
+        parts.extend(f'<li><b>{escape(keys)}:</b> {escape(text)}</li>'
+                     if keys else f'<li>{escape(text)}</li>'
+                     for keys, text in items)
+        parts.append('</ul>')
+    return ''.join(parts)
+
+
+def toggle_help_dialog(window, title, sections):
+    """
+    Show or hide a window's help dialog (the H key), building it on first use.
+
+    The dialog lists the window's keyboard shortcuts, buttons and mouse
+    controls. It scrolls if it is taller than the screen, and H (or Esc)
+    closes it again.
+
+    Parameters:
+    window (QWidget): window the dialog belongs to; the dialog is kept in
+        ``window._help_dialog`` and centered on the window.
+    title (str): window name, e.g. 'IQ Series'.
+    sections (list): ``(heading, items)`` pairs (see ``help_html``).
+
+    Returns:
+    dlg (QDialog): the dialog.
+    """
+    dlg = getattr(window, '_help_dialog', None)
+    if dlg is None:
+        dlg = QtWidgets.QDialog(window)
+        dlg.setWindowTitle(f'{title} Help  (H to close)')
+        label = QtWidgets.QLabel(help_html(f'{title} Controls', sections))
+        label.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        label.setWordWrap(True)
+        label.setMargin(8)
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidget(label)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        layout = QtWidgets.QVBoxLayout(dlg)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(scroll)
+        QtGui.QShortcut(QtGui.QKeySequence('H'), dlg, activated=dlg.hide)
+        geom = available_screen_geometry()
+        width = min(620, geom.width() - 40)
+        label.setFixedWidth(width - 30)
+        height = min(label.heightForWidth(width - 30) + 20,
+                     geom.height() - TITLE_BAR_MARGIN - 40)
+        dlg.resize(width, height)
+        window._help_dialog = dlg
+    if dlg.isVisible():
+        dlg.hide()
+        return dlg
+    dlg.show()
+    frame = dlg.frameGeometry()
+    frame.moveCenter(window.frameGeometry().center())
+    dlg.move(frame.topLeft())
+    dlg.raise_()
+    return dlg
+
+
+# Help dialog sections shared by the pipeline windows
+PANEL_HELP = ('Panel buttons', [
+    ('Run', "Run the panel's steps with its current settings"),
+    ('Run+', 'Run the panel, then every panel after it'),
+    ('Save', "Save the panel's results (they are also saved when you move "
+             'to another data index)'),
+    ('Bad Data', "Mark the panel's results bad (NaN) for this data index"),
+    ('Reset Mask', 'Reset the mask to the full frequency range (circle fit '
+                   'and IQ fit panels); click Run to apply'),
+    ('Settings', 'Step parameters; click Run to apply a change'),
+    ('Panel header', 'Click to collapse or expand the panel'),
+])
+PLOT_HELP = ('Mouse', [
+    ('Drag a shaded region', 'Move or resize a mask (circle fit, IQ fit '
+                             'and x calibration panels); click Run to '
+                             'apply'),
+    ('Shift+drag', 'Select a new mask range on the amplitude plot (circle '
+                   'fit and IQ fit panels)'),
+    ('Scroll / drag', 'Zoom / pan a plot'),
+    ('Right-click', 'Plot menu (axes, log scale, export)'),
+])
+
+
+# Shrink-to-fit limits: plots keep at least this fraction of their height,
+# and fonts at least this fraction of their size.
+MIN_PLOT_FACTOR = 0.35
+MIN_FONT_FACTOR = 0.7
+
+
+def apply_ui_scale(window, ui_scale):
+    """
+    Set the widget and plot font sizes of a window.
+
+    Parameters:
+    window (QMainWindow): window whose central widget holds the content.
+    ui_scale (float): font size multiplier.
+    """
+    window.centralWidget().setStyleSheet(widget_font_stylesheet(ui_scale))
+    for view in window.findChildren(pg.GraphicsLayoutWidget):
+        plots = [item for item in view.ci.items
+                 if isinstance(item, pg.PlotItem)]
+        scale_plot_fonts(ui_scale, *plots)
+
+
+def shrink_to_fit(window, content_height, plot_widgets, ui_scale, max_height,
+                  max_width):
+    """
+    Shrink plot heights, then fonts, until a window's content fits a screen.
+
+    Plots shrink first, down to ``MIN_PLOT_FACTOR`` of their minimum heights
+    (as a smaller ``plot_scale`` would); if the content still doesn't fit
+    (or the window is wider than the screen), fonts shrink in steps down to
+    ``MIN_FONT_FACTOR`` of ``ui_scale``. A font step that doesn't make the
+    window smaller (e.g. the width is set by plot minimum widths) is undone,
+    and shrinking stops. Nothing changes if it already fits.
+
+    Parameters:
+    window (QMainWindow): the window, at its final width.
+    content_height (callable): ``content_height()`` returns the height
+        needed to show everything without scrolling, at the current width.
+    plot_widgets (list of QWidget): plot widgets whose minimum heights may
+        shrink.
+    ui_scale (float): font size multiplier the window was built with.
+    max_height (int): height available, in logical pixels.
+    max_width (int): width available, in logical pixels.
+
+    Returns:
+    plot_factor (float): factor applied to the plot heights (1 if none).
+    font_scale (float): font size multiplier now in use.
+    """
+    base = [(w, w.minimumHeight()) for w in plot_widgets
+            if w.minimumHeight() > 0]
+    base_total = sum(h for _, h in base)
+    plot_factor, font_scale = 1.0, float(ui_scale)
+    for _ in range(12):
+        window.layout().activate()
+        need_h = content_height()
+        need_w = window.minimumSizeHint().width()
+        if need_h <= max_height and need_w <= max_width:
+            break
+        if need_h > max_height and base_total and plot_factor > MIN_PLOT_FACTOR:
+            plots_now = base_total * plot_factor
+            wanted = (max_height - (need_h - plots_now)) / base_total
+            new_factor = max(MIN_PLOT_FACTOR, min(plot_factor, wanted))
+            if new_factor < plot_factor - 1e-3:
+                plot_factor = new_factor
+                for widget, height in base:
+                    widget.setMinimumHeight(max(1, round(height * plot_factor)))
+                continue
+        if font_scale <= ui_scale * MIN_FONT_FACTOR + 1e-9:
+            break  # as small as allowed; the panels scroll
+        previous = font_scale
+        font_scale = max(ui_scale * MIN_FONT_FACTOR, font_scale * 0.9)
+        apply_ui_scale(window, font_scale)
+        window.layout().activate()
+        smaller_h = need_h > max_height and content_height() < need_h
+        smaller_w = (need_w > max_width
+                     and window.minimumSizeHint().width() < need_w)
+        if not (smaller_h or smaller_w):
+            font_scale = previous  # no help: undo and stop
+            apply_ui_scale(window, font_scale)
+            break
+    return plot_factor, font_scale
 
 
 def scale_plot_fonts(ui_scale, *plot_items):
@@ -121,9 +372,9 @@ def scale_plot_fonts(ui_scale, *plot_items):
     *plot_items (pg.PlotItem): Plots to style.
     """
     tick_font = QtGui.QFont()
-    tick_font.setPointSize(max(6, round(TICK_FONT_PT * ui_scale)))
+    tick_font.setPixelSize(font_px(TICK_FONT_PT, ui_scale))
     label_font = QtGui.QFont()
-    label_font.setPointSize(max(7, round(LABEL_FONT_PT * ui_scale)))
+    label_font.setPixelSize(font_px(LABEL_FONT_PT, ui_scale, minimum=9))
     for plot in plot_items:
         for ax_name in ('bottom', 'left', 'top', 'right'):
             ax = plot.getAxis(ax_name)
@@ -948,16 +1199,22 @@ class _SectionHeader(QtWidgets.QWidget):
         layout.setContentsMargins(0, 2, 0, 0)
         layout.setSpacing(0)
 
-        font_pt = round(11 * panel.ui_scale)
+        header_px = font_px(11, panel.ui_scale)
         self._btn = QtWidgets.QPushButton(self._label_text("▼", panel))
         self._btn.setCheckable(True)
         self._btn.setChecked(True)
         self._btn.setFlat(True)
+        # Long step names would otherwise set the panels' minimum width (and
+        # push the window off a small screen): clip the text, full text in
+        # the tooltip.
+        self._btn.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                                QtWidgets.QSizePolicy.Policy.Fixed)
+        self._btn.setToolTip("  →  ".join(panel.step_names))
         self._btn.setStyleSheet(
             "QPushButton {"
             "  text-align: left;"
             "  font-weight: bold;"
-            f"  font-size: {font_pt}pt;"
+            f"  font-size: {header_px}px;"
             "  padding: 4px 8px;"
             "  border-bottom: 1px solid palette(mid);"
             "}"
@@ -1101,6 +1358,10 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         _sc_r = QtGui.QShortcut(QtGui.QKeySequence("R"), self)
         _sc_r.activated.connect(self._autoscale_all)
 
+        # H: show or hide the help dialog
+        QtGui.QShortcut(QtGui.QKeySequence("H"), self,
+                        activated=self._toggle_help)
+
         # Number keys 1-9: run panel N and all following ("Run +", 1-indexed).
         # Shift+N: run panel N only.
         for idx in range(1, 10):
@@ -1124,8 +1385,9 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         Size the window to show every panel without scrolling, and center it.
 
         The width is set first, since word-wrapped toolbar text makes the
-        needed height depend on it. The height is capped at the screen height,
-        beyond which the panels scroll.
+        needed height depend on it. If the panels are taller than the screen,
+        the plots shrink, then the fonts (``shrink_to_fit``); only past those
+        limits do the panels scroll.
 
         Parameters:
         width (int): Preferred width in logical pixels (shrunk to fit the
@@ -1137,6 +1399,11 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         self.ensurePolished()
         self.layout().activate()
         fit_window_to_screen(self, frac=0.9, size=(width, 1), height_margin=TITLE_BAR_MARGIN)
+        geom = available_screen_geometry()
+        plots = [w for panel in self.panels
+                 for w in panel.findChildren(pg.GraphicsLayoutWidget)]
+        shrink_to_fit(self, self._content_height, plots, self._ui_scale,
+                      geom.height() - TITLE_BAR_MARGIN, geom.width())
         fit_window_to_screen(self, frac=0.9, size=(self.width(), self._content_height()),
                              height_margin=TITLE_BAR_MARGIN)
 
@@ -1166,10 +1433,22 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         )
 
     def _build_toolbar(self, data_idx) -> QtWidgets.QWidget:
-        """Build the top toolbar with navigation and a ``data_idx`` spinbox."""
+        """
+        Build the top toolbar: navigation, a ``data_idx`` spinbox and status
+        labels, with the shortcut hints on a row of their own below.
+
+        Parameters:
+        data_idx (int or None): initial data index.
+
+        Returns:
+        w (QWidget): the toolbar.
+        """
         w = QtWidgets.QWidget()
-        layout = QtWidgets.QHBoxLayout(w)
-        layout.setContentsMargins(4, 2, 4, 2)
+        rows = QtWidgets.QVBoxLayout(w)
+        rows.setContentsMargins(4, 2, 4, 2)
+        rows.setSpacing(2)
+        layout = QtWidgets.QHBoxLayout()
+        rows.addLayout(layout)
 
         # Previous button
         self._prev_btn = QtWidgets.QPushButton("\u25c0")
@@ -1213,16 +1492,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         self._idx_spin.valueChanged.connect(self._on_data_idx_changed)
         layout.addWidget(self._idx_spin)
 
-        layout.addSpacing(8)
-
-        _hints = QtWidgets.QLabel(
-            "[\u2190/A  \u2192/D] navigate    [R] rescale    [N] run+following    [\u21e7N] run panel only"
-        )
-        # Word wrap lets the hints shrink so the toolbar never forces the
-        # window wider than the screen.
-        _hints.setWordWrap(True)
-        _hints.setStyleSheet("color: palette(mid); font-style: italic;")
-        layout.addWidget(_hints, 1)
+        layout.addStretch(1)
 
         self._prefetch_label = QtWidgets.QLabel("")
         self._prefetch_label.setMinimumWidth(110)
@@ -1236,6 +1506,12 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         self._save_label.setToolTip("Background save status")
         layout.addWidget(self._save_label)
 
+        self._hints_label = hint_label(
+            "[\u2190/A  \u2192/D] navigate    [R] rescale    "
+            "[N] run+following    [\u21e7N] run panel only    "
+            "[H] help"
+        )
+        rows.addWidget(self._hints_label)
         return w
 
     def _update_nav_label(self):
@@ -1331,6 +1607,29 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             return
         panel = self.panels[index]
         panel.run_current()
+
+    def _help_sections(self):
+        """
+        Return the help dialog's contents (see ``toggle_help_dialog``).
+
+        Returns:
+        sections (list): ``(heading, [(keys, description), ...])`` pairs.
+        """
+        return [
+            ('Keyboard', [
+                ('A / D  or  Left / Right', 'Previous / next data index'),
+                ('R', 'Rescale every plot'),
+                ('1-9', 'Run panel N and every panel after it (Run+)'),
+                ('Shift+1-9', 'Run panel N only'),
+                ('H', 'Show / hide this help'),
+            ]),
+            PANEL_HELP,
+            PLOT_HELP,
+        ]
+
+    def _toggle_help(self):
+        """Show or hide the help dialog (H key)."""
+        toggle_help_dialog(self, self.windowTitle(), self._help_sections())
 
     def _autoscale_all(self):
         """Auto-range every plot in every panel."""

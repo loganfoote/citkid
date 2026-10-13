@@ -487,3 +487,62 @@ def responsive_busy():
     busy (bool): True while a ``run_responsive`` call is waiting for its work.
     """
     return _responsive_depth > 0
+
+
+def describe_display(print_report=True):
+    """
+    Describe the Qt display setup, to debug window sizes and fonts.
+
+    Reports the Qt platform and style, scaling environment variables, each
+    screen's size, logical and physical DPI and device pixel ratio, the
+    default font, and the palette colors used for muted text.
+
+    Parameters:
+    print_report (bool): If True (default), print the report.
+
+    Returns:
+    report (str): the report.
+    """
+    import os
+    import sys
+    app = _QtWidgets.QApplication.instance() or get_qapp()
+    lines = [
+        f'python {sys.version.split()[0]}, Qt {_QtCore.QT_VERSION_STR}, '
+        f'pyqtgraph {_pg.__version__}, platform {sys.platform}',
+        f'Qt platform plugin: {app.platformName()}, '
+        f'style: {app.style().objectName()}',
+        'high-DPI scaling: ' + str(app.testAttribute(
+            _QtCore.Qt.ApplicationAttribute.AA_EnableHighDpiScaling)),
+    ]
+    env_names = ('QT_SCALE_FACTOR', 'QT_AUTO_SCREEN_SCALE_FACTOR',
+                 'QT_SCREEN_SCALE_FACTORS', 'QT_ENABLE_HIGHDPI_SCALING',
+                 'QT_FONT_DPI', 'QT_QPA_PLATFORM', 'QT_STYLE_OVERRIDE',
+                 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP', 'GDK_SCALE',
+                 'GDK_DPI_SCALE')
+    env = {name: os.environ[name] for name in env_names if name in os.environ}
+    lines.append(f'environment: {env or "none set"}')
+    for screen in app.screens():
+        geom, avail = screen.geometry(), screen.availableGeometry()
+        lines.append(
+            f'screen {screen.name()!r}: {geom.width()}x{geom.height()} '
+            f'logical px (available {avail.width()}x{avail.height()}), '
+            f'logical DPI {screen.logicalDotsPerInch():.0f}, physical DPI '
+            f'{screen.physicalDotsPerInch():.0f}, device pixel ratio '
+            f'{screen.devicePixelRatio():g}')
+    font = app.font()
+    metrics = _QtGui.QFontMetrics(font)
+    lines.append(f'default font: {font.family()!r} {font.pointSizeF():g} pt '
+                 f'({metrics.height()} px line height)')
+    ten_pt = _QtGui.QFont(font)
+    ten_pt.setPointSizeF(10)
+    ten_pt_px = _QtGui.QFontMetrics(ten_pt).height()
+    lines.append(f'10 pt text is {ten_pt_px} px tall (about 16 px at 96 DPI)')
+    palette = app.palette()
+    roles = _QtGui.QPalette.ColorRole
+    colors = {name: palette.color(getattr(roles, name)).name()
+              for name in ('Window', 'WindowText', 'Mid', 'Text', 'Base')}
+    lines.append(f'palette: {colors}')
+    report = '\n'.join(lines)
+    if print_report:
+        print(report)
+    return report

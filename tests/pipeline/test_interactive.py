@@ -15,6 +15,7 @@ from citkid.pipeline.interactive.core import (
     StepPanel,
 )
 from citkid.pipeline.interactive.iq_series import IQSeriesWindow
+from citkid.pipeline.dataset import reopen_group
 
 
 def _make_step(name, func_type='per-row', return_names=None):
@@ -301,12 +302,17 @@ def _assert_hints_wrap(win):
     assert hints.wordWrap()
     full_width = QtGui.QFontMetrics(hints.font()).horizontalAdvance(hints.text())
     assert hints.minimumSizeHint().width() < full_width / 2
+    # On a row of its own (directly in the toolbar's rows), so other widgets
+    # can't squeeze it to nothing
+    assert toolbar.layout().indexOf(hints) >= 0
+    win.show()
+    assert hints.width() >= toolbar.width() - 20 and hints.height() > 0
 
 
 class TestIQSeriesWindow:
     def _make_window(
         self, qt_app, monkeypatch, nrows=2, data_idxs=None, start_idx=0,
-        state_group=None, xy_fit=None
+        state_group=None, xy_fit=None, hold_series_point=False
     ):
         """
         Build a IQSeriesWindow over two mock series runners.
@@ -320,6 +326,8 @@ class TestIQSeriesWindow:
             resumes from ``state_group``.
         state_group (zarr.Group or None): Group for persistent state.
         xy_fit (SeriesXYFit or None): Optional y vs x fit.
+        hold_series_point (bool): Initial state of the Hold Series Point
+            toggle.
 
         Returns:
         win (IQSeriesWindow): The window.
@@ -350,6 +358,7 @@ class TestIQSeriesWindow:
             title='test',
             state_group=state_group,
             xy_fit=xy_fit,
+            hold_series_point=hold_series_point,
         )
 
     @staticmethod
@@ -420,23 +429,25 @@ class TestIQSeriesWindow:
         self._close(win)
 
     def test_data_idxs_subset_navigation(self, qt_app, monkeypatch):
+        # Sorted to [1, 3, 4]
         win = self._make_window(qt_app, monkeypatch, nrows=6, data_idxs=[4, 1, 3], start_idx=1)
         self._stub_refresh(win)
 
-        assert win._data_idx == 1
+        assert win._data_idxs == [1, 3, 4]
+        assert win._data_idx == 3
         assert win._res_label.text() == '2 / 3'
         assert (win._data_idx_spin.minimum(), win._data_idx_spin.maximum()) == (1, 4)
 
         win._advance_resonator(+1)
-        assert (win._data_idx, win._nav_pos) == (3, 2)
+        assert (win._data_idx, win._nav_pos) == (4, 2)
         assert win._res_label.text() == '3 / 3'
 
         win._advance_resonator(+1)
-        assert win._data_idx == 3
+        assert win._data_idx == 4
 
         win._advance_resonator(-5)
-        assert (win._data_idx, win._nav_pos) == (4, 0)
-        assert win._data_idx_spin.value() == 4
+        assert (win._data_idx, win._nav_pos) == (1, 0)
+        assert win._data_idx_spin.value() == 1
         self._close(win)
 
     @pytest.mark.parametrize(
@@ -463,7 +474,7 @@ class TestIQSeriesWindow:
         win._prefetch_next()
         win._prefetch_thread.join(timeout=2)
 
-        win._get_x_array.assert_called_once_with(2)
+        win._get_x_array.assert_called_once_with(5)  # sorted: [2, 5]
         self._close(win)
 
     def test_background_init_only_visits_subset(self, qt_app, monkeypatch):
@@ -477,7 +488,7 @@ class TestIQSeriesWindow:
         win._start_background_initialize_remaining()
         win._init_all_thread.join(timeout=2)
 
-        assert visited == [2, 0]
+        assert visited == [2, 5]  # sorted: [0, 2, 5], starting at 0
         self._close(win)
 
     @pytest.mark.parametrize('data_idxs', [[], [0, 2], [-1]])
@@ -552,7 +563,8 @@ class TestIQSeriesWindow:
         win._start_background_initialize_remaining()
         win._init_all_thread.join(timeout=2)
 
-        assert visited == [2, 1, 5, 4]
+        # Sorted: [1, 2, 3, 4, 5], starting at 3
+        assert visited == [4, 5, 1, 2]
         self._close(win)
 
     def test_resume_starts_at_first_unviewed_index(self, qt_app, monkeypatch, tmp_path):
@@ -567,13 +579,93 @@ class TestIQSeriesWindow:
         win._advance_resonator(+1)
         assert win._data_idx == 3
         self._close(win)
-        assert state_group.attrs['series_state']['viewed_data_idxs'] == [0, 1, 3]
+        state = reopen_group(state_group).attrs['series_state']
+        # The row open at closing is not viewed; it is where to resume.
+        assert state['viewed_data_idxs'] == [0, 1]
+        assert state['last_data_idx'] == 3
 
         # Session 2 over all rows starts at 2, the first row never viewed.
         win = self._make_window(qt_app, monkeypatch, nrows=6, start_idx=None,
                                 state_group=state_group)
         assert win._data_idx == 2
         assert win._res_label.text() == '3 / 6'
+        self._close(win)
+
+    @pytest.mark.parametrize('keep', [False, True])
+    def test_hold_series_point_across_data_indices(self, qt_app, monkeypatch, keep):
+        win = self._make_window(qt_app, monkeypatch, nrows=3, hold_series_point=keep)
+        self._stub_refresh(win)
+        win._run_all_panels = MagicMock()
+        assert win._hold_series_btn.isCheckable()
+        assert win._hold_series_btn.isChecked() == keep
+
+        win._set_series_idx(1)
+        win._advance_resonator(+1)
+        assert win._data_idx == 1
+        if keep:
+            assert win._series_idx == 1
+            assert win._series_combo.currentIndex() == 1
+            assert all(panel.AR is win._ARs[1] and panel.data_idx == 1
+                       for panel in win.panels)
+        else:
+            assert win._series_idx is None and win._series_combo.currentIndex() == -1
+
+        # The toggle switches the behavior
+        win._hold_series_btn.setChecked(not keep)
+        win._set_series_idx(0)
+        win._advance_resonator(+1)
+        assert win._series_idx == (None if keep else 0)
+        self._close(win)
+
+    def test_resume_at_the_row_open_when_closed(self, qt_app, monkeypatch, tmp_path):
+        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+        win = self._make_window(qt_app, monkeypatch, nrows=6, start_idx=None,
+                                state_group=state_group)
+        self._stub_refresh(win)
+        win._advance_resonator(+1)
+        win._advance_resonator(+1)
+        # Rows pre-fitted in the background are not viewed
+        win._mark_attempted(3)
+        win._mark_attempted(4)
+        self._close(win)
+
+        win = self._make_window(qt_app, monkeypatch, nrows=6, start_idx=None,
+                                state_group=state_group)
+        assert win._data_idx == 2 and win._data_idxs == list(range(6))
+        self._stub_refresh(win)
+        win._advance_resonator(+1)
+        state = reopen_group(state_group).attrs['series_state']
+        # The open row is saved as it changes (e.g. in case of a crash)
+        assert state['viewed_data_idxs'] == [0, 1, 2]
+        assert state['last_data_idx'] == 3
+        self._close(win)
+
+    def test_resume_starts_at_an_earlier_unviewed_row(self, qt_app, monkeypatch, tmp_path):
+        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+        # Viewed 0, 2 and 3, closed on 4 (1 was never viewed)
+        state_group.attrs['series_state'] = {'viewed_data_idxs': [0, 2, 3], 'prefit_attempted': [],
+                                             'last_data_idx': 4}
+
+        win = self._make_window(qt_app, monkeypatch, nrows=6, start_idx=None,
+                                state_group=state_group)
+        assert win._data_idxs == list(range(6))
+        assert win._data_idx == 1 and win._res_label.text() == '2 / 6'
+        self._close(win)
+
+    def test_start_idx_overrides_saved_state_and_data_idxs_are_sorted(
+        self, qt_app, monkeypatch, tmp_path
+    ):
+        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+        state_group.attrs['series_state'] = {'viewed_data_idxs': [], 'prefit_attempted': [],
+                                             'last_data_idx': 4}
+
+        win = self._make_window(qt_app, monkeypatch, nrows=6, data_idxs=[5, 1, 3, 1],
+                                start_idx=1, state_group=state_group)
+        assert win._data_idxs == [1, 3, 5]
+        assert win._data_idx == 3
+        self._stub_refresh(win)
+        win._advance_resonator(+1)
+        assert win._data_idx == 5
         self._close(win)
 
     def test_resume_with_everything_viewed_or_explicit_start(self, qt_app, monkeypatch, tmp_path):
@@ -589,6 +681,20 @@ class TestIQSeriesWindow:
         assert win._data_idx == 2
         self._close(win)
 
+    def test_state_is_reread_when_the_store_was_deleted(self, qt_app, monkeypatch, tmp_path):
+        """A group object held across sessions keeps stale attributes."""
+        import shutil
+        path = tmp_path / 'state.zarr'
+        state_group = zarr.open_group(str(path), mode='w')
+        state_group.attrs['series_state'] = {'viewed_data_idxs': [0, 1], 'prefit_attempted': [0, 1]}
+        shutil.rmtree(path)
+        assert 'series_state' in state_group.attrs  # stale
+
+        win = self._make_window(qt_app, monkeypatch, nrows=3, start_idx=None, state_group=state_group)
+        assert win._data_idx == 0
+        assert win._initialized_data_idxs == set()
+        self._close(win)
+
     def test_attempted_rows_are_saved(self, qt_app, monkeypatch, tmp_path):
         state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
         win = self._make_window(qt_app, monkeypatch, nrows=4, state_group=state_group)
@@ -597,7 +703,7 @@ class TestIQSeriesWindow:
 
         win._initialize_remaining_data_indices([MagicMock()], [2, 3])
 
-        assert state_group.attrs['series_state']['prefit_attempted'] == [2, 3]
+        assert reopen_group(state_group).attrs['series_state']['prefit_attempted'] == [2, 3]
         self._close(win)
 
     def test_close_waits_for_worker_and_consolidates(self, qt_app, monkeypatch):
@@ -861,8 +967,9 @@ class TestIQSeriesWindow:
 
         with pytest.raises(RuntimeError):
             win.isVisible()
-        assert win._viewed_data_idxs == {0}
-        assert state_group.attrs['series_state']['viewed_data_idxs'] == [0]
+        assert win._data_idx == 0 and win._viewed_data_idxs == set()
+        state = reopen_group(state_group).attrs['series_state']
+        assert state['viewed_data_idxs'] == [] and state['last_data_idx'] == 0
 
     def test_worker_ars_are_built_once(self, qt_app, monkeypatch):
         win = self._make_window(qt_app, monkeypatch, nrows=3)
@@ -1531,3 +1638,233 @@ def test_launchers_pass_their_panels_to_run_interactive(module, func, panels):
     assert kwargs['ui_scale'] == 0.8
     for group in panels:
         assert icore.get_panel_class(group) is not icore.DefaultStepPanel
+
+
+################################################################################
+# Fonts, hints and fitting to the screen
+################################################################################
+
+def test_fonts_are_in_logical_pixels():
+    """Pixel sizes keep text in proportion to the windows on every system."""
+    assert icore.font_px(10) == 13 and icore.font_px(9, 0.5) == 8
+    assert icore.widget_font_stylesheet(1.0) == '* { font-size: 13px; }'
+    import pyqtgraph as pg
+    plot = pg.PlotItem()
+    icore.scale_plot_fonts(1.0, plot)
+    assert plot.titleLabel.item.font().pixelSize() == icore.font_px(icore.LABEL_FONT_PT)
+
+
+def test_hint_label_contrasts_even_when_mid_matches_the_background(qt_app):
+    palette = QtWidgets.QApplication.palette()
+    bad = QtGui.QPalette(palette)
+    bad.setColor(QtGui.QPalette.ColorRole.Mid, palette.color(QtGui.QPalette.ColorRole.Window))
+    QtWidgets.QApplication.setPalette(bad)
+    try:
+        label = icore.hint_label('hints')
+    finally:
+        QtWidgets.QApplication.setPalette(palette)
+    import re
+    rgb = [int(v) for v in re.search(r'rgb\((\d+), (\d+), (\d+)\)', label.styleSheet()).groups()]
+    bg = palette.color(QtGui.QPalette.ColorRole.Window)
+    assert label.wordWrap()
+    assert max(abs(rgb[0] - bg.red()), abs(rgb[1] - bg.green()), abs(rgb[2] - bg.blue())) > 80
+
+
+def _tall_window(qt_app, n_plots=3, plot_height=300):
+    """
+    Build a window with a label and tall plots, for shrink_to_fit.
+
+    Parameters:
+    qt_app (QApplication): Qt application fixture.
+    n_plots (int): number of plot widgets.
+    plot_height (int): minimum height of each plot widget.
+
+    Returns:
+    win (QMainWindow): the window.
+    plots (list of pg.GraphicsLayoutWidget): the plot widgets.
+    """
+    import pyqtgraph as pg
+    win = QtWidgets.QMainWindow()
+    central = QtWidgets.QWidget()
+    layout = QtWidgets.QVBoxLayout(central)
+    for i in range(4):
+        layout.addWidget(QtWidgets.QLabel(f'label {i}'))
+    plots = []
+    for _ in range(n_plots):
+        gw = pg.GraphicsLayoutWidget()
+        gw.addPlot()
+        gw.setMinimumHeight(plot_height)
+        layout.addWidget(gw)
+        plots.append(gw)
+    win.setCentralWidget(central)
+    win.centralWidget().setStyleSheet(icore.widget_font_stylesheet(1.0))
+    return win, plots
+
+
+def _height(win):
+    """Return the height a test window's content needs."""
+    win.layout().activate()
+    return win.centralWidget().minimumSizeHint().height()
+
+
+def test_shrink_to_fit_shrinks_plots_first(qt_app):
+    win, plots = _tall_window(qt_app)
+    assert _height(win) > 600
+
+    plot_factor, font_scale = icore.shrink_to_fit(win, lambda: _height(win), plots, 1.0,
+                                                  max_height=600, max_width=5000)
+
+    assert _height(win) <= 600
+    assert icore.MIN_PLOT_FACTOR <= plot_factor < 1 and font_scale == 1.0
+    assert all(gw.minimumHeight() == round(300 * plot_factor) for gw in plots)
+    win.deleteLater()
+
+
+def test_shrink_to_fit_then_fonts_down_to_the_limits(qt_app):
+    win, plots = _tall_window(qt_app)
+
+    plot_factor, font_scale = icore.shrink_to_fit(win, lambda: _height(win), plots, 1.0,
+                                                  max_height=50, max_width=5000)
+
+    assert plot_factor == icore.MIN_PLOT_FACTOR
+    assert font_scale == pytest.approx(icore.MIN_FONT_FACTOR)
+    assert 'font-size: 9px' in win.centralWidget().styleSheet()
+    win.deleteLater()
+
+
+def test_shrink_to_fit_leaves_fitting_windows_and_useless_font_steps(qt_app):
+    win, plots = _tall_window(qt_app, plot_height=50)
+    assert icore.shrink_to_fit(win, lambda: _height(win), plots, 1.0, 5000, 5000) == (1.0, 1.0)
+    # Too wide because of a fixed minimum width: smaller fonts don't help
+    plots[0].setMinimumWidth(3000)
+    assert icore.shrink_to_fit(win, lambda: _height(win), plots, 1.0, 5000, 1000) == (1.0, 1.0)
+    assert 'font-size: 13px' in win.centralWidget().styleSheet()
+    win.deleteLater()
+
+
+@pytest.mark.parametrize('kind', ['analysis', 'series'])
+def test_windows_shrink_to_fit_the_screen(qt_app, monkeypatch, kind):
+    """Both window types fit their content to the available screen."""
+    from pyqtgraph.Qt import QtCore
+    calls = []
+    real = icore.shrink_to_fit
+
+    def spy(window, content_height, plots, ui_scale, max_height, max_width):
+        calls.append((max_height, max_width))
+        return real(window, content_height, plots, ui_scale, max_height, max_width)
+
+    small = QtCore.QRect(0, 0, 1300, 700)
+    module = icore if kind == 'analysis' else iseries
+    monkeypatch.setattr(module, 'available_screen_geometry', lambda: small)
+    monkeypatch.setattr(module, 'shrink_to_fit', spy)
+    if kind == 'analysis':
+        win = TestInteractiveWindow()._make_window(qt_app, monkeypatch)
+    else:
+        win = TestIQSeriesWindow()._make_window(qt_app, monkeypatch)
+    from citkid.qt_compat import TITLE_BAR_MARGIN
+    assert calls == [(700 - TITLE_BAR_MARGIN, 1300)]
+    with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+        win.close()
+
+
+def test_compact_combo_ignores_long_items(qt_app):
+    combo = icore.compact_combo(QtWidgets.QComboBox(), 10)
+    combo.addItems(['short', 'a very long quantity name ' * 4])
+    assert combo.minimumContentsLength() == 10
+    item_width = QtGui.QFontMetrics(combo.font()).horizontalAdvance(combo.itemText(1))
+    assert combo.minimumSizeHint().width() < item_width / 2
+
+
+def test_section_headers_clip_long_step_names(qt_app, monkeypatch):
+    """Long step names must not set the panels' minimum width."""
+    win = TestInteractiveWindow()._make_window(qt_app, monkeypatch)
+    headers = win.findChildren(icore._SectionHeader)
+    assert headers
+    for header in headers:
+        btn = header._btn
+        assert btn.sizePolicy().horizontalPolicy() == QtWidgets.QSizePolicy.Policy.Ignored
+        assert btn.toolTip() == '  →  '.join(header._panel.step_names)
+    with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+        win.close()
+
+
+@pytest.mark.parametrize('data_idxs, viewed, last, start', [
+    # No saved state: first row
+    ([0, 1, 2], set(), None, 0),
+    # Stepped through 0 and 1, closed on 2
+    ([0, 1, 2, 3], {0, 1}, 2, 2),
+    # 1 never viewed: start there, so stepping forward doesn't skip it
+    ([0, 1, 2, 3], {0, 2}, 3, 1),
+    # New entries added before the open row
+    ([0, 1, 2, 5, 6], {5, 6}, 0, 0),
+    ([0, 1, 2, 5, 6], {0, 1}, 5, 2),
+    # Closed on a row viewed before (stepped back to it)
+    ([0, 1, 2, 3], {0, 1, 2}, 1, 1),
+    # Open row no longer in data_idxs, or state from an older version
+    ([0, 1, 3], {0}, 2, 1),
+    ([0, 1, 2], {0, 1, 2}, None, 0),
+])
+def test_resume_position(data_idxs, viewed, last, start):
+    assert iseries.resume_position(data_idxs, viewed, last) == start
+
+
+def test_help_html_escapes_and_lists_items():
+    html = icore.help_html('W <1>', [('Keys', [('A & B', 'x < y'), ('', 'note')])])
+    assert html.startswith('<h3>W &lt;1&gt;</h3>')
+    assert '<li><b>A &amp; B:</b> x &lt; y</li>' in html
+    assert '<li>note</li>' in html
+
+
+def test_help_dialog_fits_a_small_screen(qt_app, monkeypatch):
+    from pyqtgraph.Qt import QtCore
+    monkeypatch.setattr(icore, 'available_screen_geometry',
+                        lambda: QtCore.QRect(0, 0, 500, 300))
+    parent = QtWidgets.QWidget()
+    items = [(f'key {i}', 'a description ' * 8) for i in range(40)]
+    dlg = icore.toggle_help_dialog(parent, 'Test', [('Keyboard', items)])
+    assert dlg.isVisible() and dlg.windowTitle() == 'Test Help  (H to close)'
+    assert dlg.width() <= 500 and dlg.height() <= 300  # it scrolls instead
+    assert icore.toggle_help_dialog(parent, 'Test', []) is dlg
+    assert not dlg.isVisible()
+    parent.deleteLater()
+
+
+def help_text(win):
+    """
+    Open and close a window's help dialog with its H handler.
+
+    Parameters:
+    win (QMainWindow): window with ``_toggle_help`` and ``_hints_label``.
+
+    Returns:
+    text (str): the dialog's text.
+    """
+    keys = [sc.key().toString() for sc in win.findChildren(QtGui.QShortcut)
+            if sc.parent() is win]
+    assert 'H' in keys
+    assert '[H] help' in win._hints_label.text()
+    win._toggle_help()
+    assert win._help_dialog.isVisible()
+    text = win._help_dialog.findChild(QtWidgets.QLabel).text()
+    win._toggle_help()
+    assert not win._help_dialog.isVisible()
+    return text
+
+
+def test_analysis_window_help(qt_app, monkeypatch):
+    win = TestInteractiveWindow()._make_window(qt_app, monkeypatch)
+    text = help_text(win)
+    for item in ('Shift+1-9', 'Run+', 'Bad Data', 'Reset Mask', 'Shift+drag'):
+        assert item in text
+    with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+        win.close()
+
+
+def test_series_window_help(qt_app, monkeypatch):
+    win = TestIQSeriesWindow()._make_window(qt_app, monkeypatch)
+    text = help_text(win)
+    for item in ('W / S', 'Ctrl+Shift+B', 'Mark Bad Above', 'Hold Series Point',
+                 'Click a point', 'Bad Data'):
+        assert item in text
+    assert 'Fit curve' not in text  # no xy fit
+    TestIQSeriesWindow._close(win)

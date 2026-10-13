@@ -50,6 +50,7 @@ B           mark the selected series point bad
 Ctrl+⇧B     mark the selected series point and all points with larger x bad
 1, 2, …     run panel N and all following panels (same as its "Run +")
 Shift+N     run panel N only
+H           show / hide the help dialog
 """
 
 import concurrent.futures
@@ -60,12 +61,13 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
 from ..analysis import AnalysisRunner
-from ..dataset import DataSet, _io_lock_for, _retry_io
+from ..dataset import DataSet, _io_lock_for, _retry_io, reopen_group
 from ..framework import LazyAttr
 from ..series_xy_fit import SeriesXYFit, SeriesXYFitStore  # noqa: F401 (SeriesXYFit re-exported)
 from ...qt_compat import (
     TITLE_BAR_MARGIN,
     Qt as _Qt,
+    available_screen_geometry,
     delete_on_close,
     fit_window_to_screen,
     get_qapp,
@@ -78,15 +80,49 @@ from ...qt_compat import (
 from . import gain      # noqa: F401 — registers GainFitPanel
 from . import fit_iq    # noqa: F401 — registers FitIQPanel
 from .core import (
+    PANEL_HELP,
+    PLOT_HELP,
     _SectionHeader,
+    compact_combo,
     get_panel_class,
+    hint_label,
     scale_plot_fonts,
+    shrink_to_fit,
+    toggle_help_dialog,
     widget_font_stylesheet,
 )
 
 
 # Attribute on the state group holding viewed / pre-fitted rows.
 _STATE_ATTR = 'series_state'
+
+
+def resume_position(data_idxs, viewed, last_data_idx):
+    """
+    Pick where a resumed session starts in ``data_idxs``.
+
+    The session starts at the first entry of ``data_idxs`` the user hasn't
+    viewed (moved on from), or at ``last_data_idx`` (open when the last
+    session closed) if that comes first. When the user stepped through to a
+    row and closed there, that row is where the session resumes. Earlier
+    rows that were never viewed (e.g. new entries in ``data_idxs``) come
+    first, so stepping forward from the start never skips an entry.
+
+    Parameters:
+    data_idxs (list of int): Data indices to review, in order.
+    viewed (set of int): Data indices the user has viewed and moved on from.
+    last_data_idx (int or None): Data index open when the last session
+        closed, or None if unknown (no saved state, or state saved by an
+        older version).
+
+    Returns:
+    start_pos (int): Position in ``data_idxs`` to start at; 0 if every
+        entry was viewed and ``last_data_idx`` isn't one of them.
+    """
+    candidates = [pos for pos, di in enumerate(data_idxs)
+                  if int(di) not in viewed or int(di) == last_data_idx]
+    return candidates[0] if candidates else 0
+
 
 # Panel grouping matching iq_analysis_template.yaml
 _IQ_PANELS = [
@@ -296,23 +332,27 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
     y_name (str): Label for the y-axis of the series plot.
     start_series_idx (int): Initial series index. Default 0.
     start_idx (int or None): Position in ``data_idxs`` to start at (not a
-        ``data_idx``), clamped to the valid range. None (default) starts at
-        the first entry of ``data_idxs`` that hasn't been viewed yet (see
-        ``state_group``), or at position 0 if all have been viewed or there
-        is no saved state.
-    data_idxs (list of int or None): Ordered data indices to review.
-        Navigation, prefetching and background fitting only visit these rows.
-        None (default) uses every row, ``0 .. nrows - 1``.
+        ``data_idx``), clamped to the valid range, regardless of the saved
+        state. None (default) resumes the last session (see
+        ``state_group`` and ``resume_position``): at the data index that was
+        open when it closed, or at an earlier entry of ``data_idxs`` that
+        was never viewed; position 0 if there is no saved state.
+    data_idxs (list of int or None): Data indices to review. They are
+        sorted (duplicates dropped), and navigation steps through them in
+        increasing order. Prefetching and background fitting only visit
+        these rows. None (default) uses every row, ``0 .. nrows - 1``.
     title (str): Window title. Default 'IQ Series'.
     ui_scale (float): Font and widget size multiplier. Default 1.0.
     plot_scale (float): Plot area height multiplier. Default 1.0.
     parent (QWidget or None): Parent widget.
     state_group (zarr.Group or None): Group whose ``series_state`` attribute
         stores session state, so a later session can resume: the data
-        indices the user has viewed (left by navigating away, or open when
-        the window was closed) and the rows already pre-fitted (including
-        failed fits, which are not retried). None (default) keeps state in
-        memory only. Delete ``state_group.attrs['series_state']`` to reset.
+        indices the user has viewed and moved on from, the data index that
+        is open (saved as it changes, so it is the one open at closing), and
+        the rows already pre-fitted (including failed fits, which are not
+        retried). Pre-fitting doesn't count as viewing. None (default) keeps
+        state in memory only. Delete ``state_group.attrs['series_state']``
+        to reset.
     xy_fit (SeriesXYFit or None): Optional fit of the series plot's y vs x
         data, one per resonator. Each resonator is fitted once its series points
         are pre-fitted, and again whenever its plotted x or y data changes.
@@ -343,6 +383,10 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
     xscale, yscale (str): Series-plot axis scales. Can be 'linear' (default)
         or 'log' (base 10; points with x or y <= 0 are not drawn). Log scale
         can also be toggled from the plot's right-click menu.
+    hold_series_point (bool): Initial state of the Hold Series Point
+        toggle. If on, the selected series point stays selected when the
+        data index changes (its panels show the new row). If off (default),
+        changing the data index deselects it.
 
     Notes:
     While the window is open, every dataset writes through its fast write
@@ -368,7 +412,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         start_idx=None, data_idxs=None, title="IQ Series", ui_scale=1.0,
         plot_scale=1.0, parent=None, state_group=None, xy_fit=None, panels=None,
         precompute_values=False, background_fitting=False, x_values=None,
-        xscale='linear', yscale='linear',
+        xscale='linear', yscale='linear', hold_series_point=False,
     ):
         """
         Build the window, toolbar, series plots and analysis panels.
@@ -381,6 +425,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         super().__init__(parent)
         delete_on_close(self)  # destroy on the GUI thread when closed
         self._xscale, self._yscale = xscale, yscale
+        self._hold_series_point = bool(hold_series_point)
         self._ARs = list(ARs)
         self._x_param_name = x_param_name
         self._x_name = x_name
@@ -414,11 +459,13 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         except Exception:
             self._nrows = 1
 
-        # Ordered rows to review; navigation moves by position in this list.
+        # Rows to review, in increasing order; navigation moves by position
+        # in this list.
         if data_idxs is None:
             self._data_idxs = list(range(self._nrows))
         else:
-            self._data_idxs = [int(di) for di in np.atleast_1d(data_idxs)]
+            self._data_idxs = sorted(
+                {int(di) for di in np.atleast_1d(data_idxs)})
         if not self._data_idxs:
             raise ValueError('data_idxs must contain at least one data index')
         bad = [di for di in self._data_idxs if not 0 <= di < self._nrows]
@@ -427,11 +474,16 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                 f'data_idxs must be in 0 .. {self._nrows - 1}; got {bad}'
             )
 
-        # Persistent session state (viewed and pre-fitted rows).
+        # Persistent session state (viewed and pre-fitted rows). Reopened,
+        # since a group object keeps the attributes it first read (stale if
+        # the store was deleted or changed since).
+        if state_group is not None:
+            state_group = reopen_group(state_group)
         self._state_group = state_group
         self._state_lock = threading.Lock()
         state = self._load_state()
         self._viewed_data_idxs: set[int] = set(state.get('viewed_data_idxs', []))
+        last_data_idx = state.get('last_data_idx')
         # Rows already attempted for every series point (fitted, loaded, or failed).
         # They are not fitted again automatically; the user can rerun panels.
         self._initialized_data_idxs: set[int] = set(state.get('prefit_attempted', []))
@@ -441,7 +493,9 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._xy_store = None
         if xy_fit is not None:
             group = xy_fit.group
-            if group is None:
+            if group is not None:
+                group = reopen_group(group)
+            else:
                 group = (state_group.require_group('xy_fit') if state_group is not None
                          else zarr.open_group(zarr.storage.MemoryStore(), mode='w'))
             store = SeriesXYFitStore(group, xy_fit, self._nrows, self._n_series)
@@ -452,11 +506,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             self._xy_store = store
 
         if start_idx is None:
-            unviewed = [
-                pos for pos, di in enumerate(self._data_idxs)
-                if di not in self._viewed_data_idxs
-            ]
-            start_idx = unviewed[0] if unviewed else 0
+            start_idx = resume_position(
+                self._data_idxs, self._viewed_data_idxs, last_data_idx)
         self._nav_pos = max(0, min(int(start_idx), len(self._data_idxs) - 1))
         self._data_idx = self._data_idxs[self._nav_pos]
 
@@ -556,6 +607,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         sc_r.activated.connect(self._autoscale_all)
         sc_b = QtGui.QShortcut(QtGui.QKeySequence('B'), self)
         sc_b.activated.connect(self._mark_all_bad)
+        QtGui.QShortcut(QtGui.QKeySequence('H'), self,
+                        activated=self._toggle_help)
         # N: run panel N and all following ("Run +"). Shift+N: panel N only.
         for idx in range(1, 10):
             _sc = QtGui.QShortcut(QtGui.QKeySequence(str(idx)), self)
@@ -573,8 +626,9 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         The width is set first, since the word-wrapped toolbar hints make the
         needed height depend on it. The splitter then gives the panels 60% of
         the width, or at least the width they need to avoid a horizontal
-        scrollbar, with the plots taking the rest. The height is capped at
-        the screen height, beyond which the panels scroll.
+        scrollbar, with the plots taking the rest. If the panels are taller
+        than the screen, their plots shrink, then the fonts
+        (``core.shrink_to_fit``); only past those limits do they scroll.
 
         Parameters:
         width (int): Preferred width in logical pixels (shrunk to fit the
@@ -586,6 +640,12 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self.ensurePolished()
         self.layout().activate()
         fit_window_to_screen(self, frac=0.9, size=(width, 1), height_margin=TITLE_BAR_MARGIN)
+        self._splitter.setSizes(self._splitter_sizes())
+        geom = available_screen_geometry()
+        plots = [w for panel in self.panels
+                 for w in panel.findChildren(pg.GraphicsLayoutWidget)]
+        shrink_to_fit(self, self._content_height, plots, self._ui_scale,
+                      geom.height() - TITLE_BAR_MARGIN, geom.width())
         self._splitter.setSizes(self._splitter_sizes())
         fit_window_to_screen(self, frac=0.9, size=(self.width(), self._content_height()),
                              height_margin=TITLE_BAR_MARGIN)
@@ -638,12 +698,11 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     def _build_toolbar(self) -> QtWidgets.QWidget:
         """
-        Build the two-row toolbar.
+        Build the three-row toolbar.
 
-        Row 1 holds navigation, series selection and status labels. Row 2
-        holds the shortcut hints and the batch-action buttons. The hints
-        label word-wraps, so the toolbar never forces the window wider than
-        the screen.
+        Row 1 holds navigation, series selection and status labels, row 2
+        the batch-action buttons, and row 3 the shortcut hints, on a row of
+        their own so they always have the full width to wrap in.
 
         Returns:
         w (QWidget): The toolbar widget.
@@ -690,8 +749,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         # Series selection — dropdown showing index + x value for each series point
         self._series_combo_label = QtWidgets.QLabel(f'series index, {self._x_name}:')
         layout.addWidget(self._series_combo_label)
-        self._series_combo = QtWidgets.QComboBox()
-        self._series_combo.setMinimumWidth(160)
+        self._series_combo = compact_combo(QtWidgets.QComboBox(), 16)
         for i in range(self._n_series):
             self._series_combo.addItem(f'{i + 1}, —')
         self._series_combo.setCurrentIndex(-1)  # nothing selected on startup
@@ -702,16 +760,13 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
         layout.addStretch()
 
-        # Row 2: word-wrapping shortcut hints, then batch actions
+        # Row 2: batch actions. Row 3: word-wrapping shortcut hints.
         bad_above = '   [Ctrl+⇧B] mark bad above' if self._MARK_BAD_ABOVE else ''
-        hints = QtWidgets.QLabel(
+        self._hints_label = hint_label(
             '[A/D] resonator   [W/S] series point   [R] rescale   [B] mark bad'
             f'   [⇧B] mark all bad{bad_above}   [N] run+following'
-            '   [⇧N] run panel only   [⇧A] apply to all'
+            '   [⇧N] run panel only   [⇧A] apply to all   [H] help'
         )
-        hints.setWordWrap(True)
-        hints.setStyleSheet('color: palette(mid); font-style: italic;')
-        row2.addWidget(hints, 1)
 
         apply_all_btn = QtWidgets.QPushButton('Apply to All')
         apply_all_btn.setToolTip(
@@ -736,6 +791,16 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             mark_bad_above_btn.clicked.connect(self._mark_bad_above)
             row2.addWidget(mark_bad_above_btn)
 
+        self._hold_series_btn = QtWidgets.QPushButton('Hold Series Point')
+        self._hold_series_btn.setCheckable(True)
+        self._hold_series_btn.setChecked(self._hold_series_point)
+        self._hold_series_btn.setToolTip(
+            'On: hold the selected series point when the data index '
+            'changes. Off: deselect it.'
+        )
+        self._hold_series_btn.toggled.connect(self._on_hold_series_toggled)
+        row2.addWidget(self._hold_series_btn)
+
         self._apply_status_label = QtWidgets.QLabel('')
         self._apply_status_label.setMinimumWidth(120)
         layout.addWidget(self._apply_status_label)
@@ -745,8 +810,74 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._prefetch_label.setToolTip('Background prefetch status for the next resonator')
         layout.addWidget(self._prefetch_label)
 
+        row2.addStretch(1)
+        rows.addWidget(self._hints_label)
         self._update_res_label()
         return w
+
+    def _help_sections(self):
+        """
+        Return the help dialog's contents (see ``toggle_help_dialog``).
+
+        Returns:
+        sections (list): ``(heading, [(keys, description), ...])`` pairs.
+        """
+        keys = [
+            ('A / D  or  Left / Right', 'Previous / next data index'),
+            ('W / S  or  Up / Down', 'Previous / next series point'),
+            ('R', 'Rescale every plot'),
+            ('B', 'Mark the selected series point bad (every panel)'),
+            ('Shift+B', 'Mark every series point bad for this data index'),
+        ]
+        if self._MARK_BAD_ABOVE:
+            keys.append(('Ctrl+Shift+B', 'Mark the selected series point and '
+                         'every point with a larger x bad'))
+        keys += [
+            ('Shift+A', 'Apply the panel settings to every series point '
+                        'at this data index, and save'),
+            ('1-9', 'Run panel N and every panel after it (Run+)'),
+            ('Shift+1-9', 'Run panel N only'),
+            ('H', 'Show / hide this help'),
+        ]
+        toolbar = [
+            ('◀ / ▶, data_idx', 'Previous / next data index, or type one'),
+            ('Series index', 'Select a series point'),
+            ('Apply to All', 'Same as Shift+A'),
+            ('Mark All Series Bad', 'Same as Shift+B'),
+        ]
+        if self._MARK_BAD_ABOVE:
+            toolbar.append(('Mark Bad Above', 'Same as Ctrl+Shift+B'))
+        toolbar += self._extra_toolbar_help()
+        toolbar.append(('Hold Series Point', 'On: keep the selected series '
+                        'point selected when the data index changes. Off: '
+                        'deselect it'))
+        series = [
+            ('Click a point', 'Select that series point; the panels on the '
+                              'right show it'),
+            ('Waterfall', '|S21| of every series point at this data index'),
+        ]
+        if self._xy_fit is not None:
+            series.append(('Fit curve', f'{self._xy_fit.name} fit of the '
+                           'plotted points, refit whenever they change'))
+            if self._xy_fit.uses_guess:
+                series.append(('Guess inputs', 'Edit a guess and press '
+                               'Enter to refit with it; Reset refits with '
+                               "the fit's own guess"))
+        return [('Keyboard', keys), ('Toolbar', toolbar),
+                ('Series plot', series), PANEL_HELP, PLOT_HELP]
+
+    def _extra_toolbar_help(self):
+        """
+        Return help items for the controls ``_add_toolbar_controls`` adds.
+
+        Returns:
+        items (list): ``(name, description)`` pairs; none here.
+        """
+        return []
+
+    def _toggle_help(self):
+        """Show or hide the help dialog (H key)."""
+        toggle_help_dialog(self, self.windowTitle(), self._help_sections())
 
     def _add_toolbar_controls(self, layout):
         """
@@ -910,7 +1041,9 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
         Returns:
         state (dict): Keys ``viewed_data_idxs`` and ``prefit_attempted``
-            (lists of int). Empty if there is no state group or saved state.
+            (lists of int) and ``last_data_idx`` (int; missing in state saved
+            by older versions). Empty if there is no state group or saved
+            state.
         """
         if self._state_group is None:
             return {}
@@ -923,7 +1056,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     def _save_state(self):
         """
-        Write the viewed and pre-fitted rows to ``state_group``.
+        Write the viewed and pre-fitted rows, and the open data index, to
+        ``state_group``.
 
         Safe to call from the UI thread and the background worker.
         """
@@ -933,6 +1067,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             state = {
                 'viewed_data_idxs': sorted(self._viewed_data_idxs),
                 'prefit_attempted': sorted(self._initialized_data_idxs),
+                'last_data_idx': int(self._data_idx),
             }
             try:
                 with _io_lock_for(self._state_group):
@@ -942,14 +1077,13 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     def _mark_viewed(self, data_idx: int):
         """
-        Record that the user has viewed a data index, and save the state.
+        Record that the user has viewed a data index, and save the state
+        (including the open data index).
 
         Parameters:
-        data_idx (int): Data index the user is leaving or closing.
+        data_idx (int): Data index the user is leaving.
         """
         with self._state_lock:
-            if int(data_idx) in self._viewed_data_idxs:
-                return
             self._viewed_data_idxs.add(int(data_idx))
         self._save_state()
 
@@ -1038,6 +1172,15 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             self._data_idx_spin.setValue(self._data_idx)
             self._data_idx_spin.blockSignals(False)
 
+    def _on_hold_series_toggled(self, checked: bool):
+        """
+        Set whether the series point stays selected across data indices.
+
+        Parameters:
+        checked (bool): New state of the Hold Series Point toggle.
+        """
+        self._hold_series_point = bool(checked)
+
     def _on_series_combo_changed(self, value: int):
         if value != self._series_idx:
             self._set_series_idx(value)
@@ -1051,15 +1194,16 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             return
         self._wait_for_marks(new_di)  # returning to a row still being saved
         self._save_dirty_panels()  # persist results for the outgoing resonator
-        self._mark_viewed(self._data_idx)
-        self._data_idx = new_di
+        old_di, self._data_idx = self._data_idx, new_di
+        self._mark_viewed(old_di)  # also saves new_di as the open index
         self._nav_pos = self._data_idxs.index(new_di)
         self._data_idx_spin.blockSignals(True)
         self._data_idx_spin.setValue(new_di)
         self._data_idx_spin.blockSignals(False)
         self._update_res_label()
 
-        # Reset series selection so no point is pre-selected on the new dataset.
+        # Deselect the series point; it is selected again below if it is held.
+        held_si = self._series_idx if self._hold_series_point else None
         self._series_idx = None
         self._update_series_combo_selection()
 
@@ -1084,6 +1228,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._update_series_scatter()
         self._update_waterfall()
         self._autoscale_all()
+        if held_si is not None:
+            self._set_series_idx(held_si)
         QtCore.QTimer.singleShot(200, self._prefetch_next)
 
     def _set_series_idx(self, new_si: int):
@@ -1241,7 +1387,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event):
         """
-        Save, record the open data index as viewed, and consolidate storage.
+        Save, record the open data index (not as viewed: the next session
+        resumes there), and consolidate storage.
 
         The background worker is stopped first (it finishes at most its
         current fit), so nothing writes while buffered rows are merged into
@@ -1258,7 +1405,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             return
         self._init_all_stop.set()
         self._save_dirty_panels()
-        self._mark_viewed(self._data_idx)
+        self._save_state()
 
         dialog = self._make_busy_dialog('Finishing background fit and saving…', 'Closing')
         dialog.show()
@@ -2408,7 +2555,7 @@ def run_iq_series(
     root=None, n_series=None, x_param_name='ares', x_name=None,
     y_param_name='a', start_series_idx=0, start_idx=None, data_idxs=None,
     title="IQ Series", ui_scale=1.0, plot_scale=1.0, xy_fit=None, datasets=None,
-    x_values=None, xscale='linear', yscale='linear',
+    x_values=None, xscale='linear', yscale='linear', hold_series_point=False,
 ):
     """
     Build one AnalysisRunner per series index, then launch the IQSeriesWindow.
@@ -2448,12 +2595,14 @@ def run_iq_series(
         ``Qc = Qr / amp`` and ``Qi = 1 / (1/Qr - 1/Qc)``. Default ``'a'``.
     start_series_idx (int): Initial series index. Default 0.
     start_idx (int or None): Position in ``data_idxs`` to start at (not a
-        ``data_idx``). None (default) resumes at the first entry of
-        ``data_idxs`` not viewed in an earlier session. A data index counts
-        as viewed once the user navigates away from it or closes the window
-        with it open.
-    data_idxs (list of int or None): Ordered data indices to review and fit.
-        Only these rows are visited and fitted in the background. None
+        ``data_idx``), regardless of the saved state. None (default)
+        resumes the last session at the data index open when it closed, or
+        at an earlier entry of ``data_idxs`` never viewed (moved on from),
+        so stepping forward never skips one. Rows pre-fitted in the
+        background don't count as viewed. See ``resume_position``.
+    data_idxs (list of int or None): Data indices to review and fit, in
+        increasing order (they are sorted). Only these rows are visited and
+        fitted in the background. None
         (default) uses every row.
     title (str): Window title. Default ``'IQ Series'``.
     ui_scale (float): Font and widget size multiplier. Default 1.0.
@@ -2477,6 +2626,10 @@ def run_iq_series(
         DataSets.
     xscale, yscale (str): Series-plot axis scales. Can be 'linear' (default)
         or 'log' (base 10; points with x or y <= 0 are not drawn).
+    hold_series_point (bool): Initial state of the Hold Series Point
+        toggle. If on, the selected series point stays selected when the
+        data index changes (its panels show the new row). If off (default),
+        changing the data index deselects it.
 
     Returns:
     win (IQSeriesWindow): The created (and already shown) window.
@@ -2544,6 +2697,7 @@ def run_iq_series(
         background_fitting=True,
         xscale=xscale,
         yscale=yscale,
+        hold_series_point=hold_series_point,
     )
     win.show()
     app.exec()
@@ -2561,7 +2715,8 @@ def series_runners(
     make_custom_steps (callable or None): Builds new DataSets in ``root``
         (see ``build_series_runners``). Exactly one of this and ``datasets``.
     datasets (list of DataSet or None): Existing DataSets, one per series
-        point, all with the same number of rows.
+        point, all with the same number of rows. Their in-memory caches are
+        cleared (``DataSet.clear_cache``), so only saved values count.
     cal_yaml_path (str): Calibration YAML path or alias, for
         ``make_custom_steps``.
     analysis_yaml_path (str or None): Analysis YAML path or alias. With
@@ -2599,6 +2754,12 @@ def series_runners(
         raise TypeError(f'datasets must be DataSet objects; got {bad}')
     if n_series is not None and int(n_series) != len(datasets):
         raise ValueError(f'n_series ({n_series}) does not match len(datasets) ({len(datasets)})')
+    # The window works from what is saved. Values cached in memory (e.g. from
+    # an earlier session, or a store deleted and recreated since the
+    # DataSets were opened) would otherwise count as done without being
+    # saved.
+    for ds in datasets:
+        ds.clear_cache()
     nrows = [int(ds.nrows) for ds in datasets]
     if len(set(nrows)) != 1:
         raise ValueError(f'all datasets must have the same number of rows; got {nrows}')

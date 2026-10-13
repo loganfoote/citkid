@@ -540,3 +540,12 @@ def test_refits_rescale_the_series_plot(qt_app, monkeypatch, refit):
     assert view.viewRange()[0][1] < 100              # back on the data
     assert view.viewRange()[0] == pytest.approx(data_range[0], rel=0.5)
     _close(win)
+
+
+def test_help_lists_the_quantity_dropdowns(qt_app, monkeypatch):
+    from tests.pipeline.test_interactive import help_text
+    win, _ = _make_window(qt_app, monkeypatch)
+    text = help_text(win)
+    assert 'x / y' in text and 'W / S' in text
+    assert 'Mark Bad Above' not in text  # not offered in the TS window
+    _close(win)

@@ -42,6 +42,7 @@ from ...qt_compat import get_qapp
 from . import gain  # noqa: F401 — registers GainFitPanel
 from . import circ  # noqa: F401 — registers CircleFitPanel
 from . import xcal  # noqa: F401 — registers XCalPanel
+from .core import compact_combo
 from .iq_series import (
     QtWidgets,
     IQSeriesWindow,
@@ -212,6 +213,15 @@ class TSSeriesWindow(IQSeriesWindow):
         self._x_getter = self._quantities[x]
         self._x_key, self._y_key = x, y
 
+    def _extra_toolbar_help(self):
+        """
+        Return help items for the quantity dropdowns.
+
+        Returns:
+        items (list): ``(name, description)`` pairs.
+        """
+        return [('x / y', 'Quantities on the series plot axes')]
+
     def _add_toolbar_controls(self, layout):
         """
         Add the x and y quantity dropdowns to the first toolbar row.
@@ -220,8 +230,8 @@ class TSSeriesWindow(IQSeriesWindow):
         layout (QHBoxLayout): First toolbar row.
         """
         labels = list(self._quantities)
-        self._x_combo = QtWidgets.QComboBox()
-        self._y_combo = QtWidgets.QComboBox()
+        self._x_combo = compact_combo(QtWidgets.QComboBox())
+        self._y_combo = compact_combo(QtWidgets.QComboBox())
         for combo, initial, axis in ((self._x_combo, self._initial_x, 'x'),
                                      (self._y_combo, self._initial_y, 'y')):
             combo.addItems(labels)
@@ -271,7 +281,7 @@ def run_ts_series(
     quantities=None, cal_yaml_path='ts', analysis_yaml_path='ts',
     start_series_idx=0, start_idx=None, data_idxs=None, title='TS Series',
     ui_scale=1.0, plot_scale=1.0, xy_fit=None, datasets=None, x_values=None,
-    x_name=None, xscale='linear', yscale='linear',
+    x_name=None, xscale='linear', yscale='linear', hold_series_point=False,
 ):
     """
     Build one AnalysisRunner per series index for the 'ts' analysis, then
@@ -313,11 +323,14 @@ def run_ts_series(
         'ts'. With ``datasets``, None uses each DataSet's embedded analysis
         definition.
     start_series_idx (int): Initial series index. Default 0.
-    start_idx (int or None): Position in ``data_idxs`` to start at. None
-        (default) resumes at the first entry not viewed in an earlier
-        session.
-    data_idxs (list of int or None): Ordered data indices to review. None
-        (default) uses every row.
+    start_idx (int or None): Position in ``data_idxs`` to start at,
+        regardless of the saved state. None (default) resumes the last
+        session at the data index open when it closed, or at an earlier
+        entry of ``data_idxs`` never viewed (moved on from), so stepping
+        forward never skips one. Rows pre-fitted in the background don't
+        count as viewed. See ``iq_series.resume_position``.
+    data_idxs (list of int or None): Data indices to review, in increasing
+        order (they are sorted). None (default) uses every row.
     title (str): Window title. Default 'TS Series'.
     ui_scale (float): Font and widget size multiplier. Default 1.0.
     plot_scale (float): Plot area height multiplier. Default 1.0.
@@ -332,6 +345,10 @@ def run_ts_series(
         or 'log' (base 10; points with x or y <= 0 are not drawn). They stay
         when the plotted quantities change, and can also be toggled from the
         plot's right-click menu.
+    hold_series_point (bool): Initial state of the Hold Series Point
+        toggle. If on, the selected series point stays selected when the
+        data index changes (its panels show the new row). If off (default),
+        changing the data index deselects it.
 
     Returns:
     win (TSSeriesWindow): The window (after it is closed).
@@ -363,6 +380,7 @@ def run_ts_series(
         background_fitting=True,
         xscale=xscale,
         yscale=yscale,
+        hold_series_point=hold_series_point,
     )
     win.show()
     app.exec()
