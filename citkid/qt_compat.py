@@ -414,8 +414,10 @@ def _exclude_user_input_flag():
     flag (QEventLoop.ProcessEventsFlag): ``ExcludeUserInputEvents``.
     """
     loop = _QtCore.QEventLoop
-    flags = getattr(loop, 'ProcessEventsFlag', loop)
-    return getattr(flags, 'ExcludeUserInputEvents', getattr(loop, 'ExcludeUserInputEvents'))
+    flags = getattr(loop, 'ProcessEventsFlag', None)
+    if flags is not None and hasattr(flags, 'ExcludeUserInputEvents'):
+        return flags.ExcludeUserInputEvents
+    return loop.ExcludeUserInputEvents
 
 
 def run_responsive(func, *args, poll_s=0.03, **kwargs):
