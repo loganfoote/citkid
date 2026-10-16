@@ -434,43 +434,48 @@ async def test_sweep(pytestconfig, monkeypatch):
     assert np.all(np.isnan(z[0]))
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method", ['parser', 'memory'])
-async def test_stream(pytestconfig, monkeypatch, tmp_path, method):
+@pytest.mark.parametrize("mode", ['direct', 'tmp', 'memory'])
+async def test_stream(pytestconfig, monkeypatch, tmp_path, mode):
     """
     Tests whether streaming executes properly, and if the amplitue and phase
-    matches sweep (just for a couple modules), for both stream methods.
+    matches sweep (just for a couple modules), streaming directly to Zarr,
+    through a temporary Zarr store, and to memory.
     """
     ### Initialize board 
     crs = initialize_crs(pytestconfig)
     await crs.configure_system(
         clock_source = "VCXO", full_scale_dbm = 7,
-        analog_bank_high = False, verbose = False
+        analog_bank_high = True, verbose = False
     )
 
     ### set_nco
-    await crs.set_nco({1: 1e9, 2: 2e9})
+    await crs.set_nco({5: 1e9, 6: 2e9})
 
     fres = np.array([0.9e9, 1e9, 1.1e9, 1.9e9, 2.0e9, 2.1e9])
     ares = np.array([-55, -55, -50, -50, -55, -50], dtype = np.float64)
 
     root = zarr.open(os.path.join(tmp_path, 'data.zarr'), mode = 'a')
     grp = root.require_group('sample_0')
+    tmp_directory = os.path.join(tmp_path, 'tmp')
 
     spy = TqdmSpy()
     monkeypatch.setattr("citkid.util.tqdm", spy)
-    await crs.capture_ts(
-        fres = fres,
-        ares = ares,
-        ts_duration_s = 4,
-        dec_stage = 4,
-        grp = grp,
-        tmp_directory = os.path.join(tmp_path, 'tmp/'),
-        batch_size_mb = 1,
-        chunk_size_mb = 1,
-        delete_parser_data = True,
-        verbose = True,
-        method = method
-    )
+    if mode == 'memory':
+        await crs.write_tones_for_stream(fres, ares)
+        try:
+            zt = await crs.stream_to_memory(4, 4, verbose = True)
+        finally:
+            await crs.clear_tones()
+    else:
+        await crs.capture_ts(
+            fres = fres,
+            ares = ares,
+            ts_duration_s = 4,
+            dec_stage = 4,
+            grp = grp,
+            tmp_directory = tmp_directory if mode == 'tmp' else None,
+            verbose = True
+        )
     _, zsweep = await crs.sweep_span(
         fres, ares, 1e3, 1, 100, 
         allow_missing = False, center_fres = True, downward = True,
@@ -482,25 +487,32 @@ async def test_stream(pytestconfig, monkeypatch, tmp_path, method):
     assert stub1.desc == "Streaming"
 
     # Check output 
-    counts_to_s21 = grp['counts_to_s21']
-    dt = float(grp['dt'][...])
-    z = grp['z']
+    dt = 1 / util.get_sample_freq(4)
+    if mode == 'memory':
+        assert zt.dtype == np.complex128
+        assert zt.shape[0] == len(fres)
+        z = zt
+    else:
+        counts_to_s21 = grp['counts_to_s21']
+        assert np.isclose(float(grp['dt'][...]), dt)
+        z = grp['z']
+        assert counts_to_s21.shape == (len(fres),)
+        assert z.shape[0] == 2
+        assert z.shape[1] == len(fres)
+        z = z[0, :, :] + 1j * z[1, :, :]
+        z *= np.array(counts_to_s21)[:, np.newaxis]
+    assert z.shape[1] == int(4 / dt)
+    if mode == 'tmp':
+        # The temporary store is deleted after copying
+        assert os.listdir(tmp_directory) == []
 
-    assert counts_to_s21.shape == (len(fres),)
-    assert np.isclose(dt, 1 / util.get_sample_freq(4))
-    assert z.shape[0] == 2
-    assert z.shape[1] == len(fres)
-    assert np.isclose(z.shape[2] * dt, 4.0, atol = 0.2)
-
-    # Check that sweep matches parser 
-    z = z[0, :, :] + 1j * z[1, :, :]
-    z *= np.array(counts_to_s21)[:, np.newaxis]
+    # Check that sweep matches stream 
     z_avg = np.mean(z, axis = 1) 
     zsweep = zsweep[:, 0]
 
     # Absolute level: loopback S21 should be near 0 dB for the sweep and the
     # stream. Catches unit changes in rfmux.
-    for zi, name in [(zsweep, 'sweep'), (z_avg, f'stream ({method})')]:
+    for zi, name in [(zsweep, 'sweep'), (z_avg, f'stream ({mode})')]:
         level_db = np.median(20 * np.log10(np.abs(zi)))
         assert abs(level_db) < S21_LEVEL_TOL_DB, (
             f"{name} median |S21| = {level_db:.2f} dB is not within "
@@ -622,7 +634,7 @@ async def test_loopback(pytestconfig, tmp_path):
                 dec_stage = 5 
                 grp = root.require_group(f'run_{run_idx:d}')
                 run_idx += 1
-                ts_path = os.path.join(tmp_directory, 'parser/') 
+                ts_path = os.path.join(tmp_directory, 'stream_tmp/') 
                 os.makedirs(ts_path, exist_ok = True)
 
                 # ch_map sanity check 
@@ -640,9 +652,6 @@ async def test_loopback(pytestconfig, tmp_path):
                     ch_map = ch_map,
                     allow_missing = False,
                     tmp_directory = ts_path,
-                    batch_size_mb = 1000,
-                    chunk_size_mb = 128,
-                    delete_parser_data = True,
                     verbose = False
                 )
                 capture_ts_s = time.perf_counter() - t0
@@ -754,26 +763,14 @@ async def test_loopback(pytestconfig, tmp_path):
              for mi, lvl in levels_db.items()]
         results = []
         try:
-            # Absolute level: loopback S21 should be near 0 dB. The mean over
-            # modules catches unit changes in rfmux, and each module catches
-            # hardware problems.
-            if abs(mean_level_db) > S21_MEAN_LEVEL_TOL_DB:
-                raise AssertionError(
-                    f"Mean loopback |S21| level {mean_level_db:.2f} dB is not "
-                    f"within {S21_MEAN_LEVEL_TOL_DB} dB of 0 dB"
-                )
-            for mi, lvl in levels_db.items():
-                if abs(lvl) > S21_LEVEL_TOL_DB:
-                    raise AssertionError(
-                        f"Module {mi} loopback |S21| level {lvl:.2f} dB is "
-                        f"not within {S21_LEVEL_TOL_DB} dB of 0 dB"
-                    )
-
             # Confirms that streamed noise matches IQ to within abs_tol
             abs_tol = 5e-2
             max_abs_overall = -np.inf
             max_abs_module = None
             max_abs_idx = None
+            # Compare every module before raising, so that the status file
+            # reports all of them
+            failures = []
             for module_idx, (_, zsweep) in data.items():
                 zt = data_ts[module_idx][1] 
                 z_avg = np.array([np.mean(zi) for zi in zt])
@@ -801,10 +798,32 @@ async def test_loopback(pytestconfig, tmp_path):
                 if max_abs > abs_tol:
                     zs_val = zsweep.ravel()[flat_idx]
                     za_val = z_avg.ravel()[flat_idx]
+                    failures.append(
+                        f"module {module_idx}: idx = {max_idx}, "
+                        f"zsweep = {zs_val}, z_avg = {za_val}, "
+                        f"abs_diff = {max_abs}"
+                    )
+            if failures:
+                raise AssertionError(
+                    f"Max absolute diff exceeds tolerance ({abs_tol}): "
+                    + "; ".join(failures)
+                )
+
+            # Checked after the stream comparison, so that the comparison
+            # runs even if a module is not in loopback.
+            # Absolute level: loopback S21 should be near 0 dB. The mean over
+            # modules catches unit changes in rfmux, and each module catches
+            # hardware problems.
+            if abs(mean_level_db) > S21_MEAN_LEVEL_TOL_DB:
+                raise AssertionError(
+                    f"Mean loopback |S21| level {mean_level_db:.2f} dB is not "
+                    f"within {S21_MEAN_LEVEL_TOL_DB} dB of 0 dB"
+                )
+            for mi, lvl in levels_db.items():
+                if abs(lvl) > S21_LEVEL_TOL_DB:
                     raise AssertionError(
-                        "Max absolute diff exceeds tolerance: "
-                        f"idx = {max_idx}, zsweep = {zs_val}, z_avg = {za_val}, "
-                        f"abs_diff = {max_abs} (tol = {abs_tol})"
+                        f"Module {mi} loopback |S21| level {lvl:.2f} dB is "
+                        f"not within {S21_LEVEL_TOL_DB} dB of 0 dB"
                     )
             lines = ["PASS"] + level_lines
             lines.append(

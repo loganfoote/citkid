@@ -316,12 +316,6 @@ def test_get_sample_freq_accepts_numpy_int():
         )
 
 ################################################################################
-################################ parser_to_zarr ################################
-################################################################################
-# NOTE: Tests for parser_to_zarr have been moved to test_parser_to_zarr.py
-# to keep validation and functional tests together in a dedicated file.
-
-################################################################################
 ############################ estimate_ts_data_size #############################
 ################################################################################
 def _parse_size_line(line):
@@ -361,7 +355,7 @@ def test_estimate_ts_data_size_outputs_mb(capsys):
     raw_label, raw_val, raw_unit = _parse_size_line(out[0])
     proc_label, proc_val, proc_unit = _parse_size_line(out[1])
 
-    assert raw_label.startswith('Raw parser data size')
+    assert raw_label.startswith('Raw streamed data size')
     assert proc_label.startswith('Processed data size')
     assert raw_unit == 'MB'
     assert proc_unit == 'MB'
@@ -391,7 +385,7 @@ def test_estimate_ts_data_size_outputs_gb(capsys):
     raw_label, raw_val, raw_unit = _parse_size_line(out[0])
     proc_label, proc_val, proc_unit = _parse_size_line(out[1])
 
-    assert raw_label.startswith('Raw parser data size')
+    assert raw_label.startswith('Raw streamed data size')
     assert proc_label.startswith('Processed data size')
     assert raw_unit == 'GB'
     assert proc_unit == 'GB'

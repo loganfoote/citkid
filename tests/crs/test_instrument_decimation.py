@@ -373,3 +373,31 @@ async def test_set_decimation_module_idxs_numpy_array_valid(
         module_idxs = np.array([1, 2, 3]),
         verbose = False
     )
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dec_stage, module_idxs, short", [
+    (0, [1, 2], True), (1, [1, 2, 3, 4], True), (3, [1, 2, 3], False)])
+async def test_set_decimation_rejects_frame_rate(
+    mock_crs_for_set_decimation, dec_stage, module_idxs, short
+):
+    """Test frame rates above util.MAX_FRAME_RATE raise before the board is
+    changed."""
+    crs = mock_crs_for_set_decimation
+    with pytest.raises(ValueError, match = 'MAX_FRAME_RATE'):
+        await crs.set_decimation(dec_stage, short = short,
+                                 module_idxs = module_idxs, verbose = False)
+    crs.d.set_decimation.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dec_stage, module_idxs, short", [
+    (0, [1], True), (1, [1, 2, 3], True), (4, [1, 2, 3, 4], False),
+    (6, [1, 2, 3, 4], False)])
+async def test_set_decimation_allows_verified_frame_rates(
+    mock_crs_for_set_decimation, dec_stage, module_idxs, short
+):
+    """Test the verified frame rates are allowed."""
+    crs = mock_crs_for_set_decimation
+    await crs.set_decimation(dec_stage, short = short,
+                             module_idxs = module_idxs, verbose = False)
+    crs.d.set_decimation.assert_called_once()

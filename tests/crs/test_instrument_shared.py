@@ -918,16 +918,13 @@ async def test_stream_restores_shared_decimation(
     grp = zarr.open_group(tmp_path / 'data.zarr', mode = 'w')
 
     with patch('citkid.crs.instrument.util.write_acq_cfg_to_zarr'), \
-         patch('rfmux.tools.parser', create = True) as mock_parser, \
-         patch('citkid.crs.instrument.util.parser_to_zarr') as mock_p2z, \
-         patch('citkid.crs.instrument.shutil.rmtree'):
-        mock_parser.main = MagicMock(side_effect = SystemExit(0))
-        await crs.stream(1.0, dec_stage, grp, verbose = False,
-                         tmp_directory = str(tmp_path / 'tmp'))
+         patch('citkid.crs.instrument.util.capture_to_zarr',
+               return_value = {1: 0}):
+        await crs.stream(1.0, dec_stage, grp, verbose = False)
 
     assert [c.args[0] for c in crs.set_decimation.call_args_list] == expected
     # dt is from the streaming stage, not the restored stage
-    dt = mock_p2z.call_args.args[7]
+    dt = grp['dt'][...]
     assert dt == pytest.approx(256 * 64 * 2 ** dec_stage / 625e6)
 
 

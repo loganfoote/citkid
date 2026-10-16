@@ -18,7 +18,6 @@ from rfmux.algorithms.measurement import take_netanal
 
 ALL_MODULE_IDXS = tuple(range(1, 9))
 ADC_CALIBRATION_MODES = ('AUTO', 'MODE1', 'MODE2')
-STREAM_METHODS = ('parser', 'memory')
 
 class CRS:
     def __init__(
@@ -523,7 +522,9 @@ class CRS:
         Set the decimation stage, with optional short mode and module indices.
         If short and/or module_idxs are not provided, they are determined
         automatically (see below). Raises an error if the configuration will
-        drop packets.
+        drop packets: the board refuses rates above its network limit, and
+        this function refuses frame rates above the verified limit
+        ``util.MAX_FRAME_RATE``.
 
         Decimation is a board-wide setting. How it is handled depends on the
         session:
@@ -616,6 +617,9 @@ class CRS:
                     int(k) for k, v in self.fres_map.items() if len(v)
                     )
 
+        # Check the frame rate before the board starts sending
+        util.check_frame_rate(dec_stage, len(module_idxs), short)
+
         # Set decimation
         await self.d.set_decimation(
             dec_stage, short = short, module = module_idxs
@@ -690,6 +694,16 @@ class CRS:
 
         # Update self.nco_freqs
         self._forget_modules(module_idxs, forget_ncos = True)
+
+    async def clear_tones(self):
+        """
+        Clear all tones on this session's modules in the active analog bank.
+        NCO frequencies are kept.
+
+        Returns:
+        None
+        """
+        await self._clear_channels(self.active_module_idxs)
 
     async def _clear_channels(self, module_idxs):
         """
@@ -1269,78 +1283,42 @@ class CRS:
         f, z = f[ix], z[ix]
         return f, z
 
-    async def capture_ts(
-        self, fres, ares, ts_duration_s, dec_stage, grp, ch_map = None,
-        allow_missing = False, tmp_directory = 'tmp/', batch_size_mb = 1000,
-        chunk_size_mb = 128, delete_parser_data = True, verbose = True,
-        method = 'parser'
+    async def write_tones_for_stream(
+        self, fres, ares, grp = None, ch_map = None, allow_missing = False
     ):
         """
         Clear all tones on this session's modules, write tones using fres and
-        ares, capture a timestream of length ts_time using the parser or
-        directly into memory, and then clear all tones on this session's
-        modules.
+        ares, and save the tones and the system configuration to grp.
+
+        Prepares for one or more calls to ``CRS.stream`` or
+        ``CRS.stream_to_memory``, for example to stream into several
+        subgroups of grp with the same tones. Clear the tones afterwards with
+        ``CRS.clear_tones``. If an error occurs here, the tones are cleared
+        before the error is raised.
 
         Parameters:
         fres (array-like): tone frequencies in Hz.
         ares (array-like): tone amplitudes in dBm.
-        ts_duration_s (float): timestream length in seconds.
-        dec_stage (int): dec_stage frequency downsampling factor.
-            See self.set_decimation for details.
-        grp (zarr.Group): zarr group to save the batch data. The written
-            (dithered) tone frequencies are saved as 'fres' (NaN for missing
-            tones), and the requested frequencies as 'fres_requested'.
+        grp (zarr.Group or None): zarr group to save the tones and system
+            configuration to. The written (dithered) tone frequencies are
+            saved as 'fres' (NaN for missing tones), the requested
+            frequencies as 'fres_requested', the amplitudes as 'ares', and
+            the system configuration in 'crs_config'. If None, nothing is
+            saved.
         ch_map (dict): keys (int) are module indices and values (array-like int)
             are channel indices to write tones to. If None, automatically maps
             tones to NCOs based on frequency.
         allow_missing (bool): If True, ignores tones that are outside the
             bandwidth of all NCOs. If False, raises an error if any tones are
             outside the bandwidth of all NCOs.
-        tmp_directory (str): directory to save temporary parser data before
-            converting. Data is streamed to disk, so the drive must have
-            fast enough I/O performance with sufficient free space.
-        batch_size_mb (float): batch size, in MB. Approximate size of each chunk
-            that is loaded into memory when converting parser data to zarr.
-        chunk_size_mb (float): size of each zarr chunk along the time axis,
-            in MB.
-        delete_parser_data (bool): If True, deletes the parser data files
-            after importing the data.
-        verbose (bool): If True, displays a progress bar while taking data.
-        method (str): Can be 'parser' (default) or 'memory'. See
-            ``CRS.stream``. For 'memory', the available memory is checked
-            before tones are written, assuming the worst case of up to 1024
-            tones on every module with an NCO set.
 
         Returns:
-        None
-
-        Raises:
-        MemoryError: if method is 'memory' and the data would not fit in
-            memory with headroom.
+        fres_written (np.array): written (dithered) tone frequencies in Hz, in
+            the order of fres. Missing tones are NaN.
         """
-        # Validate stream inputs early to fail fast before write_tones
-        ts_duration_s, dec_stage, ch_map, allow_missing, tmp_directory, \
-           _, batch_size_mb, chunk_size_mb, delete_parser_data, \
-           verbose = _validate_stream_input(
-            ts_duration_s, dec_stage, grp, ch_map, allow_missing, tmp_directory,
-            batch_size_mb, chunk_size_mb,
-            delete_parser_data, verbose, method
-        )
-        conflicts = {'fres', 'fres_requested', 'ares', 'crs_config'} & \
-                    set(grp.keys())
-        if conflicts:
-            raise ValueError(
-                f'grp already contains required names: {sorted(conflicts)}')
+        # Input validation. fres and ares are validated in self.write_tones
+        _validate_tones_grp(grp)
         self._require_configured()
-        if method == 'memory':
-            # Worst case before the tones are mapped to modules
-            ntones = int(np.size(fres))
-            util.check_memory_for_stream(
-                max(len(self.nco_freqs), 1), min(ntones, 1024), ntones,
-                int(util.get_sample_freq(dec_stage) * ts_duration_s),
-                chunk_size_mb
-                )
-        # fres and ares validation is performed in self.write_tones
 
         # Clear all channels - ensures that unused modules are cleared
         idx_to_clear = self.active_module_idxs
@@ -1352,60 +1330,110 @@ class CRS:
                 fres, ares, ch_map = ch_map, allow_missing = allow_missing
                 )
 
-            # Write configuration to zarr
-            cfg_grp = grp.require_group('crs_config')
-            util.write_system_cfg_to_zarr(self, cfg_grp)
+            if grp is not None:
+                # Write configuration to zarr
+                cfg_grp = grp.require_group('crs_config')
+                util.write_system_cfg_to_zarr(self, cfg_grp)
 
-            # Save tones
-            grp.create_array(name = 'fres', data = fres_written)
-            grp.create_array(name = 'fres_requested',
-                             data = np.asarray(fres, dtype = np.float64))
-            grp.create_array(name = 'ares',
-                             data = np.asarray(ares, dtype = np.float64))
+                # Save tones
+                grp.create_array(name = 'fres', data = fres_written)
+                grp.create_array(name = 'fres_requested',
+                                 data = np.asarray(fres, dtype = np.float64))
+                grp.create_array(name = 'ares',
+                                 data = np.asarray(ares, dtype = np.float64))
 
             # Sleep briefly to ensure tones are settled
             time.sleep(0.5)
+        except BaseException:
+            await self._clear_channels(idx_to_clear)
+            raise
+        return fres_written
 
-            # Stream
+    async def capture_ts(
+        self, fres, ares, ts_duration_s, dec_stage, grp, ch_map = None,
+        allow_missing = False, tmp_directory = None, verbose = True
+    ):
+        """
+        Write tones, stream one timestream to grp, and clear the tones, using
+        ``CRS.write_tones_for_stream``, ``CRS.stream``, and
+        ``CRS.clear_tones``. The tones are cleared even if an error occurs. To
+        take several timestreams with the same tones, call those functions
+        directly.
+
+        Parameters:
+        fres (array-like): tone frequencies in Hz.
+        ares (array-like): tone amplitudes in dBm.
+        ts_duration_s (float): timestream length in seconds.
+        dec_stage (int): dec_stage frequency downsampling factor.
+            See self.set_decimation for details.
+        grp (zarr.Group): zarr group to save the tones, configuration, and
+            timestream. See ``CRS.write_tones_for_stream`` and ``CRS.stream``.
+        ch_map (dict): keys (int) are module indices and values (array-like int)
+            are channel indices to write tones to. If None, automatically maps
+            tones to NCOs based on frequency.
+        allow_missing (bool): If True, ignores tones that are outside the
+            bandwidth of all NCOs. If False, raises an error if any tones are
+            outside the bandwidth of all NCOs.
+        tmp_directory (str or None): If None (default), streams directly to
+            grp. Otherwise, streams to a temporary Zarr store in this
+            directory and then copies the data to grp. See ``CRS.stream``.
+        verbose (bool): If True, displays progress bars while taking data.
+
+        Returns:
+        None
+        """
+        # Validate inputs early to fail fast before touching the board
+        _validate_stream_input(ts_duration_s, dec_stage, grp, tmp_directory,
+                               verbose)
+        _validate_tones_grp(grp)
+        self._require_configured()
+        util.check_stream_write_rate(int(dec_stage), int(np.size(fres)))
+
+        # Clears the tones itself if it fails
+        await self.write_tones_for_stream(
+            fres, ares, grp = grp, ch_map = ch_map,
+            allow_missing = allow_missing
+            )
+        try:
             await self.stream(
                 ts_duration_s = ts_duration_s,
                 dec_stage = dec_stage,
                 grp = grp,
                 tmp_directory = tmp_directory,
-                batch_size_mb = batch_size_mb,
-                chunk_size_mb = chunk_size_mb,
-                delete_parser_data = delete_parser_data,
-                verbose = verbose,
-                method = method
+                verbose = verbose
             )
         finally:
             # Clear all channels after streaming (success or failure)
-            await self._clear_channels(idx_to_clear)
+            await self.clear_tones()
 
     async def stream(
-        self, ts_duration_s, dec_stage, grp, tmp_directory = 'tmp/',
-        batch_size_mb = 1000, chunk_size_mb = 128, delete_parser_data = True,
-        verbose = True, method = 'parser'
+        self, ts_duration_s, dec_stage, grp, tmp_directory = None,
+        verbose = True
     ):
         """
-        Capture a timestream using the parser or directly into memory. Does
-        not change written tones - assumes fres_map and ares_map match the
-        currently written tones.
+        Stream a timestream of the currently written tones to a Zarr group.
+        Does not change written tones - assumes fres_map and ares_map match
+        the currently written tones (see ``CRS.write_tones_for_stream``).
 
-        Both methods receive the same streamed packets and save the same
-        format: 'counts_to_s21', 'dt', and the int32 array 'z' of shape
-        (2, ntones, nsamples). The parser method stops when any module reaches
-        ts_duration_s + 0.1 s of data. The memory method stops when every
-        module has exactly ts_duration_s of data, and warns if packets were
-        dropped.
+        Data are written to Zarr while streaming. Packets are collected into
+        blocks of one shard, which a writer process sorts into tone order and
+        writes, so the timestream length is limited by disk space rather than
+        memory. Each chunk of 'z' holds one tone (I or Q) for a block of time
+        samples, so a tone can be read on its own, for the whole timestream
+        or part of it. The block length is set by
+        ``util.get_stream_chunk_length``. Streaming stops when every module has
+        exactly ts_duration_s of data. Missing packets are not filled in, and
+        a warning is raised if packets were dropped.
+
+        Saves 'counts_to_s21', 'dt', and the int32 array 'z' of shape
+        (2, ntones, nsamples) to grp, the acquisition configuration to
+        grp['crs_config'], and the start time as the 'timestamp' attribute.
 
         Note on streaming capabilities: If all modules have less than 129 tones,
         the system will stream 128 tones per module. Otherwise, it will stream
         1024 tones per module. Streaming will only be performed on modules with
-        tones set (see self.fres_map). Setting the decimation stage will fail if
-        the requested number of modules/tones will cause packet loss. For low
-        decimation stages, aim for less than 129 tones per module, and use fewer
-        modules.
+        tones set (see self.fres_map). For low decimation stages, aim for less
+        than 129 tones per module, and use fewer modules.
 
         In a shared session with global control, the decimation is restored
         to stage 6 after streaming at another stage, so that other sessions
@@ -1415,154 +1443,195 @@ class CRS:
         ts_duration_s (float): timestream length in seconds.
         dec_stage (int): dec_stage frequency downsampling factor.
             See self.set_decimation for details.
-        grp (zarr.Group): zarr group to save the batch data.
-        tmp_directory (str): directory to save temporary parser data before
-            converting. Data is streamed to disk, so the drive must have
-            fast enough I/O performance with sufficient free space. Only used
-            by the parser method.
-        batch_size_mb (float): batch size, in MB. Approximate size of each chunk
-            that is loaded into memory when converting parser data to zarr.
-            Only used by the parser method.
-        chunk_size_mb (float): size of each zarr chunk along the time axis,
-            in MB.
-        delete_parser_data (bool): If True, deletes the parser data files
-            after importing the data. Only used by the parser method.
-        verbose (bool): If True, displays a progress bar while taking data.
-        method (str): Can be 'parser' (default, the rfmux parser writes the
-            data to tmp_directory, which is then converted to zarr in
-            batches) or 'memory' (the data is received into memory and then
-            written to zarr, without temporary files). Before streaming, the
-            memory method checks that the data fits in the available memory
-            with headroom (see ``util.check_memory_for_stream``).
+        grp (zarr.Group): zarr group to save the data.
+        tmp_directory (str or None): If None (default), data are streamed
+            directly to grp. Otherwise, data are streamed to a temporary Zarr
+            store in tmp_directory and then copied to grp, for example to
+            stream to a fast drive when grp is on a slow one. The temporary
+            store is deleted after a successful copy, and kept if streaming
+            or copying fails.
+        verbose (bool): If True, displays progress bars while taking data.
 
         Returns:
         None
 
         Raises:
-        MemoryError: if method is 'memory' and the data would not fit in
-            memory with headroom.
+        ValueError: if the write rate exceeds the verified limit
+            ``util.MAX_STREAM_WRITE_RATE``, or the frame rate exceeds
+            ``util.MAX_FRAME_RATE`` (see ``CRS.set_decimation``).
+        OSError: if a local destination does not have room for the
+            uncompressed data.
         """
         # Validate inputs
-        ts_duration_s, dec_stage, self.ch_map, _, \
-        tmp_directory, data_directory, batch_size_mb, chunk_size_mb, \
-        delete_parser_data, verbose = \
-        _validate_stream_input(
-            ts_duration_s, dec_stage, grp, self.ch_map, False,
-            tmp_directory, batch_size_mb, chunk_size_mb, delete_parser_data,
-            verbose, method
-        )
+        ts_duration_s, dec_stage, tmp_directory, verbose = \
+            _validate_stream_input(ts_duration_s, dec_stage, grp,
+                                   tmp_directory, verbose)
+        max_ntones, module_idxs, nframes = self._stream_setup(
+            ts_duration_s, dec_stage)
+        util.check_stream_write_rate(dec_stage, self.ntones)
+        nbytes = 2 * self.ntones * nframes * np.dtype(np.int32).itemsize
+        grp_path = util.local_store_path(grp)
+        if grp_path is not None:
+            util.check_free_space(grp_path, nbytes)
+        if tmp_directory is not None:
+            util.check_free_space(tmp_directory, nbytes)
+
+        # Create the output array, in grp or in a temporary store
+        chunk_length = util.get_stream_chunk_length(
+            self.ntones, len(module_idxs), max_ntones, nframes)
+        from datetime import datetime
+        start = datetime.now()
+        if tmp_directory is None:
+            z_dest, _ = util._create_z_array(grp, self.ntones, nframes,
+                                             chunk_length)
+        else:
+            tmp_path = os.path.join(
+                tmp_directory,
+                f'stream_{start.strftime("%Y%m%d_%H%M%S_%f")}.zarr')
+            tmp_grp = zarr.open_group(tmp_path, mode = 'w-')
+            z_dest, _ = util._create_z_array(tmp_grp, self.ntones, nframes,
+                                             chunk_length)
+
+        # Stream
+        grp.attrs['timestamp'] = start.strftime('%Y%m%d,%H:%M:%S')
+        dropped = await self._capture(
+            dec_stage, ts_duration_s, verbose, util.capture_to_zarr,
+            self.interface, self.serial_number, module_idxs, max_ntones,
+            nframes, z_dest, self.ch_map,
+            cfg_grp = grp.require_group('crs_config')
+            )
+        _warn_dropped(dropped)
+
+        # Copy from the temporary store
+        if tmp_directory is not None:
+            util.copy_z_array(z_dest, grp, verbose = verbose)
+            shutil.rmtree(tmp_path)
+
+        # Save scale factors and sample time
+        util._write_counts_to_s21_and_dt(
+            grp, self.ntones, self.ch_map, self.ares_map,
+            1 / util.get_sample_freq(dec_stage)
+            )
+
+    async def stream_to_memory(self, ts_duration_s, dec_stage, verbose = True):
+        """
+        Stream a timestream of the currently written tones into memory and
+        return it as S21. Nothing is saved to disk. Does not change written
+        tones - assumes fres_map and ares_map match the currently written
+        tones (see ``CRS.write_tones_for_stream``).
+
+        Streaming stops when every module has exactly ts_duration_s of data.
+        Missing packets are not filled in, and a warning is raised if packets
+        were dropped. Before streaming, checks that the data fits in the
+        available memory with headroom (see ``util.check_memory_for_stream``).
+        See ``CRS.stream`` for notes on streaming capabilities and shared
+        sessions.
+
+        Parameters:
+        ts_duration_s (float): timestream length in seconds.
+        dec_stage (int): dec_stage frequency downsampling factor.
+            See self.set_decimation for details.
+        verbose (bool): If True, displays a progress bar while taking data.
+
+        Returns:
+        zt (np.array complex128): timestream of shape (ntones, nsamples),
+            indexed like the tones in self.ch_map, and scaled with the
+            counts-to-S21 factors (see ``util.get_counts_to_s21``) so that
+            20 log10|zt| is in dBc. Rows of tones that are not in self.ch_map
+            are NaN. The sample time is 1 / self.sample_freq.
+
+        Raises:
+        MemoryError: if the data would not fit in memory with headroom.
+        """
+        # Validate inputs
+        ts_duration_s, dec_stage = _validate_ts_duration_and_dec(
+            ts_duration_s, dec_stage)
+        verbose = bool(verbose)
+        max_ntones, module_idxs, nframes = self._stream_setup(
+            ts_duration_s, dec_stage)
+        util.check_memory_for_stream(len(module_idxs), max_ntones,
+                                     self.ntones, nframes)
+
+        # Stream
+        buffers, dropped = await self._capture(
+            dec_stage, ts_duration_s, verbose, util.capture_to_memory,
+            self.interface, self.serial_number, module_idxs, max_ntones,
+            nframes
+            )
+        _warn_dropped(dropped)
+
+        # Convert to S21, one module at a time
+        scale = util.get_counts_to_s21(self.ntones, self.ch_map, self.ares_map)
+        zt = np.full((self.ntones, nframes), complex(np.nan, np.nan))
+        for mi in module_idxs:
+            ch_idxs = self.ch_map[mi]
+            data = buffers.pop(mi)[:, :len(ch_idxs)]
+            zi = np.empty((len(ch_idxs), nframes), dtype = np.complex128)
+            zi.real = data[:, :, 0].T
+            zi.imag = data[:, :, 1].T
+            zi *= scale[ch_idxs, np.newaxis]
+            zt[ch_idxs] = zi
+        return zt
+
+    def _stream_setup(self, ts_duration_s, dec_stage):
+        """
+        Return the streaming parameters for the currently written tones.
+
+        Parameters:
+        ts_duration_s (float): timestream length in seconds.
+        dec_stage (int): decimation stage.
+
+        Returns:
+        max_ntones (int): maximum number of tones on a module.
+        module_idxs (list of int): modules with tones, which are streamed.
+        nframes (int): number of time samples per module.
+
+        Raises:
+        RuntimeError: if no tones are written.
+        """
         max_ntones = max(
             [len(f) for f in self.fres_map.values()]
             ) if len(self.fres_map) else 0
         if self.ntones == 0 or max_ntones == 0:
             raise RuntimeError('No tones are written')
-        stream_module_idxs = sorted(
+        module_idxs = sorted(
             int(mi) for mi, f in self.fres_map.items() if len(f))
-        if method == 'memory':
-            nframes = int(util.get_sample_freq(dec_stage) * ts_duration_s)
-            util.check_memory_for_stream(
-                len(stream_module_idxs), max_ntones, self.ntones, nframes,
-                chunk_size_mb
-                )
+        nframes = int(util.get_sample_freq(dec_stage) * ts_duration_s)
+        return max_ntones, module_idxs, nframes
 
-        ### Start CRS config group
-        cfg_grp = grp.require_group('crs_config')
+    async def _capture(
+        self, dec_stage, ts_duration_s, verbose, capture, *args, cfg_grp = None
+    ):
+        """
+        Set the decimation stage, run a capture function, and restore the
+        shared sweep stage afterwards (see ``CRS.stream``).
 
-        ### Set decimation stage
+        Parameters:
+        dec_stage (int): decimation stage.
+        ts_duration_s (float): timestream length in seconds, for the
+            progress bar.
+        verbose (bool): If True, displays a progress bar while capturing.
+        capture (callable): capture function, called with args.
+        *args: arguments to pass to capture.
+        cfg_grp (zarr.Group or None): if not None, the acquisition
+            configuration is saved to this group after setting the
+            decimation.
+
+        Returns:
+        The return value of capture.
+        """
         await self.set_decimation(dec_stage, verbose = verbose)
-        dt = 1 / self.sample_freq
         try:
-            util.write_acq_cfg_to_zarr(self, cfg_grp)
-
-            # Save timestamp
-            from datetime import datetime
-            grp.attrs['timestamp'] = datetime.now().strftime('%Y%m%d,%H:%M:%S')
-
-            if method == 'parser':
-                ### Run parser
-                # Prepare parser arguments
-                chs = '1-' + f'{max_ntones}'
-                T = ts_duration_s + 0.1
-                nframes = int(self.sample_freq * T)
-                # As of 20260127, parser ends when any module reaches nframes,
-                # so 0.1 s is added to ensure all modules reach desired
-                # ts_duration_s. This will likely be fixed in future parser
-                # versions.
-                args = [
-                    '-i', self.interface,
-                    '-d', data_directory,
-                    '-c', chs,
-                    '-s', f'{self.serial_number:04d}',
-                    '-n', f'{nframes:d}'
-                    ]
-
-                # Run parser
-                from rfmux.tools import parser
-                try:
-                    if verbose:
-                        run_with_time_bar(
-                            parser.main,
-                            T,
-                            'Streaming',
-                            *args
-                            )
-                    else:
-                        parser.main(*args)
-                except SystemExit as e:
-                    # parser.main raises SystemExit when it is done
-                    pass
-            else:
-                ### Receive packets into memory
-                capture_args = (self.interface, self.serial_number,
-                                stream_module_idxs, max_ntones, nframes)
-                if verbose:
-                    buffers, dropped = run_with_time_bar(
-                        util.capture_to_memory, ts_duration_s, 'Streaming',
-                        *capture_args
-                        )
-                else:
-                    buffers, dropped = util.capture_to_memory(*capture_args)
+            if cfg_grp is not None:
+                util.write_acq_cfg_to_zarr(self, cfg_grp)
+            if verbose:
+                return run_with_time_bar(capture, ts_duration_s, 'Streaming',
+                                         *args)
+            return capture(*args)
         finally:
             # Restore the shared sweep stage so other sessions can sweep
             if self.shared and self.global_control and dec_stage != 6:
                 await self.set_decimation(6, verbose = verbose)
-
-        ### Process data
-        if method == 'parser':
-            util.parser_to_zarr(
-                data_directory,
-                grp,
-                self.serial_number,
-                self.ntones,
-                max_ntones,
-                self.ch_map,
-                self.ares_map,
-                dt,
-                batch_size_mb = batch_size_mb,
-                chunk_size_mb = chunk_size_mb
-            )
-
-            ### Delete parser data
-            if delete_parser_data:
-                shutil.rmtree(data_directory)
-        else:
-            lost = {mi: n for mi, n in dropped.items() if n}
-            if lost:
-                warnings.warn(
-                    f'Packets were dropped while streaming (module: number '
-                    f'dropped): {lost}. The saved samples are not evenly '
-                    'spaced in time.', UserWarning
-                    )
-            util.memory_to_zarr(
-                buffers,
-                grp,
-                self.ntones,
-                max_ntones,
-                self.ch_map,
-                self.ares_map,
-                dt,
-                chunk_size_mb = chunk_size_mb
-            )
 
 ################################################################################
 ################## Methods registered to rfmux.ReadoutModule ###################
@@ -1878,50 +1947,21 @@ def _validate_nco_freqs(nco_freqs, analog_bank_high):
                 'analog bank.'
                 )
 
-def _validate_stream_input(
-    ts_duration_s, dec_stage, grp, ch_map, allow_missing, tmp_directory,
-    batch_size_mb, chunk_size_mb, delete_parser_data, verbose, method = 'parser'
-):
+def _validate_ts_duration_and_dec(ts_duration_s, dec_stage):
     """
-    Validate inputs for the stream method.
+    Validate the timestream length and decimation stage for streaming.
 
     Parameters:
     ts_duration_s (float): timestream length in seconds.
-    dec_stage (int): dec_stage frequency downsampling factor.
-    grp (zarr.Group): zarr group to save the batch data.
-    ch_map (dict): keys (int) are module indices and values (array-like int)
-        are channel indices to write tones to. If None, automatically maps
-        tones to NCOs based on frequency.
-    allow_missing (bool): whether to allow missing channels in ch_map.
-    tmp_directory (str): directory to save temporary parser data. Only
-        created and checked if method is 'parser'.
-    batch_size_mb (float): batch size in MB.
-    chunk_size_mb (float): chunk size in MB.
-    delete_parser_data (bool): whether to delete parser data after import.
-    verbose (bool): whether to display progress bars.
-    method (str): 'parser' (default) or 'memory'. See ``CRS.stream``.
+    dec_stage (int): decimation stage.
 
     Returns:
     ts_duration_s (float): timestream length in seconds.
     dec_stage (int): decimation stage.
-    ch_map (dict or None): validated ch_map.
-    allow_missing (bool): whether to allow missing channels.
-    tmp_directory (str): normalized temporary directory.
-    data_directory (str or None): parser data directory, or None if method
-        is 'memory'.
-    batch_size_mb (float): batch size in MB.
-    chunk_size_mb (float): chunk size in MB.
-    delete_parser_data (bool): whether to delete parser data.
-    verbose (bool): whether to display progress bars.
 
     Raises:
     ValueError: if parameters have invalid values
-    TypeError: if parameters have invalid types
-    FileExistsError: if data_directory already exists
     """
-    if method not in STREAM_METHODS:
-        raise ValueError(f'method must be one of {STREAM_METHODS}')
-
     ts_duration_s = float(ts_duration_s)
     if ts_duration_s <= 0:
         raise ValueError('ts_duration_s must be a positive float')
@@ -1929,6 +1969,35 @@ def _validate_stream_input(
     dec_stage = int(dec_stage)
     if dec_stage < 0 or dec_stage > 6:
         raise ValueError('dec_stage must be an integer between 0 and 6')
+    return ts_duration_s, dec_stage
+
+def _validate_stream_input(
+    ts_duration_s, dec_stage, grp, tmp_directory, verbose
+):
+    """
+    Validate inputs for the stream method. Creates tmp_directory if it does
+    not exist.
+
+    Parameters:
+    ts_duration_s (float): timestream length in seconds.
+    dec_stage (int): dec_stage frequency downsampling factor.
+    grp (zarr.Group): zarr group to save the data.
+    tmp_directory (str or None): directory for the temporary Zarr store, or
+        None to stream directly to grp.
+    verbose (bool): whether to display progress bars.
+
+    Returns:
+    ts_duration_s (float): timestream length in seconds.
+    dec_stage (int): decimation stage.
+    tmp_directory (str or None): normalized temporary directory.
+    verbose (bool): whether to display progress bars.
+
+    Raises:
+    ValueError: if parameters have invalid values
+    TypeError: if parameters have invalid types
+    """
+    ts_duration_s, dec_stage = _validate_ts_duration_and_dec(
+        ts_duration_s, dec_stage)
 
     if not isinstance(grp, zarr.core.group.Group):
         raise TypeError('grp must be a zarr.Group object')
@@ -1940,28 +2009,57 @@ def _validate_stream_input(
         msg = f'grp already contains required names: {sorted(conflicts)}'
         raise ValueError(msg)
 
-    ch_map = util._validate_ch_map(ch_map)
-
-    allow_missing = bool(allow_missing)
-
-    tmp_directory = os.path.normpath(os.path.expanduser(tmp_directory))
-    if method == 'parser':
+    if tmp_directory is not None:
+        if not isinstance(tmp_directory, (str, os.PathLike)):
+            raise TypeError('tmp_directory must be a str, path, or None')
+        tmp_directory = os.path.normpath(os.path.expanduser(tmp_directory))
         os.makedirs(tmp_directory, exist_ok = True)
-        data_directory = os.path.join(tmp_directory, 'parser_data_00')
-        if os.path.exists(data_directory):
-            raise FileExistsError(f'{data_directory} already exists')
-    else:
-        data_directory = None
 
-    batch_size_mb, chunk_size_mb = util._validate_batch_chunk_sizes(
-        batch_size_mb, chunk_size_mb
-    )
-
-    delete_parser_data = bool(delete_parser_data)
     verbose = bool(verbose)
-    return ts_duration_s, dec_stage, ch_map, allow_missing, tmp_directory, \
-           data_directory, batch_size_mb, chunk_size_mb, delete_parser_data, \
-           verbose
+    return ts_duration_s, dec_stage, tmp_directory, verbose
+
+def _validate_tones_grp(grp):
+    """
+    Validate the group that ``CRS.write_tones_for_stream`` saves tones to.
+
+    Parameters:
+    grp (zarr.Group or None): zarr group, or None to save nothing.
+
+    Returns:
+    None
+
+    Raises:
+    TypeError: if grp is not a zarr.Group or None
+    ValueError: if grp already contains the names that are saved
+    """
+    if grp is None:
+        return
+    if not isinstance(grp, zarr.core.group.Group):
+        raise TypeError('grp must be a zarr.Group object or None')
+    conflicts = {'fres', 'fres_requested', 'ares', 'crs_config'} & \
+                set(grp.keys())
+    if conflicts:
+        raise ValueError(
+            f'grp already contains required names: {sorted(conflicts)}')
+
+def _warn_dropped(dropped):
+    """
+    Warn if packets were dropped while streaming.
+
+    Parameters:
+    dropped (dict): keys (int) are module indices and values (int) are the
+        number of dropped packets.
+
+    Returns:
+    None
+    """
+    lost = {mi: n for mi, n in dropped.items() if n}
+    if lost:
+        warnings.warn(
+            f'Packets were dropped while streaming (module: number '
+            f'dropped): {lost}. The saved samples are not evenly '
+            'spaced in time.', UserWarning
+            )
 
 def _validate_sweep_input(
     module_idx, nco_freqs, frequencies_map, ares_map, sweep_f, sweep_z, nsamps,
