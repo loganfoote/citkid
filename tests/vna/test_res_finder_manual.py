@@ -1581,6 +1581,30 @@ class TestEventFilter:
         assert finder._drag_selection_active is False
         assert finder._drag_start_freq is None
 
+    def test_shift_drag_release_clears_scene_click_queue(self, synthetic_vna_data, tmp_path):
+        """A consumed shift+drag release must not leave a stale Shift+click
+        queued in the scene, or the next plain click is replaced by it."""
+        finder = self._make_finder(synthetic_vna_data, tmp_path)
+        scene = MagicMock()
+        scene.clickEvents = ['stale shift click']
+        scene.dragButtons = [_Qt.LeftButton]
+
+        release_event = MagicMock()
+        release_event.type.return_value = QtCore.QEvent.Type.GraphicsSceneMouseRelease
+        finder.plot_mag.vb.mapSceneToView = MagicMock(
+            return_value=MagicMock(x=MagicMock(return_value=5.1e9))
+        )
+        finder._drag_selection_active = True
+        finder._drag_start_freq = 5e9
+        finder._drag_start_scene_pos = MagicMock()
+
+        with patch.object(finder, 'remove_resonances_in_range'):
+            assert finder.eventFilter(scene, release_event) is True
+
+        assert scene.clickEvents == []
+        assert scene.dragButtons == []
+        assert scene.dragItem is None
+
 
 class TestResFinderQuit:
     """Quit and Save must behave exactly like closing the window."""

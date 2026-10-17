@@ -242,6 +242,43 @@ def test_delete_on_close_destroys_window_only_when_closed(qapp):
     refusing.hide()
 
 
+def test_hold_pan_key_taps_then_scrolls_until_release(qapp):
+    """A tap pans one step; holding scrolls at ``rate``; release stops it."""
+    from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
+    from citkid import qt_compat
+
+    win = QtWidgets.QWidget()
+    pans = []
+    key = qt_compat.HoldPanKey('X', win, 0.2, pans.append, rate=0.5)
+
+    key._on_press()
+    assert pans == [0.2]
+    key._on_press()                      # repeated press while held: ignored
+    assert pans == [0.2]
+
+    key._start_scroll()
+    QtCore.QThread.msleep(50)
+    key._scroll()
+    assert len(pans) == 2
+    assert 0 < pans[1] < 0.5 * 0.5       # rate * elapsed (well under 0.5 s)
+
+    release = QtGui.QKeyEvent(QtCore.QEvent.Type.KeyRelease,
+                              QtCore.Qt.Key.Key_X,
+                              QtCore.Qt.KeyboardModifier.NoModifier)
+    other = QtGui.QKeyEvent(QtCore.QEvent.Type.KeyRelease,
+                            QtCore.Qt.Key.Key_Z,
+                            QtCore.Qt.KeyboardModifier.NoModifier)
+    assert key.eventFilter(win, other) is False
+    assert key._held                     # other key: still scrolling
+    assert key.eventFilter(win, release) is False
+    assert not key._held
+    assert not key._scroll_timer.isActive()
+
+    key._on_press()                      # a new tap works after release
+    assert pans[-1] == 0.2
+    key.stop()
+
+
 def test_use_system_ui_font_sets_app_font(qapp):
     """A known system UI font replaces the app default font."""
     from citkid import qt_compat

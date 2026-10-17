@@ -45,6 +45,7 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 
 from ..qt_compat import (
+    HoldPanKey,
     Qt as _Qt,
     delete_on_close,
     fit_window_to_screen,
@@ -272,7 +273,10 @@ class ResMatcher:
     groups (list[MatchGroup]): current match groups, sorted by frequency.
     zarr_group (zarr.Group): group where results are saved.
     ds2_f_offset (float): visualization-only DS2 frequency offset in Hz.
+    hold_pan_rate (float): scroll speed while Z/X is held, in view widths
+        per second.
     """
+    hold_pan_rate = 0.5
 
     # ------------------------------------------------------------------ init
 
@@ -1164,7 +1168,7 @@ class ResMatcher:
         """
         title = (
             '<span style="color:#FFF; font-size:9pt;">'
-            'Z/X: pan 20%  |  A/S: pan 80%  |  Ctrl+drag: DS2 shift  |  G: auto-align  |  E/F/D/W/Q/R  |  H: help'
+            'Z/X: pan 20% (hold: scroll)  |A/S: pan 80%  |  Ctrl+drag: DS2 shift  |  G: auto-align  |  E/F/D/W/Q/R  |  H: help'
             '</span>'
         )
         self.plot_widget.addLabel(title, col=0)
@@ -1179,10 +1183,11 @@ class ResMatcher:
         self.plot_overview.getAxis('left').setStyle(showValues=False)
         self.plot_overview.getAxis('bottom').setStyle(showValues=False)
         self.plot_overview.showGrid(x=False, y=False)
-        self.plot_overview.setMouseEnabled(x=True, y=False)
+        # Fixed axis limits: no wheel zoom, drag pan, or right-drag zoom.
+        # Clicks and dragging the region item still move the main view.
+        self.plot_overview.setMouseEnabled(x=False, y=False)
+        self.plot_overview.setMenuEnabled(False)
         self.plot_overview.hideButtons()
-        # Disable wheel zoom on overview plot
-        self.plot_overview.vb.wheelScaleFactor = 0
 
         _stride = max(1, len(self.f1) // 3000)
         self.curve_overview_ds1 = self.plot_overview.plot(
@@ -1526,9 +1531,13 @@ class ResMatcher:
         """
         Install the single-key, Ctrl+Z (undo), and Ctrl+S (save) shortcuts.
         """
+        # Z/X: tap pans 20%, hold scrolls smoothly
+        self._pan_left_key = HoldPanKey(
+            'Z', self.win, -0.2, self._pan_now, rate=self.hold_pan_rate)
+        self._pan_right_key = HoldPanKey(
+            'X', self.win, 0.2, self._pan_now, rate=self.hold_pan_rate)
+
         _map = {
-            'Z': self.pan_left,
-            'X': self.pan_right,
             'A': self.fast_pan_left,
             'S': self.fast_pan_right,
             'G': self._auto_align_ds2_offset,
@@ -2942,6 +2951,22 @@ class ResMatcher:
         shift = fraction * (x1 - x0)
         self.plot_mag.setXRange(x0 + shift, x1 + shift, padding=0)
 
+    def _pan_now(self, fraction: float):
+        """
+        Pan and redraw immediately, skipping the range-change debounce.
+
+        Used by the held Z/X keys, whose rapid pans would otherwise keep
+        restarting the debounce timer so the plot never redraws.
+
+        Parameters:
+        fraction (float): shift as a fraction of the visible span; negative
+            pans left, positive pans right.
+        """
+        self._pan(fraction)
+        if self._range_timer is not None:
+            self._range_timer.stop()
+        self._do_range_update()
+
     def pan_left(self):
         """
         Pan the view left by 20% (Z key).
@@ -3130,7 +3155,7 @@ class ResMatcher:
             '</ul>'
             '<p><b>Keyboard (Left Hand):</b></p>'
             '<ul>'
-            '<li><b>Z / X:</b> Pan left / right 20%</li>'
+            '<li><b>Z / X:</b> Pan left / right 20% (hold to scroll)</li>'
             '<li><b>A / S:</b> Pan left / right 80%</li>'
             '<li><b>G:</b> Auto-align DS2 using the 10 nearest 1:1 groups to the window center</li>'
             '<li><b>E:</b> Delete all selected resonances</li>'

@@ -258,6 +258,118 @@ def delete_on_close(win):
     win.setAttribute(_QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
 
 
+class HoldPanKey(_QtCore.QObject):
+    """
+    Single-key shortcut that pans by a step when tapped and scrolls smoothly
+    while held.
+
+    A tap calls ``pan(step)`` once. If the key is still down after
+    ``hold_delay_ms``, the view scrolls continuously at ``rate`` view widths
+    per second (in the direction of ``step``) until the key is released or
+    the application loses focus. OS key auto-repeat is ignored, so the speed
+    does not depend on the keyboard repeat settings.
+    """
+
+    def __init__(self, key, window, step, pan, rate=0.5, hold_delay_ms=350,
+                 interval_ms=30):
+        """
+        Create the shortcut on ``window``.
+
+        Parameters:
+        key (str): single letter key, e.g. 'Z'.
+        window (QWidget): window the shortcut is active in; also the Qt
+            parent of this object.
+        step (float): pan per tap as a signed fraction of the view width.
+        pan (callable): called with a signed fraction of the view width to
+            shift the view by. It should redraw immediately, since a held key
+            pans every ``interval_ms``.
+        rate (float): scroll speed while held, in view widths per second.
+            Default 0.5.
+        hold_delay_ms (int): how long the key must be held before smooth
+            scrolling starts. Default 350.
+        interval_ms (int): time between smooth-scroll updates. Default 30.
+        """
+        super().__init__(window)
+        self.step = float(step)
+        self.rate = float(rate)
+        self._pan = pan
+        self._key = getattr(_QtCore.Qt.Key, 'Key_' + key.upper())
+        self._held = False
+
+        self._shortcut = _QtGui.QShortcut(_QtGui.QKeySequence(key), window)
+        self._shortcut.setAutoRepeat(False)
+        self._shortcut.activated.connect(self._on_press)
+
+        self._delay_timer = _QtCore.QTimer(self)
+        self._delay_timer.setSingleShot(True)
+        self._delay_timer.setInterval(int(hold_delay_ms))
+        self._delay_timer.timeout.connect(self._start_scroll)
+        self._scroll_timer = _QtCore.QTimer(self)
+        self._scroll_timer.setInterval(int(interval_ms))
+        self._scroll_timer.timeout.connect(self._scroll)
+        self._clock = _QtCore.QElapsedTimer()
+
+    def _on_press(self):
+        """
+        Pan one step and start waiting to see whether the key is held.
+        """
+        if self._held:
+            return
+        self._held = True
+        # Watch the whole application for the release, since it goes to
+        # whichever widget has focus. Only installed while the key is down.
+        _QtWidgets.QApplication.instance().installEventFilter(self)
+        self._pan(self.step)
+        self._delay_timer.start()
+
+    def _start_scroll(self):
+        """
+        Begin smooth scrolling after the hold delay.
+        """
+        self._clock.start()
+        self._scroll_timer.start()
+
+    def _scroll(self):
+        """
+        Pan by the distance covered since the last update.
+        """
+        dt = self._clock.restart() / 1000.0
+        direction = 1.0 if self.step >= 0 else -1.0
+        self._pan(direction * self.rate * dt)
+
+    def stop(self):
+        """
+        Stop scrolling and stop watching for the key release.
+        """
+        if not self._held:
+            return
+        self._held = False
+        self._delay_timer.stop()
+        self._scroll_timer.stop()
+        app = _QtWidgets.QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        """
+        Stop on release of the key or when the application loses focus.
+
+        Parameters:
+        obj (QObject): object that received the event.
+        event (QEvent): Qt event.
+
+        Returns:
+        handled (bool): always False, so the event is processed normally.
+        """
+        etype = event.type()
+        if etype == _QtCore.QEvent.Type.KeyRelease:
+            if event.key() == self._key and not event.isAutoRepeat():
+                self.stop()
+        elif etype == _QtCore.QEvent.Type.ApplicationDeactivate:
+            self.stop()
+        return False
+
+
 # Logical pixels reserved for a window's title bar and frame when a window
 # may use the full screen height (Windows 11 title bars are ~31 px).
 TITLE_BAR_MARGIN = 40

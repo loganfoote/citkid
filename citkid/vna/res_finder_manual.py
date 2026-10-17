@@ -13,6 +13,7 @@ from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 import os
 
 from ..qt_compat import (
+    HoldPanKey,
     Qt as _Qt,
     delete_on_close,
     fit_window_to_screen,
@@ -116,7 +117,13 @@ class ResFinder(QtCore.QObject):
     """
     Interactive pyqtgraph GUI for manually adding and removing resonances
     in VNA sweep data, saving the result to a zarr group.
+
+    Attributes:
+    hold_pan_rate (float): Scroll speed while Z/X is held, in view widths
+        per second.
     """
+    hold_pan_rate = 0.5
+
     def __init__(self, f, z, fres_initial, zarr_grp, margin_factor = 0.15):
         """
         Initialize the interactive resonance finder for VNA sweep data.
@@ -300,7 +307,7 @@ class ResFinder(QtCore.QObject):
             'Shift+Click: Remove nearest | '
             'Shift+Drag: Remove range | '
             'Ctrl+Z: Undo | '
-            'Z/X: Pan 20% | '
+            'Z/X: Pan 20% (hold to scroll) | '
             'A/S: Pan 80% | '
             'Ctrl+S: Save | '
             'Q: Toggle IQ plot'
@@ -389,10 +396,11 @@ class ResFinder(QtCore.QObject):
         self.plot_overview.getAxis('left').setStyle(showValues = False)
         self.plot_overview.getAxis('bottom').setStyle(showValues = False)
         self.plot_overview.showGrid(x = False, y = False)
-        self.plot_overview.setMouseEnabled(x = True, y = False)
+        # Fixed axis limits: no wheel zoom, drag pan, or right-drag zoom.
+        # Clicks and dragging the region item still move the main view.
+        self.plot_overview.setMouseEnabled(x = False, y = False)
+        self.plot_overview.setMenuEnabled(False)
         self.plot_overview.hideButtons()
-        # Disable wheel zoom on overview plot
-        self.plot_overview.vb.wheelScaleFactor = 0
 
         _stride = max(1, len(self.f) // 3000)
         self.plot_overview.plot(
@@ -510,11 +518,11 @@ class ResFinder(QtCore.QObject):
         self.undo_action = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Z"), self.win)
         self.undo_action.activated.connect(self.undo)
 
-        # Pan left/right shortcuts
-        self.pan_left_action = QtGui.QShortcut(QtGui.QKeySequence("Z"), self.win)
-        self.pan_left_action.activated.connect(self.pan_left)
-        self.pan_right_action = QtGui.QShortcut(QtGui.QKeySequence("X"), self.win)
-        self.pan_right_action.activated.connect(self.pan_right)
+        # Pan left/right shortcuts: tap pans 20%, hold scrolls smoothly
+        self.pan_left_action = HoldPanKey(
+            'Z', self.win, -0.2, self._pan_now, rate = self.hold_pan_rate)
+        self.pan_right_action = HoldPanKey(
+            'X', self.win, 0.2, self._pan_now, rate = self.hold_pan_rate)
 
         # IQ plot toggle shortcut
         self.iq_action = QtGui.QShortcut(QtGui.QKeySequence("Q"), self.win)
@@ -659,6 +667,15 @@ class ResFinder(QtCore.QObject):
                 
                 self._drag_start_freq = None
                 self._drag_start_scene_pos = None
+                # Consuming the release skips pyqtgraph's own release
+                # handling, which would otherwise clear the click it queued
+                # at press. Left in the queue, that stale Shift+click is
+                # delivered on the next release, so the next plain click
+                # removes a resonance instead of adding one. Clear it here.
+                obj.clickEvents = []
+                obj.dragButtons = []
+                obj.dragItem = None
+                obj.lastDrag = None
                 return True
             if self._drag_start_freq is not None:
                 self._drag_start_freq = None
@@ -1215,6 +1232,22 @@ class ResFinder(QtCore.QObject):
         shift = fraction * (x1 - x0)
         self.plot_mag.setXRange(x0 + shift, x1 + shift, padding=0)
 
+    def _pan_now(self, fraction):
+        """
+        Pan and redraw immediately, skipping the range-change debounce.
+
+        Used by the held Z/X keys, whose rapid pans would otherwise keep
+        restarting the debounce timer so the plot never redraws.
+
+        Parameters:
+        fraction (float): Fraction of the view width to shift by. Positive
+            pans right, negative pans left.
+        """
+        self._pan(fraction)
+        if self._range_timer is not None:
+            self._range_timer.stop()
+        self._do_range_update()
+
     def pan_left(self):
         """
         Pan the view to the left by 20% of current width (Z key).
@@ -1378,8 +1411,8 @@ class ResFinder(QtCore.QObject):
             "</ul>"
             "<p><b>Keyboard:</b></p>"
             "<ul>"
-            "<li><b>Z:</b> Pan left by 20%</li>"
-            "<li><b>X:</b> Pan right by 20%</li>"
+            "<li><b>Z:</b> Pan left by 20% (hold to scroll)</li>"
+            "<li><b>X:</b> Pan right by 20% (hold to scroll)</li>"
             "<li><b>A:</b> Pan left by 80%</li>"
             "<li><b>S:</b> Pan right by 80%</li>"
             "<li><b>Ctrl+S:</b> Save resonances to file</li>"
