@@ -7,6 +7,10 @@ PySide6).  In some combinations the traditional flat namespace
 available — constants live inside nested enum classes instead
 (``QtCore.Qt.KeyboardModifier.ShiftModifier``).
 
+citkid itself always uses PyQt5: importing citkid sets
+``PYQTGRAPH_QT_LIB=PyQt5``, and importing this module raises ImportError if
+pyqtgraph is on another binding (imported before citkid).
+
 This module exposes every constant used by citkid under a single ``Qt``
 namespace that works regardless of binding, so call sites can write::
 
@@ -33,6 +37,15 @@ import threading as _threading
 import warnings as _warnings
 
 import pyqtgraph as _pg
+
+# citkid sets PYQTGRAPH_QT_LIB=PyQt5 on import (see citkid/__init__.py).
+if _pg.Qt.QT_LIB != 'PyQt5':
+    raise ImportError(
+        f"citkid's Qt code needs PyQt5, but pyqtgraph is using "
+        f'{_pg.Qt.QT_LIB}. pyqtgraph was probably imported before citkid '
+        '(e.g. by rfmux): restart Python and import citkid first.'
+    )
+
 from pyqtgraph.Qt import QtCore as _QtCore, QtGui as _QtGui, QtWidgets as _QtWidgets
 
 # Enum groups to probe for members.  Order matters: the first group that
@@ -607,9 +620,10 @@ def describe_display(print_report=True):
     """
     Describe the Qt display setup, to debug window sizes and fonts.
 
-    Reports the Qt platform and style, scaling environment variables, each
-    screen's size, logical and physical DPI and device pixel ratio, the
-    default font, and the palette colors used for muted text.
+    Reports the Qt binding pyqtgraph uses, the Qt platform and style,
+    scaling environment variables, each screen's size, logical and physical
+    DPI and device pixel ratio, the default font, and the palette colors
+    used for muted text.
 
     Parameters:
     print_report (bool): If True (default), print the report.
@@ -623,6 +637,7 @@ def describe_display(print_report=True):
     lines = [
         f'python {sys.version.split()[0]}, Qt {_QtCore.QT_VERSION_STR}, '
         f'pyqtgraph {_pg.__version__}, platform {sys.platform}',
+        f'Qt binding used by pyqtgraph: {_pg.Qt.QT_LIB}',
         f'Qt platform plugin: {app.platformName()}, '
         f'style: {app.style().objectName()}',
         'high-DPI scaling: ' + str(app.testAttribute(

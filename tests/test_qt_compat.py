@@ -500,6 +500,41 @@ def test_describe_display_reports_screens_and_fonts(qapp, capsys):
     from citkid import qt_compat
     report = qt_compat.describe_display()
     assert report == capsys.readouterr().out.rstrip('\n')
-    for text in ('Qt platform plugin', 'screen', 'logical DPI', 'default font', 'palette'):
+    for text in ('Qt platform plugin', 'Qt binding used by pyqtgraph: PyQt5', 'screen',
+                 'logical DPI', 'default font', 'palette'):
         assert text in report
     assert qt_compat.describe_display(print_report=False) == report
+
+
+def test_citkid_uses_pyqt5():
+    """Importing the package (not the repo-root module pytest uses) pins PyQt5."""
+    import os
+    import subprocess
+    import sys
+    code = '; '.join([
+        'import os, citkid, pyqtgraph.Qt',
+        "print(citkid.__file__, os.environ['PYQTGRAPH_QT_LIB'], pyqtgraph.Qt.QT_LIB)",
+    ])
+    env = {k: v for k, v in os.environ.items() if k != 'PYQTGRAPH_QT_LIB'}
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True,
+                            text=True, env=env)
+    assert result.returncode == 0, result.stderr
+    path, env_value, lib = result.stdout.split()
+    assert os.path.exists(os.path.join(os.path.dirname(path), 'qt_compat.py'))
+    assert (env_value, lib) == ('PyQt5', 'PyQt5')
+
+
+def test_qt_compat_refuses_another_binding():
+    """pyqtgraph imported (on another binding) before citkid: a clear error."""
+    import subprocess
+    import sys
+    code = '; '.join([
+        'import pyqtgraph.Qt',
+        "pyqtgraph.Qt.QT_LIB = 'PyQt6'",  # as if imported first by rfmux
+        'import citkid.qt_compat',
+    ])
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert 'ImportError' in result.stderr
+    assert 'needs PyQt5, but pyqtgraph is using PyQt6' in result.stderr
+

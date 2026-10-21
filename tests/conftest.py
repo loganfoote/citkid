@@ -3,6 +3,9 @@ import os
 os.environ["CRS_EMBEDDED"] = "1"
 os.environ["MPLBACKEND"] = "Agg"
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
+# As citkid/__init__.py does. Under pytest, the repo-root __init__.py is
+# imported as ``citkid`` instead, so it must be set here too.
+os.environ["PYQTGRAPH_QT_LIB"] = "PyQt5"
 import warnings
 
 # Suppress DeprecationWarning raised intentionally by code scheduled for removal.
