@@ -1,6 +1,6 @@
 import numpy as np 
 import pyfftw 
-from scipy.signal import fftconvolve
+from scipy.signal import oaconvolve
 from tqdm.auto import tqdm
 
 # Conventions: lower case = time domain, upper case = frequency domain
@@ -58,8 +58,9 @@ def create_opt_filt(a, SJ, nfft):
 
 def apply_opt_filt(s, h):
     """
-    Apply the optimal filter h to the signal timestream s using 
-    FFT convolution.
+    Apply the optimal filter h to the signal timestream s using
+    overlap-add FFT convolution (same result as fftconvolve to rounding,
+    and faster when h is much shorter than s).
 
     Parameters:
     s (np.ndarray, float64, (L,)): Signal timestream.
@@ -75,8 +76,8 @@ def apply_opt_filt(s, h):
     assert len(h) <= len(s), \
         "Length of h must be less than or equal to length of s"
     
-    # apply filter using fftconvolve
-    y = np.roll(fftconvolve(s, h, mode = 'same'), -1)
+    # apply filter using oaconvolve
+    y = np.roll(oaconvolve(s, h, mode = 'same'), -1)
     return y
 
 def create_nsd(s, nfft):
