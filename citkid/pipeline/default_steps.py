@@ -130,6 +130,10 @@ default_analysis_steps =\
                                     thetaf, xf, xcal_mask, poly_x_deg = 3), 
   ['thetaf', 'xf', 'xcal_mask'], ['poly_x'], 'per-row'),
 
+ ('get_xcal_mask_fixed_theta', xcal.get_xcal_mask_fixed_theta,
+  ['thetaf', 'xcal_theta_min_offset', 'xcal_theta_max_offset'],
+  ['xcal_mask'], 'per-row'),
+
  ('fit_iq', res_fitter.fit_nonlinear_iq_pl, 
   ['ff', 'zf_rmv', 'iq_mask'], ['iq_p0', 'iq_popt', 'iq_nrmse'], 'per-row'),
 )

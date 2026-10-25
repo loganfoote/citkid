@@ -19,6 +19,7 @@ _CAL_YAML_ALIASES = {
     "ts": "cal-ts.yaml",
     "iq": "cal-iqonly.yaml",
     "ts_offres": "cal-offres.yaml",
+    "ts-fixed_theta": "cal-ts.yaml",
 }
 
 _PER_ROW_CHUNK_ROWS = 1

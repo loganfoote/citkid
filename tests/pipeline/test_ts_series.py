@@ -35,7 +35,7 @@ class _Panel(StepPanel):
 
 def _make_window(
     qt_app, monkeypatch, quantities=None, x='p', y='a', nrows=4, n_series=3,
-    **kwargs
+    panels=None, **kwargs
 ):
     """
     Build a TSSeriesWindow over mock runners with deterministic quantities.
@@ -50,6 +50,8 @@ def _make_window(
     x, y (str): Initial quantities.
     nrows (int): Rows per mock dataset.
     n_series (int): Number of series indices.
+    panels (list or None): Step grouping of the runners' analysis path.
+        None (default) uses the 'ts' grouping.
     **kwargs: Extra TSSeriesWindow arguments.
 
     Returns:
@@ -58,7 +60,8 @@ def _make_window(
     """
     steps = [
         plStep(name, lambda x=None: x, ['x'], [f'{name}_out'], 'per-row')
-        for group in its._TS_PANELS for name in group
+        for group in (its._TS_PANELS if panels is None else panels)
+        for name in group
     ]
     ars = []
     for _ in range(n_series):
@@ -549,3 +552,12 @@ def test_help_lists_the_quantity_dropdowns(qt_app, monkeypatch):
     assert 'x / y' in text and 'W / S' in text
     assert 'Mark Bad Above' not in text  # not offered in the TS window
     _close(win)
+
+
+def test_fixed_theta_analysis_uses_its_panel(qt_app, monkeypatch):
+    from citkid.pipeline.interactive import ts_analysis
+    panels = ts_analysis._TS_FIXED_THETA_PANELS
+    win, _ = _make_window(qt_app, monkeypatch, panels=panels)
+    assert [p.step_names for p in win.panels] == [tuple(g) for g in panels]
+    _close(win)
+

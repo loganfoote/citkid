@@ -62,6 +62,7 @@ from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
 from ..analysis import AnalysisRunner
 from ..dataset import DataSet, _io_lock_for, _retry_io, reopen_group
+from ...res.mask import nearby_tone_mask
 from ..framework import LazyAttr
 from ..series_xy_fit import SeriesXYFit, SeriesXYFitStore  # noqa: F401 (SeriesXYFit re-exported)
 from ...qt_compat import (
@@ -122,6 +123,29 @@ def resume_position(data_idxs, viewed, last_data_idx):
     candidates = [pos for pos, di in enumerate(data_idxs)
                   if int(di) not in viewed or int(di) == last_data_idx]
     return candidates[0] if candidates else 0
+
+
+def nearby_tone_iq_mask(DS, data_idx):
+    """
+    Return a row's IQ fit mask that leaves out the sweep beyond the halfway
+    points to the neighboring tones (``nearby_tone_mask``).
+
+    Parameters:
+    DS (DataSet): DataSet with ``ff``, ``fres`` and optionally ``res_idxs``
+        (calibration tones, ``res_idxs < 0``, are not neighbors).
+    data_idx (int): Row.
+
+    Returns:
+    mask (np.ndarray of bool): Mask over ``DS.ff[data_idx]``.
+    """
+    ff = np.asarray(DS.ff[data_idx], dtype=float)
+    fres = np.asarray(DS.fres[:], dtype=float)
+    try:
+        neighbors = np.asarray(DS.res_idxs[:]) >= 0
+    except Exception:
+        neighbors = np.ones(len(fres), dtype=bool)
+    neighbors[int(data_idx)] = False
+    return nearby_tone_mask(ff, fres[int(data_idx)], fres[neighbors])
 
 
 # Panel grouping matching iq_analysis_template.yaml
@@ -387,6 +411,13 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         toggle. If on, the selected series point stays selected when the
         data index changes (its panels show the new row). If off (default),
         changing the data index deselects it.
+    mask_nearby_tones (bool): If True, a row's default IQ fit mask (when
+        it has no saved mask, including in background pre-fits) cuts the
+        sweep halfway to the nearest other tone on each side
+        (``citkid.res.mask.nearby_tone_mask``, keeping at least 25% of the
+        sweep). Other tones are the DataSet's ``fres``, without calibration
+        tones (``res_idxs < 0``). Reset Mask returns to this default. If
+        False (default), the default mask is the whole sweep.
 
     Notes:
     While the window is open, every dataset writes through its fast write
@@ -413,6 +444,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         plot_scale=1.0, parent=None, state_group=None, xy_fit=None, panels=None,
         precompute_values=False, background_fitting=False, x_values=None,
         xscale='linear', yscale='linear', hold_series_point=False,
+        mask_nearby_tones=False,
     ):
         """
         Build the window, toolbar, series plots and analysis panels.
@@ -426,6 +458,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         delete_on_close(self)  # destroy on the GUI thread when closed
         self._xscale, self._yscale = xscale, yscale
         self._hold_series_point = bool(hold_series_point)
+        self._mask_nearby_tones = bool(mask_nearby_tones)
         self._ARs = list(ARs)
         self._x_param_name = x_param_name
         self._x_name = x_name
@@ -584,6 +617,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                 parent=self,
             )
             panel.panel_index = i
+            if self._mask_nearby_tones and hasattr(panel, 'default_iq_mask'):
+                panel.default_iq_mask = self._default_iq_mask
             panel.downstream_rerun.connect(self._on_panel_rerun)
             panel.run_from_here.connect(
                 lambda p=panel: self._run_through_panel(p.panel_index)
@@ -1742,9 +1777,28 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         """
         return all(self._runner_outputs_exist(AR, data_idx) for AR in self._ARs)
 
+    def _default_iq_mask(self, AR, data_idx):
+        """
+        Return a row's default IQ fit mask, for ``FitIQPanel.default_iq_mask``.
+
+        Parameters:
+        AR (AnalysisRunner): Runner of the series point shown.
+        data_idx (int): Row.
+
+        Returns:
+        mask (np.ndarray of bool): ``nearby_tone_iq_mask(AR.DS, data_idx)``.
+        """
+        return nearby_tone_iq_mask(AR.DS, data_idx)
+
     def _initialize_runner_outputs(self, AR, data_idx: int):
         """
         Ensure global-prefix analysis steps exist once, then run the per-row suffix.
+
+        With ``mask_nearby_tones``, ``fit_iq`` runs with the row's default
+        mask (``nearby_tone_iq_mask``) instead of the YAML ``iq_mask``.
+
+        Raises:
+        RuntimeError: If a step fails for the row.
         """
         step_start_idx = self._global_prefix_length(AR)
         for step_dict in AR.path[:step_start_idx]:
@@ -1754,8 +1808,30 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                 continue
             AR.execute_step(step, data_idx=None, save=True)
 
-        if step_start_idx < len(AR.path):
-            AR.execute_path(data_idx=data_idx, step_start_idx=step_start_idx, save=True, verbose=False)
+        if step_start_idx >= len(AR.path):
+            return
+        names = [step_dict['task'].name for step_dict in AR.path]
+        fit_idx = names.index('fit_iq') if 'fit_iq' in names else None
+        if (not self._mask_nearby_tones or fit_idx is None
+                or fit_idx < step_start_idx):
+            AR.execute_path(data_idx=data_idx, step_start_idx=step_start_idx,
+                            save=True, verbose=False)
+            return
+        if fit_idx > step_start_idx:
+            AR.execute_path(data_idx=data_idx, step_start_idx=step_start_idx,
+                            step_end_idx=fit_idx, save=True, verbose=False)
+        step_dict = AR.path[fit_idx]
+        params = dict(step_dict.get('params', {}) or {})
+        params['iq_mask'] = nearby_tone_iq_mask(AR.DS, data_idx)
+        AR.execute_step(step_dict['task'], data_idx=data_idx,
+                        user_params=params, save=True)
+        failures = AR._last_failures or {}
+        if failures:
+            raise RuntimeError(f"Step 'fit_iq' failed for data_idx "
+                               f"{data_idx}:\n{failures[min(failures)]}")
+        if fit_idx + 1 < len(AR.path):
+            AR.execute_path(data_idx=data_idx, step_start_idx=fit_idx + 1,
+                            save=True, verbose=False)
 
     def _start_background_initialize_remaining(self):
         """
@@ -2556,6 +2632,7 @@ def run_iq_series(
     y_param_name='a', start_series_idx=0, start_idx=None, data_idxs=None,
     title="IQ Series", ui_scale=1.0, plot_scale=1.0, xy_fit=None, datasets=None,
     x_values=None, xscale='linear', yscale='linear', hold_series_point=False,
+    mask_nearby_tones=False,
 ):
     """
     Build one AnalysisRunner per series index, then launch the IQSeriesWindow.
@@ -2630,6 +2707,13 @@ def run_iq_series(
         toggle. If on, the selected series point stays selected when the
         data index changes (its panels show the new row). If off (default),
         changing the data index deselects it.
+    mask_nearby_tones (bool): If True, a row's default IQ fit mask (when
+        it has no saved mask, including in background pre-fits) cuts the
+        sweep halfway to the nearest other tone on each side
+        (``citkid.res.mask.nearby_tone_mask``, keeping at least 25% of the
+        sweep). Other tones are the DataSet's ``fres``, without calibration
+        tones (``res_idxs < 0``). Reset Mask returns to this default. If
+        False (default), the default mask is the whole sweep.
 
     Returns:
     win (IQSeriesWindow): The created (and already shown) window.
@@ -2698,6 +2782,7 @@ def run_iq_series(
         xscale=xscale,
         yscale=yscale,
         hold_series_point=hold_series_point,
+        mask_nearby_tones=mask_nearby_tones,
     )
     win.show()
     app.exec()

@@ -72,6 +72,45 @@ def get_xcal_mask(
     mask[idx0:idx1 + 1] = True
     return mask
 
+def get_xcal_mask_fixed_theta(
+    theta_f, theta_min_offset = 0.2, theta_max_offset = 0.2
+):
+    """
+    Get mask of the fine s21 sweep over which x vs theta should be fit to
+    produce the x calibration. Keeps the points whose theta_f is at least
+    theta_min_offset above the minimum of theta_f and at least
+    theta_max_offset below its maximum. Unlike get_xcal_mask, the timestream
+    is not used.
+
+    Parameters:
+    theta_f (array-like, float64): Theta values from the fine S21 sweep in
+        radians. NaN values are ignored (never in the mask).
+    theta_min_offset (float): Offset in radians up from the minimum of
+        theta_f. Default 0.2.
+    theta_max_offset (float): Offset in radians down from the maximum of
+        theta_f. Default 0.2.
+
+    Returns:
+    mask (np.array, bool): Mask of theta_f. Points need not be contiguous:
+        points outside the band (e.g. glitches) are left out.
+
+    Raises:
+    ValueError: If no point of theta_f is inside the band.
+    """
+    theta_f = np.asarray(theta_f, dtype = np.float64)
+    if not np.any(np.isfinite(theta_f)):
+        raise ValueError("theta_f has no finite values.")
+    lo = np.nanmin(theta_f) + theta_min_offset
+    hi = np.nanmax(theta_f) - theta_max_offset
+    mask = (theta_f >= lo) & (theta_f <= hi)
+    if not mask.any():
+        raise ValueError(
+            f"No theta_f values in the band [{lo:.4g}, {hi:.4g}] rad: "
+            f"theta_min_offset ({theta_min_offset}) and theta_max_offset "
+            f"({theta_max_offset}) leave nothing to fit."
+        )
+    return mask
+
 def fit_x_theta(thetat, xf, mask, poly_x_deg):
     """
     Fit a polynomial to x vs theta data for the fine s21 sweep, using only the

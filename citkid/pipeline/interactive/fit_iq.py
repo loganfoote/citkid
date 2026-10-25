@@ -67,12 +67,19 @@ class FitIQPanel(StepPanel):
     The IQ mask is controlled interactively via a LinearRegionItem on the
     amplitude vs frequency plot.
 
+    Attributes:
+    default_iq_mask (callable or None): ``default_iq_mask(AR, data_idx)``
+        returns the mask a row starts with when it has no saved mask (and
+        that Reset Mask restores). None (default) uses the whole sweep.
+
     Parameters:
     AR (AnalysisRunner): The analysis runner.
     step_names (tuple of str): Step names handled by this panel.
     data_idx (int or None): Initial data index.
     parent (QWidget or None): Parent widget.
     """
+
+    default_iq_mask = None
 
     def setup_ui(self):
         root = QtWidgets.QVBoxLayout(self)
@@ -197,7 +204,7 @@ class FitIQPanel(StepPanel):
         if saved is not None:
             self._mask = np.asarray(saved, dtype=bool)
         else:
-            self._mask = None
+            self._mask = self._default_mask()
         self._f_center = 0.0
         self._region_initialized = False
 
@@ -338,13 +345,36 @@ class FitIQPanel(StepPanel):
         self._mask = mask
         return mask
 
+    def _default_mask(self):
+        """
+        Return the mask a row starts with when it has no saved mask.
+
+        Returns:
+        mask (np.ndarray of bool or None): ``default_iq_mask``'s mask, or
+            None (the whole sweep) if there is none or it fails.
+        """
+        if self.default_iq_mask is None or self.data_idx is None:
+            return None
+        try:
+            mask = self.default_iq_mask(self.AR, self.data_idx)
+            mask = np.asarray(mask, dtype=bool)
+        except Exception as exc:
+            print(f"Default IQ mask failed for data_idx {self.data_idx}: {exc}")
+            return None
+        return mask if mask.any() else None
+
     def _reset_mask(self):
-        """Reset the region to the full frequency range."""
+        """Reset the region to the default mask (the full range if none)."""
+        mask = self._default_mask()
         if self._ff_cache is not None:
-            lo = float((self._ff_cache.min() - self._f_center) * 1e-3)
-            hi = float((self._ff_cache.max() - self._f_center) * 1e-3)
-            self._region.setRegion((lo, hi))
-        self._mask = None
+            ff = self._ff_cache
+            if mask is not None and len(mask) == len(ff):
+                lo, hi = ff[mask].min(), ff[mask].max()
+            else:
+                lo, hi = ff.min(), ff.max()
+            self._region.setRegion((float((lo - self._f_center) * 1e-3),
+                                    float((hi - self._f_center) * 1e-3)))
+        self._mask = mask
         self._status_label.setText("Mask reset — click Run")
 
     def _on_range_selected(self, lo: float, hi: float):

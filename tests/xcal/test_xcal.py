@@ -89,3 +89,36 @@ def test_get_xcal_mask_additional_invalid(
         
 
     
+
+
+################################################################################
+########################### get_xcal_mask_fixed_theta ##########################
+################################################################################
+def test_get_xcal_mask_fixed_theta_band():
+    theta_f = np.linspace(-2, 2, 41)  # 0.1 rad steps
+    mask = xcal.get_xcal_mask_fixed_theta(theta_f, 0.25, 0.5)
+    np.testing.assert_array_equal(mask, (theta_f >= -1.75) & (theta_f <= 1.5))
+    # Defaults are 0.2 rad
+    np.testing.assert_array_equal(
+        xcal.get_xcal_mask_fixed_theta(theta_f),
+        (theta_f >= -2 + 0.2) & (theta_f <= 2 - 0.2))
+
+
+def test_get_xcal_mask_fixed_theta_leaves_out_glitches_and_nan():
+    theta_f = np.linspace(2, -2, 41)  # decreasing works too
+    theta_f[20] = 1.95                # a glitch in the middle
+    theta_f[5] = np.nan
+    mask = xcal.get_xcal_mask_fixed_theta(theta_f, 0.2, 0.2)
+    assert not mask[20] and not mask[5]
+    assert mask[19] and mask[21]
+    assert not mask[0] and not mask[-1]
+
+
+@pytest.mark.parametrize('theta_f, lo, hi', [
+    (np.linspace(-1, 1, 11), 1.0, 1.1),
+    (np.array([np.nan, np.nan]), 0.2, 0.2),
+])
+def test_get_xcal_mask_fixed_theta_raises_when_nothing_is_left(theta_f, lo, hi):
+    with pytest.raises(ValueError):
+        xcal.get_xcal_mask_fixed_theta(theta_f, lo, hi)
+

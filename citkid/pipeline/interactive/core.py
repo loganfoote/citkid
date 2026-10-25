@@ -274,6 +274,8 @@ PLOT_HELP = ('Mouse', [
                              'apply'),
     ('Shift+drag', 'Select a new mask range on the amplitude plot (circle '
                    'fit and IQ fit panels)'),
+    ('Dashed lines', 'Drag to set the theta band (fixed-theta x '
+                     'calibration panel); click Run to apply'),
     ('Scroll / drag', 'Zoom / pan a plot'),
     ('Right-click', 'Plot menu (axes, log scale, export)'),
 ])

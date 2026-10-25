@@ -19,6 +19,7 @@ _ANALYSIS_YAML_ALIASES = {
     "iq": "iq_analysis.yaml",
     "ts": "ts_analysis.yaml",
     "ts_offres": "ts_offres_analysis.yaml",
+    "ts-fixed_theta": "ts-fixed_theta_analysis.yaml",
 }
 
 _MASK_SHAPE_SOURCES = {

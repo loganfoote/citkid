@@ -1427,6 +1427,7 @@ def test_every_registered_panel_can_clear_its_plots():
 @pytest.mark.parametrize('module, steps', [
     ('circ', ('fit_iq_circle', 'get_idx_t', 'get_theta_phase_offset')),
     ('xcal', ('get_xcal_mask', 'fit_x_theta')),
+    ('xcal_fixed_theta', ('get_xcal_mask_fixed_theta', 'fit_x_theta')),
 ])
 def test_ts_panels_clear_every_curve(qt_app, module, steps):
     import importlib
@@ -1495,6 +1496,7 @@ def test_panel_drops_all_nan_curves(qt_app, method):
     ('fit_iq', ('fit_iq',)),
     ('circ', ('fit_iq_circle', 'get_idx_t', 'get_theta_phase_offset')),
     ('xcal', ('get_xcal_mask', 'fit_x_theta')),
+    ('xcal_fixed_theta', ('get_xcal_mask_fixed_theta', 'fit_x_theta')),
 ])
 def test_sweep_panels_draw_every_point(qt_app, module, steps):
     """No auto-downsampling: it drops sweep points, and its peak mode can raise
@@ -1868,3 +1870,201 @@ def test_series_window_help(qt_app, monkeypatch):
         assert item in text
     assert 'Fit curve' not in text  # no xy fit
     TestIQSeriesWindow._close(win)
+
+
+################################################################################
+# Nearby-tone default IQ mask
+################################################################################
+
+def _tone_ds(res_idxs=(0, -1, 2)):
+    """
+    Build a stand-in DataSet with three tones, 4 Hz apart, and 0.1 Hz sweeps.
+
+    Parameters:
+    res_idxs (tuple or None): ``res_idxs`` (-1: calibration tone), or None
+        for a DataSet without them.
+
+    Returns:
+    DS (SimpleNamespace): ``ff``, ``zf_rmv``, ``fres`` (and ``res_idxs``).
+    """
+    from types import SimpleNamespace
+    fres = np.array([1000., 1002., 1004.])
+    ff = np.array([np.linspace(fr - 10, fr + 10, 201) for fr in fres])
+    DS = SimpleNamespace(ff=ff, zf_rmv=np.ones_like(ff, dtype=complex), fres=fres)
+    if res_idxs is not None:
+        DS.res_idxs = np.array(res_idxs)
+    return DS
+
+
+def test_nearby_tone_iq_mask_skips_calibration_tones():
+    DS = _tone_ds()
+    # Row 0: the 1002 Hz tone is a calibration tone, so the cut is at 1002
+    np.testing.assert_array_equal(iseries.nearby_tone_iq_mask(DS, 0), DS.ff[0] <= 1002.)
+    # Without res_idxs every other tone counts
+    DS = _tone_ds(res_idxs=None)
+    np.testing.assert_array_equal(iseries.nearby_tone_iq_mask(DS, 0), DS.ff[0] <= 1001.)
+    # A row with tones on both sides keeps 25% of its sweep
+    assert iseries.nearby_tone_iq_mask(DS, 1).sum() == 51
+
+
+def test_fit_iq_panel_starts_and_resets_to_the_default_mask(qt_app):
+    from types import SimpleNamespace
+    from citkid.pipeline.interactive import fit_iq
+    steps = ('fit_iq',)
+    ar, _ = _make_ar(*steps)
+    ar.DS = _tone_ds(res_idxs=None)
+    panel = fit_iq.FitIQPanel(ar, steps, data_idx=0)
+    assert panel.default_iq_mask is None
+    panel.on_data_idx_changing()
+    assert panel._mask is None  # whole sweep
+
+    panel.default_iq_mask = lambda AR, di: IQSeriesWindow._default_iq_mask(None, AR, di)
+    panel.on_data_idx_changing()
+    expected = ar.DS.ff[0] <= 1001.
+    np.testing.assert_array_equal(panel._mask, expected)
+    panel.update_plots()
+    lo, hi = panel._region.getRegion()
+    assert lo * 1e3 + panel._f_center == pytest.approx(990.)
+    assert hi * 1e3 + panel._f_center == pytest.approx(1001., abs=0.06)
+
+    # A saved mask wins; Reset Mask returns to the default
+    saved = np.zeros(201, dtype=bool)
+    saved[50:150] = True
+    ar.DS.iq_mask = [saved]
+    panel.on_data_idx_changing()
+    np.testing.assert_array_equal(panel._mask, saved)
+    panel.update_plots()
+    panel._reset_mask()
+    np.testing.assert_array_equal(panel._mask, expected)
+    np.testing.assert_array_equal(panel._build_mask(ar.DS.ff[0]), expected)
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_prefits_use_the_nearby_tone_mask(monkeypatch, enabled):
+    from types import SimpleNamespace
+    steps = [_make_step('make_fr_spans', func_type='global')]
+    steps += [_make_step(name) for name in ('fit_gain', 'fit_iq', 'after')]
+    AR = MagicMock()
+    AR.path = [{'task': step} for step in steps]
+    AR.path[2]['params'] = {'iq_mask': None, 'other': 1}
+    AR._last_failures = {}
+    mask = np.array([True, False])
+    monkeypatch.setattr(iseries, 'nearby_tone_iq_mask', lambda DS, di: mask)
+    win = SimpleNamespace(_mask_nearby_tones=enabled,
+                          _global_prefix_length=lambda ar: 1,
+                          _step_outputs_exist=lambda *a, **k: True)
+
+    IQSeriesWindow._initialize_runner_outputs(win, AR, 3)
+
+    paths = [call.kwargs for call in AR.execute_path.call_args_list]
+    if not enabled:
+        assert [(c['step_start_idx'], c.get('step_end_idx')) for c in paths] == [(1, None)]
+        AR.execute_step.assert_not_called()
+        return
+    assert [(c['step_start_idx'], c.get('step_end_idx')) for c in paths] == [(1, 2), (3, None)]
+    (step,), kwargs = AR.execute_step.call_args
+    assert step is steps[2] and kwargs['data_idx'] == 3
+    assert kwargs['user_params']['iq_mask'] is mask and kwargs['user_params']['other'] == 1
+
+    AR._last_failures = {3: 'boom'}
+    with pytest.raises(RuntimeError, match="'fit_iq' failed for data_idx 3"):
+        IQSeriesWindow._initialize_runner_outputs(win, AR, 3)
+
+
+################################################################################
+# Fixed-theta x calibration panel
+################################################################################
+
+def _xcal_ds():
+    """
+    Build a stand-in DataSet row for the fixed-theta x calibration panel.
+
+    Returns:
+    DS (SimpleNamespace): one row of sweep, theta, x and timestream data,
+        with theta_f from -3 to 3 rad and poly_x = [0, 0, 1e-4, 0].
+    """
+    from types import SimpleNamespace
+    n = 60  # no point exactly on a band edge
+    ff = np.linspace(1e9 - 3e4, 1e9 + 3e4, n)
+    thetaf = np.linspace(3, -3, n)
+    zf_cent = np.exp(1j * thetaf)
+    rng = np.random.default_rng(0)
+    thetat = rng.normal(0, 0.05, 500)
+    return SimpleNamespace(
+        ff=[ff], zf_rmv=[zf_cent + 2], zf_cent=[zf_cent], thetaf=[thetaf],
+        xf=[1e-4 * thetaf], thetat=[thetat], zt_cent=[np.exp(1j * thetat)],
+        poly_x=[np.array([0, 0, 1e-4, 0])])
+
+
+def test_fixed_theta_panel_mask_follows_the_offsets(qt_app):
+    from citkid.pipeline.interactive import xcal_fixed_theta as ixf
+    steps = ('get_xcal_mask_fixed_theta', 'fit_x_theta')
+    ar, _ = _make_ar(*steps)
+    ar.DS = _xcal_ds()
+    panel = ixf.XCalFixedThetaPanel(ar, steps, data_idx=0)
+    assert panel._offsets() == (0.2, 0.2)  # no saved value or YAML: default
+    panel.on_data_idx_changing()
+    panel.update_plots()
+
+    thetaf = ar.DS.thetaf[0]
+
+    def count(curve):
+        data = curve.getData()[0]
+        return 0 if data is None else len(data)
+
+    def n_in(lo, hi):
+        return int(((thetaf >= -3 + lo) & (thetaf <= 3 - hi)).sum())
+
+    assert count(panel._xcal_inc) == n_in(0.2, 0.2) == 56
+    assert count(panel._xcal_exc) == 60 - n_in(0.2, 0.2)
+    assert count(panel._zt_iq) == 500       # timestream shown
+    assert count(panel._xcal_ts) == 500
+    assert count(panel._xcal_fit) == 500
+    assert panel._lo_line.value() == pytest.approx(-2.8)
+    assert panel._hi_line.value() == pytest.approx(2.8)
+
+    # Spin box -> band edge and colors
+    panel._min_spin.setValue(1.0)
+    assert panel._lo_line.value() == pytest.approx(-2.0)
+    assert count(panel._xcal_inc) == n_in(1.0, 0.2)
+    assert 'click Run' in panel._status_label.text()
+    # Dragged band edge -> spin box
+    panel._hi_line.setValue(2.5)
+    panel._on_line_moved(panel._hi_line)
+    assert panel._max_spin.value() == pytest.approx(0.5)
+    assert panel.get_params_for_step(_make_step('get_xcal_mask_fixed_theta')) == {
+        'xcal_theta_min_offset': 1.0, 'xcal_theta_max_offset': 0.5}
+    # Offsets that leave nothing: all excluded, said so
+    panel._min_spin.setValue(6.0)
+    assert count(panel._xcal_inc) == 0
+    assert 'no points' in panel._status_label.text()
+
+    panel.clear_plots()
+    assert not panel._lo_line.isVisible()
+
+
+def test_fixed_theta_panel_restores_offsets_per_row(qt_app):
+    from citkid.pipeline.interactive import xcal_fixed_theta as ixf
+    steps = ('get_xcal_mask_fixed_theta', 'fit_x_theta')
+    ar, _ = _make_ar(*steps)
+    ar.DS = _xcal_ds()
+    ar.DS.xcal_theta_min_offset = [0.3]
+    ar.DS.xcal_theta_max_offset = [0.4]
+    panel = ixf.XCalFixedThetaPanel(ar, steps, data_idx=0)
+    panel.on_data_idx_changing()
+    assert panel._offsets() == (0.3, 0.4)
+    assert set(panel._nan_outputs()) == {'xcal_mask', 'poly_x'}
+    assert panel._nan_outputs()['xcal_mask'].shape == (60,)
+
+
+def test_ts_panels_follow_the_analysis_path():
+    from citkid.pipeline.interactive import ts_analysis
+    ar = MagicMock()
+    ar.path = [{'task': _make_step(name)} for group in ts_analysis._TS_PANELS
+               for name in group]
+    assert ts_analysis.ts_panels(ar) == ts_analysis._TS_PANELS
+    ar.path = [{'task': _make_step(name)}
+               for group in ts_analysis._TS_FIXED_THETA_PANELS for name in group]
+    assert ts_analysis.ts_panels(ar)[-1] == ('get_xcal_mask_fixed_theta', 'fit_x_theta')
+    assert ts_analysis.ts_panels(ar)[:2] == ts_analysis._TS_PANELS[:2]
+

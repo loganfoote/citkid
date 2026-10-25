@@ -1254,6 +1254,7 @@ def test_analysis_runner_has_no_failures_before_running(pipeline_files):
 @pytest.mark.parametrize("cal_alias, analysis_alias, template", [
     ("ts", "ts", "custom_steps_template.py"),
     ("ts_offres", "ts_offres", "custom_steps_template.py"),
+    ("ts-fixed_theta", "ts-fixed_theta", "custom_steps_template.py"),
     ("iq", "iq", "custom_steps_iqonly_template.py"),
 ])
 def test_every_template_pair_builds_a_runner(

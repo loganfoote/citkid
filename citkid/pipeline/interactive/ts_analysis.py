@@ -9,6 +9,10 @@ The panels match the steps in ``pipeline/templates/ts_analysis.yaml``
         -> ``CircleFitPanel``
     ``get_xcal_mask``, ``fit_x_theta`` -> ``XCalPanel``
 
+With the 'ts-fixed_theta' analysis
+(``pipeline/templates/ts-fixed_theta_analysis.yaml``), the last panel is
+``XCalFixedThetaPanel`` (``get_xcal_mask_fixed_theta``, ``fit_x_theta``).
+
 ``run_ts_analysis`` is ``core.run_interactive`` with this panel grouping.
 
 Examples:
@@ -21,6 +25,7 @@ from .core import run_interactive
 from . import gain   # noqa: F401 — registers GainFitPanel
 from . import circ   # noqa: F401 — registers CircleFitPanel
 from . import xcal   # noqa: F401 — registers XCalPanel
+from . import xcal_fixed_theta  # noqa: F401 — registers XCalFixedThetaPanel
 
 # Step grouping that matches ts_analysis.yaml
 _TS_PANELS = [
@@ -28,6 +33,30 @@ _TS_PANELS = [
     ('fit_iq_circle', 'get_idx_t', 'get_theta_phase_offset'),
     ('get_xcal_mask', 'fit_x_theta'),
 ]
+# ... and ts-fixed_theta_analysis.yaml
+_TS_FIXED_THETA_PANELS = _TS_PANELS[:2] + [
+    ('get_xcal_mask_fixed_theta', 'fit_x_theta'),
+]
+
+
+def ts_panels(AR):
+    """
+    Return the TS panel grouping for a runner's analysis path.
+
+    Parameters:
+    AR (AnalysisRunner): runner with the 'ts' or 'ts-fixed_theta' analysis.
+
+    Returns:
+    panels (list of tuple of str): ``_TS_FIXED_THETA_PANELS`` if the path
+        has ``get_xcal_mask_fixed_theta``, otherwise ``_TS_PANELS``.
+    """
+    try:
+        names = [step_dict['task'].name for step_dict in AR.path]
+    except Exception:
+        names = []
+    if 'get_xcal_mask_fixed_theta' in names:
+        return list(_TS_FIXED_THETA_PANELS)
+    return list(_TS_PANELS)
 
 
 def run_ts_analysis(
@@ -38,13 +67,15 @@ def run_ts_analysis(
     Launch the interactive TS analysis window.
 
     This wraps ``run_interactive`` with the panel grouping that matches
-    ``pipeline/templates/ts_analysis.yaml``.
+    the runner's analysis, ``pipeline/templates/ts_analysis.yaml`` or
+    ``ts-fixed_theta_analysis.yaml`` (see ``ts_panels``).
 
     Parameters:
     AR (AnalysisRunner): runner whose ``DS`` has the calibration pipeline
         loaded and whose ``analysis_steps`` include ``fit_gain``,
         ``fit_iq_circle``, ``get_idx_t``, ``get_theta_phase_offset``,
-        ``get_xcal_mask``, and ``fit_x_theta``.
+        ``get_xcal_mask`` (or ``get_xcal_mask_fixed_theta``), and
+        ``fit_x_theta``.
     start_idx (int): index into ``data_idxs`` to start at. Default is 0.
     data_idxs (list of int or None): data indices to step through with the
         navigation buttons, in order. None (default) uses every row.
@@ -58,7 +89,7 @@ def run_ts_analysis(
     """
     return run_interactive(
         AR,
-        panels=_TS_PANELS,
+        panels=ts_panels(AR),
         start_idx=start_idx,
         data_idxs=data_idxs,
         title=title,

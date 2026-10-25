@@ -412,3 +412,24 @@ def test_series_runners_rerun_after_the_store_was_deleted(data_dir, tmp_path):
         DataSet(zarr.open_group(out_path)['set1']).iq_popt[0][4],
         a_true(POWERS[1]), rtol = 0.05, atol = 0.01)
 
+
+def test_ts_fixed_theta_analysis_end_to_end(data_dir, tmp_path):
+    """
+    The 'ts-fixed_theta' analysis masks the x calibration at fixed theta
+    offsets, and the noise calibration runs after it.
+    """
+    from citkid.xcal.xcal import get_xcal_mask_fixed_theta
+    datasets = open_series_datasets(
+        data_dir, 'sweep.zarr', str(tmp_path / 'out.zarr'), set_idxs = [0],
+        cal_yaml_path = 'ts-fixed_theta', ts = 'ts_00')
+    run_series_analysis(datasets, 'ts-fixed_theta', verbose = False)
+    DS = datasets[0]
+    for di in range(2):
+        thetaf = np.asarray(DS.thetaf[di])
+        mask = np.asarray(DS.xcal_mask[di], dtype = bool)
+        np.testing.assert_array_equal(
+            mask, get_xcal_mask_fixed_theta(thetaf, 0.2, 0.2))
+        assert 0 < mask.sum() < len(mask)
+        assert np.all(np.isfinite(DS.poly_x[di]))
+        assert np.all(np.isfinite(DS.xt[di]))
+

@@ -1,0 +1,30 @@
+### ----------------------------- ###
+###         Analysis steps        ###
+### ----------------------------- ###
+# The 'ts' analysis, with an x calibration mask at fixed theta offsets from
+# the ends of the sweep (get_xcal_mask_fixed_theta) instead of the range the
+# timestream covers. The calibration is the same as 'ts' (cal-ts.yaml).
+
+ANALYSIS_STEPS:
+  1 :
+    task: make_fr_spans
+    # global step.
+  2 :
+    task: fit_gain
+    params:
+      span_mult: 1
+  3 :
+    task: fit_iq_circle
+    params:
+      circ_mask: null # null will build a mask that is all True.
+  4 :
+    task: get_idx_t
+  5 :
+    task: get_theta_phase_offset
+  6 :
+    task: get_xcal_mask_fixed_theta
+    params:
+      xcal_theta_min_offset: 0.2 # rad up from the minimum of thetaf
+      xcal_theta_max_offset: 0.2 # rad down from the maximum of thetaf
+  7 :
+    task: fit_x_theta

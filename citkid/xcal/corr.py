@@ -26,6 +26,9 @@ def pca(x, N_comp, sig = None, highpass_params = None):
     where a_kc are scaling factors, A_ct are the common components, and n_kt are
     white noise timestreams. k is the detector index (max N), t is the time
     index (max T), and c is the component index (max N_comp).
+    The first N_comp eigenvectors, sorted by eigenvalue, of the covariance 
+    matrix of the normalized timestreams are used to calculate the common 
+    components.
 
     Parameters:
     x (array-like, (N, T)): Timestream data with N timestreams of length T.

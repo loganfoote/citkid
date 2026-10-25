@@ -10,7 +10,8 @@ chosen from two dropdowns (e.g. the reduced PSD ``sxx_10`` vs power
 For each resonator (data_idx), displays:
   - Left:  the selected y vs x for every series index, and a ``|S21|``
            waterfall.
-  - Right: the TS panels (GainFitPanel, CircleFitPanel, XCalPanel) for the
+  - Right: the TS panels (GainFitPanel, CircleFitPanel, and XCalPanel, or
+           XCalFixedThetaPanel with the 'ts-fixed_theta' analysis) for the
            selected series index.
 
 Usage
@@ -43,6 +44,7 @@ from . import gain  # noqa: F401 — registers GainFitPanel
 from . import circ  # noqa: F401 — registers CircleFitPanel
 from . import xcal  # noqa: F401 — registers XCalPanel
 from .core import compact_combo
+from .ts_analysis import _TS_PANELS, ts_panels
 from .iq_series import (
     QtWidgets,
     IQSeriesWindow,
@@ -51,13 +53,6 @@ from .iq_series import (
     dataset_quantity,
     series_runners,
 )
-
-# Step grouping that matches ts_analysis.yaml
-_TS_PANELS = [
-    ('fit_gain',),
-    ('fit_iq_circle', 'get_idx_t', 'get_theta_phase_offset'),
-    ('get_xcal_mask', 'fit_x_theta'),
-]
 
 # Scalar per-resonator quantities produced by the 'ts' calibration and
 # analysis, offered in the x and y dropdowns by default.
@@ -206,7 +201,7 @@ class TSSeriesWindow(IQSeriesWindow):
             x_name=x,
             y_func=self._quantities[y],
             y_name=y,
-            panels=_TS_PANELS,
+            panels=ts_panels(ARs[0]),
             precompute_values=True,
             **kwargs,
         )
@@ -319,9 +314,10 @@ def run_ts_series(
         uses 'x'.
     cal_yaml_path (str): Calibration YAML path or alias, for
         ``make_custom_steps``. Default 'ts'.
-    analysis_yaml_path (str or None): Analysis YAML path or alias. Default
-        'ts'. With ``datasets``, None uses each DataSet's embedded analysis
-        definition.
+    analysis_yaml_path (str or None): Analysis YAML path or alias, e.g.
+        'ts' (default) or 'ts-fixed_theta' (x calibration mask at fixed
+        theta offsets). With ``datasets``, None uses each DataSet's embedded
+        analysis definition.
     start_series_idx (int): Initial series index. Default 0.
     start_idx (int or None): Position in ``data_idxs`` to start at,
         regardless of the saved state. None (default) resumes the last
