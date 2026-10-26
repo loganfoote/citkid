@@ -40,6 +40,9 @@ Pipeline-specific launchers
 
 :func:`~.ts_analysis.run_ts_analysis`
     One-liner for the ts_analysis YAML pipeline.
+
+:func:`~.iq_ts_analysis.run_iq_ts_analysis`
+    The ts_analysis panels followed by the IQ fit panel.
 """
 
 # Core framework — always imported
@@ -63,6 +66,7 @@ from .iq_series import IQSeriesWindow, SeriesValues, SeriesXYFit
 # Pipeline-specific assemblers
 from .iq_analysis import run_iq_analysis  # noqa: F401
 from .ts_analysis import run_ts_analysis  # noqa: F401
+from .iq_ts_analysis import run_iq_ts_analysis  # noqa: F401
 from .gain_only_analysis import run_gain_only_analysis  # noqa: F401
 from .iq_series import run_iq_series  # noqa: F401
 from .ts_series import TSSeriesWindow, run_ts_series  # noqa: F401
@@ -84,6 +88,7 @@ __all__ = [
     "run_iq_analysis",
     "run_gain_only_analysis",
     "run_ts_analysis",
+    "run_iq_ts_analysis",
     "run_iq_series",
     "run_ts_series",
     "IQSeriesWindow",

@@ -1603,7 +1603,8 @@ def test_package_exports_every_launcher():
     for name in pl.__all__:
         assert hasattr(pl, name), name
     for name in ('run_interactive', 'run_iq_analysis', 'run_ts_analysis',
-                 'run_gain_only_analysis', 'run_iq_series', 'run_ts_series'):
+                 'run_iq_ts_analysis', 'run_gain_only_analysis',
+                 'run_iq_series', 'run_ts_series'):
         assert getattr(pl, name) is getattr(inter, name)
     for name in inter.__all__:
         assert hasattr(inter, name), name
@@ -1616,6 +1617,12 @@ def test_package_exports_every_launcher():
         ('fit_gain',),
         ('fit_iq_circle', 'get_idx_t', 'get_theta_phase_offset'),
         ('get_xcal_mask', 'fit_x_theta'),
+    ]),
+    ('iq_ts_analysis', 'run_iq_ts_analysis', [
+        ('fit_gain',),
+        ('fit_iq_circle', 'get_idx_t', 'get_theta_phase_offset'),
+        ('get_xcal_mask', 'fit_x_theta'),
+        ('fit_iq',),
     ]),
 ])
 def test_launchers_pass_their_panels_to_run_interactive(module, func, panels):
@@ -2067,4 +2074,13 @@ def test_ts_panels_follow_the_analysis_path():
                for group in ts_analysis._TS_FIXED_THETA_PANELS for name in group]
     assert ts_analysis.ts_panels(ar)[-1] == ('get_xcal_mask_fixed_theta', 'fit_x_theta')
     assert ts_analysis.ts_panels(ar)[:2] == ts_analysis._TS_PANELS[:2]
+
+
+def test_iq_ts_panels_append_fit_iq_and_leave_ts_panels_alone():
+    from citkid.pipeline.interactive import ts_analysis, iq_ts_analysis
+    ar = MagicMock()
+    for grouping in (ts_analysis._TS_PANELS, ts_analysis._TS_FIXED_THETA_PANELS):
+        ar.path = [{'task': _make_step(name)} for group in grouping for name in group]
+        assert iq_ts_analysis.iq_ts_panels(ar) == list(grouping) + [('fit_iq',)]
+        assert ts_analysis.ts_panels(ar) == list(grouping)   # the TS list is not modified
 

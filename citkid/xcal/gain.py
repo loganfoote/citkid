@@ -121,9 +121,12 @@ def fit_gain(f, z, fr_spans, span_mult = 1):
     # Cut out resonances
     mask = get_res_mask(f, [(fs[0], fs[1] * span_mult) for fs in fr_spans])
     f, z = f[mask], z[mask]
-    # Find indices in the center of False regions of the mask for phase fitting
+    # Runs of uncut points (between resonances) for phase fitting: found in
+    # the indices of the full arrays, then converted to indices of the cut
+    # arrays f, z
     false_groups = np.flatnonzero(np.diff(np.r_[True, ~mask, True]))
-    cut_ixs = false_groups.reshape(-1, 2)
+    n_kept = np.r_[0, np.cumsum(mask)]
+    cut_ixs = n_kept[false_groups.reshape(-1, 2)]
 
     # Convert to dB, phase
     dB = 20 * np.log10(np.abs(z))
