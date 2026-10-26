@@ -390,3 +390,23 @@ def test_get_peak_fwhm_monotonic_signal_fallback():
 def test_get_peak_fwhm_invalid_input(x, y):
     with pytest.raises((ValueError, TypeError)):
         util.get_peak_fwhm(x, y)
+
+def test_qi_qc():
+    Qi, Qc, Qi_err, Qc_err = util.qi_qc([2e4, 2e4, 2e4], [0.5, 1., 1.5],
+                                        [100, 100, 100], [0.01, 0.01, 0.01])
+    np.testing.assert_allclose([Qi[0], Qc[0]], [4e4, 4e4])
+    assert np.isinf(Qi[1]) and np.isnan(Qi[2]) and np.isnan(Qc[2])
+    assert Qi_err[0] > 0 and Qc_err[0] > 0
+
+@pytest.mark.parametrize("Qr,amp", [(2e4, 0.3), (1e5, 0.9), (5e3, 0.01)])
+def test_qi_qc_scalar_matches_calc_qc_qi(Qr, amp):
+    Qi, Qc, Qi_err, Qc_err = util.qi_qc(Qr, amp)
+    qc, qi = util.calc_qc_qi(Qr, amp)
+    np.testing.assert_allclose([Qi, Qc], [qi, qc], rtol = 1e-12)
+    assert np.isnan(Qi_err) and np.isnan(Qc_err)
+
+def test_qi_qc_invalid_gives_nan_not_error():
+    Qi, Qc, _, _ = util.qi_qc([2e4, 2e4, np.nan], [-0.1, 1 - 1e-7, 0.5])
+    assert np.isnan(Qi[0]) and np.isnan(Qc[0])
+    assert np.isinf(Qi[1]) and np.isfinite(Qc[1])
+    assert np.isnan(Qi[2]) and np.isnan(Qc[2])

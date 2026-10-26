@@ -32,6 +32,7 @@ from pyqtgraph.Qt import QtWidgets, QtCore
 from .core import register_panel, StepPanel
 from ...qt_compat import Qt as _Qt
 from ...res.funcs import nonlinear_iq
+from ...res.util import qi_qc
 
 
 class _MaskViewBox(pg.ViewBox):
@@ -59,8 +60,25 @@ class _MaskViewBox(pg.ViewBox):
             super().mouseDragEvent(ev, axis=axis)
 
 
+def _format_q(q):
+    """
+    Format a quality factor for the fit legend.
+
+    Parameters:
+    q (float): quality factor.
+
+    Returns:
+    text (str): ``q`` rounded with thousands separators, or 'inf' / 'NaN'.
+    """
+    if np.isnan(q):
+        return 'NaN'
+    if np.isinf(q):
+        return 'inf'
+    return f"{int(round(float(q))):,}"
+
+
 @register_panel('fit_iq')
-class FitIQPanel(StepPanel):
+class IQFitPanel(StepPanel):
     """
     Panel for the fit_iq step.
 
@@ -276,15 +294,12 @@ class FitIQPanel(StepPanel):
                 (f_model - f_center) * 1e-3,
                 20.0 * np.log10(np.abs(z_model)),
             )
-            Qr  = iq_popt[1]
-            amp = iq_popt[2]
-            Qc  = Qr / amp
-            Qi  = 1.0 / (1.0 / Qr - 1.0 / Qc)
+            Qi, Qc, _, _ = qi_qc(iq_popt[1], iq_popt[2])
             phi = iq_popt[3]
             a_nl = iq_popt[4]
             self._fit_text.setText(
-                f"Qc = {int(round(Qc)):,}\n"
-                f"Qi = {int(round(Qi)):,}\n"
+                f"Qc = {_format_q(Qc)}\n"
+                f"Qi = {_format_q(Qi)}\n"
                 f"\u03d5 = {phi / np.pi:.2f}\u03c0\n"
                 f"a\u2099\u2097 = {a_nl:.2f}"
             )

@@ -4,7 +4,7 @@ Launch an interactive session for the IQ analysis pipeline.
 The panels match the steps in ``pipeline/templates/iq_analysis.yaml``:
 
     1. ``fit_gain`` -> ``GainFitPanel``
-    2. ``fit_iq`` -> ``FitIQPanel``
+    2. ``fit_iq`` -> ``IQFitPanel``
 
 ``run_iq_analysis`` is ``core.run_interactive`` with this panel grouping.
 
@@ -16,7 +16,7 @@ Examples:
 from .core import run_interactive
 # Importing the panel modules triggers their @register_panel decorators.
 from . import gain      # noqa: F401 — registers GainFitPanel
-from . import fit_iq    # noqa: F401 — registers FitIQPanel
+from . import fit_iq    # noqa: F401 — registers IQFitPanel
 
 # Step grouping that matches iq_analysis.yaml
 _IQ_PANELS = [

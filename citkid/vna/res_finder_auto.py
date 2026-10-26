@@ -11,9 +11,8 @@ import numpy as np
 import zarr
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
-from scipy.signal import find_peaks
 import os
-from .s21_filt import highpass_filter, polynomial_baseline
+from .s21_filt import filter_mag, find_res_dips
 from ..qt_compat import (
     Qt as _Qt,
     delete_on_close,
@@ -654,11 +653,10 @@ class AutoResFinder:
         Returns:
         filtered_mag (np.ndarray): smoothed magnitude (dB).
         """
-        if params['smoothing'] == 'highpass':
-            return highpass_filter(self.f, self.mag_db, params['highpass_mhz'])
-        if params['smoothing'] == 'polynomial':
-            return polynomial_baseline(self.f, self.mag_db, params['poly_order'])
-        return self.mag_db.copy()  # 'none'
+        return filter_mag(
+            self.f, self.mag_db, params['smoothing'], params['highpass_mhz'],
+            params['poly_order']
+        )
 
     def _compute_peaks(self, params):
         """
@@ -674,35 +672,13 @@ class AutoResFinder:
             no data is in the frequency range.
         """
         filtered_mag = self._smoothed(params)
-
-        # Mask for frequency range
-        mask = (self.f >= params['f_min']) & (self.f <= params['f_max'])
-        f_masked = self.f[mask]
-        mag_masked = filtered_mag[mask]
-        if len(f_masked) == 0:
-            return filtered_mag, None
-
-        # Calculate width and distance in samples
-        # Width and distance are in kHz/GHz
-        # Convert: (kHz/GHz) * (GHz) = kHz, then * 1e3 = Hz
-        f_center = np.mean([params['f_min'], params['f_max']])
-        f_center_ghz = f_center / 1e9
-        width_hz = params['width'] * f_center_ghz * 1e3
-        distance_hz = params['distance'] * f_center_ghz * 1e3
-
-        # Convert to samples
-        df = np.median(np.diff(f_masked))
-        width_samples = max(1, int(width_hz / df))
-        distance_samples = max(1, int(distance_hz / df))
-
-        # Find peaks (looking for dips, so invert)
-        peaks, properties = find_peaks(
-            -mag_masked,
-            height = -params['height'],
-            width = width_samples,
-            distance = distance_samples
+        fres = find_res_dips(
+            self.f, filtered_mag, params['height'], params['width'],
+            params['distance'], params['f_min'], params['f_max']
         )
-        return filtered_mag, f_masked[peaks].tolist()
+        if fres is None:
+            return filtered_mag, None
+        return filtered_mag, fres.tolist()
 
     def update_peaks(self):
         """

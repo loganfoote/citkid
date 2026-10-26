@@ -196,3 +196,38 @@ def fit_gain_spline(
                       n_knots = int(len(la.t) - 8),
                       n_modeled = int(good.sum()), n_masked = len(masked),
                       frac_dropped = float(np.mean((wu == 0) & (w[use] > 0))))
+
+def normalize_edges(z, n_edge = None):
+    """
+    Normalize the gain amplitude and phase offset of each sweep from its edge
+    samples.
+
+    Parameters:
+    z (np.array, complex, (M, N)): complex S21 data, one sweep per row.
+    n_edge (int or None): number of off-resonance samples used at each end
+        of each row. None (default) uses max(1, N // 100).
+
+    Returns:
+    z (np.array, complex, (M, N)): normalized complex S21 data (a new
+        array).
+
+    Notes:
+    1. Amplitude: divide each row by the median |z| of the edge samples
+       (rows whose median is 0 are left unscaled).
+    2. Phase offset: rotate each row so the mean of the edge samples lies on
+       the positive real axis.
+    Cable delay is not removed.
+    """
+    z = np.asarray(z)
+    n = max(1, z.shape[1] // 100) if n_edge is None else n_edge
+
+    # Amplitude normalization from the off-resonance edge samples
+    offres = np.concatenate([z[:, :n], z[:, -n:]], axis = 1)
+    amp_ref = np.median(np.abs(offres), axis = 1, keepdims = True)
+    amp_ref = np.where(amp_ref == 0, 1.0, amp_ref)
+    z = z / amp_ref
+
+    # Rotate the off-resonance mean onto the positive real axis
+    offres = np.concatenate([z[:, :n], z[:, -n:]], axis = 1)
+    phase_ref = np.angle(offres.mean(axis = 1, keepdims = True))
+    return z * np.exp(-1j * phase_ref)

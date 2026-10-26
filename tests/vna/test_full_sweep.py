@@ -10,13 +10,6 @@ def test_coupling_error_pair():
     np.testing.assert_allclose(k[1], 0.8 * 1e9 / 2e4 / 2e6)
     assert np.isnan(k[2])
 
-def test_qi_qc():
-    Qi, Qc, Qi_err, Qc_err = fs.qi_qc([2e4, 2e4, 2e4], [0.5, 1., 1.5],
-                                      [100, 100, 100], [0.01, 0.01, 0.01])
-    np.testing.assert_allclose([Qi[0], Qc[0]], [4e4, 4e4])
-    assert np.isinf(Qi[1]) and np.isnan(Qi[2]) and np.isnan(Qc[2])
-    assert Qi_err[0] > 0 and Qc_err[0] > 0
-
 def test_reliability_flags():
     flags, misfit = fs.reliability_flags(
         coupling = [0.5, 0., 0., 0.], excess = [0., 100., 0., 0.],

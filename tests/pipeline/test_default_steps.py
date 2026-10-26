@@ -5,6 +5,7 @@ Checks the structure of default_cal_steps and default_analysis_steps:
 names, param_names, return_names, and func_types. Does not execute any functions.
 """
 
+import numpy as np
 import pytest
 from citkid.pipeline.default_steps import default_cal_steps, default_analysis_steps
 from citkid.pipeline.framework import plStep
@@ -223,3 +224,39 @@ def test_reduced_steps_return_one_value_per_frequency(step_name, prefix, n_input
         assert values.shape == (2,)
         assert values.dtype == np.float64
         np.testing.assert_allclose(values, [e[f"{prefix}_{freq}"] for e in expected])
+
+################################################################################
+# _fit_iq_step
+################################################################################
+
+def _iq_data(n=500):
+    from citkid.res.funcs import nonlinear_iq
+    params = [500e6, 20000, 0.5, 0.1, 0.05, 1.0, 0.0, 0.0]
+    f = np.linspace(params[0] - 3 * params[0] / params[1],
+                    params[0] + 3 * params[0] / params[1], n)
+    return f, nonlinear_iq(f, *params, True), params
+
+
+def test_fit_iq_step_fits_masked_data():
+    from citkid.pipeline.default_steps import _fit_iq_step
+    f, z, params = _iq_data()
+    mask = np.zeros(len(f), dtype=bool)
+    mask[50:450] = True
+    p0, popt, nrmse = _fit_iq_step(f, z, mask)
+    assert len(p0) == 8 and len(popt) == 8
+    assert popt[0] == pytest.approx(params[0], rel=1e-4)
+    assert nrmse < 1e-2
+
+
+def test_fit_iq_step_none_mask_fits_all_data():
+    from citkid.pipeline.default_steps import _fit_iq_step
+    f, z, _ = _iq_data()
+    p0_n, popt_n, nrmse_n = _fit_iq_step(f, z, None)
+    p0_a, popt_a, nrmse_a = _fit_iq_step(f, z, np.ones(len(f), dtype=bool))
+    np.testing.assert_array_equal(popt_n, popt_a)
+    assert nrmse_n == nrmse_a
+
+
+def test_fit_iq_step_is_the_fit_iq_function():
+    from citkid.pipeline.default_steps import _fit_iq_step
+    assert _step_map(default_analysis_steps)['fit_iq'].func is _fit_iq_step

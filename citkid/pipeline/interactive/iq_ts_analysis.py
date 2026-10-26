@@ -3,14 +3,14 @@ Launch an interactive session for the ts_analysis pipeline plus the
 nonlinear IQ fit.
 
 The panels are those of ``run_ts_analysis`` (see ``ts_analysis.ts_panels``)
-followed by ``fit_iq`` -> ``FitIQPanel``:
+followed by ``fit_iq`` -> ``IQFitPanel``:
 
     ``fit_gain`` -> ``GainFitPanel``
     ``fit_iq_circle``, ``get_idx_t``, ``get_theta_phase_offset``
         -> ``CircleFitPanel``
     ``get_xcal_mask``, ``fit_x_theta`` -> ``XCalPanel``
         (``XCalFixedThetaPanel`` with the 'ts-fixed_theta' analysis)
-    ``fit_iq`` -> ``FitIQPanel``
+    ``fit_iq`` -> ``IQFitPanel``
 
 ``fit_iq`` is not a step of ``ts_analysis.yaml``. Every runner has it in
 ``analysis_steps``, so the panel works, but ``execute_path`` does not run it
@@ -32,7 +32,7 @@ Examples:
 
 from .core import run_interactive
 # Importing the panel modules triggers their @register_panel decorators.
-from . import fit_iq    # noqa: F401 — registers FitIQPanel
+from . import fit_iq    # noqa: F401 — registers IQFitPanel
 from .ts_analysis import ts_panels
 
 

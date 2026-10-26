@@ -13,7 +13,10 @@ Tests cover:
 import numpy as np
 import pytest
 
-from citkid.vna.s21_filt import highpass_filter, polynomial_baseline
+from citkid.vna.s21_filt import (
+    filter_mag, find_res_dips, highpass_filter, polynomial_baseline,
+    remove_linear_phase,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -180,3 +183,79 @@ class TestPolynomialBaseline:
         result = polynomial_baseline(f, mag_db, order=3)
         # Dips should survive; dynamic range should remain non-trivial
         assert np.ptp(result) > 1.0
+
+
+# ---------------------------------------------------------------------------
+# filter_mag
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("method", ['highpass', 'polynomial', 'none', 'other'])
+def test_filter_mag_dispatch(method):
+    f = _make_sweep(n=2000)
+    mag = np.random.default_rng(0).normal(size=f.size) + 1e-9 * f
+    out = filter_mag(f, mag, method, highpass_mhz=20.0, poly_order=2)
+    if method == 'highpass':
+        expected = highpass_filter(f, mag, 20.0)
+    elif method == 'polynomial':
+        expected = polynomial_baseline(f, mag, 2)
+    else:
+        expected = mag
+    np.testing.assert_array_equal(out, expected)
+
+
+def test_filter_mag_none_returns_copy():
+    f = _make_sweep(n=100)
+    mag = np.zeros(100)
+    out = filter_mag(f, mag)
+    out[0] = 1.0
+    assert mag[0] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# remove_linear_phase
+# ---------------------------------------------------------------------------
+
+def test_remove_linear_phase_removes_cable_delay():
+    f = _make_sweep(n=5000, f_start=4e9, f_stop=4.1e9)
+    tau, phi0 = 50e-9, 0.3
+    z = 0.8 * np.exp(1j * (phi0 - 2 * np.pi * f * tau))
+    z0 = z.copy()
+    z_rot, phase, p = remove_linear_phase(f, z)
+    np.testing.assert_array_equal(z, z0)  # input not modified
+    np.testing.assert_allclose(p[0], -2 * np.pi * tau, rtol=1e-6)
+    np.testing.assert_allclose(phase, 0, atol=1e-6)
+    np.testing.assert_allclose(np.abs(z_rot), 0.8)
+    np.testing.assert_allclose(phase, np.unwrap(np.angle(z_rot)))
+
+
+# ---------------------------------------------------------------------------
+# find_res_dips
+# ---------------------------------------------------------------------------
+
+def test_find_res_dips_finds_resonances():
+    f = _make_sweep(n=100001)
+    fres_true = np.array([4.5e9, 5.2e9, 6.1e9, 7.3e9])
+    x = (f[:, None] - fres_true) / fres_true
+    z = np.prod(1 - 0.9 / (1 + 2j * 3e4 * x), axis=1)  # notch dips
+    z += 1e-3 * np.random.default_rng(0).normal(size=f.size)
+    mag = 20 * np.log10(np.abs(z))
+    fres = find_res_dips(f, mag, height=-3.0, width=1.0, distance=10.0)
+    np.testing.assert_allclose(fres, fres_true, atol=2 * (f[1] - f[0]))
+
+
+def test_find_res_dips_range():
+    f = _make_sweep(n=10001, f_start=4e9, f_stop=5e9)
+    mag = np.zeros_like(f)
+    for fr in (4.2e9, 4.8e9):
+        mag -= 10 / (1 + ((f - fr) / 1e6) ** 2)
+    fres = find_res_dips(f, mag, height=-3.0, width=0.1, distance=1.0,
+                         f_min=4.5e9, f_max=5e9)
+    np.testing.assert_allclose(fres, [4.8e9])
+    assert find_res_dips(f, mag, -3.0, 0.1, 1.0, f_min=6e9, f_max=7e9) is None
+
+
+def test_find_res_dips_height_threshold():
+    f = _make_sweep(n=10001, f_start=4e9, f_stop=5e9)
+    mag = -2 / (1 + ((f - 4.5e9) / 1e6) ** 2)  # 2 dB deep
+    assert len(find_res_dips(f, mag, -3.0, 0.1, 1.0)) == 0
+    assert len(find_res_dips(f, mag, -1.0, 0.1, 1.0)) == 1

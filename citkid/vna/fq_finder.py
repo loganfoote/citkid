@@ -57,6 +57,7 @@ from ..qt_compat import (
     run_responsive,
 )
 from ..multitone.fres import update_fres as _update_fres
+from .gain import normalize_edges
 
 # QEvent.KeyPress moved to QEvent.Type.KeyPress in PyQt6 / some PySide6 builds.
 _QEVENT_KEY_PRESS = getattr(
@@ -331,42 +332,6 @@ def _ask_start_idx(saved_idx: int, res_idx) -> int:
     return saved_idx if box.clickedButton() is resume_btn else 0
 
 
-def _rmv_gain_simple(z: np.ndarray) -> np.ndarray:
-    """
-    Remove the gain amplitude and phase offset from (M, N) sweep data.
-
-    Parameters:
-    z (np.array): complex S21 data, shape (M, N).
-
-    Returns:
-    z (np.array): corrected complex S21 data, shape (M, N).
-
-    Notes:
-    Uses the off-resonance edge samples of each row, the first and last
-    ``n = max(1, N // 100)`` points:
-    1. Amplitude: divide each row by the median |z| of the edge samples.
-    2. Phase offset: rotate each row so the mean of the edge samples lies on
-       the positive real axis.
-    """
-    N = max(1, z.shape[1] // 100)
-
-    # Off-resonance edge samples
-    offres = np.concatenate([z[:, :N], z[:, -N:]], axis=1)  # (M, 2N)
-
-    # 1. Amplitude normalisation
-    amp_ref = np.median(np.abs(offres), axis=1, keepdims=True)  # (M, 1)
-    amp_ref = np.where(amp_ref == 0, 1.0, amp_ref)
-    z = z / amp_ref
-
-    # 2. Phase-offset removal: rotate off-resonance mean onto real axis
-    offres = np.concatenate([z[:, :N], z[:, -N:]], axis=1)
-    phase_ref = np.angle(offres.mean(axis=1, keepdims=True))  # (M, 1)
-    z = z * np.exp(-1j * phase_ref)
-
-    return z
-
-
-
 class _InteractiveViewBox(pg.ViewBox):
     """
     ViewBox that emits:
@@ -520,7 +485,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         self._f = np.take_along_axis(self._f, _sort_idx, axis=1)
         self._z = np.take_along_axis(self._z, _sort_idx, axis=1)
         if rmv_gain_simple:
-            self._z = _rmv_gain_simple(self._z)
+            self._z = normalize_edges(self._z)
         fres = np.asarray(fres, dtype=np.float64)
         qres = np.asarray(qres, dtype=np.float64)
         res_idxs = np.asarray(res_idxs)

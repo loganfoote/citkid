@@ -106,6 +106,14 @@ def test_create_nsd_amplitude():
     assert np.isclose(mean_SJ / 2, variance_s, rtol = 0.2), \
         "Mean of SJ should be close to variance of s * 2"
 
+@pytest.mark.parametrize("nfft", [256, 255, 9, 8])
+def test_create_nsd_parseval(nfft):
+    # one chunk: the one-sided PSD must sum to the total power for even and
+    # odd nfft (odd nfft has no Nyquist bin, so its last bin is doubled)
+    s = np.random.default_rng(0).standard_normal(nfft)
+    SJ = opt_filt.create_nsd(s, nfft)
+    assert np.isclose(np.sum(SJ), np.sum(s**2))
+
 def test_create_nsd_zero_input():
     s = np.zeros(512)
     SJ = opt_filt.create_nsd(s, 256)
@@ -138,8 +146,7 @@ def test_iterate_of():
                             start_idx = np.array([5, 20, 35, 50, 65, 80]),
                             build_template = build_template,
                             get_start_idx = get_start_idx,
-                            N_iter = 5,
-                            verbose = False)
+                            N_iter = 5)
     assert isinstance(a, np.ndarray), "Output a should be a numpy array"
     assert a.dtype == np.float64, "Output a should be of type float64"
     assert isinstance(y, np.ndarray), "Output y should be a numpy array"
@@ -170,8 +177,7 @@ def test_iterate_of_invalid_iter():
         opt_filt.iterate_of(s, j, start_idx = np.array([1, 5, 9]),
                             build_template = build_template,
                             get_start_idx = get_start_idx,
-                            N_iter = 0,
-                            verbose = False)
+                            N_iter = 0)
 
 
 

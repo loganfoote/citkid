@@ -26,6 +26,7 @@ import pandas as pd
 import zarr
 from tqdm.auto import tqdm
 from ..res.funcs import product_s21
+from ..res.util import qi_qc
 from ..res.multifit import (
     fit_poles, fit_resonators, multifit_model, init_qr, group_resonances,
     window_mask, gain_degree, block_average, resid_noise_sigma,
@@ -137,45 +138,6 @@ def residual_excess(
         if core.any():
             excess[i] = e[core].mean()
     return excess
-
-def qi_qc(Qr, amp, Qr_err = None, amp_err = None):
-    """
-    Convert (Qr, amp) arrays to internal and coupling quality factors.
-
-    amp = Qr / Qc with 1 / Qr = 1 / Qi + 1 / Qc, so Qc = Qr / amp and
-    Qi = Qr / (1 - amp) (``res.util.calc_qc_qi``, for arrays and with
-    errors). amp at 1 (within 1e-6; fits are bounded there) means the
-    internal loss is unresolved: Qi = inf. Other amp outside (0, 1) gives
-    NaN. Errors are propagated to first order, ignoring the Qr-amp
-    covariance.
-
-    Parameters:
-    Qr (np.array): total quality factors.
-    amp (np.array): Qr / Qc.
-    Qr_err, amp_err (np.array or None): 1-sigma errors. Default None (the
-        returned errors are NaN).
-
-    Returns:
-    Qi (np.array): internal quality factors.
-    Qc (np.array): coupling quality factors.
-    Qi_err (np.array): 1-sigma error of Qi.
-    Qc_err (np.array): 1-sigma error of Qc.
-    """
-    Qr = np.asarray(Qr, dtype = np.float64)
-    amp = np.asarray(amp, dtype = np.float64)
-    at_one = np.abs(amp - 1) <= 1e-6
-    ok = (amp > 0) & (amp < 1) & ~at_one
-    with np.errstate(divide = 'ignore', invalid = 'ignore'):
-        Qc = np.where(ok | at_one, Qr / amp, np.nan)
-        Qi = np.where(ok, Qr / (1 - amp), np.where(at_one, np.inf, np.nan))
-        if Qr_err is None or amp_err is None:
-            nan = np.full(Qr.shape, np.nan)
-            return Qi, Qc, nan, nan.copy()
-        rq = np.asarray(Qr_err, dtype = np.float64) / Qr
-        ra = np.asarray(amp_err, dtype = np.float64)
-        Qc_err = Qc * np.sqrt(rq ** 2 + (ra / amp) ** 2)
-        Qi_err = Qi * np.sqrt(rq ** 2 + (ra / (1 - amp)) ** 2)
-    return Qi, Qc, Qi_err, Qc_err
 
 def reliability_flags(
     coupling, excess, snr, narrow, a = None, kappa_max = KAPPA_MAX,

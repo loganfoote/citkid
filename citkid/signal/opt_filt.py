@@ -1,7 +1,6 @@
 import numpy as np 
 import pyfftw 
 from scipy.signal import oaconvolve
-from tqdm.auto import tqdm
 
 # Conventions: lower case = time domain, upper case = frequency domain
 
@@ -107,7 +106,11 @@ def create_nsd(s, nfft):
         chunk = s[i:i+nfft]
         X = pyfftw.interfaces.numpy_fft.rfft(chunk)
         X = (np.abs(X)**2) / nfft
-        X[1:-1] *= 2
+        # one-sided: double all bins except DC and (even nfft) Nyquist
+        if nfft % 2 == 0:
+            X[1:-1] *= 2
+        else:
+            X[1:] *= 2
         psd_accum += X
         count += 1
 
@@ -120,9 +123,7 @@ def create_nsd(s, nfft):
 ################################################################################
 ############################## Iterative Procedure #############################
 ################################################################################
-def iterate_of(
-    s, j, start_idx, build_template, get_start_idx, N_iter = 10, verbose = True
-):
+def iterate_of(s, j, start_idx, build_template, get_start_idx, N_iter = 10):
     """
     Create an optimal filter template using a minimal iterative procedure.
 
@@ -136,7 +137,6 @@ def iterate_of(
     get_start_idx (callable): Extracts start indices from the filtered
         timestream y and returns an array of shape (K1,).
     N_iter (int): Number of iterations to perform.
-    verbose (bool): Whether to show a progress bar.
 
     Returns: 
     a (np.ndarray, float64, (N_iter + 1, M)): Template timestreams from each
@@ -160,10 +160,7 @@ def iterate_of(
     SJ = create_nsd(j, nfft)
     
     # iterate 
-    pbar = range(N_iter) 
-    if verbose:
-        pbar = tqdm(pbar, total = N_iter, leave = False, desc = "OF Iteration")
-    for iter_idx in pbar:
+    for iter_idx in range(N_iter):
         # Create and apply optimal filter
         h = create_opt_filt(a[iter_idx, :], SJ, nfft)
         y = apply_opt_filt(s, h)

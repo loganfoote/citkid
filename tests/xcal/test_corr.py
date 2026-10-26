@@ -10,26 +10,24 @@ from citkid.xcal import corr
 # return arrays of the correct shape. 
 x = np.random.randn(5, 100)
 y = np.random.randn(1000, 100)
-m = "x,N_comp,N_iter,dt,lowpass_params,highpass_params,verbose"
+m = "x,N_comp,N_iter,dt,lowpass_params,highpass_params"
 @pytest.mark.parametrize(m, [
     # basic test
-    (x, 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    (x, 2, 3, 0.1, (1.0, 4), (0.5, 2)),
     # N_comp = 0
-    (x, 0, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    (x, 0, 3, 0.1, (1.0, 4), (0.5, 2)),
     # N_iter = 1
-    (x, 2, 1, 0.1, (1.0, 4), (0.5, 2), False),
-    # verbose = True
-    (x, 2, 3, 0.1, (1.0, 4), (0.5, 2), True),
+    (x, 2, 1, 0.1, (1.0, 4), (0.5, 2)),
     # different x format
-    (y, 2, 3, 0.1, (0.1, 4), (0.5, 4), False),
+    (y, 2, 3, 0.1, (0.1, 4), (0.5, 4)),
     # N_comp = N
-    (x, x.shape[0], 2, 0.1, (1.0, 4), (0.5, 2), False)
+    (x, x.shape[0], 2, 0.1, (1.0, 4), (0.5, 2))
 ])
 def test_calc_cm(
-    x, N_comp, N_iter, dt, lowpass_params, highpass_params, verbose
+    x, N_comp, N_iter, dt, lowpass_params, highpass_params
 ):
     a, A, sig_iter, a_full = corr.calc_cm(x, N_comp, N_iter, dt, lowpass_params, 
-                                          highpass_params, verbose)
+                                          highpass_params)
     # check shapes
     assert a.shape == (x.shape[0], N_comp)
     assert A.shape == (N_comp, x.shape[1])
@@ -38,45 +36,44 @@ def test_calc_cm(
 
 @pytest.mark.parametrize(m, [
     # invalid x (1D)    
-    (np.random.randn(100), 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    (np.random.randn(100), 2, 3, 0.1, (1.0, 4), (0.5, 2)),
     # empty x     
-    ([[]], 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    ([[]], 2, 3, 0.1, (1.0, 4), (0.5, 2)),
     # non-numeric x    
-    ([['A', 'B'], ['C', 'D']], 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    ([['A', 'B'], ['C', 'D']], 2, 3, 0.1, (1.0, 4), (0.5, 2)),
     # negative dt
-    (x, 2, 3, -0.1, (1.0, 4), (0.5, 2), False),
+    (x, 2, 3, -0.1, (1.0, 4), (0.5, 2)),
     # non-numeric dt
-    (x, 2, 3, 'a', (1.0, 4), (0.5, 2), False),
+    (x, 2, 3, 'a', (1.0, 4), (0.5, 2)),
     # zero dt
-    (x, 2, 3, 0.0, (1.0, 4), (0.5, 2), False),
+    (x, 2, 3, 0.0, (1.0, 4), (0.5, 2)),
     # NaN dt
-    (x, 2, 3, np.nan, (1.0, 4), (0.5, 2), False),
+    (x, 2, 3, np.nan, (1.0, 4), (0.5, 2)),
     # invalid filter parameters
-    (x, 2, 3, 0.1, (1.0,), (0.5, 2), False),
-    (x, 2, 3, 0.1, (1.0, 4), (0.5,), False), 
-    (x, 2, 3, 0.1, (), (0.5, 2), False),
-    (x, 2, 3, 0.1, (1.0, 4), (), False), 
-    (x, 2, 3, 0.1, (1.0,), (0.5, 2), False),
-    (x, 2, 3, 0.1, (1.0, 4), (0.5,), False), 
-    (x, 2, 3, 0.1, (1.0,2.0,3.0), (0.5, 2), False),
-    (x, 2, 3, 0.1, (1.0, 4), (0.5,2.0,4.0), False), 
+    (x, 2, 3, 0.1, (1.0,), (0.5, 2)),
+    (x, 2, 3, 0.1, (1.0, 4), (0.5,)), 
+    (x, 2, 3, 0.1, (), (0.5, 2)),
+    (x, 2, 3, 0.1, (1.0, 4), ()), 
+    (x, 2, 3, 0.1, (1.0,), (0.5, 2)),
+    (x, 2, 3, 0.1, (1.0, 4), (0.5,)), 
+    (x, 2, 3, 0.1, (1.0,2.0,3.0), (0.5, 2)),
+    (x, 2, 3, 0.1, (1.0, 4), (0.5,2.0,4.0)), 
     # None highpass_params unsupported
-    (x, 2, 3, 0.1, (1.0, 4), None, False),
+    (x, 2, 3, 0.1, (1.0, 4), None),
     # negative N_comp   
-    (x, -1, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    (x, -1, 3, 0.1, (1.0, 4), (0.5, 2)),
     # N_comp > N
-    (x, 6, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    (x, 6, 3, 0.1, (1.0, 4), (0.5, 2)),
     # negative N_iter
-    (x, 2, -1, 0.1, (1.0, 4), (0.5, 2), False),
+    (x, 2, -1, 0.1, (1.0, 4), (0.5, 2)),
 ])
 def test_find_cm_invalid(
-    x, N_comp, N_iter, dt, lowpass_params, highpass_params, verbose
+    x, N_comp, N_iter, dt, lowpass_params, highpass_params
 ):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         with pytest.raises(Exception):
-            corr.calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params, 
-                         verbose)
+            corr.calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params)
 
 ################################################################################
 ################################## calc_sigma ##################################
@@ -195,29 +192,27 @@ def test_calc_a_invalid(x, A):
 ################################################################################
 x = np.random.randn(5, 100) + 1j * np.random.randn(5, 100)
 y = np.random.randn(1000, 100) + 1j * np.random.randn(1000, 100)
-m = "z,theta,N_comp,N_iter,dt,lowpass_params,highpass_params,verbose"
+m = "z,theta,N_comp,N_iter,dt,lowpass_params,highpass_params"
 @pytest.mark.parametrize(m, [
     # basic test
-    (x, None, 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    (x, None, 2, 3, 0.1, (1.0, 4), (0.5, 2)),
     # custom theta 
-    (x, np.zeros(x.shape[0]), 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    (x, np.zeros(x.shape[0]), 2, 3, 0.1, (1.0, 4), (0.5, 2)),
     # N_comp = 0
-    (x, None, 0, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    (x, None, 0, 3, 0.1, (1.0, 4), (0.5, 2)),
     # N_iter = 1
-    (x, None, 2, 1, 0.1, (1.0, 4), (0.5, 2), False),
-    # verbose = True
-    (x, None, 2, 3, 0.1, (1.0, 4), (0.5, 2), True),
+    (x, None, 2, 1, 0.1, (1.0, 4), (0.5, 2)),
     # different x format
-    (y, None, 2, 3, 0.1, (0.1, 4), (0.5, 4), False),
+    (y, None, 2, 3, 0.1, (0.1, 4), (0.5, 4)),
     # complex64 input promoted to complex128
-    (np.array(x, dtype = np.complex64), None, 2, 3, 0.1, (1.0, 4), (0.5, 2), False)
+    (np.array(x, dtype = np.complex64), None, 2, 3, 0.1, (1.0, 4), (0.5, 2))
 ])
 def test_calc_cm_complex(
-    z, theta, N_comp, N_iter, dt, lowpass_params, highpass_params, verbose
+    z, theta, N_comp, N_iter, dt, lowpass_params, highpass_params
 ):
     aI, aQ, AI, AQ, sigI_iter, sigQ_iter, aI_full, aQ_full, theta_out = \
         corr.calc_cm_complex(z, theta, N_comp, N_iter, dt, lowpass_params, 
-                             highpass_params, verbose)
+                             highpass_params)
     # check shapes
     assert aI.shape == (z.shape[0], N_comp)
     assert AI.shape == (N_comp, z.shape[1])
@@ -234,49 +229,49 @@ def test_calc_cm_complex(
     else:
         np.testing.assert_allclose(theta_out, theta, equal_nan = True)
 
-m = "z,theta,N_comp,N_iter,dt,lowpass_params,highpass_params,verbose"
+m = "z,theta,N_comp,N_iter,dt,lowpass_params,highpass_params"
 @pytest.mark.parametrize(m, [
     # invalid x (1D)    
-    (np.random.randn(100), None, 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    (np.random.randn(100), None, 2, 3, 0.1, (1.0, 4), (0.5, 2)),
     # empty x     
-    ([[]], None, 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    ([[]], None, 2, 3, 0.1, (1.0, 4), (0.5, 2)),
     # non-numeric x    
-    ([['A', 'B'], ['C', 'D']], None, 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    ([['A', 'B'], ['C', 'D']], None, 2, 3, 0.1, (1.0, 4), (0.5, 2)),
     # negative dt
-    (x, None, 2, 3, -0.1, (1.0, 4), (0.5, 2), False),
+    (x, None, 2, 3, -0.1, (1.0, 4), (0.5, 2)),
     # non-numeric dt
-    (x, None, 2, 3, 'a', (1.0, 4), (0.5, 2), False),
+    (x, None, 2, 3, 'a', (1.0, 4), (0.5, 2)),
     # zero dt
-    (x, None, 2, 3, 0.0, (1.0, 4), (0.5, 2), False),
+    (x, None, 2, 3, 0.0, (1.0, 4), (0.5, 2)),
     # invalid filter parameters
-    (x, None, 2, 3, 0.1, (1.0,), (0.5, 2), False),
-    (x, None, 2, 3, 0.1, (1.0, 4), (0.5,), False), 
-    (x, None, 2, 3, 0.1, (), (0.5, 2), False),
-    (x, None, 2, 3, 0.1, (1.0, 4), (), False), 
-    (x, None, 2, 3, 0.1, (1.0,), (0.5, 2), False),
-    (x, None, 2, 3, 0.1, (1.0, 4), (0.5,), False), 
-    (x, None, 2, 3, 0.1, (1.0,2.0,3.0), (0.5, 2), False),
-    (x, None, 2, 3, 0.1, (1.0, 4), (0.5,2.0,4.0), False), 
+    (x, None, 2, 3, 0.1, (1.0,), (0.5, 2)),
+    (x, None, 2, 3, 0.1, (1.0, 4), (0.5,)), 
+    (x, None, 2, 3, 0.1, (), (0.5, 2)),
+    (x, None, 2, 3, 0.1, (1.0, 4), ()), 
+    (x, None, 2, 3, 0.1, (1.0,), (0.5, 2)),
+    (x, None, 2, 3, 0.1, (1.0, 4), (0.5,)), 
+    (x, None, 2, 3, 0.1, (1.0,2.0,3.0), (0.5, 2)),
+    (x, None, 2, 3, 0.1, (1.0, 4), (0.5,2.0,4.0)), 
     # negative N_comp   
-    (x, None, -1, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    (x, None, -1, 3, 0.1, (1.0, 4), (0.5, 2)),
     # N_comp > N
-    (x, None, 6, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    (x, None, 6, 3, 0.1, (1.0, 4), (0.5, 2)),
     # negative N_iter
-    (x, None, 2, -1, 0.1, (1.0, 4), (0.5, 2), False),
+    (x, None, 2, -1, 0.1, (1.0, 4), (0.5, 2)),
     # invalid theta shape  
-    (x, [0, 1], 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
-    (x, np.array([[0, 1]]), 2, 3, 0.1, (1.0, 4), (0.5, 2), False),
+    (x, [0, 1], 2, 3, 0.1, (1.0, 4), (0.5, 2)),
+    (x, np.array([[0, 1]]), 2, 3, 0.1, (1.0, 4), (0.5, 2)),
     # None highpass_params unsupported
-    (x, None, 2, 3, 0.1, (1.0, 4), None, False),
+    (x, None, 2, 3, 0.1, (1.0, 4), None),
 ])
 def test_calc_cm_complex_invalid(
-    z, theta, N_comp, N_iter, dt, lowpass_params, highpass_params, verbose
+    z, theta, N_comp, N_iter, dt, lowpass_params, highpass_params
 ):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", RuntimeWarning)
         with pytest.raises(Exception):
             corr.calc_cm_complex(z, theta, N_comp, N_iter, dt, lowpass_params, 
-                                 highpass_params, verbose)
+                                 highpass_params)
         
 ################################################################################
 ################################## remove_cm ###################################

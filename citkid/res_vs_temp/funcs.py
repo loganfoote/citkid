@@ -33,7 +33,7 @@ def f_vs_T(T, f0, alpha, Tc, Fdelta0, gamma = 1):
     f (float or array-like): Resonant frequency at the given temperature(s).
     """
     f_tls = f_vs_T_tls(T, f0, Fdelta0)
-    f_qp = f_vs_T_qp(T, f0, alpha, Tc, gamma = 1)
+    f_qp = f_vs_T_qp(T, f0, alpha, Tc, gamma = gamma)
     return f_tls + f_qp - f0
 
 def Q_vs_T(T, f0, alpha, Tc, Fdelta0, delta_z, gamma = 1):
@@ -106,8 +106,9 @@ def Q_vs_T_qp(T, f0, alpha, Tc, delta_z, gamma = 1):
     hf0 = h * f0
 
     nth_N0 = nth_over_N0(kT, Delta0)
-    A = - gamma * alpha / (2 * Delta0)
-    delta_qp = A * S1(kT, Delta0, hf0)  * nth_N0
+    # QP loss is positive, so Q falls as T rises
+    A = gamma * alpha / (2 * Delta0)
+    delta_qp = A * S1(kT, Delta0, hf0) * nth_N0
     return 1 / (delta_qp + delta_z)
 
 ################################################################################

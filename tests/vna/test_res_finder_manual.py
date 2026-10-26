@@ -21,21 +21,21 @@ np.seterr(divide='ignore')
 
 from citkid.qt_compat import Qt as _Qt
 from citkid.vna.res_finder_manual import (
-    ResFinder,
+    ManualResFinder,
     ResFinderWindow,
     run_res_finder_manual
 )
 
 
 class TestResFinderInit:
-    """Test ResFinder initialization."""
+    """Test ManualResFinder initialization."""
     
     def test_init_with_array(self, synthetic_vna_data, tmp_path):
         """Test initialization with array of initial resonances."""
         outpath = tmp_path / "test.h5"
         fres_initial = synthetic_vna_data['fres_true'][:2]  # Use first 2
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             fres_initial,
@@ -56,7 +56,7 @@ class TestResFinderInit:
         """Test that phase is detrended during initialization."""
         outpath = tmp_path / "test.h5"
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -77,7 +77,7 @@ class TestResFinderInit:
         z = np.asarray(synthetic_vna_data['z'], dtype=np.complex128)
         z_before = z.copy()
 
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'], z, [], str(tmp_path / "test.zarr")
         )
 
@@ -85,16 +85,16 @@ class TestResFinderInit:
         assert not np.shares_memory(finder.z, z)
 
     def test_init_file_exists_overwrite_false(self, synthetic_vna_data, tmp_path):
-        """Test that ResFinder allows loading when fres_manual exists in zarr group."""
+        """Test that ManualResFinder allows loading when fres_manual exists in zarr group."""
         zarr_path = tmp_path / "existing.zarr"
         # Create a zarr group with existing fres_manual
         grp = zarr.open_group(str(zarr_path), mode='w')
         existing_fres = np.array([4.5e9])
         grp.create_array('fres_manual', data=existing_fres)
         
-        # ResFinder should now allow this without error
+        # ManualResFinder should now allow this without error
         # (conflict resolution happens in run_res_finder_manual)
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -106,7 +106,7 @@ class TestResFinderInit:
         """Test that zarr directory is created automatically."""
         zarr_path = tmp_path / "new_dir" / "output.zarr"
 
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -120,7 +120,7 @@ class TestResFinderInit:
         """Test that zarr paths are accepted (not just .h5)."""
         zarr_path = tmp_path / "output.zarr"
 
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -131,15 +131,15 @@ class TestResFinderInit:
         assert finder.zarr_group is not None
     
     def test_init_file_exists_overwrite_true(self, synthetic_vna_data, tmp_path):
-        """Test that ResFinder allows initialization even when fres_manual exists in zarr."""
+        """Test that ManualResFinder allows initialization even when fres_manual exists in zarr."""
         zarr_path = tmp_path / "existing.zarr"
         # Create a zarr group with existing fres_manual
         grp = zarr.open_group(str(zarr_path), mode='w')
         grp.create_array('fres_manual', data=np.array([4.5e9]))
         
-        # ResFinder should now allow this without warning
+        # ManualResFinder should now allow this without warning
         # (conflict resolution happens in run_res_finder_manual)
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -152,7 +152,7 @@ class TestResFinderInit:
         """Test initialization with empty initial resonance list."""
         outpath = tmp_path / "test.h5"
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -169,7 +169,7 @@ class TestResFinderInit:
         grp.create_array('res_finder_manual_xlims', data=np.array([5.1e9, 5.25e9]))
 
         with patch('citkid.vna.res_finder_manual.np.polyfit', return_value=np.array([0.0, 0.0])):
-            finder = ResFinder(
+            finder = ManualResFinder(
                 synthetic_vna_data['f'],
                 synthetic_vna_data['z'],
                 [],
@@ -186,7 +186,7 @@ class TestResFinderAddRemove:
         """Test adding a resonance."""
         outpath = tmp_path / "test.h5"
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -205,7 +205,7 @@ class TestResFinderAddRemove:
         """Test adding multiple resonances."""
         outpath = tmp_path / "test.h5"
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -226,7 +226,7 @@ class TestResFinderAddRemove:
         outpath = tmp_path / "test.h5"
         fres_initial = [4.5e9, 5.2e9, 6.1e9]
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             fres_initial.copy(),
@@ -252,7 +252,7 @@ class TestResFinderAddRemove:
         outpath = tmp_path / "test.h5"
         fres_initial = [4.5e9, 5.2e9, 6.1e9]
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             fres_initial.copy(),
@@ -274,7 +274,7 @@ class TestResFinderAddRemove:
         """Test removing when no resonances exist."""
         outpath = tmp_path / "test.h5"
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -299,7 +299,7 @@ class TestResFinderUndo:
         """Test undoing an add operation."""
         outpath = tmp_path / "test.h5"
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -319,7 +319,7 @@ class TestResFinderUndo:
         outpath = tmp_path / "test.h5"
         fres_initial = [4.5e9, 5.2e9]
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             fres_initial.copy(),
@@ -345,7 +345,7 @@ class TestResFinderUndo:
         """Test undoing multiple operations in sequence."""
         outpath = tmp_path / "test.h5"
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [5e9],
@@ -370,7 +370,7 @@ class TestResFinderUndo:
         """Test undo when undo stack is empty."""
         outpath = tmp_path / "test.h5"
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -385,7 +385,7 @@ class TestResFinderUndo:
         """Test that undo stack grows with operations."""
         outpath = tmp_path / "test.h5"
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -411,7 +411,7 @@ class TestResFinderFileIO:
         outpath = tmp_path / "results.zarr"
         fres_initial = [4.5e9, 5.2e9, 6.1e9]
 
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             fres_initial,
@@ -434,7 +434,7 @@ class TestResFinderFileIO:
         """Current plot x-limits are persisted for exact restoration."""
         outpath = tmp_path / "results_xlims.zarr"
 
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [4.5e9],
@@ -453,7 +453,7 @@ class TestResFinderFileIO:
         """Test saving empty resonance list."""
         outpath = tmp_path / "empty.zarr"
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -475,7 +475,7 @@ class TestResFinderEdgeCases:
         f = np.array([5e9])
         z = np.array([0.9 + 0.1j])
         
-        finder = ResFinder(f, z, [], str(outpath))
+        finder = ManualResFinder(f, z, [], str(outpath))
         
         assert len(finder.f) == 1
         assert len(finder.mag_db) == 1
@@ -488,7 +488,7 @@ class TestResFinderEdgeCases:
         # Include duplicates in initial list
         fres_initial = [5e9, 5e9, 6e9, 6e9, 7e9]
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             fres_initial,
@@ -505,7 +505,7 @@ class TestResFinderEdgeCases:
         # Unsorted initial list
         fres_initial = [6e9, 4.5e9, 7e9, 5e9]
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             fres_initial,
@@ -521,11 +521,11 @@ class TestResFinderEdgeCases:
 
 
 class TestLocalDf:
-    """Tests for ResFinder._local_df()."""
+    """Tests for ManualResFinder._local_df()."""
 
     def _make_finder(self, f, z, tmp_path):
         outpath = str(tmp_path / "out.h5")
-        return ResFinder(f, z, [], outpath)
+        return ManualResFinder(f, z, [], outpath)
 
     def test_local_df_uniform_spacing(self, tmp_path):
         """Uniform grid → returns the grid step."""
@@ -566,12 +566,12 @@ class TestLocalDf:
 
 
 class TestInterpolateZ:
-    """Tests for ResFinder._interpolate_z()."""
+    """Tests for ManualResFinder._interpolate_z()."""
 
     def test_interpolate_at_sample_point(self, synthetic_vna_data, tmp_path):
         """At an exact sample index, result equals finder.z at that index."""
         outpath = str(tmp_path / "out.h5")
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -586,7 +586,7 @@ class TestInterpolateZ:
         f = np.array([0.0, 1.0, 2.0, 3.0])
         z = np.array([0 + 0j, 2 + 4j, 6 + 8j, 10 + 12j], dtype=complex)
         outpath = str(tmp_path / "out.h5")
-        finder = ResFinder(f, z, [], outpath)
+        finder = ManualResFinder(f, z, [], outpath)
         finder.f = f
         finder.z = z
         result = finder._interpolate_z(0.5)  # midpoint of f[0] and f[1]
@@ -598,7 +598,7 @@ class TestInterpolateZ:
         f = np.array([1e9, 2e9, 3e9], dtype=float)
         z = np.array([1 + 0j, 0 + 1j, -1 + 0j], dtype=complex)
         outpath = str(tmp_path / "out.h5")
-        finder = ResFinder(f, z, [], outpath)
+        finder = ManualResFinder(f, z, [], outpath)
         finder.f = f
         finder.z = z
         result = finder._interpolate_z(0.0)
@@ -609,7 +609,7 @@ class TestInterpolateZ:
         f = np.array([1e9, 2e9, 3e9], dtype=float)
         z = np.array([1 + 0j, 0 + 1j, -1 + 0j], dtype=complex)
         outpath = str(tmp_path / "out.h5")
-        finder = ResFinder(f, z, [], outpath)
+        finder = ManualResFinder(f, z, [], outpath)
         finder.f = f
         finder.z = z
         result = finder._interpolate_z(10e9)
@@ -622,7 +622,7 @@ class TestAddResonanceDuplicateGuard:
     def test_add_too_close_rejected(self, synthetic_vna_data, tmp_path):
         """Frequency within one sample spacing of an existing fres is rejected."""
         outpath = str(tmp_path / "out.h5")
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -636,7 +636,7 @@ class TestAddResonanceDuplicateGuard:
     def test_add_just_outside_accepted(self, synthetic_vna_data, tmp_path):
         """Frequency more than one sample spacing away is accepted."""
         outpath = str(tmp_path / "out.h5")
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -650,7 +650,7 @@ class TestAddResonanceDuplicateGuard:
     def test_add_empty_fres_always_accepted(self, synthetic_vna_data, tmp_path):
         """First resonance is always accepted (no existing fres to clash with)."""
         outpath = str(tmp_path / "out.h5")
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -661,11 +661,11 @@ class TestAddResonanceDuplicateGuard:
 
 
 class TestUpdateIQPlot:
-    """Tests for ResFinder.update_iq_plot()."""
+    """Tests for ManualResFinder.update_iq_plot()."""
 
     def _make_finder(self, synthetic_vna_data, tmp_path, view_range=None):
         outpath = str(tmp_path / "out.h5")
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -729,11 +729,11 @@ class TestUpdateIQPlot:
 
 
 class TestToggleIQ:
-    """Tests for ResFinder.toggle_iq()."""
+    """Tests for ManualResFinder.toggle_iq()."""
 
     def _make_finder(self, synthetic_vna_data, tmp_path):
         outpath = str(tmp_path / "out.h5")
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -769,12 +769,12 @@ class TestToggleIQ:
 
 
 class TestOnIQClick:
-    """Tests for ResFinder.on_iq_click()."""
+    """Tests for ManualResFinder.on_iq_click()."""
 
     def _make_finder(self, synthetic_vna_data, tmp_path):
         """Finder with iq_visible=True and known IQ selection data."""
         outpath = str(tmp_path / "out.h5")
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -854,13 +854,13 @@ class TestOnIQClick:
 class TestRunResFinder:
     """Test run_res_finder_manual wrapper function."""
     
-    @patch('citkid.vna.res_finder_manual.ResFinder.run')
+    @patch('citkid.vna.res_finder_manual.ManualResFinder.run')
     def test_run_with_array(self, mock_run, synthetic_vna_data, tmp_path):
         """Test run_res_finder_manual with array input."""
         outpath = tmp_path / "test.h5"
         fres_initial = [4.5e9, 5.2e9]
         
-        with patch('citkid.vna.res_finder_manual.ResFinder') as MockFinder:
+        with patch('citkid.vna.res_finder_manual.ManualResFinder') as MockFinder:
             mock_instance = MockFinder.return_value
             mock_instance.fres = fres_initial
             
@@ -886,11 +886,11 @@ class TestRunResFinder:
         
         outpath = tmp_path / "output.zarr"
         
-        with patch('citkid.vna.res_finder_manual.ResFinder') as MockFinder:
+        with patch('citkid.vna.res_finder_manual.ManualResFinder') as MockFinder:
             mock_instance = MockFinder.return_value
             mock_instance.fres = fres_initial
             
-            with patch('citkid.vna.res_finder_manual.ResFinder.run'):
+            with patch('citkid.vna.res_finder_manual.ManualResFinder.run'):
                 fres = run_res_finder_manual(
                     synthetic_vna_data['f'],
                     synthetic_vna_data['z'],
@@ -898,15 +898,15 @@ class TestRunResFinder:
                     str(outpath)
                 )
             
-            # Check that ResFinder was initialized
+            # Check that ManualResFinder was initialized
             MockFinder.assert_called_once()
     
-    @patch('citkid.vna.res_finder_manual.ResFinder.run')
+    @patch('citkid.vna.res_finder_manual.ManualResFinder.run')
     def test_run_passes_parameters(self, mock_run, synthetic_vna_data, tmp_path):
         """Test that parameters are passed through correctly."""
         outpath = tmp_path / "test.h5"
         
-        with patch('citkid.vna.res_finder_manual.ResFinder') as MockFinder:
+        with patch('citkid.vna.res_finder_manual.ManualResFinder') as MockFinder:
             mock_instance = MockFinder.return_value
             mock_instance.fres = []
             
@@ -918,18 +918,18 @@ class TestRunResFinder:
                 margin_factor=0.2
             )
             
-            # Check parameters passed to ResFinder
+            # Check parameters passed to ManualResFinder
             call_args = MockFinder.call_args
             # Parameters are passed as positional args
             assert call_args[0][4] == 0.2  # margin_factor is 5th arg
 
 
 class TestOnClick:
-    """Tests for ResFinder.on_click() — including regression for double-fire bug."""
+    """Tests for ManualResFinder.on_click() — including regression for double-fire bug."""
 
     def _make_finder(self, synthetic_vna_data, tmp_path):
         outpath = str(tmp_path / "out.h5")
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -1045,7 +1045,7 @@ class TestIntegration:
 
         fres_auto = np.array([4.5e9, 5.2e9, 6.1e9])
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             fres_auto,
@@ -1094,7 +1094,7 @@ class TestOverviewNavigator:
     def _make_finder(self, synthetic_vna_data, tmp_path):
         import zarr
         outpath = str(tmp_path / 'out.zarr')
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],
@@ -1177,11 +1177,11 @@ class TestDragToRemove:
     
     @pytest.fixture
     def finder(self, synthetic_vna_data, tmp_path):
-        """Create a ResFinder with some initial resonances."""
+        """Create a ManualResFinder with some initial resonances."""
         outpath = tmp_path / "test.h5"
         fres_initial = synthetic_vna_data['fres_true'][:5]  # Use first 5
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             fres_initial,
@@ -1329,7 +1329,7 @@ class TestDragToRemove:
         """Test remove_resonances_in_range with empty fres list."""
         outpath = tmp_path / "test.h5"
         
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [],  # Empty initial resonances
@@ -1345,9 +1345,9 @@ class TestResFinderWindow:
     """Tests for window closeEvent behavior."""
     
     def _make_finder_with_ui(self, synthetic_vna_data, tmp_path):
-        """Create a ResFinder and mock UI components for testing."""
+        """Create a ManualResFinder and mock UI components for testing."""
         outpath = tmp_path / "test.h5"
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             synthetic_vna_data['fres_true'][:2],
@@ -1409,8 +1409,8 @@ class TestZarrConflictDialog:
             mock_dialog.exec_.return_value = None
             
             # This will test the static method structure
-            assert hasattr(ResFinder, '_show_zarr_dialog')
-            assert callable(ResFinder._show_zarr_dialog)
+            assert hasattr(ManualResFinder, '_show_zarr_dialog')
+            assert callable(ManualResFinder._show_zarr_dialog)
     
     def test_run_res_finder_with_load_choice(self, synthetic_vna_data, tmp_path):
         """Test run_res_finder_manual with load choice."""
@@ -1422,7 +1422,7 @@ class TestZarrConflictDialog:
         grp['fres_manual'] = existing_fres
         
         # Mock dialog to return 'load'
-        with patch.object(ResFinder, '_show_zarr_dialog', return_value='load'):
+        with patch.object(ManualResFinder, '_show_zarr_dialog', return_value='load'):
             result = run_res_finder_manual(
                 synthetic_vna_data['f'],
                 synthetic_vna_data['z'],
@@ -1446,7 +1446,7 @@ class TestZarrConflictDialog:
         initial_fres = synthetic_vna_data['fres_true'][:3]
         
         # Mock dialog to return 'overwrite'
-        with patch.object(ResFinder, '_show_zarr_dialog', return_value='overwrite'):
+        with patch.object(ManualResFinder, '_show_zarr_dialog', return_value='overwrite'):
             result = run_res_finder_manual(
                 synthetic_vna_data['f'],
                 synthetic_vna_data['z'],
@@ -1467,7 +1467,7 @@ class TestZarrConflictDialog:
         grp['fres_manual'] = existing_fres
         
         # Mock dialog to return 'cancel'
-        with patch.object(ResFinder, '_show_zarr_dialog', return_value='cancel'):
+        with patch.object(ManualResFinder, '_show_zarr_dialog', return_value='cancel'):
             result = run_res_finder_manual(
                 synthetic_vna_data['f'],
                 synthetic_vna_data['z'],
@@ -1483,9 +1483,9 @@ class TestEventFilter:
     """Tests for mouse event filtering during drag operations."""
     
     def _make_finder(self, synthetic_vna_data, tmp_path):
-        """Create a ResFinder and mock UI components."""
+        """Create a ManualResFinder and mock UI components."""
         outpath = str(tmp_path / 'test.zarr')
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             synthetic_vna_data['fres_true'][:2],
@@ -1611,7 +1611,7 @@ class TestResFinderQuit:
 
     def test_quit_and_save_closes_window_and_saves_once(self, synthetic_vna_data, tmp_path):
         outpath = tmp_path / "quit.zarr"
-        finder = ResFinder(
+        finder = ManualResFinder(
             synthetic_vna_data['f'],
             synthetic_vna_data['z'],
             [4.5e9, 5.2e9],
@@ -1637,12 +1637,12 @@ def test_log_after_the_panel_is_deleted_prints(capsys):
     from types import SimpleNamespace
     from PyQt5 import sip
     from pyqtgraph.Qt import QtWidgets
-    from citkid.vna.res_finder_manual import ResFinder
+    from citkid.vna.res_finder_manual import ManualResFinder
 
     QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     panel = QtWidgets.QTextEdit()
     sip.delete(panel)
 
-    ResFinder.log(SimpleNamespace(log_text=panel), 'Saved 3 resonances')
+    ManualResFinder.log(SimpleNamespace(log_text=panel), 'Saved 3 resonances')
 
     assert 'Saved 3 resonances' in capsys.readouterr().out

@@ -43,13 +43,7 @@ def get_xcal_mask(
         raise ValueError("ff must be sorted in ascending order.")
 
     # Apply cutoff to theta_t
-    if std_cutoff is not None:
-        # determine signal cutoff
-        theta_t_std = np.std(theta_t)
-        theta_t_mean = np.mean(theta_t)
-        theta_t = theta_t[
-            np.abs(theta_t - theta_t_mean) < std_cutoff * theta_t_std
-        ]
+    theta_t = theta_t[get_theta_t_bulk_mask(theta_t, std_cutoff)]
     tmin, tmax = np.min(theta_t), np.max(theta_t)
 
     # Get idx0, idx1
@@ -71,6 +65,54 @@ def get_xcal_mask(
     mask = np.ones(len(ff), dtype = bool) * False 
     mask[idx0:idx1 + 1] = True
     return mask
+
+def get_theta_t_bulk_mask(theta_t, std_cutoff):
+    """
+    Mask the noise-timestream theta values within ``std_cutoff`` standard
+    deviations of their mean, which excludes glitches and other tails.
+
+    Parameters:
+    theta_t (array-like, float64): Theta values from the noise measurement.
+    std_cutoff (float or None): Number of standard deviations from the mean
+        to keep. If None, all values are kept.
+
+    Returns:
+    mask (np.array, bool): True where theta_t is in the bulk.
+    """
+    theta_t = np.asarray(theta_t, dtype = np.float64)
+    if std_cutoff is None:
+        return np.ones(len(theta_t), dtype = bool)
+    theta_t_std = np.std(theta_t)
+    theta_t_mean = np.mean(theta_t)
+    return np.abs(theta_t - theta_t_mean) < std_cutoff * theta_t_std
+
+def calc_x(f, f0):
+    """
+    Compute the fractional frequency shift x = 1 - f / f0.
+
+    Parameters:
+    f (float or array-like, float64): Frequencies in Hz.
+    f0 (float or array-like, float64): Reference frequency in Hz, usually
+        the tone frequency.
+
+    Returns:
+    x (float or np.array, float64): Fractional frequency shift.
+    """
+    return 1 - f / f0
+
+def nearest_index(f, f0):
+    """
+    Return the index of the frequency in ``f`` closest to ``f0``.
+
+    Parameters:
+    f (array-like, float64): Frequencies in Hz.
+    f0 (float): Target frequency in Hz.
+
+    Returns:
+    idx (int): Index of ``f`` closest to ``f0``. If ``f0`` is NaN, this is
+        0.
+    """
+    return np.argmin(np.abs(np.asarray(f) - f0))
 
 def get_xcal_mask_fixed_theta(
     theta_f, theta_min_offset = 0.2, theta_max_offset = 0.2

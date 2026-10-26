@@ -29,6 +29,7 @@ from pyqtgraph.Qt import QtWidgets
 
 from .core import register_panel, StepPanel, _density_subsample
 from citkid.xcal.xcal import get_xcal_mask as _compute_xcal_mask
+from citkid.xcal.xcal import get_theta_t_bulk_mask
 
 
 @register_panel('get_xcal_mask', 'fit_x_theta')
@@ -331,10 +332,8 @@ class XCalPanel(StepPanel):
             else:
                 _thetat_early = np.asarray(DS.thetat[di], dtype=np.float64)
                 std_cut = float(self._std_spin.value())
-                _bulk_mask_early = (
-                    np.abs(_thetat_early - _thetat_early.mean())
-                    < std_cut * _thetat_early.std()
-                )
+                _bulk_mask_early = get_theta_t_bulk_mask(
+                    _thetat_early, std_cut)
                 zt_full = np.asarray(DS.zt_cent[di], dtype=np.complex128)
                 zt_bulk = _density_subsample(zt_full[_bulk_mask_early])
                 zt_tail = zt_full[~_bulk_mask_early]
@@ -386,10 +385,8 @@ class XCalPanel(StepPanel):
                         else:
                             thetat    = np.asarray(DS.thetat[di], dtype=np.float64)
                             std_cut   = float(self._std_spin.value())
-                            bulk_mask = (
-                                np.abs(thetat - thetat.mean())
-                                < std_cut * thetat.std()
-                            )
+                            bulk_mask = get_theta_t_bulk_mask(
+                                thetat, std_cut)
                         xt     = np.polyval(poly_x, thetat)
                         t_bulk = thetat[bulk_mask]
                         x_bulk = xt[bulk_mask]
@@ -532,9 +529,7 @@ class XCalPanel(StepPanel):
             zt_full = np.asarray(DS.zt_cent[di], dtype=np.complex128)
             thetat  = np.asarray(DS.thetat[di],  dtype=np.float64)
             std_cut = float(self._std_spin.value())
-            bulk_mask_zt = (
-                np.abs(thetat - thetat.mean()) < std_cut * thetat.std()
-            )
+            bulk_mask_zt = get_theta_t_bulk_mask(thetat, std_cut)
             zt_cent_bulk = _density_subsample(zt_full[bulk_mask_zt], n_keep=4000)
             zt_tail_raw  = zt_full[~bulk_mask_zt]
             zt_cent_tail = (_density_subsample(zt_tail_raw, n_keep=2000)
@@ -554,9 +549,7 @@ class XCalPanel(StepPanel):
             thetat_pf   = np.asarray(DS.thetat[di], dtype=np.float64)
             xt          = np.polyval(poly_x, thetat_pf)
             std_cut     = float(self._std_spin.value())
-            bulk_mask_pf = (
-                np.abs(thetat_pf - thetat_pf.mean()) < std_cut * thetat_pf.std()
-            )
+            bulk_mask_pf = get_theta_t_bulk_mask(thetat_pf, std_cut)
             t_bulk = thetat_pf[bulk_mask_pf]
             x_bulk = xt[bulk_mask_pf]
             t_tail = thetat_pf[~bulk_mask_pf]

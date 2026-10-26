@@ -5,7 +5,6 @@ Coverage
 --------
 _db                   -- dB conversion helper
 _ensure_zarr_arrays   -- zarr array creation / resume logic
-_rmv_gain_simple      -- amplitude + phase normalisation
 _SpanRegionItem       -- non-interactive body
 _InteractiveViewBox   -- shift-click / scroll signal emission
 FqFinderWindow        -- all public and private methods:
@@ -29,7 +28,6 @@ from citkid.vna.fq_finder import (
     _db,
     _ensure_zarr_arrays,
     _read_saved_data_idx,
-    _rmv_gain_simple,
     _SpanRegionItem,
     _InteractiveViewBox,
     FqFinderWindow,
@@ -190,72 +188,6 @@ class TestEnsureZarrArrays:
         assert "reject_reason" in zg
         assert zg["reject_reason"].shape == (4,)
         assert zg[_DATA_IDX_KEY][0] == -1
-
-
-# ===========================================================================
-# _rmv_gain_simple
-# ===========================================================================
-
-class TestRmvGainSimple:
-    def _make_input(self, M=4, N=100):
-        rng = np.random.default_rng(7)
-        f = np.vstack([np.linspace(4e9 - 1e6, 4e9 + 1e6, N) for _ in range(M)])
-        amp = rng.uniform(0.5, 2.0, (M, 1))
-        phase = rng.uniform(-np.pi, np.pi, (M, 1))
-        z = amp * np.exp(1j * phase) * np.ones((M, N))
-        # Add a resonance dip in the middle
-        for i in range(M):
-            z[i, N // 4: 3 * N // 4] *= 0.5
-        return f, z
-
-    def test_output_shape_unchanged(self):
-        f, z = self._make_input()
-        out = _rmv_gain_simple(z)
-        assert out.shape == z.shape
-
-    def test_output_is_complex(self):
-        f, z = self._make_input()
-        out = _rmv_gain_simple(z)
-        assert np.iscomplexobj(out)
-
-    def test_off_resonance_amplitude_near_one(self):
-        """After normalisation the off-resonance edge samples ≈ amplitude 1."""
-        f, z = self._make_input(M=2, N=200)
-        out = _rmv_gain_simple(z)
-        N = max(1, out.shape[1] // 100)
-        edge = np.concatenate([out[:, :N], out[:, -N:]], axis=1)
-        amp = np.abs(edge)
-        np.testing.assert_allclose(np.median(amp, axis=1), np.ones(2), rtol=0.05)
-
-    def test_off_resonance_phase_near_zero(self):
-        """After phase rotation the off-resonance mean should be real and positive."""
-        f, z = self._make_input(M=2, N=200)
-        out = _rmv_gain_simple(z)
-        N = max(1, out.shape[1] // 100)
-        edge = np.concatenate([out[:, :N], out[:, -N:]], axis=1)
-        mean_phase = np.angle(edge.mean(axis=1))
-        np.testing.assert_allclose(mean_phase, np.zeros(2), atol=1e-10)
-
-    def test_zero_amplitude_no_exception(self):
-        """Rows with all-zero amplitude should not raise (divided by 1.0)."""
-        M, N = 2, 50
-        f = np.vstack([np.linspace(4e9, 5e9, N)] * M)
-        z = np.zeros((M, N), dtype=complex)
-        out = _rmv_gain_simple(z)
-        assert out.shape == z.shape
-        assert np.all(np.isfinite(out))
-
-    def test_n_equals_one(self):
-        """N=1 edge: should not crash (N=max(1, 1//100)=1)."""
-        f = np.array([[4e9]])
-        z = np.array([[1.0 + 0.5j]])
-        out = _rmv_gain_simple(z)
-        assert out.shape == (1, 1)
-
-    def test_2d_input(self):
-        f, z = self._make_input(M=5, N=150)
-        out = _rmv_gain_simple(z)
-        assert out.shape == (5, 150)
 
 
 # ===========================================================================

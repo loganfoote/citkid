@@ -1,6 +1,6 @@
 """
-Tests for citkid.res.fitter — fit_nonlinear_iq, fit_nonlinear_iq_pl,
-fit_util, and the legacy-deprecation warnings.
+Tests for citkid.res.fitter — fit_nonlinear_iq, fit_util, and the
+legacy-deprecation warnings.
 """
 
 import pytest
@@ -8,7 +8,7 @@ import numpy as np
 import warnings
 
 from citkid.res.funcs import nonlinear_iq
-from citkid.res.fitter import fit_nonlinear_iq, fit_nonlinear_iq_pl, fit_util
+from citkid.res.fitter import fit_nonlinear_iq, fit_util
 
 
 # ---------------------------------------------------------------------------
@@ -204,30 +204,6 @@ class TestFitNonlinearIQ:
         p0_out, popt, perr, nrmse, _ = fit_nonlinear_iq(f, z, p0=p0_in)
         assert nrmse < 1e-2
 
-
-################################################################################
-##################### test_fit_nonlinear_iq_pl #################################
-################################################################################
-
-class TestFitNonlinearIQPl:
-    def test_returns_three_items(self):
-        f, z, _ = make_synthetic_data()
-        mask = np.ones(len(f), dtype=bool)
-        result = fit_nonlinear_iq_pl(f, z, mask)
-        assert len(result) == 3
-
-    def test_mask_subsets_data(self):
-        """Should fit correctly using only the masked subset."""
-        f, z, params = make_synthetic_data(n=500)
-        mask = np.ones(len(f), dtype=bool)
-        p0, popt, nrmse = fit_nonlinear_iq_pl(f, z, mask)
-        assert popt[0] == pytest.approx(params[0], rel=1e-4)
-
-    def test_nrmse_small(self):
-        f, z, _ = make_synthetic_data()
-        mask = np.ones(len(f), dtype=bool)
-        p0, popt, nrmse = fit_nonlinear_iq_pl(f, z, mask)
-        assert nrmse < 1e-2
 
 ######################## default start and bounds ##############################
 def test_fit_nonlinear_iq_does_not_modify_p0():

@@ -1,5 +1,4 @@
 import numpy as np
-from tqdm.auto import tqdm
 from ..signal.basic_filt import lowpass_filter, highpass_filter
 
 ################################################################################
@@ -98,9 +97,7 @@ def calc_a(x, A):
 ################################################################################
 ####################### Iterative common mode algorithm ########################
 ################################################################################
-def calc_cm(
-    x, N_comp, N_iter, dt, lowpass_params, highpass_params, verbose = True
-):
+def calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params):
     """
     Iteratively find common modes in multiple timestreams. In each iteration,
     perform a PCA normalized by the variance of the timestreams with the
@@ -120,7 +117,6 @@ def calc_cm(
         sigma (but not in the calculation of A).
         frequency: highpass filter frequency in Hz.
         order: highpass filter order.
-    verbose (bool): If True, shows a progress bar while iterating.
 
     Returns:
     a (array-like, (N, N_comp)): Scaling factors from A -> x.
@@ -149,10 +145,7 @@ def calc_cm(
     sig_iter = np.empty((N_iter, x.shape[0], N_comp), dtype = float)
 
     # Run iterative algorithm
-    pbar = range(N_iter)
-    if verbose:
-        pbar = tqdm(pbar, total = N_iter, leave = False)
-    for i in pbar: 
+    for i in range(N_iter):
         if i == N_iter - 1:
             # For last iteration, calculate a_full
             a_full, A0 = pca(x, x.shape[0], sig, (dt, highpass_params[0], 

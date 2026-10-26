@@ -17,7 +17,7 @@ Controlled parameter
 Cascade behaviour
 -----------------
 After a successful run the panel emits ``downstream_rerun`` so that
-subsequent panels (e.g. FitIQPanel) are automatically updated.
+subsequent panels (e.g. IQFitPanel) are automatically updated.
 """
 
 import numpy as np

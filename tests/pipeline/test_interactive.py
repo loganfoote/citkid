@@ -1920,7 +1920,7 @@ def test_fit_iq_panel_starts_and_resets_to_the_default_mask(qt_app):
     steps = ('fit_iq',)
     ar, _ = _make_ar(*steps)
     ar.DS = _tone_ds(res_idxs=None)
-    panel = fit_iq.FitIQPanel(ar, steps, data_idx=0)
+    panel = fit_iq.IQFitPanel(ar, steps, data_idx=0)
     assert panel.default_iq_mask is None
     panel.on_data_idx_changing()
     assert panel._mask is None  # whole sweep
@@ -2084,3 +2084,19 @@ def test_iq_ts_panels_append_fit_iq_and_leave_ts_panels_alone():
         assert iq_ts_analysis.iq_ts_panels(ar) == list(grouping) + [('fit_iq',)]
         assert ts_analysis.ts_panels(ar) == list(grouping)   # the TS list is not modified
 
+
+
+@pytest.mark.parametrize("amp,qi_text", [(0.5, "Qi = 2,000"), (1 - 1e-7, "Qi = inf")])
+def test_fit_iq_panel_legend_handles_pinned_amp(qt_app, amp, qi_text):
+    from citkid.pipeline.interactive import fit_iq
+    steps = ('fit_iq',)
+    ar, _ = _make_ar(*steps)
+    ar.DS = _tone_ds(res_idxs=None)
+    ar.DS.iq_popt = [np.array([1000., 1000., amp, 0., 0., 1., 0., 0.])]
+    panel = fit_iq.IQFitPanel(ar, steps, data_idx=0)
+    panel.on_data_idx_changing()
+    panel.update_plots()
+    text = panel._fit_text.textItem.toPlainText()
+    assert qi_text in text
+    assert "Qc = 1,000" in text or "Qc = 2,000" in text
+    assert len(panel._iq_fit.getData()[0]) == 1000  # overlay not cleared

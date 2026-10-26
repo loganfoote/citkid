@@ -24,8 +24,8 @@ def mock_qt_ui():
     with patch('citkid.vna.res_finder_auto.AutoResFinder.setup_ui'), \
          patch('citkid.vna.res_finder_auto.AutoResFinder.setup_plot'), \
          patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks', mock_update), \
-         patch('citkid.vna.res_finder_manual.ResFinder.setup_ui'), \
-         patch('citkid.vna.res_finder_manual.ResFinder.run'):
+         patch('citkid.vna.res_finder_manual.ManualResFinder.setup_ui'), \
+         patch('citkid.vna.res_finder_manual.ManualResFinder.run'):
         yield
 
 

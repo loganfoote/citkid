@@ -21,6 +21,7 @@ from ..qt_compat import (
     responsive_busy,
     run_responsive,
 )
+from .s21_filt import remove_linear_phase
 
 
 def run_res_finder_manual(f, z, fres_initial, zarr_grp, margin_factor = 0.15):
@@ -60,7 +61,7 @@ def run_res_finder_manual(f, z, fres_initial, zarr_grp, margin_factor = 0.15):
     # Check if fres_manual already exists in zarr
     if 'fres_manual' in zarr_group:
         # Show dialog to ask user what to do
-        choice = ResFinder._show_zarr_dialog()
+        choice = ManualResFinder._show_zarr_dialog()
         if choice == 'load':
             # Load from zarr, overriding fres_initial
             fres_initial = zarr_group['fres_manual'][:]
@@ -70,7 +71,7 @@ def run_res_finder_manual(f, z, fres_initial, zarr_grp, margin_factor = 0.15):
         else:  # choice == 'cancel'
             return None
     
-    finder = ResFinder(
+    finder = ManualResFinder(
         f, z, fres_initial, zarr_grp, margin_factor
     )
     finder.run()
@@ -87,7 +88,7 @@ class ResFinderWindow(pg.GraphicsLayoutWidget):
         Initialize the window.
 
         Parameters:
-        finder (ResFinder or None): Finder whose ``save_data`` is called
+        finder (ManualResFinder or None): Finder whose ``save_data`` is called
             when the window closes. If None, nothing is saved on close.
         *args (tuple): Positional arguments passed to
             ``pg.GraphicsLayoutWidget``.
@@ -113,7 +114,7 @@ class ResFinderWindow(pg.GraphicsLayoutWidget):
         super().closeEvent(event)
 
 
-class ResFinder(QtCore.QObject):
+class ManualResFinder(QtCore.QObject):
     """
     Interactive pyqtgraph GUI for manually adding and removing resonances
     in VNA sweep data, saving the result to a zarr group.
@@ -162,15 +163,11 @@ class ResFinder(QtCore.QObject):
         except Exception:
             self._saved_xlims = None
 
-        # Unwrap phase and remove a 1st order polynomial trend
-        unwrapped_phase = np.unwrap(np.angle(self.z))
-        p = np.polyfit(self.f, unwrapped_phase, 1)
-        phase_trend = np.polyval(p, self.f)
-        self.z *= np.exp(-1j * phase_trend)
-        
-        # Compute magnitude and phase
+        # Remove a 1st order polynomial trend from the unwrapped phase
+        self.z, self.phase, _ = remove_linear_phase(self.f, self.z)
+
+        # Compute magnitude
         self.mag_db = 20 * np.log10(np.abs(self.z))
-        self.phase = np.unwrap(np.angle(self.z))
 
         # Compute baseline minimum y-range limits so auto-scaling doesn't
         # collapse the view when there are no strong features in the

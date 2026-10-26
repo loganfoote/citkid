@@ -53,7 +53,8 @@ from ..qt_compat import (
     responsive_busy,
     run_responsive,
 )
-from .s21_filt import highpass_filter, polynomial_baseline
+from .match import match_nearest, match_sorted
+from .s21_filt import filter_mag, remove_linear_phase
 
 
 # ---------------------------------------------------------------------------
@@ -177,8 +178,8 @@ def run_res_matcher(
         The actual starting index will be max(new_res_start_idx, max(existing_indices)+1)
         to avoid collisions with existing resonator indices.
     init_match (str): How to build the initial pairing.  'sorted' pairs by
-        frequency order; 'nearest' uses median-offset-corrected
-        nearest-neighbor.  Default is 'sorted'.
+        frequency order; 'nearest' uses nearest-neighbor matching after adding
+        ``DS2_f_offset`` (0 if None).  Default is 'sorted'.
     apply_filter (bool): If False (default), both dataset filters start as
         'none' so the raw magnitude is shown and startup is fast.  Set True
         to start with the default highpass filter applied.
@@ -306,8 +307,8 @@ class ResMatcher:
             resonances. The actual start is max(new_res_start_idx,
             max(existing indices) + 1). Default is 2000.
         init_match (str): how to build the initial pairing. Can be 'sorted'
-            (default, pair by frequency order) or 'nearest'
-            (median-offset-corrected nearest-neighbor).
+            (default, pair by frequency order) or 'nearest' (nearest-neighbor
+            after adding the DS2 offset, 0 unless ``DS2_f_offset`` is given).
         apply_filter (bool): if True, start both datasets with the highpass
             filter; if False (default), start with no filter.
         DS2_f_offset (float or None): visualization-only DS2 frequency offset
@@ -406,13 +407,8 @@ class ResMatcher:
         self.mag_db1 = 20.0 * np.log10(np.abs(self.z1))
         self.mag_db2 = 20.0 * np.log10(np.abs(self.z2))
 
-        _ph1_raw = np.unwrap(np.angle(self.z1))
-        _p1 = np.polyfit(self.f1, _ph1_raw, 1)
-        self.phase1 = np.unwrap(np.angle(self.z1 * np.exp(-1j * np.polyval(_p1, self.f1))))
-
-        _ph2_raw = np.unwrap(np.angle(self.z2))
-        _p2 = np.polyfit(self.f2, _ph2_raw, 1)
-        self.phase2 = np.unwrap(np.angle(self.z2 * np.exp(-1j * np.polyval(_p2, self.f2))))
+        _, self.phase1, _ = remove_linear_phase(self.f1, self.z1)
+        _, self.phase2, _ = remove_linear_phase(self.f2, self.z2)
 
         # ---- filtered magnitude (updated when controls change) --------------
         self.filtered_mag1 = self.mag_db1.copy()
@@ -437,14 +433,17 @@ class ResMatcher:
         if _load_from_zarr:
             self.groups, self._next_group_id = self._load_from_zarr()
         else:
+            init_arrays = (self.fres1_init, self.res_idx1_init,
+                           self.fres2_init, self.res_idx2_init)
             if init_match == 'sorted':
-                self.groups, self._next_group_id = self._init_sorted()
+                init = self._init_sorted_from_arrays
             elif init_match == 'nearest':
-                self.groups, self._next_group_id = self._init_nearest()
+                init = self._init_nearest_from_arrays
             else:
                 raise ValueError(
                     f"init_match must be 'sorted' or 'nearest', got {init_match!r}"
                 )
+            self.groups, self._next_group_id = init(*init_arrays)
 
         # ---- interaction state ----------------------------------------------
         # Multi-selection: set of (group_id, dataset, fres) tuples
@@ -473,125 +472,6 @@ class ResMatcher:
         self.setup_ui()
 
     # ================================================================ init helpers
-
-    def _init_sorted(self):
-        """
-        Pair by sorted frequency order; leftovers become unmatched groups.
-
-        Returns:
-        groups (list[MatchGroup]): sorted list of initial match groups.
-        gid (int): next available group ID.
-        """
-        idx1 = np.argsort(self.fres1_init)
-        idx2 = np.argsort(self.fres2_init)
-        fres1_s = self.fres1_init[idx1];  ridx1_s = self.res_idx1_init[idx1]
-        fres2_s = self.fres2_init[idx2];  ridx2_s = self.res_idx2_init[idx2]
-
-        n1, n2 = len(fres1_s), len(fres2_s)
-        n_common = min(n1, n2)
-        groups = []
-        gid = 0
-
-        for i in range(n_common):
-            groups.append(MatchGroup(
-                group_id=gid,
-                entries1=[(float(fres1_s[i]), int(ridx1_s[i]))],
-                entries2=[(float(fres2_s[i]), int(ridx2_s[i]))],
-            ))
-            gid += 1
-
-        for i in range(n_common, n1):
-            groups.append(MatchGroup(
-                group_id=gid,
-                entries1=[(float(fres1_s[i]), int(ridx1_s[i]))],
-                entries2=[],
-            ))
-            gid += 1
-
-        for i in range(n_common, n2):
-            groups.append(MatchGroup(
-                group_id=gid,
-                entries1=[],
-                entries2=[(float(fres2_s[i]), int(ridx2_s[i]))],
-            ))
-            gid += 1
-
-        groups.sort(key=lambda g: g.center_freq())
-        return groups, gid
-
-    def _init_nearest(self):
-        """
-        Pair by median-offset-corrected nearest-neighbor matching.
-
-        A global median frequency offset between datasets is estimated first,
-        then greedy nearest-neighbor matching is applied with a threshold of
-        3× the median inter-resonance spacing.
-
-        Returns:
-        groups (list[MatchGroup]): Sorted list of initial match groups.
-        gid (int): Next available group ID.
-        """
-        idx1 = np.argsort(self.fres1_init)
-        idx2 = np.argsort(self.fres2_init)
-        fres1_s = self.fres1_init[idx1];  ridx1_s = self.res_idx1_init[idx1]
-        fres2_s = self.fres2_init[idx2];  ridx2_s = self.res_idx2_init[idx2]
-
-        n1, n2 = len(fres1_s), len(fres2_s)
-        n_common = min(n1, n2)
-
-        offset = float(np.median(fres2_s[:n_common] - fres1_s[:n_common])) \
-            if n_common > 0 else 0.0
-        fres2_corr = fres2_s - offset
-
-        if n1 > 1:
-            threshold = 3.0 * float(np.median(np.diff(fres1_s)))
-        elif n2 > 1:
-            threshold = 3.0 * float(np.median(np.diff(fres2_s)))
-        else:
-            threshold = np.inf
-
-        matched1: set = set()
-        matched2: set = set()
-        pairs = []
-
-        for i, f1v in enumerate(fres1_s):
-            if n2 == 0:
-                break
-            dists = np.abs(fres2_corr - f1v)
-            j = int(np.argmin(dists))
-            if dists[j] < threshold and j not in matched2:
-                pairs.append((i, j))
-                matched1.add(i)
-                matched2.add(j)
-
-        gid = 0
-        groups = []
-        for i, j in pairs:
-            groups.append(MatchGroup(
-                group_id=gid,
-                entries1=[(float(fres1_s[i]), int(ridx1_s[i]))],
-                entries2=[(float(fres2_s[j]), int(ridx2_s[j]))],
-            ))
-            gid += 1
-        for i in range(n1):
-            if i not in matched1:
-                groups.append(MatchGroup(
-                    group_id=gid,
-                    entries1=[(float(fres1_s[i]), int(ridx1_s[i]))],
-                    entries2=[],
-                ))
-                gid += 1
-        for j in range(n2):
-            if j not in matched2:
-                groups.append(MatchGroup(
-                    group_id=gid,
-                    entries1=[],
-                    entries2=[(float(fres2_s[j]), int(ridx2_s[j]))],
-                ))
-                gid += 1
-
-        groups.sort(key=lambda g: g.center_freq())
-        return groups, gid
 
     def _show_startup_dialog(self):
         """
@@ -757,13 +637,10 @@ class ResMatcher:
         filtered (np.array): filtered magnitude in dB, or a copy of
             ``mag_db`` if no filter is selected.
         """
-        method = params['smoothing']
-        if method == 'highpass':
-            return highpass_filter(f, mag_db, params['highpass_mhz'])
-        elif method == 'polynomial':
-            return polynomial_baseline(f, mag_db, params['poly_order'])
-        else:
-            return mag_db.copy()
+        return filter_mag(
+            f, mag_db, params['smoothing'], params['highpass_mhz'],
+            params['poly_order']
+        )
 
     def _display_freq(self, freq: float, ds: int) -> float:
         """
@@ -2806,9 +2683,11 @@ class ResMatcher:
 
     def _init_sorted_from_arrays(self, fres1, ridx1, fres2, ridx2):
         """
-        Perform sorted matching on the provided arrays.
+        Pair by sorted frequency order (``match.match_sorted``); leftovers
+        become unmatched groups.
 
-        Group IDs start at 0; the caller must assign final group IDs.
+        Group IDs start at 0; the caller must assign final group IDs when
+        adding to existing groups.
 
         Parameters:
         fres1 (np.array): DS1 resonance frequencies in Hz.
@@ -2820,50 +2699,17 @@ class ResMatcher:
         groups (list[MatchGroup]): match groups sorted by center frequency.
         gid (int): number of groups created (next local group ID).
         """
-        idx1 = np.argsort(fres1)
-        idx2 = np.argsort(fres2)
-        fres1_s = fres1[idx1];  ridx1_s = ridx1[idx1]
-        fres2_s = fres2[idx2];  ridx2_s = ridx2[idx2]
-
-        n1, n2 = len(fres1_s), len(fres2_s)
-        n_common = min(n1, n2)
-        groups = []
-        gid = 0
-
-        for i in range(n_common):
-            groups.append(MatchGroup(
-                group_id=gid,
-                entries1=[(float(fres1_s[i]), int(ridx1_s[i]))],
-                entries2=[(float(fres2_s[i]), int(ridx2_s[i]))],
-            ))
-            gid += 1
-
-        for i in range(n_common, n1):
-            groups.append(MatchGroup(
-                group_id=gid,
-                entries1=[(float(fres1_s[i]), int(ridx1_s[i]))],
-                entries2=[],
-            ))
-            gid += 1
-
-        for i in range(n_common, n2):
-            groups.append(MatchGroup(
-                group_id=gid,
-                entries1=[],
-                entries2=[(float(fres2_s[i]), int(ridx2_s[i]))],
-            ))
-            gid += 1
-
-        groups.sort(key=lambda g: g.center_freq())
-        return groups, gid
+        return self._groups_from_match(
+            fres1, ridx1, fres2, ridx2, *match_sorted(fres1, fres2))
 
     def _init_nearest_from_arrays(self, fres1, ridx1, fres2, ridx2):
         """
-        Perform nearest-neighbor matching on the provided arrays.
+        Pair by nearest-neighbor matching (``match.match_nearest``) with the
+        current DS2 display offset, ``self.ds2_f_offset``. No offset is
+        estimated: it is 0 unless set by the user.
 
-        Uses the same median-offset-corrected algorithm as
-        ``_init_nearest``. Group IDs start at 0; the caller must assign final
-        group IDs.
+        Group IDs start at 0; the caller must assign final group IDs when
+        adding to existing groups.
 
         Parameters:
         fres1 (np.array): DS1 resonance frequencies in Hz.
@@ -2875,65 +2721,50 @@ class ResMatcher:
         groups (list[MatchGroup]): match groups sorted by center frequency.
         gid (int): number of groups created (next local group ID).
         """
-        idx1 = np.argsort(fres1)
-        idx2 = np.argsort(fres2)
-        fres1_s = fres1[idx1];  ridx1_s = ridx1[idx1]
-        fres2_s = fres2[idx2];  ridx2_s = ridx2[idx2]
+        return self._groups_from_match(
+            fres1, ridx1, fres2, ridx2,
+            *match_nearest(fres1, fres2, offset=self.ds2_f_offset))
 
-        n1, n2 = len(fres1_s), len(fres2_s)
-        n_common = min(n1, n2)
+    @staticmethod
+    def _groups_from_match(fres1, ridx1, fres2, ridx2, pairs, un1, un2):
+        """
+        Build match groups from the output of a ``citkid.vna.match``
+        function.
 
-        offset = float(np.median(fres2_s[:n_common] - fres1_s[:n_common])) \
-            if n_common > 0 else 0.0
-        fres2_corr = fres2_s - offset
+        Parameters:
+        fres1 (np.array): DS1 resonance frequencies in Hz.
+        ridx1 (np.array): DS1 resonator indices, same length as ``fres1``.
+        fres2 (np.array): DS2 resonance frequencies in Hz.
+        ridx2 (np.array): DS2 resonator indices, same length as ``fres2``.
+        pairs (np.array, int, (K, 2)): paired indices into fres1 and fres2.
+        un1 (np.array, int): unpaired indices into fres1.
+        un2 (np.array, int): unpaired indices into fres2.
 
-        if n1 > 1:
-            threshold = 3.0 * float(np.median(np.diff(fres1_s)))
-        elif n2 > 1:
-            threshold = 3.0 * float(np.median(np.diff(fres2_s)))
-        else:
-            threshold = np.inf
-
-        matched1: set = set()
-        matched2: set = set()
-        pairs = []
-
-        for i, f1v in enumerate(fres1_s):
-            if n2 == 0:
-                break
-            dists = np.abs(fres2_corr - f1v)
-            j = int(np.argmin(dists))
-            if dists[j] < threshold and j not in matched2:
-                pairs.append((i, j))
-                matched1.add(i)
-                matched2.add(j)
-
-        gid = 0
+        Returns:
+        groups (list[MatchGroup]): match groups sorted by center frequency;
+            group IDs are 0, 1, ... in the order pairs, un1, un2.
+        gid (int): number of groups created (next local group ID).
+        """
         groups = []
         for i, j in pairs:
             groups.append(MatchGroup(
-                group_id=gid,
-                entries1=[(float(fres1_s[i]), int(ridx1_s[i]))],
-                entries2=[(float(fres2_s[j]), int(ridx2_s[j]))],
+                group_id=len(groups),
+                entries1=[(float(fres1[i]), int(ridx1[i]))],
+                entries2=[(float(fres2[j]), int(ridx2[j]))],
             ))
-            gid += 1
-        for i in range(n1):
-            if i not in matched1:
-                groups.append(MatchGroup(
-                    group_id=gid,
-                    entries1=[(float(fres1_s[i]), int(ridx1_s[i]))],
-                    entries2=[],
-                ))
-                gid += 1
-        for j in range(n2):
-            if j not in matched2:
-                groups.append(MatchGroup(
-                    group_id=gid,
-                    entries1=[],
-                    entries2=[(float(fres2_s[j]), int(ridx2_s[j]))],
-                ))
-                gid += 1
-
+        for i in un1:
+            groups.append(MatchGroup(
+                group_id=len(groups),
+                entries1=[(float(fres1[i]), int(ridx1[i]))],
+                entries2=[],
+            ))
+        for j in un2:
+            groups.append(MatchGroup(
+                group_id=len(groups),
+                entries1=[],
+                entries2=[(float(fres2[j]), int(ridx2[j]))],
+            ))
+        gid = len(groups)
         groups.sort(key=lambda g: g.center_freq())
         return groups, gid
 

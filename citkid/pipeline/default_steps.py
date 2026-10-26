@@ -34,6 +34,32 @@ def _dict_outputs_in_freq_order(func, prefix):
     wrapped.__module__ = func.__module__
     return wrapped
 
+def _fit_iq_step(f, z, mask):
+    """
+    Fit an IQ loop with ``res.fitter.fit_nonlinear_iq`` for the ``fit_iq``
+    step, using the default guess, bounds, and a downward sweep.
+
+    Parameters:
+    f (np.array): frequencies in Hz.
+    z (np.array): complex S21 data.
+    mask (np.array of bool or None): only fits data where mask is True.
+        None fits all of the data.
+
+    Returns:
+    p0 (np.array): initial guess parameters.
+    popt (np.array): fit parameters.
+    nrmse (float): normalized root mean square error of the fit.
+    """
+    f = np.asarray(f)
+    z = np.asarray(z)
+    if mask is None:
+        mask = np.ones(len(f), dtype = bool)
+    p0, popt, _, nrmse, _ = res_fitter.fit_nonlinear_iq(
+        f[mask], z[mask], bounds = None, p0 = None, fr_guess = None,
+        fit_tau = True, tau_guess = None, downward = True, plotq = False
+    )
+    return p0, popt, nrmse
+
 
 ############################## Default cal steps ###############################
 # name, function, input parameter names, output parameter names, 
@@ -65,7 +91,7 @@ default_cal_steps =\
  ('get_thetat', lambda z: circle.convert_to_theta(z, unwrap = False), 
   ['zt_cent'], ['thetat'], 'per-row'),
 
- ('get_xf', lambda ff, ft: 1 - ff / ft, 
+ ('get_xf', xcal.calc_x, 
   ['ff', 'ft'], ['xf'], 'per-row'),
 
  ('get_xt', np.polyval, 
@@ -111,7 +137,7 @@ default_analysis_steps =\
  ('fit_iq_circle', circle.fit_iq_circle, 
   ['zf_rmv', 'circ_mask'], ['circ_origin', 'circ_radius'], 'per-row'),
 
- ('get_idx_t', lambda ff, ft: np.argmin(np.abs(ff - ft)), 
+ ('get_idx_t', xcal.nearest_index, 
   ['ff', 'ft'], ['idx_t'], 'per-row'),
 
  ('get_theta_phase_offset', circle.get_theta_phase_offset, 
@@ -125,7 +151,9 @@ default_analysis_steps =\
   ['ff', 'thetaf', 'thetat', 'xcal_idx0_offset', 'xcal_idx1_offset', 
    'xcal_std_cutoff'], ['xcal_mask'], 'per-row'),
 
- ('fit_x_theta', 
+ # Degree 3 is fixed on purpose: poly_x must have one shape per dataset.
+ # For another degree, define a custom step.
+ ('fit_x_theta',
   lambda thetaf, xf, xcal_mask: xcal.fit_x_theta(
                                     thetaf, xf, xcal_mask, poly_x_deg = 3), 
   ['thetaf', 'xf', 'xcal_mask'], ['poly_x'], 'per-row'),
@@ -134,7 +162,7 @@ default_analysis_steps =\
   ['thetaf', 'xcal_theta_min_offset', 'xcal_theta_max_offset'],
   ['xcal_mask'], 'per-row'),
 
- ('fit_iq', res_fitter.fit_nonlinear_iq_pl, 
+ ('fit_iq', _fit_iq_step, 
   ['ff', 'zf_rmv', 'iq_mask'], ['iq_p0', 'iq_popt', 'iq_nrmse'], 'per-row'),
 )
 

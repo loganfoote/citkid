@@ -5,7 +5,7 @@ temperature series.
 For each resonator (data_idx), displays:
   - Left:  scatter plot of a user-defined y value vs the series parameter, and
            a ``|S21|`` waterfall for all series indices.
-  - Right: GainFitPanel + FitIQPanel driven by the selected series index.
+  - Right: GainFitPanel + IQFitPanel driven by the selected series index.
 
 One :class:`~citkid.pipeline.analysis.AnalysisRunner` is created per series
 index.  Each runner manages its own DataSet, storing results in a dedicated
@@ -63,6 +63,7 @@ from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 from ..analysis import AnalysisRunner
 from ..dataset import DataSet, _io_lock_for, _retry_io, reopen_group
 from ...res.mask import nearby_tone_mask
+from ...res.util import qi_qc
 from ..framework import LazyAttr
 from ..series_xy_fit import SeriesXYFit, SeriesXYFitStore  # noqa: F401 (SeriesXYFit re-exported)
 from ...qt_compat import (
@@ -79,7 +80,7 @@ from ...qt_compat import (
     vbox_height_for_width,
 )
 from . import gain      # noqa: F401 — registers GainFitPanel
-from . import fit_iq    # noqa: F401 — registers FitIQPanel
+from . import fit_iq    # noqa: F401 — registers IQFitPanel
 from .core import (
     PANEL_HELP,
     PLOT_HELP,
@@ -341,7 +342,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
     Left panel: scatter of ``y_func(AR, data_idx)`` vs ``x_param_name`` for
     all series indices, plus a ``|S21|`` waterfall for the current resonator.
 
-    Right panel: GainFitPanel + FitIQPanel for the currently selected series
+    Right panel: GainFitPanel + IQFitPanel for the currently selected series
     index and resonator.
 
     Parameters:
@@ -1779,7 +1780,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     def _default_iq_mask(self, AR, data_idx):
         """
-        Return a row's default IQ fit mask, for ``FitIQPanel.default_iq_mask``.
+        Return a row's default IQ fit mask, for ``IQFitPanel.default_iq_mask``.
 
         Parameters:
         AR (AnalysisRunner): Runner of the series point shown.
@@ -2748,11 +2749,9 @@ def run_iq_series(
             popt = np.asarray(AR.DS.iq_popt[data_idx], dtype=float)
             if y_param_name in _DIRECT:
                 val = popt[_DIRECT[y_param_name]]
-            elif y_param_name == 'Qc':
-                val = popt[1] / popt[2]          # Qr / amp
-            else:  # Qi
-                Qc = popt[1] / popt[2]
-                val = 1.0 / (1.0 / popt[1] - 1.0 / Qc)
+            else:
+                Qi, Qc, _, _ = qi_qc(popt[1], popt[2])
+                val = Qc if y_param_name == 'Qc' else Qi
             return None if not np.isfinite(val) else float(val)
         except Exception:
             return None

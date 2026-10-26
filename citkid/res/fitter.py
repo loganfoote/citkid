@@ -119,23 +119,6 @@ def fit_nonlinear_iq(
     p0 = np.array(p0)
     return p0, popt, perr, nrmse, figax
 
-def fit_nonlinear_iq_pl(f, z, mask):
-    """
-    Wrap fit_nonlinear_iq for use as a plStep. See fit_nonlinear_iq 
-    for details.
-
-    Parameters:
-    f (numpy.array): frequencies Hz.    
-    z (numpy.array): complex s21.
-    mask (numpy.array of bool or None): only fits data where mask is True.
-    """
-    p0, popt, _, nrmse, _ = fit_nonlinear_iq(
-        f[mask], z[mask], bounds = None, p0 = None, fr_guess = None, fit_tau = True, 
-        tau_guess = None, downward = True, plotq = False
-    ) 
-    return p0, popt, nrmse
-
-
 ################################################################################
 ######################### Utility functions ####################################
 ################################################################################

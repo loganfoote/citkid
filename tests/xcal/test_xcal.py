@@ -122,3 +122,31 @@ def test_get_xcal_mask_fixed_theta_raises_when_nothing_is_left(theta_f, lo, hi):
     with pytest.raises(ValueError):
         xcal.get_xcal_mask_fixed_theta(theta_f, lo, hi)
 
+
+################################################################################
+############################# get_theta_t_bulk_mask ############################
+################################################################################
+def test_get_theta_t_bulk_mask_cuts_glitch():
+    theta_t = np.random.default_rng(0).normal(size = 1000)
+    theta_t[10] = 1e3
+    mask = xcal.get_theta_t_bulk_mask(theta_t, 5)
+    assert not mask[10]
+    expected = (np.abs(theta_t - theta_t.mean()) < 5 * theta_t.std())
+    np.testing.assert_array_equal(mask, expected)
+
+def test_get_theta_t_bulk_mask_none_keeps_all():
+    mask = xcal.get_theta_t_bulk_mask([1., 2., 1e6], None)
+    np.testing.assert_array_equal(mask, [True, True, True])
+
+################################################################################
+############################ calc_x / nearest_index ############################
+################################################################################
+def test_calc_x():
+    f = np.array([1e9, 1.001e9, 0.999e9])
+    np.testing.assert_array_equal(xcal.calc_x(f, 1e9), 1 - f / 1e9)
+    assert xcal.calc_x(1e9, 1e9) == 0
+
+@pytest.mark.parametrize("f0,idx", [(4.0, 4), (4.4, 4), (4.6, 5), (-10., 0),
+                                    (100., 9), (np.nan, 0)])
+def test_nearest_index(f0, idx):
+    assert xcal.nearest_index(np.arange(10.), f0) == idx

@@ -24,7 +24,7 @@ Built-in panels
 :class:`~.gain.GainFitPanel`
     Handles *fit_gain*.
 
-:class:`~.fit_iq.FitIQPanel`
+:class:`~.fit_iq.IQFitPanel`
     Handles *fit_iq* with interactive mask selection.
 
 :class:`~.circ.CircleFitPanel`
