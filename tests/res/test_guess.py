@@ -137,3 +137,25 @@ def test_guess_Qr_flips_when_off_res_greater(monkeypatch):
     assert isinstance(Qr_guess, float)
 
     
+############################### guess_p0_pole ##################################
+@pytest.mark.parametrize("a", [0., 0.5])
+def test_guess_p0_pole(a):
+    fr, Qr = 1e9, 3e4
+    lw = fr / Qr
+    f = np.linspace(fr - 4 * lw, fr + 4.5 * lw, 600)
+    z = funcs.nonlinear_iq(f, fr, Qr, 0.6, 0.2, a, 0.3, -0.8, 2e-8, True)
+    p0 = guess.guess_p0_pole(f, z)
+    assert len(p0) == 8 and p0[4] == 0
+    # A linear pole sits about a linewidths from the low-power fr
+    assert abs(p0[0] - fr) < (0.1 + a) * lw
+    assert 0.8 < p0[1] / Qr < 1.25
+    assert abs(np.angle((p0[5] + 1j * p0[6]) / (0.3 - 0.8j))) < 0.3
+
+def test_guess_p0_pole_skips_edge_neighbor():
+    fr, Qr = 1e9, 3e4
+    lw = fr / Qr
+    f = np.linspace(fr - 5 * lw, fr + 5 * lw, 800)
+    z = (funcs.linear_iq_nogain(f, fr, Qr, 0.3, 0.)
+         * funcs.linear_iq_nogain(f, fr + 4.5 * lw, Qr, 0.9, 0.))
+    p0 = guess.guess_p0_pole(f, z)
+    assert abs(p0[0] - fr) < 0.2 * lw

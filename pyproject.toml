@@ -64,6 +64,10 @@ dependencies = [
   "rfmux>=1.4.1",
 ]
 
+[project.optional-dependencies]
+# CNN resonance finder for full VNA sweeps (citkid.vna.res_finder_cnn)
+cnn = ["torch>=2.13.0"]
+
 [project.urls]
 "Homepage" = "https://github.com/loganfoote/citkid"
 "Bug Reports" = "https://github.com/loganfoote/citkid/issues"

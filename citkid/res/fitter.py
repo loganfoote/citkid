@@ -21,7 +21,13 @@ def fit_nonlinear_iq(
     f (numpy.array): frequencies Hz.
     z (numpy.array): complex s21.
     bounds (tuple or None): 2d tuple of low values bounds[0] the high values
-        bounds[1] to bound the fitting problem. If None, sets default bounds.
+        bounds[1] to bound the fitting problem. If None, sets default
+        bounds: fr within the data, Qr within a factor 10 of p0, amp in
+        [0.01, 1 - 1e-6], phi in [-pi/2, pi/2], a in [0, 1], i0 and q0 in
+        +-10 |i0 + j q0| of p0 (either sign), tau in +-1 us. A fitted a
+        above bifurcation (4 sqrt(3) / 9 ~ 0.77) means the resonator is
+        bifurcated; strongly bifurcated ones end at the bound a = 1 with a
+        poor fit.
     p0 (list or None): initial guesses for all parameters
         fr_guess  = p0[0]
         Qr_guess  = p0[1]
@@ -31,7 +37,8 @@ def fit_nonlinear_iq(
         i0_guess  = p0[5]
         q0_guess  = p0[6]
         tau_guess = p0[7].
-        If None, calls citkid.fit.guess.guess_nonlinear_iq to find p0.
+        If None, calls ``citkid.res.guess.guess_p0_pole`` to find p0. The
+        caller's list is not modified.
     fr_guess (float or None): if float, overrides p0[0].
     fit_tau (bool): if False, tau is enforced from p0[7] to speed up fitting.
         If True, tau is fit.
@@ -53,7 +60,8 @@ def fit_nonlinear_iq(
     ix = np.argsort(f)
     f, z = f[ix], z[ix]
     if p0 is None: # default initial guess
-        p0 = guess.guess_p0_nonlinear_iq(f, z)
+        p0 = guess.guess_p0_pole(f, z)
+    p0 = [float(p) for p in p0] # don't modify the caller's list
     if bounds is None:
         # default bounds. Phi range is increased to avoid jumping at bounds
         #                 fr,  Qr, amp,       phi,    a,   i0,   q0,    tau
@@ -61,11 +69,15 @@ def fit_nonlinear_iq(
             [np.min(f), 1e3, .01, -np.pi / 2, 0, -1e2, -1e2, -1.0e-6],
             [np.max(f), 1e7, 1 - 1e-6, np.pi / 2, 1, 1e2, 1e2, 1.0e-6],
         )
-        for index in [1, 5, 6]:
-            # These will be flipped in bounds_check if needed
-            if p0[index] != 0:
-                bounds[0][index] = p0[index] / 10
-                bounds[1][index] = p0[index] * 10
+        if p0[1] != 0:
+            bounds[0][1] = p0[1] / 10
+            bounds[1][1] = p0[1] * 10
+        # i0 and q0 may change sign: a gain phase guess that is slightly off
+        # must not exclude the true gain
+        g = 10 * abs(p0[5] + 1j * p0[6])
+        if g > 0:
+            bounds[0][5], bounds[0][6] = -g, -g
+            bounds[1][5], bounds[1][6] = g, g
     if fr_guess is not None:
         p0[0] = fr_guess
     if tau_guess is not None:

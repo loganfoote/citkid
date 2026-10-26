@@ -125,20 +125,49 @@ def dense_resonances_vna_data():
     # Closely spaced resonances (50 MHz apart)
     fres_true = np.array([5.1e9, 5.15e9, 5.2e9, 5.25e9, 5.3e9])
     Q = 25000
-    
+
     z = np.ones(len(f), dtype=complex)
-    
+
     for fr in fres_true:
         delta_f = f - fr
         z *= 1 / (1 + 2j * Q * delta_f / fr)
-    
+
     # Add small noise
     noise_level = 0.0005
     z += noise_level * (np.random.randn(len(f)) + 1j * np.random.randn(len(f)))
-    
+
     return {
         'f': f,
         'z': z,
         'fres_true': fres_true,
         'Q': Q
     }
+
+
+@pytest.fixture
+def full_sweep():
+    """
+    Simulate a 20 MHz full VNA sweep: 30 resonators (citkid's linear model)
+    on a rippled gain with cable delay, plus white noise.
+
+    Returns:
+    f (np.array): frequencies in Hz.
+    z (np.array): complex S21.
+    gain (np.array): the true complex gain.
+    truth (dict): fr, Qr, amp, phi arrays.
+    """
+    from citkid.res.funcs import product_s21
+    rng = np.random.default_rng(0)
+    n = 30
+    fr = np.sort(rng.uniform(1.001e9, 1.013e9, n))
+    fr = fr + 2e5 * np.arange(n) / 3  # at least ~2 linewidths apart
+    Qr = 10 ** rng.uniform(4.3, 4.7, n)
+    amp = rng.uniform(0.3, 0.9, n)
+    phi = rng.uniform(-0.3, 0.3, n)
+    f = np.arange(1e9, 1.02e9, 2e3)
+    gain = (0.01 * (1 + 0.2 * np.sin(2 * np.pi * (f - 1e9) / 7e6))
+            * np.exp(-2j * np.pi * (f - 1e9) * 40e-9))
+    z = gain * product_s21(f, fr, Qr, amp, phi)
+    z = z + 2e-5 * (rng.standard_normal(len(f))
+                    + 1j * rng.standard_normal(len(f)))
+    return f, z, gain, dict(fr = fr, Qr = Qr, amp = amp, phi = phi)

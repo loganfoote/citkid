@@ -228,3 +228,28 @@ class TestFitNonlinearIQPl:
         mask = np.ones(len(f), dtype=bool)
         p0, popt, nrmse = fit_nonlinear_iq_pl(f, z, mask)
         assert nrmse < 1e-2
+
+######################## default start and bounds ##############################
+def test_fit_nonlinear_iq_does_not_modify_p0():
+    f, z, params = make_synthetic_data()
+    p0 = list(params)
+    p0[2] = 0.3
+    before = list(p0)
+    fit_nonlinear_iq(f, z, p0 = p0, fr_guess = params[0] + 1e3)
+    assert p0 == before
+
+@pytest.mark.parametrize("gain", [0.05 + 1j, -1 + 0.05j, 0.7 - 0.7j])
+def test_fit_nonlinear_iq_gain_near_axis(gain):
+    # Default bounds let i0 and q0 change sign from the guess
+    params = [1e9, 3e4, 0.6, 0.3, 0.65, gain.real, gain.imag, 1e-8]
+    f, z, _ = make_synthetic_data(params = params, noise_sigma = 1e-3)
+    _, popt, _, _, _ = fit_nonlinear_iq(f, z)
+    lw = params[0] / params[1]
+    assert abs(popt[0] - params[0]) < 0.05 * lw
+    assert abs(popt[4] - params[4]) < 0.05
+
+def test_fit_nonlinear_iq_bifurcated():
+    params = [1e9, 3e4, 0.6, 0.1, 0.95, 1.0, 0.2, 0.]
+    f, z, _ = make_synthetic_data(params = params, noise_sigma = 1e-3)
+    _, popt, _, _, _ = fit_nonlinear_iq(f, z)
+    assert popt[4] > 4 * np.sqrt(3) / 9

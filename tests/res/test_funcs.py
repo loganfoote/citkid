@@ -223,3 +223,28 @@ def test_linear_iq_consistency(fr, Qr, amp, phi, i0, q0, tau):
                                                  q0, tau, downward))
         assert np.allclose(s21_res, funcs.nonlinear_iq_nogain(f, fr, Qr, amp,
                                                               phi, 0., downward))
+
+################################################################################
+################################# product_s21 ##################################
+################################################################################
+def test_product_s21_linear():
+    f = np.linspace(0.999e9, 1.001e9, 2001)
+    fr, Qr = [0.9995e9, 1.0005e9], [2e4, 5e4]
+    amp, phi = [0.5, 0.8], [0.1, -0.2]
+    expected = (funcs.linear_iq_nogain(f, fr[0], Qr[0], amp[0], phi[0])
+                * funcs.linear_iq_nogain(f, fr[1], Qr[1], amp[1], phi[1]))
+    s21 = funcs.product_s21(f, fr, Qr, amp, phi)
+    np.testing.assert_allclose(s21, expected, rtol = 1e-12)
+
+def test_product_s21_empty():
+    f = np.linspace(1e9, 1.001e9, 11)
+    np.testing.assert_array_equal(funcs.product_s21(f, [], [], [], []),
+                                  np.ones(11))
+
+@pytest.mark.parametrize("downward", [True, False])
+def test_product_s21_nonlinear(downward):
+    f = np.linspace(0.9999e9, 1.0001e9, 501)
+    s21 = funcs.product_s21(f, [1e9], [5e4], [0.6], [0.2], [0.5],
+                            downward = downward)
+    expected = funcs.nonlinear_iq_nogain(f, 1e9, 5e4, 0.6, 0.2, 0.5, downward)
+    np.testing.assert_allclose(s21, expected, rtol = 1e-12)

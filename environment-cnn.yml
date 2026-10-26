@@ -1,0 +1,55 @@
+name: citkid-cnn
+channels:
+  - conda-forge
+# environment.yml plus PyTorch, for the CNN resonance finder
+# (citkid.vna.res_finder_cnn). Create with
+#   mamba env create -f environment-cnn.yml
+# or add PyTorch to an existing citkid environment with
+#   mamba install -n citkid -c conda-forge pytorch=2.13.0 numpy=1.26.4
+# pytorch picks a CUDA build when an NVIDIA driver is present, otherwise the
+# CPU build (the finder runs in seconds on either). If the CUDA build fails
+# at runtime because the driver is too old, add e.g. `cuda-version=12.8`.
+dependencies:
+  # Core interpreter (pin first for fast solving)
+  - python=3.12
+
+  # ABI-heavy scientific stack
+  - numpy=1.26.4
+  - scipy=1.16.3
+  - numba=0.62.1
+  - pyfftw=0.15.1
+
+  # Machine learning (CNN resonance finder)
+  - pytorch=2.13.0
+
+  # Plotting / widgets / UI
+  - matplotlib=3.10.8
+  - ipympl=0.9.8
+  - ipywidgets=8.1.8
+  - pyqtgraph=0.13.7
+  - pyqt=5.15.11
+
+  # Notebook environment
+  - jupyterlab=4.5.0
+  - tqdm=4.67.1
+  - pandas=2.3.3
+
+  # Domain-specific libraries
+  - emcee=3.1.6
+  - corner=2.2.3
+  - paramiko=4.0.0
+  - zarr=3.1.5
+  - rich=14.3.3
+  - psutil=7.2.2
+
+  # Dev/test tools
+  - pytest=9.0.1
+
+  # pip installer
+  - pip=25.3
+
+  # Editable install (pip section always last)
+  - pip:
+      - -e .
+      - redis==3.5.3
+      - rfmux==1.4.1

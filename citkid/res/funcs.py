@@ -180,6 +180,51 @@ def linear_iq(f, fr, Qr, amp, phi, i0, q0, tau):
     z = s21_readout * s21_res
     return z
 
+def product_s21(f, fr, Qr, amp, phi, a = None, downward = True):
+    """
+    Compute the transmission of several resonators on one feedline as the
+    product of the single-resonator transmissions (no gain, no reflections
+    between resonators).
+
+    Linear resonators use ``linear_iq_nogain``. Resonators with a > 0 use
+    ``nonlinear_iq_nogain`` within 50 linewidths of fr (the nonlinear
+    correction falls off as a / y^2 away from resonance) and the linear
+    model outside.
+
+    Parameters:
+    f (np.array): frequencies in Hz.
+    fr (array-like): resonance frequencies in Hz, shape (N,). N = 0 gives
+        a transmission of 1.
+    Qr (array-like): total quality factors, shape (N,).
+    amp (array-like): Qr / Qc, shape (N,).
+    phi (array-like): impedance-mismatch rotations in radians, shape (N,).
+    a (array-like or None): nonlinearity parameters, shape (N,). Default
+        None (all linear).
+    downward (bool): If True (default), uses the solution for a downward
+        sweep (decreasing frequency); if False, for an upward sweep. Only
+        matters for a > 0.
+
+    Returns:
+    s21 (np.array): complex transmission.
+    """
+    f = np.ascontiguousarray(f, dtype = np.float64)
+    fr, Qr, amp, phi = (np.atleast_1d(np.asarray(p, dtype = np.float64))
+                        for p in (fr, Qr, amp, phi))
+    a = np.zeros(len(fr)) if a is None else \
+        np.atleast_1d(np.asarray(a, dtype = np.float64))
+    s21 = np.ones(len(f), dtype = np.complex128)
+    for fr_i, Qr_i, amp_i, phi_i, a_i in zip(fr, Qr, amp, phi, a):
+        s = linear_iq_nogain(f, fr_i, Qr_i, amp_i, phi_i)
+        if a_i != 0:
+            near = np.abs(f - fr_i) < 50 * fr_i / Qr_i
+            if near.any():
+                s[near] = nonlinear_iq_nogain(
+                    np.ascontiguousarray(f[near]), fr_i, Qr_i, amp_i, phi_i,
+                    a_i, bool(downward)
+                )
+        s21 *= s
+    return s21
+
 ################################################################################
 ####################### nonlinear_iq for fitter ################################
 ################################################################################
