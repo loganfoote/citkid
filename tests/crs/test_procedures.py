@@ -677,7 +677,10 @@ class TestTargetSweep:
         
         # Check fres is unchanged
         np.testing.assert_array_almost_equal(fres_out, target_sweep_inputs['fres'])
-    
+
+        # Check the channel map made by the fine sweep is returned
+        assert ch_map_out == {'mock': 'ch_map'}
+
     async def test_rough_and_gain_only(
         self, mock_crs_for_target_sweep, target_sweep_inputs,
         mock_util_write_system_cfg, mock_update_fres
@@ -1396,6 +1399,28 @@ class TestPowerSweep:
         assert calls[2].kwargs['ch_map'] == {'mock': 'ch_map'}
         np.testing.assert_allclose(calls[2].args[0], fres * 1.0001)
         np.testing.assert_allclose(fres_out, fres * 1.0001 ** 2)
+        assert ch_map == {'mock': 'ch_map'}
+
+    async def test_fine_only_ch_map_carried_forward(
+        self, mock_crs_for_target_sweep, mock_util_write_system_cfg,
+        mock_update_fres
+    ):
+        """
+        Test that later sets reuse the first set's channel map when only the
+        fine sweep is taken.
+        """
+        from citkid.crs.procedures import power_sweep
+
+        fres = np.array([1e9, 2e9])
+        _, ch_map = await power_sweep(
+            mock_crs_for_target_sweep, fres, [-50., -40.], [1e3, 1e3], [0, 1],
+            zarr.group(), npoints_rough = None, npoints_gain = None,
+            npoints_fine = 5,
+        )
+        calls = mock_crs_for_target_sweep.sweep_qres.call_args_list
+        # calls: fine0, fine1
+        assert calls[0].kwargs['ch_map'] is None
+        assert calls[1].kwargs['ch_map'] == {'mock': 'ch_map'}
         assert ch_map == {'mock': 'ch_map'}
 
     async def test_2d_aress_and_shuffle(

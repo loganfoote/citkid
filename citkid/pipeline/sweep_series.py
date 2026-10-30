@@ -6,7 +6,9 @@ Each series point is one ``citkid.crs.procedures.target_sweep`` saved to its
 own group, named ``set{idx}`` (``citkid.zarr_util.set_name``), with
 ``fine_sweep`` and ``gain_sweep`` subgroups and optionally a timestream
 group (e.g. ``ts_00``). ``citkid.crs.procedures.power_sweep`` writes this
-format.
+format. The timestream group is written by ``CRS.capture_ts``, or by
+``CRS.write_tones_for_stream`` with the stream in a subgroup of it
+(``ts_stream``), named the same in every set.
 
 Loading
 -------
@@ -49,7 +51,7 @@ _ARRAY_SPEC = re.compile(r'^(.*?\.zarr)[/\\](.+)$')
 
 def target_sweep_steps(
     data_path, group = '', main_dir = None, fres_all = None, qres_all = None,
-    ts = None, ts_nsamps = None, f_avg = 1,
+    ts = None, ts_stream = None, ts_nsamps = None, f_avg = 1,
 ):
     """
     Return the calibration steps that load one target sweep.
@@ -76,8 +78,13 @@ def target_sweep_steps(
         every resonance. None (default) uses the swept tones' qres, and is
         only allowed if ``fres_all`` is None.
     ts (str or None): name of the timestream group inside ``group`` (e.g.
-        'ts_00'), for the 'ts' and 'ts_offres' calibrations. None (default)
-        loads no timestream.
+        'ts_00'), for the 'ts' and 'ts_offres' calibrations. It holds the
+        tones ('fres'). None (default) loads no timestream.
+    ts_stream (str or None): subgroup of ``ts`` holding the stream ('z',
+        'counts_to_s21', 'dt'), e.g. 'ts_0' when several streams were taken
+        with the same tones (``CRS.write_tones_for_stream`` then
+        ``CRS.stream`` into subgroups). None (default) uses ``ts`` itself,
+        as written by ``CRS.capture_ts``. Only allowed if ``ts`` is given.
     ts_nsamps (int or None): number of timestream samples to load, from the
         start. None (default) loads all of them.
     f_avg (int): number of adjacent fine sweep points to average together.
@@ -95,7 +102,10 @@ def target_sweep_steps(
         raise ValueError('f_avg must be a positive integer')
     if ts_nsamps is not None and (int(ts_nsamps) != ts_nsamps or ts_nsamps < 1):
         raise ValueError('ts_nsamps must be a positive integer or None')
+    if ts_stream is not None and ts is None:
+        raise ValueError('ts_stream is only allowed if ts is given')
     f_avg = int(f_avg)
+    stream = ts if ts_stream is None else f'{ts}/{ts_stream}'
     ts_slice = slice(None, None if ts_nsamps is None else int(ts_nsamps))
     data_path = _resolve_path(data_path, main_dir)
     opened = {}
@@ -136,7 +146,7 @@ def target_sweep_steps(
                 qres_all_ = np.full_like(fres_all_, float(qres_all))
         if ts is None:
             return fres_all_, qres_all_, nrows
-        dt = g[f'{ts}/dt'][...]
+        dt = g[f'{stream}/dt'][...]
         return fres_all_, qres_all_, dt, nrows
 
     def load_global_res_data():
@@ -170,9 +180,10 @@ def target_sweep_steps(
 
     def load_zt(data_idx):
         g = grp()
-        zt = g[f'{ts}/z'][:, data_idx, ts_slice]
+        zt = g[f'{stream}/z'][:, data_idx, ts_slice]
         zt = zt[0] + 1j * zt[1]
-        zt *= np.asarray(g[f'{ts}/counts_to_s21'][data_idx])[:, np.newaxis]
+        zt *= np.asarray(
+            g[f'{stream}/counts_to_s21'][data_idx])[:, np.newaxis]
         return zt
 
     global_names = ['fres_all', 'qres_all', 'nrows']
@@ -197,7 +208,7 @@ def target_sweep_steps(
 
 def target_sweep_source(
     main_dir, data_path, group = '', fres_all = None, qres_all = None,
-    ts = None, ts_nsamps = None, f_avg = 1,
+    ts = None, ts_stream = None, ts_nsamps = None, f_avg = 1,
 ):
     """
     Return source code defining ``custom_cal_steps`` with
@@ -209,8 +220,8 @@ def target_sweep_source(
 
     Parameters:
     main_dir (str): directory the paths are relative to.
-    data_path, group, fres_all, qres_all, ts, ts_nsamps, f_avg: see
-        ``target_sweep_steps``.
+    data_path, group, fres_all, qres_all, ts, ts_stream, ts_nsamps, f_avg:
+        see ``target_sweep_steps``.
 
     Returns:
     source (str): the source code.
@@ -224,6 +235,9 @@ def target_sweep_source(
         'qres_all': qres_all, 'ts': ts, 'ts_nsamps': ts_nsamps,
         'f_avg': f_avg,
     }
+    # Only written if given, so existing embedded sources stay unchanged
+    if ts_stream is not None:
+        params['ts_stream'] = ts_stream
     for name, value in params.items():
         if isinstance(value, np.generic):
             params[name] = value = value.item()
@@ -269,8 +283,9 @@ def open_series_datasets(
     prefix (str): set group name prefix. Default 'set'. Use e.g. 'amp' for
         data saved before the 'set' convention.
     write_buffer (bool): passed to DataSet. Default False.
-    **loader_kwargs: fres_all, qres_all, ts, ts_nsamps, f_avg. See
-        ``target_sweep_steps``.
+    **loader_kwargs: fres_all, qres_all, ts, ts_stream, ts_nsamps, f_avg.
+        See ``target_sweep_steps``. ``ts`` and ``ts_stream`` are the same
+        for every set.
 
     Returns:
     datasets (list of DataSet): one DataSet per set.

@@ -1644,7 +1644,7 @@ async def _set_nco(module, nco_freqs):
         Parameters:
         module (rfmux.ReadoutModule): readout module object.
         nco_freqs (dict): keys (int) are module indices and values (float)
-            are NCO frequencies in Hz. This should not be a round number.
+            are NCO frequencies in Hz.
 
         Returns:
         nco_meas (float): Measured NCO frequency in Hz.

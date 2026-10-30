@@ -19,7 +19,8 @@ def fit_responsivity_int(
     x (array-like): Fractional frequency shifts in Hz / Hz. This must be
         scaled close to x(P = 0) = 0 for the initial guess to work well.
     x_err (array-like or None): Error on x used in the fitting. If None,
-        points are weighted equally.
+        points are weighted equally and the errors are scaled by the
+        fit residuals.
     f1 (float): Frequency at P = 0 used to calculate x.
     guess (list or None): If not None, overwrite the initial guess
         [R0_guess, P0_guess, c_guess].
@@ -75,7 +76,7 @@ def fit_responsivity_int(
             sigma = sigma,
             p0 = p00,
             bounds = bounds,
-            absolute_sigma = True,
+            absolute_sigma = sigma is not None,
         )
         perr = np.sqrt(np.diag(pcov))
         p0[0], popt[0], perr[0] = (
@@ -119,7 +120,8 @@ def fit_responsivity_int_x0(
     x (array-like): Fractional frequency shifts in Hz / Hz.
     f1 (float): Frequency at P = 0 used to calculate x.
     x_err (array-like or None): Error on x used in the fitting. If None,
-        points are weighted equally.
+        points are weighted equally and the errors are scaled by the
+        fit residuals.
     guess (list or None): If not None, overwrite the initial guess
         [R0_guess, P0_guess, x0_guess] (unscaled units: 1 / W, W, Hz / Hz).
     guess_nfit (int): Number of high-power (P >> P_0) points for the guess.
@@ -174,7 +176,7 @@ def fit_responsivity_int_x0(
             sigma = sigma,
             p0 = p00,
             bounds = bounds,
-            absolute_sigma = True,
+            absolute_sigma = sigma is not None,
         )
         popt = popt / scale
         perr = np.sqrt(np.diag(pcov)) / scale
@@ -204,7 +206,8 @@ def fit_responsivity_int_x0_fixed_R0(
     R0 (float): Fixed responsivity at P = 0 (1 / W). In the sign convention of
         responsivity_int_x0, R0 < 0 for x decreasing with power.
     x_err (array-like or None): Error on x used in the fitting. If None,
-        points are weighted equally.
+        points are weighted equally and the errors are scaled by the
+        fit residuals.
     guess (list or None): If not None, overwrite the initial guess
         [P0_guess, x0_guess] (unscaled units: W, Hz / Hz).
     guess_nfit (int): Number of high-power (P >> P_0) points for the guess.
@@ -263,7 +266,7 @@ def fit_responsivity_int_x0_fixed_R0(
             sigma = sigma,
             p0 = p00,
             bounds = bounds,
-            absolute_sigma = True,
+            absolute_sigma = sigma is not None,
         )
         popt = popt / scale
         perr = np.sqrt(np.diag(pcov)) / scale

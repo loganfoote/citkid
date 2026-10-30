@@ -89,9 +89,10 @@ async def target_sweep(
         # Save fres update method
         grpr.attrs['fres_update_method'] = fres_update_method
 
-        # Assign ch_map
+        # Assign ch_map. Each sweep clears the session's channels before
+        # writing tones and keeps crs.ch_map afterwards, so this is the map
+        # of the sweep just taken
         ch_map = crs.ch_map
-        # Is ch_map persistent after sweep? - it should be, but check
 
         # Update fres based on rough sweep. Calibration tones (res_idxs < 0)
         # are not updated
@@ -143,6 +144,9 @@ async def target_sweep(
                 pbar_description = 'Fine sweep',
             )
         _save_sweep_data(grpf, '', f_fine, z_fine)
+        # If ch_map was determined within the fine sweep, return it so later
+        # sweeps (e.g. power_sweep sets) use the same channels
+        ch_map = crs.ch_map
 
     # return updated fres and ch_map
     return fres, ch_map

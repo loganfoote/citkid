@@ -154,10 +154,46 @@ def test_steps_timestream(data_dir):
     assert float(out['dt']) == 1e-3
 
 
+def add_stream_subgroup(path, name = 'ts_1', scale = 3.):
+    """
+    Add a stream subgroup to each set's 'ts_00' group, as written by
+    write_tones_for_stream then stream: 'fres' stays in 'ts_00'.
+
+    Parameters:
+    path (str): zarr store path written by write_power_sweep.
+    name (str): stream subgroup name.
+    scale (float): multiplier on the counts_to_s21 of 'ts_00', so the
+        subgroup's zt differs from the parent's.
+    """
+    root = zarr.open_group(path, mode = 'a')
+    for set_name_ in [k for k in root.group_keys()]:
+        ts = root[f'{set_name_}/ts_00']
+        sub = ts.create_group(name)
+        sub.create_array('z', data = ts['z'][...][..., ::-1].copy())
+        sub.create_array('counts_to_s21',
+                         data = scale * ts['counts_to_s21'][...])
+        sub.create_array('dt', data = np.array(2e-3))
+
+
+def test_steps_timestream_stream_subgroup(data_dir):
+    path = os.path.join(data_dir, 'sweep.zarr')
+    add_stream_subgroup(path)
+    raw = zarr.open_group(path, mode = 'r')
+    out = run_steps(target_sweep_steps(
+        'sweep.zarr', 'set1', main_dir = data_dir, ts = 'ts_00',
+        ts_stream = 'ts_1', ts_nsamps = 20), data_idx = 1)
+    z = raw['set1/ts_00/ts_1/z'][:, 1, :20]
+    np.testing.assert_allclose(out['zt'], [(z[0] + 1j * z[1]) * 6e-3])
+    # The tones are read from the parent group
+    np.testing.assert_array_equal(out['ft'], [FRES[1] + 1.0])
+    assert float(out['dt']) == 2e-3
+
+
 @pytest.mark.parametrize('kwargs, match', [
     (dict(fres_all = 'x.zarr/fres_all'), 'qres_all is required'),
     (dict(f_avg = 0), 'f_avg'),
     (dict(ts_nsamps = 0), 'ts_nsamps'),
+    (dict(ts_stream = 'ts_0'), 'ts_stream'),
 ])
 def test_steps_invalid_parameters(kwargs, match):
     with pytest.raises(ValueError, match = match):
@@ -178,6 +214,28 @@ def test_source_defines_steps_and_rejects_non_literals(data_dir):
     assert 'f_avg = 2,' in source
     with pytest.raises(TypeError, match = 'fres_all'):
         target_sweep_source(data_dir, 'sweep.zarr', fres_all = np.ones(2))
+
+
+def test_source_writes_ts_stream_only_if_given(data_dir):
+    # Without ts_stream the source is unchanged, so existing DataSets that
+    # embed it still reopen
+    source = target_sweep_source(data_dir, 'sweep.zarr', 'set0', ts = 'ts_00')
+    assert 'ts_stream =' not in source
+    source = target_sweep_source(data_dir, 'sweep.zarr', 'set0', ts = 'ts_00',
+                                 ts_stream = 'ts_1')
+    assert "ts_stream = 'ts_1'," in source
+
+
+def test_open_series_datasets_ts_stream_in_every_set(data_dir, tmp_path):
+    path = os.path.join(data_dir, 'sweep.zarr')
+    add_stream_subgroup(path)
+    raw = zarr.open_group(path, mode = 'r')
+    datasets = open_series_datasets(
+        data_dir, 'sweep.zarr', str(tmp_path / 'out.zarr'),
+        cal_yaml_path = 'ts', ts = 'ts_00', ts_stream = 'ts_1')
+    for i, DS in enumerate(datasets):
+        z = raw[f'set{i}/ts_00/ts_1/z'][:, 0, :]
+        np.testing.assert_allclose(DS.zt[0], (z[0] + 1j * z[1]) * 3e-3)
 
 
 def test_dataset_custom_source_embeds_and_reopens(data_dir, tmp_path):

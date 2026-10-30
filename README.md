@@ -9,12 +9,15 @@ Collection of Kinetic Inductance Detector (KID) data acquisition and analysis co
  <li> <b> citkid.res_vs_temp </b>: Mattis-Bardeen model fitting of resonance frequencies and quality factors versus temperature </li>
  <li> <b> citkid.vna </b>: interactive resonance finding, matching, and target sweep frequency/span selection </li>
  <li> <b> citkid.crs </b>: t0.technology CRS readout interface software and measurement procedures </li>
- <li> <b> citkid.pipeline </b>: zarr-backed calibration and analysis pipeline with interactive review windows. To be renamed to "pipeline" </li>
+ <li> <b> citkid.pipeline </b>: zarr-backed calibration and analysis pipeline with interactive review windows </li>
  <li> <b> citkid.multitone </b>: resonance frequency updates for multitone readouts (other modules are legacy) </li>
  <li> <b> citkid.primecam </b>: PrimeCam readout interface software and measurement procedures (legacy) </li>
 </ul>
 
-Example notebooks are in `notebooks/`, and derivations are in `documents/`.
+Example notebooks are in `notebooks/` (the newer ones run on synthetic
+data). Documents are in `documents/`: `pipeline_guide.md`,
+`xcal_derivations.md`, and `crs_streaming_format.md`. Derivations for resonator fitting and
+optimal filtering are in `res_fitting.pdf` and `optimal_filtering.pdf`.
 
 ## Installation with conda environment setup
 1. Clone this repository: `git clone https://github.com/loganfoote/citkid`

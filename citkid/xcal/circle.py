@@ -69,8 +69,10 @@ def fit_iq_circle(z, mask = None):
 ################################################################################
 def get_theta_phase_offset(zt_rmv, origin):
     """
-    Calculate the phase offset to ensure that the median value of theta of the 
-    timestream is zero.
+    Calculate the phase offset that rotates the median of the centered
+    timestream onto the positive real axis, so the timestream's theta is
+    centered on zero. The median is taken separately of the real and
+    imaginary parts.
 
     Parameters:
     zt_rmv (array-like, complex128): Complex S21 timestream with gain removed.
@@ -84,9 +86,13 @@ def get_theta_phase_offset(zt_rmv, origin):
     if not isinstance(origin, complex):
         raise ValueError("origin must be a complex number")
     
-    # Center zt without rotating, and calculate the median angle
+    # Center zt without rotating, and take the angle of its median. np.median
+    # of a complex array sorts by the real part, so take the median of the
+    # real and imaginary parts separately
     zt_cent_not_rot = cent_rot_s21(zt_rmv, origin, 0)
-    theta_phase_offset = np.angle(np.median(zt_cent_not_rot))
+    zt_median = (np.median(zt_cent_not_rot.real)
+                 + 1j * np.median(zt_cent_not_rot.imag))
+    theta_phase_offset = np.angle(zt_median)
     return theta_phase_offset
 
 def cent_rot_s21(z, center, phase):

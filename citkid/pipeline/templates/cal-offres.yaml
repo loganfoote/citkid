@@ -14,7 +14,6 @@ CAL_STEPS:
         task: load_zt
       3:
         task: rmv_gain_t 
-        delete_input: [zt]
       4:
         task: rotate_offres_t 
       5:

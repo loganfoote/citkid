@@ -67,6 +67,18 @@ def test_get_theta_phase_offset(zt_rmv, origin, theta_exp):
         assert np.isclose(theta, np.float64(theta_exp), 
                           equal_nan = True)
 
+@pytest.mark.parametrize("theta0", [-0.02, 0.0, 0.02, 1.0])
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_get_theta_phase_offset_centers_theta_near_zero(theta0, seed):
+    # Theta clustered near 0: sorting complex values by real part (as
+    # np.median of a complex array does) would pick a point at +-|theta|
+    rng = np.random.default_rng(seed)
+    theta = theta0 + rng.normal(0, 0.05, 1001)
+    origin = 0.5 + 0.2j
+    zt_rmv = origin + 0.3 * np.exp(1j * theta)
+    offset = circle.get_theta_phase_offset(zt_rmv, origin)
+    assert offset == pytest.approx(np.median(theta), abs = 3e-3)
+
 @pytest.mark.parametrize("zt_rmv,origin", [
     (['a', 1], 0 + 1j),  # non-numeric zt_rmv
     ([1], 'a'),  # non-numeric origin

@@ -22,7 +22,8 @@ def fit_f_vs_T(
     gamma (float): 1, 1/2, or 1/3 for thin-film, local, or anomalous limits
     Tc_guess (float): critical temperature guess in K
     f_err (array-like or None): If not None, f_err is the error on f used in
-        the fitting. If None, points are weighted equally
+        the fitting. If None, points are weighted equally and the
+        errors are scaled by the fit residuals.
     enforced_alpha (float or None): if not None, enforces alpha to be this
         value. Else fits for alpha
     guess (list or None): If not None, overwrites the initial guess. Also
@@ -88,7 +89,8 @@ def fit_f_vs_T(
             p00 = p0
     try:
         popt, pcov = curve_fit(fit_func, T, f, sigma = sigma,
-                              p0 = p00, bounds = bounds, absolute_sigma = True)
+                              p0 = p00, bounds = bounds,
+                              absolute_sigma = sigma is not None)
         perr = np.sqrt(np.diag(pcov))
     except Exception as e:
         if not catch_exceptions:
@@ -126,7 +128,8 @@ def fit_Q_vs_T(
     gamma (float): 1, 1/2, or 1/3 for thin-film, local, or anomalous limits
     Tc_guess (float): critical temperature guess in K
     Q_err (array-like or None): If not None, Q_err is the error on Q used in
-        the fitting. If None, points are weighted equally
+        the fitting. If None, points are weighted equally and the
+        errors are scaled by the fit residuals.
     enforced_alpha (float or None): if not None, enforces alpha to be this
         value. Else fits for alpha
     guess (list or None): If not None, overwrites the initial guess. Also
@@ -195,7 +198,8 @@ def fit_Q_vs_T(
          p00 = p0
     try:
       popt, pcov = curve_fit(fit_func, T, Q, sigma = sigma,
-                             p0 = p00, bounds = bounds, absolute_sigma = True)
+                             p0 = p00, bounds = bounds,
+                             absolute_sigma = sigma is not None)
       perr = np.sqrt(np.diag(pcov))
     except Exception as e:
       if not catch_exceptions:
@@ -235,7 +239,8 @@ def fit_f_vs_T_qp(
     gamma (float): 1, 1/2, or 1/3 for thin-film, local, or anomalous limits
     Tc_guess (float): critical temperature guess in K
     f_err (array-like or None): If not None, f_err is the error on f used in
-        the fitting. If None, points are weighted equally
+        the fitting. If None, points are weighted equally and the
+        errors are scaled by the fit residuals.
     enforced_alpha (float or None): if not None, enforces alpha to be this
         value. Else fits for alpha
     guess (list or None): If not None, overwrites the initial guess. Also
@@ -297,7 +302,8 @@ def fit_f_vs_T_qp(
           p00 = p0
     try:
        popt, pcov = curve_fit(fit_func, T, f, sigma = sigma,
-                              p0 = p00, bounds = bounds, absolute_sigma = True)
+                              p0 = p00, bounds = bounds,
+                              absolute_sigma = sigma is not None)
        perr = np.sqrt(np.diag(pcov))
     except Exception as e:
        if not catch_exceptions:
@@ -335,7 +341,8 @@ def fit_Q_vs_T_qp(
     gamma (float): 1, 1/2, or 1/3 for thin-film, local, or anomalous limits
     Tc_guess (float): critical temperature guess in K
     Q_err (array-like or None): If not None, Q_err is the error on Q used in
-        the fitting. If None, points are weighted equally
+        the fitting. If None, points are weighted equally and the
+        errors are scaled by the fit residuals.
     enforced_alpha (float or None): if not None, enforces alpha to be this
         value. Else fits for alpha
     guess (list or None): If not None, overwrites the initial guess. Also
@@ -396,10 +403,11 @@ def fit_Q_vs_T_qp(
         except Exception as e:
             if not catch_exceptions:
                 raise e
-        p00 = p0
+            p00 = p0
     try:
         popt, pcov = curve_fit(fit_func, T, Q, sigma = sigma,
-                             p0 = p00, bounds = bounds, absolute_sigma = True)
+                             p0 = p00, bounds = bounds,
+                             absolute_sigma = sigma is not None)
         perr = np.sqrt(np.diag(pcov))
     except Exception as e:
         if not catch_exceptions:
@@ -436,7 +444,8 @@ def fit_f_vs_T_tls(
     T (array-like): temperature data in K
     f (array-like): resonant frequency data in Hz
     f_err (array-like or None): If not None, f_err is the error on f used in
-        the fitting. If None, points are weighted equally
+        the fitting. If None, points are weighted equally and the
+        errors are scaled by the fit residuals.
     guess (list or None): If not None, overwrites the initial guess. Also
         overwrites Tc_guess.
     bounds (list or None): custom bounds to overwrite the default option
@@ -487,7 +496,8 @@ def fit_f_vs_T_tls(
            p00 = p0
     try:
        popt, pcov = curve_fit(fit_func, T, f, sigma = sigma, p0 = p00,
-                              bounds = bounds, absolute_sigma = True)
+                              bounds = bounds,
+                              absolute_sigma = sigma is not None)
        perr = np.sqrt(np.diag(pcov))
     except Exception as e:
         if not catch_exceptions:
@@ -517,7 +527,8 @@ def fit_Q_vs_T_tls(
     T (array-like): temperature data in K
     Q (array-like): quality factor data
     Q_err (array-like or None): If not None, fr_err is the error on Q used in
-        the fitting. If None, points are weighted equally
+        the fitting. If None, points are weighted equally and the
+        errors are scaled by the fit residuals.
     f0_guess (float): guess for the resonant frequency in Hz at T = 0 K
     guess (list or None): If not None, overwrites the initial guess. Also
         overwrites Tc_guess.
@@ -571,7 +582,8 @@ def fit_Q_vs_T_tls(
             p00 = p0
     try:
         popt, pcov = curve_fit(fit_func, T, Q, sigma = sigma, p0 = p00,
-                              bounds = bounds, absolute_sigma = True)
+                              bounds = bounds,
+                              absolute_sigma = sigma is not None)
         perr = np.sqrt(np.diag(pcov))
     except Exception as e:
         if not catch_exceptions:

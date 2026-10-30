@@ -5,9 +5,13 @@ def responsivity(P, R_0, P_0):
     """
     Calculate the responsivity dx / dP of a KID
 
+    This is the derivative of ``responsivity_int`` (with c = 1) and
+    ``responsivity_int_x0``, so the same R_0 describes both.
+
     Parameters:
     P (float or array-like): power (W)
-    R_0 (float): responsivity at P = 0 (1 / W)
+    R_0 (float): responsivity at P = 0 (1 / W). R_0 < 0 for x decreasing
+        with power, as for a KID.
     P_0 (float): power at which the responsivity is rolled off by sqrt(2) from
         its value at P = 0
 
@@ -16,7 +20,7 @@ def responsivity(P, R_0, P_0):
     """
     if P_0 == 0:
         return np.nan
-    return - R_0 * (1 + P / P_0) ** (-0.5)
+    return R_0 * (1 + P / P_0) ** (-0.5)
 responsivity = np.vectorize(responsivity)
 
 @njit(float64[:](float64[:], float64, float64, float64), cache = True)
@@ -27,7 +31,8 @@ def responsivity_int(P, R_0, P_0, c):
 
     Parameters:
     P (np.array, float64): power (W).
-    R_0 (float64): responsivity at P = 0 (1 / W).
+    R_0 (float64): responsivity at P = 0 (1 / W). R_0 < 0 for x
+        decreasing with power (see ``responsivity``).
     P_0 (float64): power at which the responsivity is rolled off by sqrt(2) from
         its value at P = 0.
     c (float64): f0 / f1, where f0 is the actual frequency at P = 0, and f1 is 
@@ -66,7 +71,8 @@ def responsivity_int_x0(P, R_0, P_0, x_0):
 
     Parameters:
     P (np.array, float64): power (W).
-    R_0 (float64): responsivity at P = 0 (1 / W).
+    R_0 (float64): responsivity at P = 0 (1 / W). R_0 < 0 for x
+        decreasing with power (see ``responsivity``).
     P_0 (float64): power at which the responsivity is rolled off by sqrt(2) from
         its value at P = 0.
     x_0 (float64): x at P = 0. If x is calibrated perfectly, x_0 = 0. The

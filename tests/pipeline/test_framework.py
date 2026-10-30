@@ -454,9 +454,19 @@ def test_check_pl_tree_structure_accepts_valid_trees():
     pf.check_pl_tree_structure({})
     analysis = {'ANALYSIS_STEPS': {1: {
         'task': steps['child'], 'params': {'k': 1.5, 'm': None},
-        'delete_input': ['a'],
     }}}
     pf.check_pl_tree_structure(analysis, cal=False)
+
+
+@pytest.mark.parametrize('value', [['zt'], 'all', 'anything'])
+def test_check_pl_tree_structure_ignores_removed_delete_input(value):
+    """
+    Check that the removed ``delete_input`` key is still accepted (and
+    ignored), so stores whose embedded YAML has it can be reopened.
+    """
+    _, s = _tree_steps()
+    tree = {'CAL_STEPS': {1: {'task': s['child'], 'delete_input': value}}}
+    pf.check_pl_tree_structure(tree, cal=True)
 
 
 def _bad_trees():
@@ -479,10 +489,6 @@ def _bad_trees():
          'not allowed'),
         ({'CAL_STEPS': {1: {'task': s['child'], 'params': {'k': [1]}}}},
          False, 'simple type'),
-        ({'CAL_STEPS': {1: {'task': s['child'], 'delete_input': ['z']}}},
-         False, 'not found'),
-        ({'CAL_STEPS': {1: {'task': s['child'], 'delete_input': 'some'}}},
-         False, 'not a valid list'),
         ([], False, 'must be a dict'),
     ]
 

@@ -661,30 +661,6 @@ def check_pl_tree_structure(tree, cal = False):
                 m = f"Pipeline task <{tree['task']}> is not a valid "
                 m += "plStep instance."
                 raise ValueError(m)
-        # Check if delete_input key is present, 
-        # and corresponds to 'all' or list of strings
-        # Need to check that list elements are valid for task
-        if 'delete_input' in keys:
-            if 'task' not in keys:
-                m = 'Pipeline tree "delete_input" key requires '
-                m += 'a corresponding "task" key.'
-                raise ValueError(m)
-            val = tree['delete_input']
-            if isinstance(val, list):
-                for v in val:
-                    if not isinstance(v, str):
-                        m = 'Pipeline tree "delete_input" list elements '
-                        m += 'must be strings.'
-                        raise ValueError(m)
-                    if v not in tree['task'].param_names:
-                        m = f'Pipeline tree "delete_input" value "{v}" '
-                        m += f'not found in "{tree["task"].name}" input names.'
-                        raise ValueError(m)
-            elif val != 'all':
-                m = f"Pipeline tree <delete_input: {val}> is not a valid list"
-                m += " of input names or 'all'."
-                raise ValueError(m)
-        
         # Check if params key is present, and corresponds to valid dict
         if 'params' in keys:
             if cal:
@@ -713,10 +689,14 @@ def check_pl_tree_structure(tree, cal = False):
                     raise ValueError(m)
             
         # Otherwise, key should be <>_STEPS sequence 
-        checked_keys = ['task', 'delete_input', 'params']
+        checked_keys = ['task', 'params']
         for k in checked_keys:
             if k in keys:
                 keys.remove(k)
+        # 'delete_input' was removed (it never did anything); it is ignored
+        # so that stores whose embedded YAML still has it can be reopened
+        if 'delete_input' in keys:
+            keys.remove('delete_input')
         for key in keys:
             if not key.endswith('_STEPS'):
                 m = f'Pipeline tree string keys must be in {checked_keys}'
