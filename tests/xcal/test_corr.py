@@ -34,6 +34,23 @@ def test_calc_cm(
     assert sig_iter.shape == (N_iter, x.shape[0], N_comp)
     assert a_full.shape == (x.shape[0], x.shape[0])
 
+
+def test_calc_cm_sig_iter_is_sigma_of_highpassed_residual():
+    """
+    Check that ``sig_iter`` stores sigma (RMS), not sigma squared: for a
+    single iteration it equals ``calc_sig`` of the highpassed residual.
+    """
+    rng = np.random.default_rng(1)
+    x = 3.0 * rng.normal(size = (4, 2000))
+    dt, lp, hp = 0.01, (1.0, 4), (0.5, 2)
+    a, A0, sig_iter, _ = corr.calc_cm(x, 1, 1, dt, lp, hp)
+
+    xc = x - x.mean(axis = 1)[:, np.newaxis]
+    A = corr.lowpass_filter(A0, dt, *lp)
+    sig = corr.calc_sig(corr.highpass_filter(xc - a @ A, dt, *hp))
+    np.testing.assert_allclose(sig_iter[0], np.repeat(sig, 1, axis = 1))
+    assert 1.0 < np.median(sig_iter) < 4.0  # sigma ~ 3, not 9
+
 @pytest.mark.parametrize(m, [
     # invalid x (1D)    
     (np.random.randn(100), 2, 3, 0.1, (1.0, 4), (0.5, 2)),
@@ -329,11 +346,18 @@ AQ = np.array([[0, 1, 0], [1, 0, 1]], dtype = np.float64)
       [6 + 1j * 4, -5 + 1j * -1, -14 + 1j * -6]]),
     # Single timestream, idx = 1
     (z, aI, aQ, AI, AQ, 1, None, [6 + 1j * 4, -5 + 1j * -1, -14 + 1j * -6]),
-    # Custom theta
-    (z, aI, aQ, AI, AQ, 0, np.zeros(z.shape[0]), 
+    # Custom theta: a scalar for 1D z
+    (z, aI, aQ, AI, AQ, 0, 0.0, 
      [8 + 1j * 4, -3 + 1j * -1, -12 + 1j * -6]),
-    (z, aI, aQ, AI, AQ, 1, np.zeros(z.shape[0]), 
+    (z, aI, aQ, AI, AQ, 1, 0.0, 
      [6 + 1j * 4, -5 + 1j * -1, -14 + 1j * -6]),
+    # Custom theta: one angle per row of 2D z, or a scalar for every row
+    ([z, z], aI, aQ, AI, AQ, [0, 1], np.zeros(2), 
+     [[8 + 1j * 4, -3 + 1j * -1, -12 + 1j * -6],
+      [6 + 1j * 4, -5 + 1j * -1, -14 + 1j * -6]]),
+    ([z, z], aI, aQ, AI, AQ, [0, 1], 0.0, 
+     [[8 + 1j * 4, -3 + 1j * -1, -12 + 1j * -6],
+      [6 + 1j * 4, -5 + 1j * -1, -14 + 1j * -6]]),
     
 ])  
 def test_remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta, y_exp):
@@ -352,7 +376,32 @@ def test_remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta, y_exp):
         else:
             assert theta_out.shape == (z.shape[0],)
     else:
-        np.testing.assert_allclose(theta, theta_out, equal_nan = True)
+        theta_exp = np.broadcast_to(theta, np.shape(theta_out))
+        np.testing.assert_allclose(theta_out, theta_exp, equal_nan = True)
+
+
+@pytest.mark.parametrize("T", [50, 3])  # T = N: square z
+def test_remove_cm_complex_rotates_each_row_by_its_theta(T):
+    """
+    Check that each row of 2D z is rotated by its own theta: removing the
+    rotated common modes from rotated data gives the rotated residual. The
+    square case (T == N) used to rotate by column without raising.
+    """
+    rng = np.random.default_rng(0)
+    N, C = 3, 2
+    aI2, aQ2 = rng.normal(size=(N, C)), rng.normal(size=(N, C))
+    AI2, AQ2 = rng.normal(size=(C, T)), rng.normal(size=(C, T))
+    resid = rng.normal(size=(N, T)) + 1j * rng.normal(size=(N, T))
+    z_rot = aI2 @ AI2 + 1j * (aQ2 @ AQ2) + resid
+    theta = np.array([0.3, -1.2, 2.0])
+    z2 = z_rot * np.exp(1j * theta)[:, np.newaxis]
+
+    y, theta_out = corr.remove_cm_complex(
+        z2, aI2, aQ2, AI2, AQ2, np.arange(N), theta)
+
+    np.testing.assert_allclose(
+        y, resid * np.exp(1j * theta)[:, np.newaxis], atol = 1e-12)
+    np.testing.assert_allclose(theta_out, theta)
 
 @pytest.mark.parametrize("z,aI,aQ,AI,AQ,idx,theta", [
     (1, aI, aQ, AI, AQ, 0, None), # 0D z 
@@ -371,6 +420,8 @@ def test_remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta, y_exp):
     (z, aI, aQ, AI, AQ, [0, -1], None),
     (z, aI, aQ, AI, AQ, 0, [0, 1]), # invalid theta shape
     (z, aI, aQ, AI, AQ, 0, np.array([[0, 1]])),
+    (z, aI, aQ, AI, AQ, 0, np.zeros(3)), # per-sample theta for 1D z
+    ([z, z], aI, aQ, AI, AQ, [0, 1], np.zeros(3)), # wrong length for 2D z
     # empty idx unsupported
     ([z, z], aI, aQ, AI, AQ, [], None),
 ])  

@@ -432,7 +432,7 @@ class TestDs2DisplayOffsetBehavior:
             matcher_obj = ResMatcher(
                 sd['f'], sd['z1'], sd['fres1'], sd['res_idx1'],
                 sd['f'], sd['z2'], sd['fres2'], sd['res_idx2'],
-                grp, DS2_f_offset=1.5e6,
+                grp, ds2_f_offset=1.5e6,
             )
         assert matcher_obj.ds2_f_offset == 1.5e6
         assert np.allclose(matcher_obj.f2_display, matcher_obj.f2 + 1.5e6)
@@ -1132,7 +1132,7 @@ def test_ds2_offset_saved_and_restored(
     assert np.array(matcher.zarr_group['res_matcher_ds2_f_offset'])[0] == 3.0e6
 
     reopened = _reopen_matcher(simple_data, str(tmp_path / 'out.zarr'),
-                               choice, DS2_f_offset=passed)
+                               choice, ds2_f_offset=passed)
 
     assert reopened.ds2_f_offset == expected
     assert np.allclose(reopened.f2_display, reopened.f2 + expected)
@@ -1235,7 +1235,7 @@ def test_log_after_the_panel_is_deleted_prints(capsys):
 
 @pytest.mark.parametrize("offset,n_pairs", [(None, 0), (0.75e9, 4)])
 def test_init_nearest_uses_user_ds2_offset(simple_data, tmp_path, offset, n_pairs):
-    """'nearest' estimates no offset; it only uses DS2_f_offset when given."""
+    """'nearest' estimates no offset; it only uses ds2_f_offset when given."""
     sd = simple_data
     fres2 = sd['fres1'] - 0.75e9  # DS2 shifted by about one spacing
     with patch.object(ResMatcher, 'setup_ui'), \
@@ -1244,7 +1244,7 @@ def test_init_nearest_uses_user_ds2_offset(simple_data, tmp_path, offset, n_pair
             sd['f'], sd['z1'], sd['fres1'], sd['res_idx1'],
             sd['f'], sd['z2'], fres2, sd['res_idx2'],
             str(tmp_path / 'out.zarr'), init_match='nearest',
-            DS2_f_offset=offset,
+            ds2_f_offset=offset,
         )
     pairs = [g for g in m.groups if g.mapping_str() == '1-1'
              and np.isclose(g.entries1[0][0] - g.entries2[0][0], 0.75e9)]

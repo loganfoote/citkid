@@ -11,7 +11,7 @@ from .util import cardan
 def get_y(y0, a, largest):
     """
     Calculate the largest or smallest real root of
-        y0 = y - a / (1 + y^2).
+        y0 = y - a / (1 + 4 y^2).
 
     Parameters:
     y0 (np.array): resonance shift in the low-power and linear limit.
@@ -42,7 +42,7 @@ def nonlinear_iq_nogain(f, fr, Qr, amp, phi, a, downward):
          \     Qc * cos(phi)       (1+ 2jy)    /
 
     where the nonlinearity of y is described by
-        y0 = y - a/(1+y^2)
+        y0 = y - a/(1+4y^2)
     and y0 = Qr*x0, where x0 = (f - fr) / fr is the fractional frequency 
     shift in the low-power, linear limit.
 
@@ -82,7 +82,7 @@ def nonlinear_iq(f, fr, Qr, amp, phi, a, i0, q0, tau, downward):
                                        \     Qc * cos(phi)       (1+ 2jy)    /
 
     where the nonlinearity of y is described by
-        y0 = y - a/(1+y^2)
+        y0 = y - a/(1+4y^2)
     and y0 = Qr*x0, where x0 = (f - fr) / fr is the fractional frequency 
     shift in the low-power, linear limit.
 

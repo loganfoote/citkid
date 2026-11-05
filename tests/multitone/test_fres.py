@@ -10,7 +10,7 @@ Resonator model
 For each helper function, we build a simple IQ sweep whose "resonance feature"
 is placed at a known index ``k`` in an N-point array:
 
-  update_fr_minS21  : |S21| has a dip at index k (linear baseline + Gaussian dip).
+  update_fr_min_s21  : |S21| has a dip at index k (linear baseline + Gaussian dip).
   update_fr_spacing : IQ speed peaks at index k (sinusoidal IQ loop, speed ∝ |dz/df|).
   update_fr_distance: furthest-from-off-resonance point is at index k (circle in IQ plane).
 """
@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 from citkid.multitone.fres import (
     update_fres,
-    update_fr_minS21,
+    update_fr_min_s21,
     update_fr_spacing,
     update_fr_distance,
 )
@@ -106,23 +106,23 @@ def z_distance(f1d):
 
 
 # ---------------------------------------------------------------------------
-# update_fr_minS21
+# update_fr_min_s21
 # ---------------------------------------------------------------------------
 
 class TestUpdateFrMinS21:
 
     def test_single_returns_float(self, f1d, z_mins21):
-        fr = update_fr_minS21(f1d, z_mins21)
+        fr = update_fr_min_s21(f1d, z_mins21)
         assert isinstance(fr, float)
 
     def test_single_correct_index(self, f1d, z_mins21):
-        fr = update_fr_minS21(f1d, z_mins21)
+        fr = update_fr_min_s21(f1d, z_mins21)
         assert fr == pytest.approx(f1d[K])
 
     def test_batch_returns_array(self, f1d, z_mins21):
         f2d = np.stack([f1d, f1d])
         z2d = np.stack([z_mins21, z_mins21])
-        fr = update_fr_minS21(f2d, z2d)
+        fr = update_fr_min_s21(f2d, z2d)
         assert isinstance(fr, np.ndarray)
         assert fr.shape == (2,)
 
@@ -130,7 +130,7 @@ class TestUpdateFrMinS21:
         K2 = 120
         f2d = np.stack([f1d, f1d])
         z2d = np.stack([z_mins21, _minS21_sweep(f1d, K2)])
-        fr = update_fr_minS21(f2d, z2d)
+        fr = update_fr_min_s21(f2d, z2d)
         assert fr[0] == pytest.approx(f1d[K])
         assert fr[1] == pytest.approx(f1d[K2])
 
@@ -141,22 +141,22 @@ class TestUpdateFrMinS21:
         sigma = N / 20
         dip = -10.0 * np.exp(-0.5 * ((np.arange(N) - k) / sigma) ** 2)
         z = (10 ** (dip / 20)).astype(complex)
-        fr = update_fr_minS21(f1d, z)
+        fr = update_fr_min_s21(f1d, z)
         assert fr == pytest.approx(f1d[k])
 
     def test_dip_at_first_index(self, f1d):
         z = _minS21_sweep(f1d, 0)
-        fr = update_fr_minS21(f1d, z)
+        fr = update_fr_min_s21(f1d, z)
         assert fr == pytest.approx(f1d[0])
 
     def test_dip_at_last_index(self, f1d):
         z = _minS21_sweep(f1d, N - 1)
-        fr = update_fr_minS21(f1d, z)
+        fr = update_fr_min_s21(f1d, z)
         assert fr == pytest.approx(f1d[N - 1])
 
     def test_accepts_array_like(self, f1d, z_mins21):
         """Accepts plain Python lists."""
-        fr = update_fr_minS21(f1d.tolist(), z_mins21.tolist())
+        fr = update_fr_min_s21(f1d.tolist(), z_mins21.tolist())
         assert isinstance(fr, float)
 
 

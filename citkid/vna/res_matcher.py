@@ -160,7 +160,7 @@ class SpinBoxEventFilter(QtCore.QObject):
 def run_res_matcher(
     f1, z1, fres1, res_idx1, f2, z2, fres2, res_idx2, zarr_grp,
     new_res_start_idx: int = 2000, init_match: str = 'sorted',
-    apply_filter: bool = False, DS2_f_offset: Optional[float] = None,
+    apply_filter: bool = False, ds2_f_offset: Optional[float] = None,
 ):
     """
     Run the interactive resonance matcher.
@@ -179,11 +179,11 @@ def run_res_matcher(
         to avoid collisions with existing resonator indices.
     init_match (str): How to build the initial pairing.  'sorted' pairs by
         frequency order; 'nearest' uses nearest-neighbor matching after adding
-        ``DS2_f_offset`` (0 if None).  Default is 'sorted'.
+        ``ds2_f_offset`` (0 if None).  Default is 'sorted'.
     apply_filter (bool): If False (default), both dataset filters start as
         'none' so the raw magnitude is shown and startup is fast.  Set True
         to start with the default highpass filter applied.
-    DS2_f_offset (float or None): Visualization-only frequency offset applied
+    ds2_f_offset (float or None): Visualization-only frequency offset applied
         to the DS2 plots and markers. Saved resonance frequencies remain
         unchanged. The current offset is saved with the groups. If None
         (default), the saved offset is restored when loading existing data,
@@ -199,7 +199,7 @@ def run_res_matcher(
         new_res_start_idx=new_res_start_idx,
         init_match=init_match,
         apply_filter=apply_filter,
-        DS2_f_offset=DS2_f_offset,
+        ds2_f_offset=ds2_f_offset,
     )
     matcher.run()
     return matcher.groups
@@ -284,7 +284,7 @@ class ResMatcher:
     def __init__(
         self, f1, z1, fres1, res_idx1, f2, z2, fres2, res_idx2, zarr_grp,
         new_res_start_idx: int = 2000, init_match: str = 'sorted',
-        apply_filter: bool = False, DS2_f_offset: Optional[float] = None,
+        apply_filter: bool = False, ds2_f_offset: Optional[float] = None,
     ):
         """
         Initialize the matcher, build the initial groups, and set up the UI.
@@ -308,10 +308,10 @@ class ResMatcher:
             max(existing indices) + 1). Default is 2000.
         init_match (str): how to build the initial pairing. Can be 'sorted'
             (default, pair by frequency order) or 'nearest' (nearest-neighbor
-            after adding the DS2 offset, 0 unless ``DS2_f_offset`` is given).
+            after adding the DS2 offset, 0 unless ``ds2_f_offset`` is given).
         apply_filter (bool): if True, start both datasets with the highpass
             filter; if False (default), start with no filter.
-        DS2_f_offset (float or None): visualization-only DS2 frequency offset
+        ds2_f_offset (float or None): visualization-only DS2 frequency offset
             in Hz. If None (default), the saved offset is restored when
             loading, else 0 is used. A float overrides the saved offset.
 
@@ -347,7 +347,7 @@ class ResMatcher:
                 )
 
         # None → restore the saved offset on load (below), else 0
-        self.ds2_f_offset = 0.0 if DS2_f_offset is None else float(DS2_f_offset)
+        self.ds2_f_offset = 0.0 if ds2_f_offset is None else float(ds2_f_offset)
         self.f2_display = self.f2 + self.ds2_f_offset
         # Ensure new resonance indices don't collide with existing ones
         max_existing_idx = max(
@@ -390,7 +390,7 @@ class ResMatcher:
                     except Exception:
                         _saved_view_xlims = None
                 # Restore the saved DS2 display offset unless one was passed
-                if DS2_f_offset is None and 'res_matcher_ds2_f_offset' in self.zarr_group:
+                if ds2_f_offset is None and 'res_matcher_ds2_f_offset' in self.zarr_group:
                     try:
                         arr = np.array(self.zarr_group['res_matcher_ds2_f_offset'])
                         if arr.size >= 1:

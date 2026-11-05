@@ -11,13 +11,13 @@ def _dict_outputs_in_freq_order(func, prefix):
     """
     Adapt a reduced-parameter function that returns a dict to plStep outputs.
 
-    ``reduced_params.get_*_reduced_default_freqs`` return a dict keyed
-    ``'{prefix}_{freq}'``, but a plStep needs a tuple in ``return_names``
-    order. A dict would be taken as a single output.
+    ``reduced_params.get_*_reduced_default_freqs`` return a dict keyed by
+    ``reduced_params.default_freq_keys(prefix)``, but a plStep needs a tuple
+    in ``return_names`` order. A dict would be taken as a single output.
 
     Parameters:
     func (callable): Function returning a dict keyed by
-        ``f'{prefix}_{freq}'`` for each freq in ``reduced_params._freqs``.
+        ``reduced_params.default_freq_keys(prefix)``.
     prefix (str): Key prefix, 'sxx' or 'sfactor'.
 
     Returns:
@@ -29,7 +29,8 @@ def _dict_outputs_in_freq_order(func, prefix):
         Call ``func`` and return its values as a tuple in frequency order.
         """
         result = func(*args)
-        return tuple(result[f'{prefix}_{freq}'] for freq in reduced_params._freqs)
+        keys = reduced_params.default_freq_keys(prefix)
+        return tuple(result[key] for key in keys)
     wrapped.__name__ = func.__name__
     wrapped.__module__ = func.__module__
     return wrapped
@@ -102,24 +103,24 @@ default_cal_steps =\
   ['zt_cent'], ['At'], 'per-row'),
 
  ('get_sparper', 
-  lambda a, b, c, d: circle.get_spar_sper(a, b, c, d, get_freqs = True), 
+  lambda a, b, c, d: circle.get_spar_sper(a, b, c, d, return_freqs = True), 
   ['thetat', 'At', 'circ_radius', 'dt'], 
   ['f_sparper', 'spar', 'sper'], 'per-row'),
 
-  ('get_sxx', lambda x, dt: psd.get_psd(x, dt, get_frequencies = True),
+  ('get_sxx', lambda x, dt: psd.get_psd(x, dt, return_freqs = True),
    ['xt', 'dt'],
    ['f_sxx', 'sxx'], 'per-row'),
 
    ('get_sxx_reduced',
     _dict_outputs_in_freq_order(reduced_params.get_sxx_reduced_default_freqs, 'sxx'),
     ['f_sxx', 'sxx'], 
-    [f'sxx_{_freq}'.replace('.', 'p') for _freq in reduced_params._freqs], 
+    reduced_params.default_freq_keys('sxx'),
     'per-row'),
 
    ('get_sfactor_reduced',
     _dict_outputs_in_freq_order(reduced_params.get_sfactor_reduced_default_freqs, 'sfactor'),
     ['f_sparper', 'spar', 'sper'], 
-    [f'sfactor_{_freq}'.replace('.', 'p') for _freq in reduced_params._freqs], 
+    reduced_params.default_freq_keys('sfactor'),
     'per-row')
   
 )

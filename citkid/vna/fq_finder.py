@@ -28,14 +28,14 @@ input ``fres`` and ``qres`` values are written directly to the output zarr
 arrays and the interactive step is skipped.
 
 Output:
-These zarr arrays are written into ``zarr_group``:
+These zarr arrays are written into ``zarr_grp``:
     ``fres_opt``           — optimised resonant frequency (Hz)
     ``qres_opt``           — optimised Q-factor
     ``reject_reason``      — rejection reason ('' if not rejected)
     ``fq_finder_data_idx`` — data index shown at the last save (-1 if none)
 
 Existing data:
-If ``zarr_group`` already has ``fres_opt`` and ``qres_opt``, a dialog asks
+If ``zarr_grp`` already has ``fres_opt`` and ``qres_opt``, a dialog asks
 whether to load them, overwrite them (with a second confirmation), or
 cancel. When loading, a second dialog asks whether to resume at the saved
 data index or start from data index 0.
@@ -116,20 +116,20 @@ _DATA_IDX_KEY = "fq_finder_data_idx"
 _OUTPUT_KEYS = ("fres_opt", "qres_opt", "reject_reason", _DATA_IDX_KEY)
 
 
-def _ensure_data_idx_array(zarr_group) -> None:
+def _ensure_data_idx_array(zarr_grp) -> None:
     """
     Create the saved data index array if it is missing.
 
     Parameters:
-    zarr_group (zarr.Group): output group.
+    zarr_grp (zarr.Group): output group.
     """
-    if _DATA_IDX_KEY not in zarr_group:
-        zarr_group.create_array(
+    if _DATA_IDX_KEY not in zarr_grp:
+        zarr_grp.create_array(
             _DATA_IDX_KEY, shape=(1,), dtype=np.int64, fill_value=-1,
         )
 
 
-def _ensure_zarr_arrays(zarr_group, n: int) -> bool:
+def _ensure_zarr_arrays(zarr_grp, n: int) -> bool:
     """
     Ensure the fq_finder output arrays exist in the zarr group.
 
@@ -138,7 +138,7 @@ def _ensure_zarr_arrays(zarr_group, n: int) -> bool:
     (legacy groups). If neither exists, all output arrays are created fresh.
 
     Parameters:
-    zarr_group (zarr.Group): output group.
+    zarr_grp (zarr.Group): output group.
     n (int): number of resonators (length of each per-resonator array).
 
     Returns:
@@ -149,74 +149,74 @@ def _ensure_zarr_arrays(zarr_group, n: int) -> bool:
     RuntimeError: if only one of ``fres_opt`` and ``qres_opt`` exists.
     ValueError: if the existing arrays do not have length ``n``.
     """
-    existing = [name for name in ("fres_opt", "qres_opt") if name in zarr_group]
+    existing = [name for name in ("fres_opt", "qres_opt") if name in zarr_grp]
     if len(existing) == 1:
         raise RuntimeError(
-            f"zarr_group contains {existing} but not the other; "
+            f"zarr_grp contains {existing} but not the other; "
             "the group is in an inconsistent state."
         )
     if len(existing) == 2:
         for name in existing:
-            if zarr_group[name].shape != (n,):
+            if zarr_grp[name].shape != (n,):
                 raise ValueError(
-                    f"zarr_group[{name!r}] has shape {zarr_group[name].shape}, "
+                    f"zarr_grp[{name!r}] has shape {zarr_grp[name].shape}, "
                     f"expected ({n},) to match the input data."
                 )
         # Resume mode: older groups may lack reject_reason
-        if "reject_reason" not in zarr_group:
-            zarr_group.create_array(
+        if "reject_reason" not in zarr_grp:
+            zarr_grp.create_array(
                 "reject_reason",
                 shape=(n,),
                 dtype=str,
                 fill_value="",
             )
-        _ensure_data_idx_array(zarr_group)
+        _ensure_data_idx_array(zarr_grp)
         return True
     # Create fresh arrays
     for name in ("fres_opt", "qres_opt"):
-        zarr_group.create_array(
+        zarr_grp.create_array(
             name,
             shape=(n,),
             dtype=np.float64,
             fill_value=np.nan,
         )
-    zarr_group.create_array(
+    zarr_grp.create_array(
         "reject_reason",
         shape=(n,),
         dtype=str,
         fill_value="",
     )
-    _ensure_data_idx_array(zarr_group)
+    _ensure_data_idx_array(zarr_grp)
     return False
 
 
-def _clear_zarr_outputs(zarr_group) -> None:
+def _clear_zarr_outputs(zarr_grp) -> None:
     """
     Delete all fq_finder output arrays from the zarr group.
 
     Parameters:
-    zarr_group (zarr.Group): output group.
+    zarr_grp (zarr.Group): output group.
     """
     for key in _OUTPUT_KEYS:
-        if key in zarr_group:
-            del zarr_group[key]
+        if key in zarr_grp:
+            del zarr_grp[key]
 
 
-def _read_saved_data_idx(zarr_group, res_idxs):
+def _read_saved_data_idx(zarr_grp, res_idxs):
     """
     Read the saved data index, if it points at an interactive resonator.
 
     Parameters:
-    zarr_group (zarr.Group): output group.
+    zarr_grp (zarr.Group): output group.
     res_idxs (np.array): resonator indices; values < 0 are calibration tones.
 
     Returns:
     data_idx (int or None): saved data index, or None if none was saved, it
         is out of range, or it points at a calibration tone.
     """
-    if _DATA_IDX_KEY not in zarr_group:
+    if _DATA_IDX_KEY not in zarr_grp:
         return None
-    data_idx = int(np.asarray(zarr_group[_DATA_IDX_KEY][:]).ravel()[0])
+    data_idx = int(np.asarray(zarr_grp[_DATA_IDX_KEY][:]).ravel()[0])
     if not 0 <= data_idx < len(res_idxs) or res_idxs[data_idx] < 0:
         return None
     return data_idx
@@ -438,7 +438,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
     _REJECT_REASONS = ["tone off resonance", "overlapping resonance", "bifurcated", "other"]
 
     def __init__(
-        self, f: np.ndarray, z: np.ndarray, fres, qres, res_idxs, zarr_group,
+        self, f: np.ndarray, z: np.ndarray, fres, qres, res_idxs, zarr_grp,
         title: str = "FQ Finder", ui_scale: float = 1.0,
         fres_update_method: str = "none", start_idx: int = 0,
         rmv_gain_simple: bool = False, load_saved: bool = False,
@@ -454,7 +454,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         qres (array-like): initial Q-factors, length M.
         res_idxs (array-like): resonator indices, length M. Values < 0 mark
             calibration tones.
-        zarr_group (zarr.Group): output group. ``fres_opt`` and ``qres_opt``
+        zarr_grp (zarr.Group): output group. ``fres_opt`` and ``qres_opt``
             1-D arrays of length M are created here; existing arrays are
             kept (resume).
         title (str): window title.
@@ -469,7 +469,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         rmv_gain_simple (bool): If True, apply a simple gain correction to
             ``z`` before displaying.
         load_saved (bool): If True, start from the saved ``fres_opt``,
-            ``qres_opt``, and ``reject_reason`` values in ``zarr_group``
+            ``qres_opt``, and ``reject_reason`` values in ``zarr_grp``
             instead of the input values, for resonators that were saved. If
             False (default), existing arrays are kept but the input values
             are shown.
@@ -499,7 +499,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         self._fres_init = fres.copy()   # original values for Z-reset
         self._qres_init = qres.copy()
         self._res_idxs = res_idxs
-        self._zg = zarr_group
+        self._zg = zarr_grp
         self._M = self._f.shape[0]
 
         # Qt handles display scaling (see get_qapp), so fonts only use the
@@ -1477,7 +1477,7 @@ def _report_save_error(future):
 # ---------------------------------------------------------------------------
 
 def run_fqfinder(
-    f, z, fres, qres, res_idxs, zarr_group, title = "FQ Finder", ui_scale = 1.0,
+    f, z, fres, qres, res_idxs, zarr_grp, title = "FQ Finder", ui_scale = 1.0,
     fres_update_method = "none", rmv_gain_simple = False,
 ):
     """
@@ -1486,7 +1486,7 @@ def run_fqfinder(
     Calibration tones (``res_idxs[i] < 0``) are saved immediately with
     their input values and skipped in the interactive loop.
 
-    If *zarr_group* already contains ``fres_opt`` and ``qres_opt``, a
+    If *zarr_grp* already contains ``fres_opt`` and ``qres_opt``, a
     dialog asks whether to load the saved data, overwrite it (after a
     second confirmation), or cancel. When loading, the saved fres, qres,
     and rejection reasons are used for resonators that were saved, and a
@@ -1501,7 +1501,7 @@ def run_fqfinder(
     qres (array-like): initial Q-factors, length M.
     res_idxs (array-like): resonator indices, length M. Values < 0 mark
         calibration tones.
-    zarr_group (zarr.Group): output group. Three arrays of length M are
+    zarr_grp (zarr.Group): output group. Three arrays of length M are
         written here: ``fres_opt`` (float64), ``qres_opt`` (float64), and
         ``reject_reason`` (str, empty string for non-rejected resonators).
         ``fq_finder_data_idx`` (int64, length 1) holds the data index of
@@ -1518,7 +1518,7 @@ def run_fqfinder(
         uses the input ``fres`` as the starting point), 'minS21' (minimum
         of |S21| after subtracting a linear baseline), 'spacing' (point of
         maximum adjacent IQ spacing), or 'distance' (point furthest from the
-        off-resonance IQ value). Saved values loaded from ``zarr_group`` are
+        off-resonance IQ value). Saved values loaded from ``zarr_grp`` are
         not updated.
     rmv_gain_simple (bool): If True, apply a simple gain correction to
         ``z`` before displaying: divide each row by the median
@@ -1532,16 +1532,16 @@ def run_fqfinder(
 
     load_saved = False
     start_idx = 0
-    if "fres_opt" in zarr_group and "qres_opt" in zarr_group:
+    if "fres_opt" in zarr_grp and "qres_opt" in zarr_grp:
         choice = _show_startup_dialog()
         if choice == 'cancel':
             raise RuntimeError("User cancelled operation")
         if choice == 'overwrite':
-            _clear_zarr_outputs(zarr_group)
+            _clear_zarr_outputs(zarr_grp)
         else:
             load_saved = True
             res_idxs_arr = np.asarray(res_idxs)
-            saved_idx = _read_saved_data_idx(zarr_group, res_idxs_arr)
+            saved_idx = _read_saved_data_idx(zarr_grp, res_idxs_arr)
             if saved_idx is not None:
                 start_idx = _ask_start_idx(saved_idx, res_idxs_arr[saved_idx])
 
@@ -1551,7 +1551,7 @@ def run_fqfinder(
         fres=fres,
         qres=qres,
         res_idxs=res_idxs,
-        zarr_group=zarr_group,
+        zarr_grp=zarr_grp,
         title=title,
         ui_scale=ui_scale,
         fres_update_method=fres_update_method,

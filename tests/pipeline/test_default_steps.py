@@ -218,12 +218,13 @@ def test_reduced_steps_return_one_value_per_frequency(step_name, prefix, n_input
 
     out = step._run(params, [False] * n_inputs)
 
-    assert list(out) == [f"{prefix}_{freq}".replace(".", "p") for freq in reduced_params._freqs]
-    for freq in reduced_params._freqs:
-        values = out[f"{prefix}_{freq}".replace(".", "p")]
+    keys = reduced_params.default_freq_keys(prefix)
+    assert list(out) == keys
+    for key in keys:
+        values = out[key]
         assert values.shape == (2,)
         assert values.dtype == np.float64
-        np.testing.assert_allclose(values, [e[f"{prefix}_{freq}"] for e in expected])
+        np.testing.assert_allclose(values, [e[key] for e in expected])
 
 ################################################################################
 # _fit_iq_step

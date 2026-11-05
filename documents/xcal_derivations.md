@@ -407,9 +407,10 @@ raise and the `*_default_freqs` wrappers return NaN. For example, the 0.1 Hz
 values need a timestream of at least 12.5 s, and the 300 Hz values need
 $f_s/2 \ge 360$ Hz.
 
-Pipeline names: the wrappers return dicts keyed `sxx_0.1`, ..., and
-`pipeline/default_steps.py` stores them as `sxx_0p1`, `sxx_0p3`, `sxx_1`,
-..., `sxx_300` and `sfactor_0p1`, ..., `sfactor_300` (`.` replaced by `p`).
+Pipeline names: the wrappers return dicts keyed `sxx_0p1`, `sxx_0p3`,
+`sxx_1`, ..., `sxx_300` and `sfactor_0p1`, ..., `sfactor_300` (`.` replaced
+by `p`, see `reduced_params.default_freq_keys`), and
+`pipeline/default_steps.py` stores them under the same names.
 
 Meaning:
 

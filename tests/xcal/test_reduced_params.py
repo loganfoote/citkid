@@ -163,7 +163,7 @@ def test_get_sxx_reduced_default_freqs_returns_dict():
 
 def test_get_sxx_reduced_default_freqs_keys():
     result = get_sxx_reduced_default_freqs(_f_wide, _sxx_flat)
-    expected_keys = {f'sxx_{freq}' for freq in _freqs}
+    expected_keys = {f'sxx_{freq}'.replace('.', 'p') for freq in _freqs}
     assert set(result.keys()) == expected_keys
 
 def test_get_sxx_reduced_default_freqs_length():
@@ -174,7 +174,7 @@ def test_get_sxx_reduced_default_freqs_values_match_individual():
     result = get_sxx_reduced_default_freqs(_f_wide, _sxx_flat)
     for freq in _freqs:
         expected = get_sxx_reduced(_f_wide, _sxx_flat, freq)
-        assert np.isclose(result[f'sxx_{freq}'], expected)
+        assert np.isclose(result[f'sxx_{freq}'.replace('.', 'p')], expected)
 
 def test_get_sxx_reduced_default_freqs_flat():
     result = get_sxx_reduced_default_freqs(_f_wide, _sxx_flat)
@@ -191,7 +191,7 @@ def test_get_sfactor_reduced_default_freqs_returns_dict():
 
 def test_get_sfactor_reduced_default_freqs_keys():
     result = get_sfactor_reduced_default_freqs(_f_wide, _spar_flat, _sper_flat)
-    expected_keys = {f'sfactor_{freq}' for freq in _freqs}
+    expected_keys = {f'sfactor_{freq}'.replace('.', 'p') for freq in _freqs}
     assert set(result.keys()) == expected_keys
 
 def test_get_sfactor_reduced_default_freqs_length():
@@ -202,9 +202,20 @@ def test_get_sfactor_reduced_default_freqs_values_match_individual():
     result = get_sfactor_reduced_default_freqs(_f_wide, _spar_flat, _sper_flat)
     for freq in _freqs:
         expected = get_sfactor(_f_wide, _spar_flat, _sper_flat, freq)
-        assert np.isclose(result[f'sfactor_{freq}'], expected)
+        assert np.isclose(result[f'sfactor_{freq}'.replace('.', 'p')], expected)
 
 def test_get_sfactor_reduced_default_freqs_flat():
     result = get_sfactor_reduced_default_freqs(_f_wide, _spar_flat, _sper_flat)
     for key, val in result.items():
         assert np.isclose(val, 1.0), f"Expected 1.0 for {key}, got {val}"
+
+
+def test_default_freq_keys_replace_dots():
+    """
+    Check the key format shared by the dict wrappers and the pipeline.
+    """
+    from citkid.xcal.reduced_params import default_freq_keys
+    assert default_freq_keys('sxx') == [
+        'sxx_0p1', 'sxx_0p3', 'sxx_1', 'sxx_3', 'sxx_10', 'sxx_30',
+        'sxx_100', 'sxx_300']
+    assert default_freq_keys('sfactor')[0] == 'sfactor_0p1'

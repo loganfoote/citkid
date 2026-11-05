@@ -193,10 +193,10 @@ def test_convert_to_A_invalid_input(z):
 ################################################################################
 x = np.arange(0, 10, 0.1)
 y = np.sin(x)
-freq_exp, y_exp = get_psd(y, dt = 0.1, get_frequencies = True)
+freq_exp, y_exp = get_psd(y, dt = 0.1, return_freqs = True)
 y_exp = 10 * np.log10(y_exp)
 
-m = "theta,A,radius,dt,get_freqs,freq_exp,spar_exp,sper_exp"
+m = "theta,A,radius,dt,return_freqs,freq_exp,spar_exp,sper_exp"
 @pytest.mark.parametrize(m, [
     ([1], [1], 1, 0.5, True, [0], [0], [0]),
     ([1], [1], 1, 0.5, False, None, [0], [0]),
@@ -207,9 +207,9 @@ m = "theta,A,radius,dt,get_freqs,freq_exp,spar_exp,sper_exp"
     ([10], [1], -1, 0.5, True, [0], [20], [0]),  # negative radius symmetry
 ])
 def test_get_spar_sper(
-    theta, A, radius, dt, get_freqs, freq_exp, spar_exp, sper_exp
+    theta, A, radius, dt, return_freqs, freq_exp, spar_exp, sper_exp
 ):    
-    freq, spar, sper = circle.get_spar_sper(theta, A, radius, dt, get_freqs)
+    freq, spar, sper = circle.get_spar_sper(theta, A, radius, dt, return_freqs)
 
     assert isinstance(spar, np.ndarray)
     assert isinstance(sper, np.ndarray)
@@ -217,7 +217,7 @@ def test_get_spar_sper(
     assert spar.dtype == np.float64
     assert sper.dtype == np.float64
     assert spar.shape == sper.shape
-    if get_freqs:
+    if return_freqs:
         assert isinstance(freq, np.ndarray)
         assert freq.dtype == np.float64
         assert freq.shape == spar.shape
@@ -228,11 +228,11 @@ def test_get_spar_sper(
                        rtol = 1e-7, equal_nan = True)
     assert np.allclose(sper, np.array(sper_exp, dtype = np.float64), 
                        rtol = 1e-7, equal_nan = True)
-    if get_freqs:
+    if return_freqs:
         assert np.allclose(freq, np.array(freq_exp, dtype = np.float64), 
                            rtol = 1e-7)
         
-@pytest.mark.parametrize("theta,A,radius,dt,get_freqs", [
+@pytest.mark.parametrize("theta,A,radius,dt,return_freqs", [
     (['a', 1, -1], [1], 1, 0.5, True),  # non-numeric theta
     ([1], ['a', 1, -1], 1, 0.5, True),  # non-numeric A
     ([1], [1], 'a', 0.5, True),  # non-numeric radius
@@ -244,9 +244,9 @@ def test_get_spar_sper(
     ([1], [np.nan], 1, 0.5, True),  # non-finite value in A
     ([1], [1], 1, -1, True),  # negative dt
 ])
-def test_get_spar_sper_invalid_input(theta, A, radius, dt, get_freqs):
+def test_get_spar_sper_invalid_input(theta, A, radius, dt, return_freqs):
     with pytest.raises(Exception):
-        circle.get_spar_sper(theta, A, radius, dt, get_freqs)
+        circle.get_spar_sper(theta, A, radius, dt, return_freqs)
 
 ################################################################################
 ############################### circle_objective ###############################

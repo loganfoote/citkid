@@ -58,8 +58,8 @@ from .iq_series import (
 # analysis, offered in the x and y dropdowns by default.
 DEFAULT_TS_QUANTITIES = (
     ['ares', 'fres', 'qres', 'ft', 'circ_radius', 'theta_phase_offset', 'idx_t']
-    + [f'sxx_{freq}'.replace('.', 'p') for freq in reduced_params._freqs]
-    + [f'sfactor_{freq}'.replace('.', 'p') for freq in reduced_params._freqs]
+    + reduced_params.default_freq_keys('sxx')
+    + reduced_params.default_freq_keys('sfactor')
 )
 
 

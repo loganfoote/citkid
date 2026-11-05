@@ -82,6 +82,18 @@ def test_block_mean_of_constant_blocks_and_total_mean():
     assert out.mean() == pytest.approx(x.mean())
 
 
+def test_block_mean_averages_consecutive_samples():
+    """
+    Check that each output averages one sweep point's dwell time, i.e.
+    consecutive samples, matching np.mean(x.reshape(m, nsamps), axis=1).
+    """
+    nsamps, m = 3, 4
+    x = np.arange(nsamps * m, dtype = np.float64)
+    np.testing.assert_allclose(
+        block_mean(x, nsamps, m), x.reshape(m, nsamps).mean(axis = 1))
+    np.testing.assert_allclose(block_mean(x, nsamps, m), [1, 4, 7, 10])
+
+
 def test_get_S21_from_xA_without_noise_matches_linear_model():
     """
     Check the noiseless linear resonance: dip at fr and unity far away.

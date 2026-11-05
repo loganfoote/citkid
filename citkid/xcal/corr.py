@@ -6,13 +6,13 @@ from ..signal.basic_filt import lowpass_filter, highpass_filter
 ################################################################################
 def calc_sig(x):
     """
-    Calculate the normalized variance of each timestream in x.
+    Calculate the RMS (sigma) of each timestream in x.
 
     Parameters:
     x (array-like, (N, T)): Timestream data with N timestreams of length T.
 
     Returns:
-    sig (np.array, (N, 1)): Variance normalized by timestream length.
+    sig (np.array, (N, 1)): sqrt(sum(x ** 2) / T) for each timestream.
     """
     x = np.asarray(x)
     return np.sqrt(np.sum(x ** 2, axis = 1)[:, np.newaxis] / x.shape[1])
@@ -120,8 +120,12 @@ def calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params):
 
     Returns:
     a (array-like, (N, N_comp)): Scaling factors from A -> x.
-    A (array-like, (N_comp, T)): Common modes.
-    sig_iter (array-like, (N_iter, N, N_comp)): Sigma values per iteration.
+    A (array-like, (N_comp, T)): Common modes from the last iteration,
+        before the lowpass filter (the lowpass is only used to make the
+        iteration converge).
+    sig_iter (array-like, (N_iter, N, N_comp)): Sigma (RMS of the
+        highpassed residual, see ``calc_sig``) of each timestream after each
+        iteration, repeated along the last axis.
     a_full (array-like, (N, N)): Scaling factors from all components A -> x.
     """
     # Input validation
@@ -158,7 +162,7 @@ def calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params):
         A = lowpass_filter(A0, dt, *lowpass_params)
         y = highpass_filter(x - a @ A, dt, *highpass_params)
         sig = calc_sig(y)
-        sig_iter[i] = sig ** 2
+        sig_iter[i] = sig
     return a, A0, sig_iter, a_full
 
 def calc_cm_complex(z, theta = None, *calc_cm_params):
@@ -265,23 +269,38 @@ def remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta = None):
     aI, aQ (array-like, (N, C)): Real and imaginary scaling factors from A -> z.
     AI, AQ (array-like, (C, T)): Real and imaginary common modes.
     idx (array-like, (M,) or int): Indices into aI/aQ corresponding to z.
-    theta (array-like, (N,) or None): Rotation angles to rotate each timestream
-        to the real axis. If None, uses the angle of the median of each
-        timestream.
+    theta (float, array-like (N,), or None): Rotation angles to rotate each
+        timestream to the real axis: a scalar for 1D z, or one angle per row
+        of 2D z (a scalar is applied to every row). If None, uses the angle
+        of the median of each timestream.
+
     Returns:
     y (array-like, (N, T)): Complex timestreams with common modes removed.
-    theta (array-like, (N,)): Rotation angles used to rotate each timestream to
-        the real axis.
+    theta (float or np.array, (N,)): Rotation angles used to rotate each
+        timestream to the real axis (a float for 1D z).
     """
     # Input validation
     z = np.asarray(z, dtype = np.complex128)
+    if len(z.shape) not in (1, 2):
+        raise ValueError("z must be 1D or 2D array-like")
 
     # Rotate each timestream median to real axis
     if theta is None:
         if len(z.shape) == 1:
             theta = np.angle(np.median(z))
         else:
-            theta = np.angle(np.median(z, axis = 1))[:, np.newaxis]
+            theta = np.angle(np.median(z, axis = 1))
+    theta = np.asarray(theta, dtype = np.float64)
+    if len(z.shape) == 1:
+        if theta.size != 1:
+            raise ValueError("theta must be a scalar for 1D z")
+        theta = theta.reshape(())
+    else:
+        if theta.ndim == 0:
+            theta = np.full(z.shape[0], float(theta))
+        if theta.shape != (z.shape[0],):
+            raise ValueError("theta must be a scalar or have shape (N,)")
+        theta = theta[:, np.newaxis]
     z = z * np.exp(-1j * theta)
 
     # Calculate common modes
@@ -293,7 +312,9 @@ def remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta = None):
     y = y * np.exp(1j * theta)
     
     # Format theta for return
-    if len(theta.shape) == 2:
+    if theta.ndim == 2:
         theta = theta[:, 0]
+    else:
+        theta = float(theta)
     return y, theta
 

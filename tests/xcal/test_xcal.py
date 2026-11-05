@@ -70,20 +70,25 @@ def test_get_xcal_idx_invalid_input(
         xcal.get_xcal_mask(ffine, tfine, tnoise, 
                            ix0_offset, ix1_offset, std_cutoff)
 
-@pytest.mark.parametrize("ffine,tfine,tnoise,ix0_offset,ix1_offset,std_cutoff", [
-    # NaN in tnoise causes failure when computing min/max
-    (ffine, tfine, [np.nan], 0, 0, None),
-    # tnoise outside tfine range yields no intersections -> error
-    (ffine, tfine, [1e9], 0, 0, None),
-    # empty tnoise leads to empty after cutoff/min-max -> error
-    (ffine, tfine, [], 0, 0, None),
-    # NaN in tfine should also fail
-    (ffine, [np.nan] * len(ffine), [20.5], 0, 0, None),
+@pytest.mark.parametrize(
+    "ffine,tfine,tnoise,ix0_offset,ix1_offset,std_cutoff,match", [
+    # all-NaN, empty, or fully cut tnoise leaves no theta_t values
+    (ffine, tfine, [np.nan], 0, 0, None, "No finite theta_t"),
+    (ffine, tfine, [np.nan] * 5, 0, 0, 3.0, "No finite theta_t"),
+    (ffine, tfine, [], 0, 0, None, "No finite theta_t"),
+    (ffine, tfine, [20.5] * 5, 0, 0, 3.0, "No finite theta_t"),  # std = 0
+    # tnoise outside the tfine range, or NaN tfine: no overlap
+    (ffine, tfine, [1e9], 0, 0, None, "does not overlap"),
+    (ffine, [np.nan] * len(ffine), [20.5], 0, 0, None, "does not overlap"),
 ])
 def test_get_xcal_mask_additional_invalid(
-    ffine, tfine, tnoise, ix0_offset, ix1_offset, std_cutoff
+    ffine, tfine, tnoise, ix0_offset, ix1_offset, std_cutoff, match
 ):
-    with pytest.raises(Exception):
+    """
+    Check that empty theta_t and non-overlapping ranges raise a readable
+    ValueError instead of a bare min() error.
+    """
+    with pytest.raises(ValueError, match = match):
         xcal.get_xcal_mask(ffine, tfine, tnoise, ix0_offset, ix1_offset, 
                            std_cutoff)
         
@@ -147,6 +152,28 @@ def test_calc_x():
     assert xcal.calc_x(1e9, 1e9) == 0
 
 @pytest.mark.parametrize("f0,idx", [(4.0, 4), (4.4, 4), (4.6, 5), (-10., 0),
-                                    (100., 9), (np.nan, 0)])
+                                    (100., 9)])
 def test_nearest_index(f0, idx):
     assert xcal.nearest_index(np.arange(10.), f0) == idx
+
+
+def test_nearest_index_skips_nan_frequencies():
+    """
+    Check that NaN entries of f are never returned.
+    """
+    f = np.array([np.nan, 1.0, 2.0, np.nan])
+    assert xcal.nearest_index(f, 0.0) == 1
+    assert xcal.nearest_index(f, 5.0) == 2
+
+
+@pytest.mark.parametrize("f,f0", [
+    (np.arange(10.), np.nan),
+    (np.arange(10.), np.inf),
+    (np.full(3, np.nan), 1.0),
+])
+def test_nearest_index_rejects_nan(f, f0):
+    """
+    Check that a NaN target or all-NaN f raises instead of returning 0.
+    """
+    with pytest.raises(ValueError):
+        xcal.nearest_index(f, f0)

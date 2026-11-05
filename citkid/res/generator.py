@@ -13,7 +13,7 @@ where fqp = 1 / (2 * pi * tau_qp),  frd = 1 / (2 * pi * tau_rd),
 tau_qp is the QP lifetime, tau_rd is the resonator ringdown time,
 f_knee is the knee frequency for 1/f noise, alpha is the exponent of 1/f noise,
 sxx_white is the white level of fractional frequency noise in 1 / Hz, and 
-sAA_white is the white level of amplitude noise in dBc / Hz.
+sAA_white is the white level of amplitude noise in 1 / Hz.
 """
 # Add to environment.yml: rocket_fft=0.3.1
 
@@ -39,7 +39,7 @@ def generate_noise(n, fs, alpha, f_knee, tau_qp, tau_rd, sxx_white, sAA_white):
         disable.
     tau_rd (float): Ringdown time in seconds. Set to negative value to disable.
     sxx_white (float): fractional frequency noise psd white value in 1 / Hz.
-    sAA_white (float): amplitude noise psd white value in dBc / Hz.
+    sAA_white (float): amplitude noise psd white value in 1 / Hz.
  
     Returns:
     x (np.ndarray): real-valued fractional frequency noise signal.
@@ -88,8 +88,9 @@ def generate_noise(n, fs, alpha, f_knee, tau_qp, tau_rd, sxx_white, sAA_white):
 @njit(float64[:](float64[:], int64, int64), cache=True)
 def block_mean(x, nsamps, m):
     """
-    Average a timestream in blocks of nsamps, returning an array of length m. 
-    numba compatible version of np.mean(x.reshape(nsamps, m), axis=0).
+    Average a timestream in consecutive blocks of nsamps samples, returning
+    an array of length m. Numba-compatible version of
+    np.mean(x.reshape(m, nsamps), axis=1).
 
     Parameters:
     x (np.array): input array of length nsamps * m.
@@ -97,14 +98,13 @@ def block_mean(x, nsamps, m):
     m (int): number of blocks to average over.
 
     Returns:
-    out (np.array): array of length m, where each element is the mean of a block 
-        of nsamps samples.
+    out (np.array): array of length m, where element j is the mean of
+        x[j * nsamps:(j + 1) * nsamps].
     """
     out = np.zeros(m, dtype=np.float64)
-    for i in range(nsamps):
-        for j in range(m):
-            out[j] += x[i * m + j]
     for j in range(m):
+        for i in range(nsamps):
+            out[j] += x[j * nsamps + i]
         out[j] /= nsamps
     return out
 

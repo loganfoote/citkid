@@ -188,14 +188,15 @@ def plot_s21(
     return fig, axs
 
 def plot_circfit(
-    z, origin, radius, zt = None, mask = None, ax = None, max_points = None
+    z, circ_origin, radius, zt = None, mask = None, ax = None,
+    max_points = None
 ):
     """
     Plot IQ data with a circular fit.
 
     Parameters:
     z (np.array, complex128): Complex IQ data.
-    origin (complex): Circle origin.
+    circ_origin (complex): Circle origin.
     radius (float): Circle radius.
     zt (np.array, complex128 or None): Timestream complex S21 data, or None to
         omit from plot.
@@ -212,7 +213,7 @@ def plot_circfit(
     """
     # Input validation
     z = np.asarray(z, dtype = np.complex128)
-    origin = complex(origin)
+    circ_origin = complex(circ_origin)
     radius = float(radius)
 
     # Create cut array based on mask
@@ -234,7 +235,7 @@ def plot_circfit(
                 color = plt.cm.viridis(0.33), aa = False, label = 'fit data')
 
     # Plot circle fit
-    cir = plt.Circle((origin.real, origin.imag), radius, color = 'k',
+    cir = plt.Circle((circ_origin.real, circ_origin.imag), radius, color = 'k',
                      fill = False, aa = False)
     ax.add_patch(cir)
     ax.plot([], [], '-k', label = 'fit')

@@ -27,6 +27,11 @@ def get_xcal_mask(
 
     Returns:
     mask (np.array, bool): Mask of theta_f.
+
+    Raises:
+    ValueError: if the inputs are invalid, no theta_t values are left after
+        the std cutoff (e.g. an all-NaN timestream), or the theta_t range
+        does not overlap theta_f.
     """
     # Input validation
     ff = np.asarray(ff, dtype = np.float64)
@@ -44,6 +49,10 @@ def get_xcal_mask(
 
     # Apply cutoff to theta_t
     theta_t = theta_t[get_theta_t_bulk_mask(theta_t, std_cutoff)]
+    theta_t = theta_t[np.isfinite(theta_t)]
+    if theta_t.size == 0:
+        raise ValueError(
+            "No finite theta_t values are left after the std cutoff.")
     tmin, tmax = np.min(theta_t), np.max(theta_t)
 
     # Get idx0, idx1
@@ -53,6 +62,10 @@ def get_xcal_mask(
     idx.extend(np.where(s[:-1] * s[1:] <= 0)[0] + 1)
     t = theta_f - tmax
     idx.extend(np.where(t[:-1] * t[1:] <= 0)[0] + 1)
+    if not idx:
+        raise ValueError(
+            f"theta_t range [{tmin:.4g}, {tmax:.4g}] does not overlap "
+            f"theta_f.")
     idx0, idx1 = min(idx) - 1, max(idx)
 
     # extend idx0, idx1 by offsets
@@ -109,10 +122,17 @@ def nearest_index(f, f0):
     f0 (float): Target frequency in Hz.
 
     Returns:
-    idx (int): Index of ``f`` closest to ``f0``. If ``f0`` is NaN, this is
-        0.
+    idx (int): Index of ``f`` closest to ``f0``.
+
+    Raises:
+    ValueError: if ``f0`` is not finite, or ``f`` has no finite values.
     """
-    return np.argmin(np.abs(np.asarray(f) - f0))
+    if not np.isfinite(f0):
+        raise ValueError(f"f0 must be finite, got {f0}.")
+    dist = np.abs(np.asarray(f, dtype = np.float64) - f0)
+    if not np.any(np.isfinite(dist)):
+        raise ValueError("f has no finite values.")
+    return int(np.nanargmin(dist))
 
 def get_xcal_mask_fixed_theta(
     theta_f, theta_min_offset = 0.2, theta_max_offset = 0.2
@@ -153,14 +173,14 @@ def get_xcal_mask_fixed_theta(
         )
     return mask
 
-def fit_x_theta(thetat, xf, mask, poly_x_deg):
+def fit_x_theta(thetaf, xf, mask, poly_x_deg):
     """
     Fit a polynomial to x vs theta data for the fine s21 sweep, using only the
     points where mask is True. The resulting polynomial is used for x 
     calibration.
 
     Parameters:
-    thetat (array-like, float64): Theta values from the noise measurement.
+    thetaf (array-like, float64): Theta values from the fine S21 sweep.
     xf (array-like, float64): x values from the fine S21 sweep.
     mask (array-like, bool): Mask to apply to the data before fitting.
     poly_x_deg (int): Degree of the polynomial to fit.
@@ -168,7 +188,7 @@ def fit_x_theta(thetat, xf, mask, poly_x_deg):
     Returns:
     poly (np.array, float64): Coefficients of the fitted polynomial.
     """
-    poly = np.polyfit(thetat[mask], xf[mask], poly_x_deg) 
+    poly = np.polyfit(thetaf[mask], xf[mask], poly_x_deg) 
     return poly 
 
 

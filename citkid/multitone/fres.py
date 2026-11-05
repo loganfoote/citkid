@@ -35,7 +35,7 @@ def update_fres(fs, zs, fres, qres, res_idxs, method='distance'):
 
     # Select update method
     if method == 'minS21':
-        update = update_fr_minS21
+        update = update_fr_min_s21
     elif method == 'spacing':
         update = update_fr_spacing
     elif method == 'distance':
@@ -52,7 +52,7 @@ def update_fres(fs, zs, fres, qres, res_idxs, method='distance'):
         fres_new[res_mask] = update(fs[res_mask], zs[res_mask])
     return fres_new
 
-def update_fr_minS21(f, z):
+def update_fr_min_s21(f, z):
     """
     Return the resonance frequency estimated as the minimum of |S21| after
     subtracting a linear baseline.

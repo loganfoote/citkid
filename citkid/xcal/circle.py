@@ -67,7 +67,7 @@ def fit_iq_circle(z, mask = None):
 ################################################################################
 ###################### Convert complex S21 to theta and A ######################
 ################################################################################
-def get_theta_phase_offset(zt_rmv, origin):
+def get_theta_phase_offset(zt_rmv, circ_origin):
     """
     Calculate the phase offset that rotates the median of the centered
     timestream onto the positive real axis, so the timestream's theta is
@@ -76,39 +76,40 @@ def get_theta_phase_offset(zt_rmv, origin):
 
     Parameters:
     zt_rmv (array-like, complex128): Complex S21 timestream with gain removed.
-    origin (complex): circle center for centering the data.
+    circ_origin (complex): circle center for centering the data, e.g. the
+        ``origin`` returned by ``fit_iq_circle``.
 
     Returns:
     theta_phase_offset (float): Phase offset in radians.
     """
     # Input validation 
     zt_rmv = np.asarray(zt_rmv, dtype = np.complex128)
-    if not isinstance(origin, complex):
-        raise ValueError("origin must be a complex number")
+    if not isinstance(circ_origin, complex):
+        raise ValueError("circ_origin must be a complex number")
     
     # Center zt without rotating, and take the angle of its median. np.median
     # of a complex array sorts by the real part, so take the median of the
     # real and imaginary parts separately
-    zt_cent_not_rot = cent_rot_s21(zt_rmv, origin, 0)
+    zt_cent_not_rot = cent_rot_s21(zt_rmv, circ_origin, 0)
     zt_median = (np.median(zt_cent_not_rot.real)
                  + 1j * np.median(zt_cent_not_rot.imag))
     theta_phase_offset = np.angle(zt_median)
     return theta_phase_offset
 
-def cent_rot_s21(z, center, phase):
+def cent_rot_s21(z, circ_origin, phase):
     """
     Apply centering and rotation to S21 data.
 
     Parameters:
     z (array-like, complex128): Complex S21 data with gain removed.
-    center (complex): IQ circle center for centering the data.
+    circ_origin (complex): IQ circle center for centering the data.
     phase (float): Phase angle in radians for rotation.
 
     Returns:
     z_rot (np.array, complex128): Centered and rotated S21 data points.
     """
     z = np.asarray(z, dtype = np.complex128)
-    return (z - center) * np.exp(-1j * phase)
+    return (z - circ_origin) * np.exp(-1j * phase)
 
 def convert_to_theta(z, unwrap = False, idx_t = None):    
     """
@@ -151,7 +152,7 @@ def convert_to_A(z):
 ################################################################################
 ############################### Spar and Sper ##################################
 ################################################################################
-def get_spar_sper(theta, A, radius, dt, get_freqs = True):
+def get_spar_sper(theta, A, radius, dt, return_freqs = True):
     """
     Calculate the PSDs of parallel and perpendicular noise components.
     
@@ -160,11 +161,12 @@ def get_spar_sper(theta, A, radius, dt, get_freqs = True):
     A (array-like, float64): Amplitude noise timestream in normalized units.
     radius (float): Radius of the IQ circle.
     dt (float): Sample time in seconds.
-    get_freqs (bool): Whether to return the frequency array.
+    return_freqs (bool): Whether to return the frequency array. Default is
+        True.
     
     Returns:    
-    frequency (np.array, float64 or None): PSD frequencies in Hz if get_freqs,
-        else None.
+    frequency (np.array, float64 or None): PSD frequencies in Hz if
+        return_freqs, else None.
     spar (np.array, float64): PSD of parallel noise component in dBc.
     sper (np.array, float64): PSD of perpendicular noise component in dBc.
     """
@@ -185,11 +187,11 @@ def get_spar_sper(theta, A, radius, dt, get_freqs = True):
         raise ValueError("theta and A must have the same shape")
 
     # Compute PSDs
-    spar = get_psd(theta * radius, dt, get_frequencies = False)
-    if get_freqs:
-        freq, sper = get_psd(A, dt, get_frequencies = True)
+    spar = get_psd(theta * radius, dt, return_freqs = False)
+    if return_freqs:
+        freq, sper = get_psd(A, dt, return_freqs = True)
     else:
-        sper = get_psd(A, dt, get_frequencies = False)
+        sper = get_psd(A, dt, return_freqs = False)
         freq = None
     
     # Convert to dBc
