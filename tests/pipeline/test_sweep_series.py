@@ -491,3 +491,11 @@ def test_ts_fixed_theta_analysis_end_to_end(data_dir, tmp_path):
         assert np.all(np.isfinite(DS.poly_x[di]))
         assert np.all(np.isfinite(DS.xt[di]))
 
+
+
+def test_a_vs_power_fit_inverse_is_ares_for_a():
+    xy_fit = a_vs_power_fit()
+    assert xy_fit.inverse is ares_for_a
+    popt = np.array([0.1 * 10 ** 2.5, 0.0])
+    assert xy_fit.x_at_y(popt, 0.4) == pytest.approx(-50 + 20 * np.log10(4))
+    assert np.isnan(xy_fit.x_at_y(popt, -0.1))

@@ -287,3 +287,67 @@ def test_store_concurrent_saves(tmp_path):
     assert errors == []
     assert store.fitted_rows().all()
     np.testing.assert_allclose(group['popt'][:, 0], np.arange(nrows), atol=1e-9)
+
+
+def test_x_at_y_uses_the_inverse():
+    xy_fit, _ = _linear_fit(inverse=lambda popt, y: (y - popt[1]) / popt[0])
+
+    assert xy_fit.x_at_y(np.array([2.0, 1.0]), 7.0) == pytest.approx(3.0)
+    assert np.isnan(xy_fit.x_at_y(None, 7.0))
+    assert np.isnan(xy_fit.x_at_y(np.array([np.nan, 1.0]), 7.0))
+    never, _ = _linear_fit(inverse=lambda popt, y: np.nan)
+    assert np.isnan(never.x_at_y(np.array([2.0, 1.0]), 7.0))
+
+
+def test_x_at_y_numerical_inverse_stays_in_the_data_range():
+    xy_fit, _ = _linear_fit()              # y = 2 x + 1 for popt (2, 1)
+    x = np.array([1.0, np.nan, 3.0])
+
+    assert xy_fit.x_at_y([2.0, 1.0], 5.0, x=x) == pytest.approx(2.0, abs=1e-9)   # crossing
+    assert xy_fit.x_at_y([2.0, 1.0], 3.0, x=x) == pytest.approx(1.0)             # exact sample
+    assert xy_fit.x_at_y([2.0, 1.0], 5.0, x=x, log_x=True) == pytest.approx(2.0, abs=1e-9)
+    assert np.isnan(xy_fit.x_at_y([2.0, 1.0], 100.0, x=x))   # not reached: no extrapolation
+    assert np.isnan(xy_fit.x_at_y([2.0, 1.0], 5.0))          # no x range
+    assert np.isnan(xy_fit.x_at_y([2.0, 1.0], 5.0, x=np.array([1.0, 1.0])))
+
+
+def test_store_chosen_x():
+    xy_fit, _ = _linear_fit()
+    store = _store(xy_fit, nrows=3)
+
+    x, user = store.chosen_x()
+    assert np.all(np.isnan(x)) and not user.any()
+    assert np.isnan(store.load_chosen_x(1)[0]) and store.load_chosen_x(1)[1] is False
+    assert store.y_target is None
+    store.y_target = 0.5
+    assert store.y_target == 0.5
+
+    store.save_chosen_x(1, -40.0, user=True)
+    assert store.load_chosen_x(1) == (-40.0, True)
+    assert store.save_fit_chosen_x(-30.0, data_idx=1) is False    # the user's is kept
+    assert store.save_fit_chosen_x(-30.0, data_idx=0) is True
+    assert store.load_chosen_x(0) == (-30.0, False)
+
+    store.save_fit_chosen_x(np.array([-1.0, -2.0, -3.0]))         # every row but the user's
+    x, user = store.chosen_x()
+    np.testing.assert_array_equal(x, [-1.0, -40.0, -3.0])
+    np.testing.assert_array_equal(user, [False, True, False])
+    assert store.group['x_chosen'].shape == (3,)
+
+    store.save_chosen_x(1, -5.0, user=False)                      # reset to the fit's
+    assert store.load_chosen_x(1) == (-5.0, False)
+
+
+def test_store_all_fits():
+    xy_fit, _ = _linear_fit()
+    store = _store(xy_fit, nrows=2, n_series=3)
+
+    fit_x, popt = store.all_fits()
+    assert fit_x.shape == (2, 3) and popt.shape == (2, 2)
+    assert np.all(np.isnan(fit_x)) and np.all(np.isnan(popt))
+
+    store.save(1, [1.0, 2.0, np.nan], [3.0, 5.0, np.nan], [2.0, 1.0])
+    fit_x, popt = store.all_fits()
+    np.testing.assert_array_equal(fit_x[1], [1.0, 2.0, np.nan])
+    np.testing.assert_array_equal(popt[1], [2.0, 1.0])
+    assert np.all(np.isnan(popt[0]))

@@ -377,7 +377,9 @@ def a_vs_power_fit(
     Returns:
     xy_fit (SeriesXYFit): fit for ``run_iq_series(x_param_name = 'ares',
         y_param_name = 'a', xy_fit = ...)``. Parameters [a_slope, a_offset];
-        NaN if fewer than 2 points are left.
+        NaN if fewer than 2 points are left. Its inverse is ``ares_for_a``,
+        so with ``y_target`` the window marks the power at which each
+        resonator's fit reaches the target a (see ``run_iq_series``).
 
     Raises:
     ValueError: If ``a_min`` is not below ``a_max``.
@@ -399,7 +401,8 @@ def a_vs_power_fit(
         return a_slope * 10 ** (x / 20) + a_offset
 
     return SeriesXYFit(fit = fit, param_names = ['a_slope', 'a_offset'],
-                       model = model, name = name, group = group)
+                       model = model, name = name, group = group,
+                       inverse = ares_for_a)
 
 def ares_for_a(popt, a_target):
     """

@@ -51,6 +51,13 @@ Ctrl+⇧B     mark the selected series point and all points with larger x bad
 1, 2, …     run panel N and all following panels (same as its "Run +")
 Shift+N     run panel N only
 H           show / hide the help dialog
+
+Mouse (series plot)
+-------------------
+Click a point   select that series point
+Shift+click     with ``y_target``: choose the x under the cursor for this
+                resonator, instead of the x its fit gives
+Drag the line   same (the vertical line marks the chosen x)
 """
 
 import concurrent.futures
@@ -84,6 +91,7 @@ from . import fit_iq    # noqa: F401 — registers IQFitPanel
 from .core import (
     PANEL_HELP,
     PLOT_HELP,
+    StatusLabel,
     _SectionHeader,
     compact_combo,
     get_panel_class,
@@ -331,6 +339,33 @@ def dataset_quantity(name):
     return getter
 
 
+class _ChosenXLabel(pg.InfLineLabel):
+    """
+    Label of the chosen-x line, showing the data value rather than the plot
+    coordinate (which is log10 of it on a log axis).
+
+    Parameters:
+    line (pg.InfiniteLine): The line.
+    to_value (callable): ``to_value(coord) -> x``, plot coordinate to data
+        value.
+    **kwds: ``pg.InfLineLabel`` arguments (``text`` is a format with
+        ``{value}``).
+    """
+
+    def __init__(self, line, to_value, **kwds):
+        self._to_value = to_value   # before the base class formats the label
+        super().__init__(line, **kwds)
+
+    def valueChanged(self):
+        """
+        Show the line's data value, and reposition the label.
+        """
+        if not self.isVisible():
+            return
+        self.setText(self.format.format(value=self._to_value(self.line.value())))
+        self.updatePosition()
+
+
 ################################################################################
 # Main window
 ################################################################################
@@ -419,6 +454,17 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         sweep). Other tones are the DataSet's ``fres``, without calibration
         tones (``res_idxs < 0``). Reset Mask returns to this default. If
         False (default), the default mask is the whole sweep.
+    y_target (float or None): Target y value, to choose an x for each
+        resonator. Needs ``xy_fit``. The x at which the resonator's fit
+        reaches the target (``xy_fit.x_at_y``) is marked by a dashed
+        vertical line on the series plot, with the value and its source
+        shown below the plot. Shift+click on the plot, or drag the line, to
+        choose a different x for that resonator (solid line); Reset returns
+        to the fit's value. The target can be edited below the plot, which
+        recomputes the fit's x for every resonator (not the ones you
+        chose). The chosen x values are saved with the fits as ``x_chosen``
+        (nrows,) and ``x_chosen_user`` (see ``SeriesXYFitStore``). None
+        (default) chooses nothing.
 
     Notes:
     While the window is open, every dataset writes through its fast write
@@ -429,7 +475,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
     Raises:
     ValueError: If ``data_idxs`` is empty or contains indices outside
         ``0 .. nrows - 1``, series values don't have one entry per series
-        point, or ``xscale`` or ``yscale`` isn't 'linear' or 'log'.
+        point, ``xscale`` or ``yscale`` isn't 'linear' or 'log', or
+        ``y_target`` is given without ``xy_fit``.
     RuntimeError: If the xy fit group holds fits from a different fit
         definition and the user cancels the overwrite popup.
     """
@@ -445,7 +492,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         plot_scale=1.0, parent=None, state_group=None, xy_fit=None, panels=None,
         precompute_values=False, background_fitting=False, x_values=None,
         xscale='linear', yscale='linear', hold_series_point=False,
-        mask_nearby_tones=False,
+        mask_nearby_tones=False, y_target=None,
     ):
         """
         Build the window, toolbar, series plots and analysis panels.
@@ -455,6 +502,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         for name, scale in (('xscale', xscale), ('yscale', yscale)):
             if scale not in _AXIS_SCALES:
                 raise ValueError(f"{name} must be one of {_AXIS_SCALES}; got {scale!r}")
+        if y_target is not None and xy_fit is None:
+            raise ValueError('y_target needs an xy_fit to choose x from')
         super().__init__(parent)
         delete_on_close(self)  # destroy on the GUI thread when closed
         self._xscale, self._yscale = xscale, yscale
@@ -538,6 +587,14 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                     raise RuntimeError('User cancelled operation')
                 store.clear()
             self._xy_store = store
+
+        # Optional target y: an x is chosen for every resonator from its fit
+        # (or by the user) and marked on the series plot. The fit's values
+        # are recomputed here in case the target changed since they were saved.
+        self._y_target = None if y_target is None else float(y_target)
+        if self._y_target is not None:
+            self._xy_store.y_target = self._y_target
+            self._recompute_fit_chosen_x()
 
         if start_idx is None:
             start_idx = resume_position(
@@ -798,10 +855,11 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
         # Row 2: batch actions. Row 3: word-wrapping shortcut hints.
         bad_above = '   [Ctrl+⇧B] mark bad above' if self._MARK_BAD_ABOVE else ''
+        choose = '   [⇧click] choose x' if self._y_target is not None else ''
         self._hints_label = hint_label(
             '[A/D] resonator   [W/S] series point   [R] rescale   [B] mark bad'
             f'   [⇧B] mark all bad{bad_above}   [N] run+following'
-            '   [⇧N] run panel only   [⇧A] apply to all   [H] help'
+            f'   [⇧N] run panel only   [⇧A] apply to all{choose}   [H] help'
         )
 
         apply_all_btn = QtWidgets.QPushButton('Apply to All')
@@ -837,12 +895,12 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._hold_series_btn.toggled.connect(self._on_hold_series_toggled)
         row2.addWidget(self._hold_series_btn)
 
-        self._apply_status_label = QtWidgets.QLabel('')
-        self._apply_status_label.setMinimumWidth(120)
-        layout.addWidget(self._apply_status_label)
+        # Status messages must not widen the toolbar (and so the window)
+        # when their text changes. The apply status takes the spare width.
+        self._apply_status_label = StatusLabel(min_width=120)
+        layout.addWidget(self._apply_status_label, 1)
 
-        self._prefetch_label = QtWidgets.QLabel('')
-        self._prefetch_label.setMinimumWidth(110)
+        self._prefetch_label = StatusLabel(min_width=110)
         self._prefetch_label.setToolTip('Background prefetch status for the next resonator')
         layout.addWidget(self._prefetch_label)
 
@@ -899,6 +957,17 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                 series.append(('Guess inputs', 'Edit a guess and press '
                                'Enter to refit with it; Reset refits with '
                                "the fit's own guess"))
+        if self._y_target is not None:
+            series += [
+                ('Vertical line', f'x chosen for the target {self._y_name}: '
+                                  'dashed from the fit, solid chosen by you'),
+                ('Shift+click', 'Choose the x under the cursor for this data '
+                                "index, instead of the fit's"),
+                ('Drag the line', 'Same as Shift+click'),
+                (f'target {self._y_name}', 'Edit and press Enter to recompute '
+                                           "the fit's x for every data index"),
+                ('Reset', "Drop your choice for this data index; use the fit's x"),
+            ]
         return [('Keyboard', keys), ('Toolbar', toolbar),
                 ('Series plot', series), PANEL_HELP, PLOT_HELP]
 
@@ -971,6 +1040,27 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                 [], [], pen=pg.mkPen('w', width=1.5, style=_Qt.DashLine))
             self._plot_series.addItem(self._xy_fit_curve, ignoreBounds=True)
 
+        # Optional chosen-x line (y_target): dashed where the fit chose the
+        # x, solid where the user did. Dragging it, or Shift+clicking the
+        # plot, chooses an x. Kept out of auto-ranging like the fit curve.
+        self._chosen_x_line = None
+        if self._y_target is not None:
+            color = (255, 170, 0)
+            self._chosen_x_pens = {
+                False: pg.mkPen(color, width=2, style=_Qt.DashLine),
+                True: pg.mkPen(color, width=2),
+            }
+            self._chosen_x_line = pg.InfiniteLine(
+                angle=90, movable=True, pen=self._chosen_x_pens[False],
+                hoverPen=pg.mkPen(color, width=4))
+            self._chosen_x_label = _ChosenXLabel(
+                self._chosen_x_line, self._x_from_plot, text='{value:.4g}',
+                position=0.92, color=color)
+            self._chosen_x_line.setVisible(False)
+            self._chosen_x_line.sigPositionChangeFinished.connect(self._on_chosen_x_dragged)
+            self._plot_series.addItem(self._chosen_x_line, ignoreBounds=True)
+            self._plot_series.scene().sigMouseClicked.connect(self._on_series_plot_clicked)
+
         # Bottom: |S21| waterfall
         self._plot_waterfall = gw.addPlot(row=1, col=0, title='|S21| Waterfall')
         self._plot_waterfall.setLabel('left', '|S21| + offset (dB)')
@@ -983,14 +1073,48 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._gw = gw
         self._plots_widget = gw
         self._guess_edits = []
+        below = []
         if self._xy_fit is not None and self._xy_fit.uses_guess:
+            below.append(self._build_guess_inputs())
+        if self._y_target is not None:
+            below.append(self._build_chosen_x_controls())
+        if below:
             container = QtWidgets.QWidget()
             column = QtWidgets.QVBoxLayout(container)
             column.setContentsMargins(0, 0, 0, 0)
             column.addWidget(gw, 1)
-            column.addWidget(self._build_guess_inputs())
+            for widget in below:
+                column.addWidget(widget)
             self._plots_widget = container
         return self._plots_widget
+
+    def _build_chosen_x_controls(self) -> QtWidgets.QWidget:
+        """
+        Build the row below the series plot for the chosen x: the target y
+        input, the chosen x and where it came from, and a Reset button.
+
+        Returns:
+        widget (QWidget): the row.
+        """
+        box = QtWidgets.QWidget()
+        row = QtWidgets.QHBoxLayout(box)
+        row.setContentsMargins(4, 2, 4, 2)
+        row.addWidget(QtWidgets.QLabel(f'target {self._y_name}:'))
+        self._y_target_edit = QtWidgets.QLineEdit(f'{self._y_target:.6g}')
+        self._y_target_edit.setMaximumWidth(80)
+        self._y_target_edit.setToolTip(
+            f'Target {self._y_name}; press Enter to recompute the x chosen from '
+            'each fit (not the ones you chose)')
+        self._y_target_edit.editingFinished.connect(self._on_y_target_edited)
+        row.addWidget(self._y_target_edit)
+        self._chosen_status = StatusLabel()   # text changes mustn't resize the pane
+        row.addWidget(self._chosen_status, 1)
+        self._chosen_reset_btn = QtWidgets.QPushButton('Reset')
+        self._chosen_reset_btn.setToolTip(
+            "Drop your choice for this data index and use the fit's x again")
+        self._chosen_reset_btn.clicked.connect(self._reset_chosen_x)
+        row.addWidget(self._chosen_reset_btn)
+        return box
 
     def _build_guess_inputs(self) -> QtWidgets.QWidget:
         """
@@ -1003,7 +1127,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         box = QtWidgets.QWidget()
         grid = QtWidgets.QGridLayout(box)
         grid.setContentsMargins(4, 2, 4, 2)
-        self._guess_status = QtWidgets.QLabel('xy fit guess')
+        self._guess_status = StatusLabel('xy fit guess')   # text changes mustn't resize the pane
         reset = QtWidgets.QPushButton('Reset')
         reset.setToolTip("Refit with the fit's own guess")
         reset.clicked.connect(self._reset_xy_guess)
@@ -1292,9 +1416,12 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._run_all_panels()
         self._update_selected_marker()
 
-    def _on_scatter_clicked(self, plot_item, spots):
-        """Select a series index by clicking its scatter point."""
-        if not spots:
+    def _on_scatter_clicked(self, plot_item, spots, ev=None):
+        """
+        Select a series index by clicking its scatter point. Shift+click
+        chooses an x instead (``_on_series_plot_clicked``).
+        """
+        if not spots or (ev is not None and ev.modifiers() & _Qt.ShiftModifier):
             return
         si = spots[0].data()
         if si is not None:
@@ -2483,6 +2610,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                 edit.setText('' if p0 is None else f'{p0[i]:.6g}')
                 edit.blockSignals(False)
             self._shown_guess = None if p0 is None else np.asarray(p0, dtype=float)
+        self._update_chosen_x()
 
     def _on_xy_guess_edited(self):
         """
@@ -2564,6 +2692,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         if used is None and user:
             used = p0  # keep the user's guess even if the fit couldn't run
         store.save(data_idx, x, y, popt, used, p0_user=user)
+        if self._y_target is not None:
+            store.save_fit_chosen_x(self._fit_chosen_x(popt, x), data_idx=data_idx)
         return popt, used, error
 
     def _fit_xy_in_background(self, worker_ars, data_idx: int, x=None, y=None):
@@ -2587,6 +2717,162 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         except Exception as exc:
             print(f'[init-all] saving xy fit for data_idx={data_idx} failed: '
                   f'{type(exc).__name__}: {exc}')
+
+    # ------------------------------------------------------------------
+    # Optional chosen x (y_target)
+    # ------------------------------------------------------------------
+
+    def _x_to_plot(self, x):
+        """
+        Map an x value to the series plot's coordinate (see ``_plot_coords``).
+
+        Parameters:
+        x (float): Data value.
+
+        Returns:
+        coord (float or None): the plot coordinate, or None if it can't be
+            drawn (NaN, or <= 0 on a log axis).
+        """
+        log = self._plot_series.ctrl.logXCheck.isChecked()
+        if not np.isfinite(x) or (log and x <= 0):
+            return None
+        return float(np.log10(x)) if log else float(x)
+
+    def _x_from_plot(self, coord):
+        """
+        Map a series plot x coordinate back to a data value.
+
+        Parameters:
+        coord (float): Plot coordinate.
+
+        Returns:
+        x (float): the data value (10 ** coord on a log axis).
+        """
+        log = self._plot_series.ctrl.logXCheck.isChecked()
+        return float(10 ** coord) if log else float(coord)
+
+    def _fit_chosen_x(self, popt, x):
+        """
+        Return the x at which a fit reaches the target y.
+
+        Safe to call from the background worker.
+
+        Parameters:
+        popt (np.ndarray or None): fitted parameters of one resonator.
+        x (np.ndarray): its x value per series index (for the range of the
+            numerical inverse).
+
+        Returns:
+        x (float): the fit's x for the target, or NaN.
+        """
+        return self._xy_fit.x_at_y(popt, self._y_target, x=x, log_x=self._xscale == 'log')
+
+    def _recompute_fit_chosen_x(self):
+        """
+        Recompute and save the fit's x for every resonator the user hasn't
+        chosen an x for, from the saved fits.
+        """
+        fit_x, popt = self._xy_store.all_fits()
+        values = np.array([self._fit_chosen_x(popt[di], fit_x[di])
+                           for di in range(self._nrows)], dtype=float)
+        self._xy_store.save_fit_chosen_x(values)
+
+    def _update_chosen_x(self):
+        """
+        Show the open resonator's chosen x: the line, and the text below the
+        plot saying where it came from.
+        """
+        if self._y_target is None:
+            return
+        x, user = self._xy_store.load_chosen_x(self._data_idx)
+        line = self._chosen_x_line
+        coord = self._x_to_plot(x)
+        if coord is None:
+            line.setVisible(False)
+        else:
+            line.setPen(self._chosen_x_pens[bool(user)])
+            line.setValue(coord)
+            line.setVisible(True)
+            self._chosen_x_label.valueChanged()
+        target = f'{self._y_name} = {self._y_target:.4g}'
+        how = ('Shift+click the series plot, or drag the vertical line, to choose '
+               f'the {self._x_name} yourself.')
+        if user:
+            text = f'{self._x_name} = {x:.4g}, chosen by you'
+            tip = f"Reset returns to the {self._x_name} at which the fit reaches {target}. {how}"
+        elif np.isfinite(x):
+            text = f'{self._x_name} = {x:.4g}, from the fit'
+            tip = f'The {self._x_name} at which the fit reaches {target}. {how}'
+        else:
+            text = f'{self._x_name}: none from the fit'
+            tip = f'There is no fit, or it does not reach {target}. {how}'
+        self._chosen_status.setText(text)
+        self._chosen_status.setToolTip(tip)
+        self._chosen_reset_btn.setEnabled(bool(user))
+
+    def _set_user_chosen_x(self, x):
+        """
+        Choose an x for the open resonator (instead of the fit's), save and
+        show it.
+
+        Parameters:
+        x (float): the chosen x value.
+        """
+        self._xy_store.save_chosen_x(self._data_idx, x, user=True)
+        self._update_chosen_x()
+
+    def _reset_chosen_x(self):
+        """
+        Drop the user's choice for the open resonator and use the fit's x.
+        """
+        di = self._data_idx
+        saved = self._xy_store.load(di)
+        x = np.nan if saved is None else self._fit_chosen_x(saved.popt, saved.fit_x)
+        self._xy_store.save_chosen_x(di, x, user=False)
+        self._update_chosen_x()
+
+    def _on_chosen_x_dragged(self, line):
+        """
+        Choose the x the line was dragged to.
+
+        Parameters:
+        line (pg.InfiniteLine): the chosen-x line.
+        """
+        self._set_user_chosen_x(self._x_from_plot(line.value()))
+
+    def _on_series_plot_clicked(self, ev):
+        """
+        Shift+click on the series plot: choose the x under the cursor.
+
+        Parameters:
+        ev (MouseClickEvent): the scene's click event.
+        """
+        if ev.button() != _Qt.LeftButton or not (ev.modifiers() & _Qt.ShiftModifier):
+            return
+        vb = self._plot_series.vb
+        pos = ev.scenePos()
+        if not vb.sceneBoundingRect().contains(pos):
+            return
+        self._set_user_chosen_x(self._x_from_plot(vb.mapSceneToView(pos).x()))
+        ev.accept()
+
+    def _on_y_target_edited(self):
+        """
+        Use the target typed below the plot: recompute the fit's x for every
+        resonator (keeping the user's choices) and show the open one.
+        """
+        try:
+            value = float(self._y_target_edit.text())
+        except ValueError:
+            self._apply_status_label.setText('target must be a number')
+            self._y_target_edit.setText(f'{self._y_target:.6g}')
+            return
+        if value == self._y_target:
+            return
+        self._y_target = value
+        self._xy_store.y_target = value
+        self._recompute_fit_chosen_x()
+        self._update_chosen_x()
 
     def _update_selected_marker(self):
         """Draw a white ring around the currently selected series point."""
@@ -2633,7 +2919,7 @@ def run_iq_series(
     y_param_name='a', start_series_idx=0, start_idx=None, data_idxs=None,
     title="IQ Series", ui_scale=1.0, plot_scale=1.0, xy_fit=None, datasets=None,
     x_values=None, xscale='linear', yscale='linear', hold_series_point=False,
-    mask_nearby_tones=False,
+    mask_nearby_tones=False, y_target=None,
 ):
     """
     Build one AnalysisRunner per series index, then launch the IQSeriesWindow.
@@ -2715,14 +3001,26 @@ def run_iq_series(
         sweep). Other tones are the DataSet's ``fres``, without calibration
         tones (``res_idxs < 0``). Reset Mask returns to this default. If
         False (default), the default mask is the whole sweep.
+    y_target (float or None): Target value of ``y_param_name``, e.g. the
+        nonlinearity a to tune each resonator to. Needs ``xy_fit``. For each
+        resonator, the x at which its fit reaches the target (e.g. the tone
+        power, for ``a_vs_power_fit``) is marked by a dashed vertical line
+        on the series plot, with its value shown below the plot. Shift+click
+        on the plot, or drag the line, to choose a different x for that
+        resonator (solid line); Reset returns to the fit's value. The target
+        can be edited below the plot. The chosen x of every resonator is
+        saved with the fits as ``x_chosen`` (nrows,; NaN where none), with
+        ``x_chosen_user`` marking the ones you chose, e.g.
+        ``root['xy_fit/x_chosen'][...]``. None (default) chooses nothing.
 
     Returns:
     win (IQSeriesWindow): The created (and already shown) window.
 
     Raises:
     ValueError: If ``y_param_name`` is not a supported fit parameter, the
-        series inputs are inconsistent (see ``series_runners``), or
-        ``xscale`` or ``yscale`` isn't 'linear' or 'log'.
+        series inputs are inconsistent (see ``series_runners``), ``xscale``
+        or ``yscale`` isn't 'linear' or 'log', or ``y_target`` is given
+        without ``xy_fit``.
     TypeError: If ``datasets`` contains something other than DataSets.
     RuntimeError: If saved xy fits come from a different fit definition
         and the user cancels the overwrite popup.
@@ -2782,6 +3080,7 @@ def run_iq_series(
         yscale=yscale,
         hold_series_point=hold_series_point,
         mask_nearby_tones=mask_nearby_tones,
+        y_target=y_target,
     )
     win.show()
     app.exec()

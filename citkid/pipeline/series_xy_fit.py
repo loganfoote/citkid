@@ -54,11 +54,16 @@ class SeriesXYFit:
     uses_guess (bool): If True, ``fit`` takes and returns a guess (see
         ``fit``), the guesses are saved, and the series window shows them in
         inputs the user can edit. Default False.
+    inverse (callable or None): ``inverse(popt, y) -> x``, the x at which the
+        model reaches ``y`` (NaN if it never does), used to choose an x from
+        a target y (``y_target`` in ``run_iq_series``). None (default) solves
+        ``model(x, *popt) = y`` numerically across the plotted x range (see
+        ``x_at_y``), which can't extrapolate beyond the data.
     """
 
     def __init__(
         self, fit, param_names, model, name='xy_fit', group=None, n_samples=200,
-        min_points=None, uses_guess=False
+        min_points=None, uses_guess=False, inverse=None
     ):
         """
         Store the fit definition. See the class docstring for parameters.
@@ -79,6 +84,7 @@ class SeriesXYFit:
         self.n_samples = int(n_samples)
         self.min_points = len(param_names) if min_points is None else int(min_points)
         self.uses_guess = bool(uses_guess)
+        self.inverse = inverse
 
     @property
     def n_params(self):
@@ -181,6 +187,51 @@ class SeriesXYFit:
         xs = spacing(finite.min(), finite.max(), self.n_samples)
         return xs, np.asarray(self.model(xs, *[float(p) for p in popt]), dtype=float)
 
+    def x_at_y(self, popt, y, x=None, log_x=False):
+        """
+        Return the x at which the fitted model reaches a target y.
+
+        Uses ``inverse`` if the fit has one. Otherwise the model is sampled
+        across the range of the usable x values (as ``curve``) and the first
+        crossing of ``y`` is interpolated linearly, so the result lies within
+        the data range.
+
+        Parameters:
+        popt (np.ndarray or None): fitted parameters, or None.
+        y (float): target y value.
+        x (np.ndarray or None): x value of each series index (NaN if
+            unavailable), for the sampling range without ``inverse``. None
+            (default) gives NaN without ``inverse``.
+        log_x (bool): If True, sample geometrically (see ``curve``). Only
+            used without ``inverse``. Default False.
+
+        Returns:
+        x (float): the x at which the model reaches ``y``, or NaN if there
+            are no (finite) parameters or the model never reaches it.
+        """
+        if popt is None or not np.all(np.isfinite(popt)):
+            return np.nan
+        if self.inverse is not None:
+            with np.errstate(all='ignore'):
+                value = float(np.asarray(self.inverse(np.asarray(popt, dtype=float), float(y)),
+                                         dtype=float).ravel()[0])
+            return value if np.isfinite(value) else np.nan
+        if x is None:
+            return np.nan
+        xs, ys = self.curve(x, popt, log_x=log_x)
+        if xs is None:
+            return np.nan
+        d = ys - float(y)
+        finite = np.isfinite(d)
+        exact = np.where(finite & (d == 0))[0]
+        crossing = np.where(finite[:-1] & finite[1:] & (d[:-1] * d[1:] < 0))[0]
+        first_exact = exact[0] if len(exact) else len(xs)
+        first_crossing = crossing[0] if len(crossing) else len(xs)
+        if first_exact <= first_crossing:
+            return float(xs[first_exact]) if first_exact < len(xs) else np.nan
+        i = first_crossing
+        return float(xs[i] + (xs[i + 1] - xs[i]) * d[i] / (d[i] - d[i + 1]))
+
     def describe(self, popt):
         """
         Format the fitted parameters for display.
@@ -241,7 +292,11 @@ class SeriesXYFitStore:
     guesses; ``fit_x`` and ``fit_y`` (shape ``(nrows, n_series)``, the exact
     inputs of each saved fit, so a fit can be redone only when its inputs
     change); and ``row_exists`` (rows that have been fitted, including failed
-    fits). Each array is a single small chunk that is rewritten on update, so
+    fits). With a target y (``y_target`` attribute), it also holds
+    ``x_chosen`` (``(nrows,)``: the x chosen for each resonator, from the
+    fit or by the user; NaN if none) and ``x_chosen_user`` (``(nrows,)``:
+    True where the user chose it, so a refit doesn't replace it). Each array
+    is a single small chunk that is rewritten on update, so
     the group has only a few files. Access is guarded by the same lock as the
     DataSets on the store, so the UI thread and the background worker can
     both use it.
@@ -372,6 +427,161 @@ class SeriesXYFitStore:
             if 'popt' not in self.group:
                 return np.full((self.nrows, self.xy_fit.n_params), np.nan)
             return np.asarray(_retry_io(lambda: self.group['popt'][...]), dtype=float)
+
+    def all_fits(self):
+        """
+        Return the saved fits of every resonator in one read.
+
+        Returns:
+        fit_x (np.ndarray): x inputs, shape (nrows, n_series); NaN where
+            there is no saved fit.
+        popt (np.ndarray): fitted parameters, shape (nrows, M); NaN for
+            resonators without a (successful) fit.
+        """
+        def read():
+            """
+            Read both arrays, or their NaN defaults.
+            """
+            fit_x = (np.asarray(self.group['fit_x'][...], dtype=float) if 'fit_x' in self.group
+                     else np.full((self.nrows, self.n_series), np.nan))
+            popt = (np.asarray(self.group['popt'][...], dtype=float) if 'popt' in self.group
+                    else np.full((self.nrows, self.xy_fit.n_params), np.nan))
+            return fit_x, popt
+
+        with self._lock:
+            return _retry_io(read)
+
+    @property
+    def y_target(self):
+        """
+        The target y the chosen x values are for (``run_iq_series``'s
+        ``y_target``), or None if none was saved.
+        """
+        with self._lock:
+            value = self.group.attrs.get('y_target')
+        return None if value is None else float(value)
+
+    @y_target.setter
+    def y_target(self, value):
+        with self._lock:
+            _retry_io(self.group.attrs.__setitem__, 'y_target',
+                      None if value is None else float(value))
+
+    def chosen_x(self):
+        """
+        Return the x chosen for every resonator (from the fit or by the user).
+
+        Returns:
+        x_chosen (np.ndarray): shape (nrows,); NaN where none is chosen.
+        user (np.ndarray): boolean, shape (nrows,); True where the user
+            chose it.
+        """
+        def read():
+            """
+            Read both arrays, or their defaults.
+            """
+            x = (np.asarray(self.group['x_chosen'][...], dtype=float) if 'x_chosen' in self.group
+                 else np.full(self.nrows, np.nan))
+            user = (np.asarray(self.group['x_chosen_user'][...], dtype=bool)
+                    if 'x_chosen_user' in self.group else np.zeros(self.nrows, dtype=bool))
+            return x, user
+
+        with self._lock:
+            return _retry_io(read)
+
+    def load_chosen_x(self, data_idx):
+        """
+        Load the x chosen for one resonator.
+
+        Parameters:
+        data_idx (int): Resonator index.
+
+        Returns:
+        x (float): the chosen x, or NaN if none.
+        user (bool): True if the user chose it.
+        """
+        di = int(data_idx)
+
+        def read():
+            """
+            Read one row of both arrays.
+            """
+            x = float(self.group['x_chosen'][di]) if 'x_chosen' in self.group else np.nan
+            user = (bool(self.group['x_chosen_user'][di])
+                    if 'x_chosen_user' in self.group else False)
+            return x, user
+
+        with self._lock:
+            return _retry_io(read)
+
+    def _require_chosen_x(self):
+        """
+        Return the ``x_chosen`` and ``x_chosen_user`` arrays, creating them.
+        Call with the lock held.
+        """
+        if 'x_chosen' not in self.group:
+            self.group.create_array(
+                'x_chosen', data=np.full(self.nrows, np.nan), chunks=(self.nrows,))
+        if 'x_chosen_user' not in self.group:
+            self.group.create_array(
+                'x_chosen_user', data=np.zeros(self.nrows, dtype=bool), chunks=(self.nrows,))
+        return self.group['x_chosen'], self.group['x_chosen_user']
+
+    def save_chosen_x(self, data_idx, x, user):
+        """
+        Save the x chosen for one resonator.
+
+        Parameters:
+        data_idx (int): Resonator index.
+        x (float): the chosen x (NaN for none).
+        user (bool): True if the user chose it (kept over later fit values),
+            False if it comes from the fit.
+        """
+        di = int(data_idx)
+
+        def write():
+            """
+            Write one row of both arrays.
+            """
+            x_arr, user_arr = self._require_chosen_x()
+            x_arr[di] = np.nan if x is None else float(x)
+            user_arr[di] = bool(user)
+
+        with self._lock:
+            _retry_io(write)
+
+    def save_fit_chosen_x(self, x, data_idx=None):
+        """
+        Save the x the fit gives for resonators the user hasn't chosen one for.
+
+        Parameters:
+        x (float or np.ndarray): the fit's x for one resonator (with
+            ``data_idx``), or for every resonator, shape (nrows,).
+        data_idx (int or None): Resonator index, or None (default) for all.
+
+        Returns:
+        written (bool): True if the value was written (False if the user
+            chose the resonator's x; always True for every resonator).
+        """
+        def write():
+            """
+            Write the rows the user hasn't chosen.
+            """
+            x_arr, user_arr = self._require_chosen_x()
+            if data_idx is not None:
+                di = int(data_idx)
+                if bool(user_arr[di]):
+                    return False
+                x_arr[di] = float(x)
+                return True
+            user = np.asarray(user_arr[...], dtype=bool)
+            values = np.asarray(x_arr[...], dtype=float)
+            values[~user] = np.asarray(x, dtype=float)[~user]
+            x_arr[...] = values
+            return True
+
+        with self._lock:
+            return _retry_io(write)
 
     def load(self, data_idx):
         """

@@ -154,6 +154,35 @@ def compact_combo(combo, n_chars=14):
     return combo
 
 
+class StatusLabel(QtWidgets.QLabel):
+    """
+    A label for changing messages, whose width never follows its text.
+
+    A plain QLabel's minimum width is its text's width, so a longer message
+    widens the row it is in, which can push a splitter or the window and
+    make the plots and panels shift. This label's minimum width is fixed
+    (``min_width``), and it grows only into space the layout gives it; a
+    message that doesn't fit is clipped on the right.
+
+    Parameters:
+    text (str): Initial text. Default ''.
+    min_width (int): Minimum width in pixels. Default 0.
+    parent (QWidget or None): Parent widget.
+    """
+
+    def __init__(self, text='', min_width=0, parent=None):
+        super().__init__(text, parent)
+        self._min_width = int(min_width)
+        self.setMinimumWidth(self._min_width)
+
+    def minimumSizeHint(self):
+        """
+        Return the fixed minimum width and the normal minimum height.
+        """
+        hint = super().minimumSizeHint()
+        return QtCore.QSize(self._min_width, hint.height())
+
+
 def hint_label(text):
     """
     Return a label for keyboard-shortcut hints.
@@ -1496,15 +1525,15 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
 
         layout.addStretch(1)
 
-        self._prefetch_label = QtWidgets.QLabel("")
-        self._prefetch_label.setMinimumWidth(110)
+        # Status messages must not widen the toolbar (and so the window)
+        # when their text changes.
+        self._prefetch_label = StatusLabel(min_width=110)
         self._prefetch_label.setToolTip(
             "Background prefetch status for the next data index"
         )
         layout.addWidget(self._prefetch_label)
 
-        self._save_label = QtWidgets.QLabel("")
-        self._save_label.setMinimumWidth(90)
+        self._save_label = StatusLabel(min_width=90)
         self._save_label.setToolTip("Background save status")
         layout.addWidget(self._save_label)
 

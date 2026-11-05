@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import zarr
 from unittest.mock import MagicMock, patch
-from pyqtgraph.Qt import QtGui, QtWidgets
+from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
 import citkid.pipeline.interactive.core as icore
 import citkid.pipeline.interactive.iq_series as iseries
@@ -16,6 +16,7 @@ from citkid.pipeline.interactive.core import (
 )
 from citkid.pipeline.interactive.iq_series import IQSeriesWindow
 from citkid.pipeline.dataset import reopen_group
+from citkid.qt_compat import Qt as _Qt
 
 
 def _make_step(name, func_type='per-row', return_names=None):
@@ -312,7 +313,8 @@ def _assert_hints_wrap(win):
 class TestIQSeriesWindow:
     def _make_window(
         self, qt_app, monkeypatch, nrows=2, data_idxs=None, start_idx=0,
-        state_group=None, xy_fit=None, hold_series_point=False
+        state_group=None, xy_fit=None, hold_series_point=False, y_target=None,
+        xscale='linear',
     ):
         """
         Build a IQSeriesWindow over two mock series runners.
@@ -328,6 +330,8 @@ class TestIQSeriesWindow:
         xy_fit (SeriesXYFit or None): Optional y vs x fit.
         hold_series_point (bool): Initial state of the Hold Series Point
             toggle.
+        y_target (float or None): Target y, to choose an x per resonator.
+        xscale (str): Series-plot x scale.
 
         Returns:
         win (IQSeriesWindow): The window.
@@ -359,6 +363,8 @@ class TestIQSeriesWindow:
             state_group=state_group,
             xy_fit=xy_fit,
             hold_series_point=hold_series_point,
+            y_target=y_target,
+            xscale=xscale,
         )
 
     @staticmethod
@@ -955,6 +961,182 @@ class TestIQSeriesWindow:
         xy_fit, _ = self._line_fit()
         win = self._make_window(qt_app, monkeypatch, xy_fit=xy_fit)
         assert win._guess_edits == [] and win._plots_widget is win._gw
+        assert win._chosen_x_line is None
+        self._close(win)
+
+    def test_y_target_needs_an_xy_fit(self, qt_app, monkeypatch):
+        with pytest.raises(ValueError, match='y_target'):
+            self._make_window(qt_app, monkeypatch, y_target=4.0)
+
+    def test_chosen_x_from_the_fit_is_shown_and_saved(self, qt_app, monkeypatch):
+        xy_fit, _ = self._line_fit()           # numerical inverse of y = 2 x + 1
+        win = self._make_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit, y_target=4.0)
+        line = win._chosen_x_line
+        assert line is not None and not line.isVisible()
+        assert win._y_target_edit.text() == '4' and win._xy_store.y_target == 4.0
+        win._x_cache[0] = np.array([1.0, 2.0])
+        win._y_cache[0] = np.array([3.0, 5.0])
+
+        win._update_series_scatter()
+
+        assert line.isVisible() and line.value() == pytest.approx(1.5)
+        assert line.pen == win._chosen_x_pens[False]
+        assert win._chosen_x_label.textItem.toPlainText() == '1.5'
+        x, user = win._xy_store.load_chosen_x(0)
+        assert x == pytest.approx(1.5) and not user
+        assert 'from the fit' in win._chosen_status.text()
+        assert not win._chosen_reset_btn.isEnabled()
+
+        win._y_target_edit.setText('100')      # beyond the data: no x
+        win._y_target_edit.editingFinished.emit()
+        assert win._xy_store.y_target == 100.0
+        assert not line.isVisible() and 'none' in win._chosen_status.text()
+        assert np.isnan(win._xy_store.load_chosen_x(0)[0])
+
+        win._y_target_edit.setText('abc')      # rejected, target kept
+        win._y_target_edit.editingFinished.emit()
+        assert 'must be a number' in win._apply_status_label.text()
+        assert win._y_target_edit.text() == '100' and win._y_target == 100.0
+        self._close(win)
+
+    def test_user_chosen_x_by_drag_shift_click_and_reset(self, qt_app, monkeypatch):
+        xy_fit, _ = self._line_fit()
+        win = self._make_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit, y_target=4.0)
+        win._x_cache[0] = np.array([1.0, 2.0])
+        win._y_cache[0] = np.array([3.0, 5.0])
+        win._update_series_scatter()
+        line = win._chosen_x_line
+
+        line.setValue(1.8)                     # dragged
+        win._on_chosen_x_dragged(line)
+        assert win._xy_store.load_chosen_x(0) == (1.8, True)
+        assert line.pen == win._chosen_x_pens[True]
+        assert 'by you' in win._chosen_status.text() and win._chosen_reset_btn.isEnabled()
+
+        win._y_cache[0] = np.array([3.0, 9.0])   # refit keeps the user's x
+        win._update_series_scatter()
+        assert win._xy_store.load_chosen_x(0) == (1.8, True)
+        win._y_target_edit.setText('6')          # so does a new target
+        win._y_target_edit.editingFinished.emit()
+        assert win._xy_store.load_chosen_x(0) == (1.8, True)
+        assert line.value() == pytest.approx(1.8)
+
+        # Shift+click chooses the x under the cursor; a plain click doesn't
+        win.show()
+        qt_app.processEvents()
+        vb = win._plot_series.vb
+        vb.setRange(xRange=(0.0, 3.0), yRange=(0.0, 10.0), padding=0)
+        qt_app.processEvents()
+        shift_click = MagicMock()
+        shift_click.button.return_value = _Qt.LeftButton
+        shift_click.modifiers.return_value = _Qt.ShiftModifier
+        shift_click.scenePos.return_value = vb.mapViewToScene(QtCore.QPointF(1.2, 4.0))
+        win._on_series_plot_clicked(shift_click)
+        assert win._xy_store.load_chosen_x(0)[0] == pytest.approx(1.2, abs=1e-3)
+        shift_click.accept.assert_called_once()
+        click = MagicMock()
+        click.button.return_value = _Qt.LeftButton
+        click.modifiers.return_value = _Qt.NoModifier
+        click.scenePos.return_value = vb.mapViewToScene(QtCore.QPointF(2.5, 4.0))
+        win._on_series_plot_clicked(click)
+        assert win._xy_store.load_chosen_x(0)[0] == pytest.approx(1.2, abs=1e-3)
+        outside = MagicMock()
+        outside.button.return_value = _Qt.LeftButton
+        outside.modifiers.return_value = _Qt.ShiftModifier
+        outside.scenePos.return_value = QtCore.QPointF(-1e4, -1e4)
+        win._on_series_plot_clicked(outside)
+        assert win._xy_store.load_chosen_x(0)[0] == pytest.approx(1.2, abs=1e-3)
+
+        # Shift+click on a point doesn't select it; a plain click does
+        win._set_series_idx = MagicMock()
+        spot = MagicMock()
+        spot.data.return_value = 1
+        win._on_scatter_clicked(None, [spot], shift_click)
+        win._set_series_idx.assert_not_called()
+        win._on_scatter_clicked(None, [spot], click)
+        win._set_series_idx.assert_called_once_with(1)
+
+        win._chosen_reset_btn.click()            # back to the fit's x (y = 6 x - 3 at 6)
+        x, user = win._xy_store.load_chosen_x(0)
+        assert x == pytest.approx(1.5) and not user
+        assert line.pen == win._chosen_x_pens[False]
+        self._close(win)
+
+    def test_status_texts_do_not_resize_the_panes(self, qt_app, monkeypatch):
+        xy_fit, _ = self._line_fit(uses_guess=True)
+        win = self._make_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit, y_target=4.0)
+        win._x_name = 'Tone power (dBm)'
+        win.show()
+        qt_app.processEvents()
+        left_min = win._plots_widget.minimumSizeHint().width()
+        toolbar_min = win.centralWidget().layout().itemAt(0).widget().minimumSizeHint().width()
+        assert left_min == win._gw.minimumWidth()
+
+        win._x_cache[0] = np.array([-50.0, -40.0])
+        win._y_cache[0] = np.array([3.0, 5.0])
+        win._update_series_scatter()                 # fit text, guess text
+        win._set_user_chosen_x(-45.123)              # Shift+click text
+        long = 'a status message that is much longer than the room the label has ' * 3
+        for label in (win._chosen_status, win._guess_status,
+                      win._apply_status_label, win._prefetch_label):
+            label.setText(long)
+        qt_app.processEvents()
+
+        assert win._plots_widget.minimumSizeHint().width() == left_min
+        toolbar = win.centralWidget().layout().itemAt(0).widget()
+        assert toolbar.minimumSizeHint().width() == toolbar_min
+        self._close(win)
+
+    def test_chosen_x_line_on_a_log_x_axis(self, qt_app, monkeypatch):
+        xy_fit, _ = self._line_fit()
+        win = self._make_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit, y_target=4.0,
+                                xscale='log')
+        win._x_cache[0] = np.array([10.0, 100.0])
+        win._y_cache[0] = np.array([3.0, 5.0])   # y = 4 at x = 55
+
+        win._update_series_scatter()
+
+        line = win._chosen_x_line
+        assert line.value() == pytest.approx(np.log10(55.0), abs=1e-9)
+        assert win._chosen_x_label.textItem.toPlainText() == '55'
+        assert win._xy_store.load_chosen_x(0)[0] == pytest.approx(55.0)
+
+        line.setValue(1.0)                       # dragged to x = 10
+        win._on_chosen_x_dragged(line)
+        assert win._xy_store.load_chosen_x(0) == (pytest.approx(10.0), True)
+        self._close(win)
+
+    def test_fit_saves_chosen_x_but_keeps_the_users(self, qt_app, monkeypatch):
+        xy_fit, _ = self._line_fit()
+        win = self._make_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit, y_target=4.0)
+        win._xy_store.save_chosen_x(2, 7.0, user=True)
+        x, y = np.array([1.0, 2.0]), np.array([3.0, 5.0])
+
+        win._fit_and_save_xy(1, x, y)            # as the background worker does
+        win._fit_and_save_xy(2, x, y)
+
+        chosen, user = win._xy_store.chosen_x()
+        np.testing.assert_allclose(chosen[1:], [1.5, 7.0])
+        assert list(user) == [False, False, True]
+        self._close(win)
+
+    def test_chosen_x_recomputed_at_startup_for_a_new_target(self, qt_app, monkeypatch, tmp_path):
+        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+        xy_fit, _ = self._line_fit()
+        win = self._make_window(qt_app, monkeypatch, state_group=state_group, xy_fit=xy_fit,
+                                y_target=4.0)
+        win._x_cache[0] = np.array([1.0, 2.0])
+        win._y_cache[0] = np.array([3.0, 5.0])
+        win._update_series_scatter()
+        assert state_group['xy_fit/x_chosen'][0] == pytest.approx(1.5)
+        self._close(win)
+
+        xy_fit, calls = self._line_fit()
+        win = self._make_window(qt_app, monkeypatch, state_group=state_group, xy_fit=xy_fit,
+                                y_target=3.5)
+        assert calls == []                       # from the saved fits, no refit
+        assert win._xy_store.load_chosen_x(0)[0] == pytest.approx(1.25)
+        assert state_group['xy_fit'].attrs['y_target'] == 3.5
         self._close(win)
 
     def test_closed_window_is_destroyed_but_keeps_python_state(self, qt_app, monkeypatch, tmp_path):
