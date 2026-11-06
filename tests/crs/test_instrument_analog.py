@@ -5,10 +5,9 @@ Tests set_analog_bank and set_extended_bw methods.
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 import warnings
 
-from citkid.crs.instrument import CRS
 from .conftest import mock_module_settings
 
 

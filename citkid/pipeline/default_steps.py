@@ -7,6 +7,23 @@ from ..signal import psd
 from ..xcal import reduced_params
 
 
+def _theta_f(z, idx_t):
+    """
+    Convert the centered fine sweep to unwrapped theta, using the tone's
+    sweep point to fix the 2 pi branch.
+
+    Parameters:
+    z (np.array, complex): Centered fine sweep ``zf_cent``.
+    idx_t (int): Index of the sweep point nearest the tone. A negative value
+        (-1, written for rows marked bad) means there is none.
+
+    Returns:
+    thetaf (np.array, float): Unwrapped theta of the fine sweep.
+    """
+    idx_t = None if idx_t is None or idx_t < 0 else int(idx_t)
+    return circle.convert_to_theta(z, unwrap = True, idx_t = idx_t)
+
+
 def _dict_outputs_in_freq_order(func, prefix):
     """
     Adapt a reduced-parameter function that returns a dict to plStep outputs.
@@ -79,14 +96,13 @@ default_cal_steps =\
  ('center_t', circle.cent_rot_s21, 
   ['zt_rmv', 'circ_origin', 'theta_phase_offset'], ['zt_cent'], 'per-row'),
 
- ('rotate_offres_t', lambda z, t: circle.cent_rot_s21(z, 0 + 0j, t), 
+ ('rotate_t_offres', lambda z, t: circle.cent_rot_s21(z, 0 + 0j, t), 
   ['zt_rmv', 'theta_phase_offset'], ['zt_cent'], 'per-row'),
 
- ('rotate_offres_f', lambda z, t: circle.cent_rot_s21(z, 0 + 0j, t), 
+ ('rotate_f_offres', lambda z, t: circle.cent_rot_s21(z, 0 + 0j, t), 
   ['zf_rmv', 'theta_phase_offset'], ['zf_cent'], 'per-row'),
 
- ('get_thetaf', lambda z, idx_t: circle.convert_to_theta(
-     z, unwrap = True, idx_t = idx_t), 
+ ('get_thetaf', _theta_f,
   ['zf_cent', 'idx_t'], ['thetaf'], 'per-row'),
 
  ('get_thetat', lambda z: circle.convert_to_theta(z, unwrap = False), 
@@ -112,13 +128,15 @@ default_cal_steps =\
    ['f_sxx', 'sxx'], 'per-row'),
 
    ('get_sxx_reduced',
-    _dict_outputs_in_freq_order(reduced_params.get_sxx_reduced_default_freqs, 'sxx'),
+    _dict_outputs_in_freq_order(
+        reduced_params.get_sxx_reduced_default_freqs, 'sxx'),
     ['f_sxx', 'sxx'], 
     reduced_params.default_freq_keys('sxx'),
     'per-row'),
 
    ('get_sfactor_reduced',
-    _dict_outputs_in_freq_order(reduced_params.get_sfactor_reduced_default_freqs, 'sfactor'),
+    _dict_outputs_in_freq_order(
+        reduced_params.get_sfactor_reduced_default_freqs, 'sfactor'),
     ['f_sparper', 'spar', 'sper'], 
     reduced_params.default_freq_keys('sfactor'),
     'per-row')

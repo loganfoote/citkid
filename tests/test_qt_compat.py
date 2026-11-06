@@ -29,7 +29,9 @@ def _flat_qtcore():
 
 
 def _nested_qtcore():
-    """QtCore where constants are only inside nested enum classes (PyQt6-style)."""
+    """
+    QtCore where constants are only inside nested enum classes (PyQt6-style).
+    """
     class _KeyboardModifier:
         ShiftModifier = 0x02000000
 
@@ -70,86 +72,93 @@ def _empty_qtcore():
 # Tests: flat namespace (PyQt5-style)
 # ---------------------------------------------------------------------------
 
-class TestQtCompatFlatNamespace:
-    """Constants available directly on QtCore.Qt."""
+# Constants available directly on QtCore.Qt.
 
-    def test_keyboard_modifier(self):
-        with patch('citkid.qt_compat._QtCore', _flat_qtcore()):
-            from citkid import qt_compat
-            Qt = qt_compat._QtCompat()
-            assert Qt.ShiftModifier == 0x02000000
 
-    def test_mouse_button(self):
-        with patch('citkid.qt_compat._QtCore', _flat_qtcore()):
-            from citkid import qt_compat
-            Qt = qt_compat._QtCompat()
-            assert Qt.LeftButton == 0x00000001
+def test_qt_flat_keyboard_modifier():
+    with patch('citkid.qt_compat._QtCore', _flat_qtcore()):
+        from citkid import qt_compat
+        Qt = qt_compat._QtCompat()
+        assert Qt.ShiftModifier == 0x02000000
 
-    def test_pen_style(self):
-        with patch('citkid.qt_compat._QtCore', _flat_qtcore()):
-            from citkid import qt_compat
-            Qt = qt_compat._QtCompat()
-            assert Qt.DotLine == 3
 
-    def test_orientation(self):
-        with patch('citkid.qt_compat._QtCore', _flat_qtcore()):
-            from citkid import qt_compat
-            Qt = qt_compat._QtCompat()
-            assert Qt.Horizontal == 1
+def test_qt_flat_mouse_button():
+    with patch('citkid.qt_compat._QtCore', _flat_qtcore()):
+        from citkid import qt_compat
+        Qt = qt_compat._QtCompat()
+        assert Qt.LeftButton == 0x00000001
+
+
+def test_qt_flat_pen_style():
+    with patch('citkid.qt_compat._QtCore', _flat_qtcore()):
+        from citkid import qt_compat
+        Qt = qt_compat._QtCompat()
+        assert Qt.DotLine == 3
+
+
+def test_qt_flat_orientation():
+    with patch('citkid.qt_compat._QtCore', _flat_qtcore()):
+        from citkid import qt_compat
+        Qt = qt_compat._QtCompat()
+        assert Qt.Horizontal == 1
 
 
 # ---------------------------------------------------------------------------
 # Tests: nested enum namespace (PyQt6 / PySide6-style)
 # ---------------------------------------------------------------------------
 
-class TestQtCompatNestedNamespace:
-    """Constants only in nested enum groups."""
+# Constants only in nested enum groups.
 
-    def test_keyboard_modifier_nested(self):
-        with patch('citkid.qt_compat._QtCore', _nested_qtcore()):
-            from citkid import qt_compat
-            Qt = qt_compat._QtCompat()
-            assert Qt.ShiftModifier == 0x02000000
 
-    def test_mouse_button_nested(self):
-        with patch('citkid.qt_compat._QtCore', _nested_qtcore()):
-            from citkid import qt_compat
-            Qt = qt_compat._QtCompat()
-            assert Qt.LeftButton == 0x00000001
+def test_qt_nested_keyboard_modifier_nested():
+    with patch('citkid.qt_compat._QtCore', _nested_qtcore()):
+        from citkid import qt_compat
+        Qt = qt_compat._QtCompat()
+        assert Qt.ShiftModifier == 0x02000000
 
-    def test_pen_style_nested(self):
-        with patch('citkid.qt_compat._QtCore', _nested_qtcore()):
-            from citkid import qt_compat
-            Qt = qt_compat._QtCompat()
-            assert Qt.DotLine == 3
 
-    def test_orientation_nested(self):
-        with patch('citkid.qt_compat._QtCore', _nested_qtcore()):
-            from citkid import qt_compat
-            Qt = qt_compat._QtCompat()
-            assert Qt.Horizontal == 1
+def test_qt_nested_mouse_button_nested():
+    with patch('citkid.qt_compat._QtCore', _nested_qtcore()):
+        from citkid import qt_compat
+        Qt = qt_compat._QtCompat()
+        assert Qt.LeftButton == 0x00000001
+
+
+def test_qt_nested_pen_style_nested():
+    with patch('citkid.qt_compat._QtCore', _nested_qtcore()):
+        from citkid import qt_compat
+        Qt = qt_compat._QtCompat()
+        assert Qt.DotLine == 3
+
+
+def test_qt_nested_orientation_nested():
+    with patch('citkid.qt_compat._QtCore', _nested_qtcore()):
+        from citkid import qt_compat
+        Qt = qt_compat._QtCompat()
+        assert Qt.Horizontal == 1
 
 
 # ---------------------------------------------------------------------------
 # Tests: missing / error cases
 # ---------------------------------------------------------------------------
 
-class TestQtCompatMissing:
-    """AttributeError raised for names that don't exist anywhere."""
+# AttributeError raised for names that don't exist anywhere.
 
-    def test_unknown_name_raises(self):
-        with patch('citkid.qt_compat._QtCore', _empty_qtcore()):
-            from citkid import qt_compat
-            Qt = qt_compat._QtCompat()
-            with pytest.raises(AttributeError,
-                               match="Qt has no member 'NonExistentConstant'"):
-                _ = Qt.NonExistentConstant
 
-    def test_repr(self):
-        with patch('citkid.qt_compat._QtCore', _flat_qtcore()):
-            from citkid import qt_compat
-            Qt = qt_compat._QtCompat()
-            assert repr(Qt) == "<citkid.qt_compat.Qt>"
+def test_qt_missing_unknown_name_raises():
+    with patch('citkid.qt_compat._QtCore', _empty_qtcore()):
+        from citkid import qt_compat
+        Qt = qt_compat._QtCompat()
+        with pytest.raises(AttributeError,
+                           match="Qt has no member 'NonExistentConstant'"):
+            _ = Qt.NonExistentConstant
+
+
+def test_qt_missing_repr():
+    with patch('citkid.qt_compat._QtCore', _flat_qtcore()):
+        from citkid import qt_compat
+        Qt = qt_compat._QtCompat()
+        assert repr(Qt) == "<citkid.qt_compat.Qt>"
 
 
 
@@ -220,7 +229,9 @@ def test_delete_on_close_destroys_window_only_when_closed(qapp):
             event.ignore()
 
     def flush_deletes():
-        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+        QtCore.QCoreApplication.sendPostedEvents(
+            None, QtCore.QEvent.Type.DeferredDelete
+        )
 
     win = QtWidgets.QMainWindow()
     win.result = [1, 2, 3]
@@ -284,12 +295,14 @@ def test_use_system_ui_font_sets_app_font(qapp):
     from citkid import qt_compat
     original = qapp.font()
     try:
-        with patch.object(qt_compat, '_windows_message_font', return_value=('Arial', 9.0)):
+        with patch.object(qt_compat, '_windows_message_font',
+                          return_value=('Arial', 9.0)):
             qt_compat._use_system_ui_font(qapp)
         assert qapp.font().family() == 'Arial'
         assert qapp.font().pointSizeF() == 9.0
 
-        with patch.object(qt_compat, '_windows_message_font', return_value=(None, None)):
+        with patch.object(qt_compat, '_windows_message_font',
+                          return_value=(None, None)):
             qt_compat._use_system_ui_font(qapp)
         assert qapp.font().family() == 'Arial'   # unknown: left unchanged
     finally:
@@ -355,7 +368,8 @@ def test_fit_window_to_screen_height_margin(qapp, size, expected):
     win = QtWidgets.QWidget()
     with patch.object(qt_compat, 'available_screen_geometry',
                       return_value=QtCore.QRect(0, 0, 1000, 800)):
-        result = qt_compat.fit_window_to_screen(win, frac=0.8, size=size, height_margin=40)
+        result = qt_compat.fit_window_to_screen(win, frac=0.8, size=size,
+                                                height_margin=40)
     assert result == expected
     # The frame (title bar included) is centred inside the screen.
     assert win.y() == (800 - expected[1] - 40) // 2
@@ -388,7 +402,9 @@ def test_scroll_area_content_height(qapp):
 # ---------------------------------------------------------------------------
 
 def test_run_responsive_keeps_processing_events(qapp):
-    """Timers (repaints, OS pings) keep running while the work runs off-thread."""
+    """
+    Timers (repaints, OS pings) keep running while the work runs off-thread.
+    """
     import threading
     import time
     from citkid import qt_compat
@@ -425,7 +441,8 @@ def test_run_responsive_defers_user_input(qapp, monkeypatch):
 
     flags = []
     original = qapp.processEvents
-    monkeypatch.setattr(qapp, 'processEvents', lambda *a: (flags.append(a), original(*a))[1])
+    monkeypatch.setattr(qapp, 'processEvents',
+                        lambda *a: (flags.append(a), original(*a))[1])
 
     qt_compat.run_responsive(time.sleep, 0.1)
 
@@ -438,7 +455,9 @@ def test_run_responsive_reraises_and_runs_directly_off_main_thread(qapp):
     from citkid import qt_compat
 
     with pytest.raises(ValueError, match='boom'):
-        qt_compat.run_responsive(lambda: (_ for _ in ()).throw(ValueError('boom')))
+        qt_compat.run_responsive(
+            lambda: (_ for _ in ()).throw(ValueError('boom'))
+        )
     assert not qt_compat.responsive_busy()
 
     seen = []
@@ -446,7 +465,7 @@ def test_run_responsive_reraises_and_runs_directly_off_main_thread(qapp):
         qt_compat.run_responsive(lambda: threading.current_thread().name)))
     worker.start()
     worker.join()
-    assert seen == [worker.name]              # nested in a thread: no new thread
+    assert seen == [worker.name]  # nested in a thread: no new thread
 
 
 # ---------------------------------------------------------------------------
@@ -500,20 +519,23 @@ def test_describe_display_reports_screens_and_fonts(qapp, capsys):
     from citkid import qt_compat
     report = qt_compat.describe_display()
     assert report == capsys.readouterr().out.rstrip('\n')
-    for text in ('Qt platform plugin', 'Qt binding used by pyqtgraph: PyQt5', 'screen',
-                 'logical DPI', 'default font', 'palette'):
+    for text in ('Qt platform plugin', 'Qt binding used by pyqtgraph: PyQt5',
+                 'screen', 'logical DPI', 'default font', 'palette'):
         assert text in report
     assert qt_compat.describe_display(print_report=False) == report
 
 
 def test_citkid_uses_pyqt5():
-    """Importing the package (not the repo-root module pytest uses) pins PyQt5."""
+    """
+    Importing the package (not the repo-root module pytest uses) pins PyQt5.
+    """
     import os
     import subprocess
     import sys
     code = '; '.join([
         'import os, citkid, pyqtgraph.Qt',
-        "print(citkid.__file__, os.environ['PYQTGRAPH_QT_LIB'], pyqtgraph.Qt.QT_LIB)",
+        "print(citkid.__file__, os.environ['PYQTGRAPH_QT_LIB'], "
+        "pyqtgraph.Qt.QT_LIB)",
     ])
     env = {k: v for k, v in os.environ.items() if k != 'PYQTGRAPH_QT_LIB'}
     result = subprocess.run([sys.executable, '-c', code], capture_output=True,
@@ -533,7 +555,8 @@ def test_qt_compat_refuses_another_binding():
         "pyqtgraph.Qt.QT_LIB = 'PyQt6'",  # as if imported first by rfmux
         'import citkid.qt_compat',
     ])
-    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True,
+                            text=True)
     assert result.returncode != 0
     assert 'ImportError' in result.stderr
     assert 'needs PyQt5, but pyqtgraph is using PyQt6' in result.stderr

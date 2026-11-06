@@ -40,7 +40,9 @@ def test_get_sxx_reduced_accepts_lists():
 
 def test_get_sxx_reduced_returns_scalar():
     result = get_sxx_reduced(_f_wide, _sxx_flat, 10.0)
-    assert np.isscalar(result) or (isinstance(result, np.ndarray) and result.ndim == 0)
+    assert np.isscalar(result) or (
+        isinstance(result, np.ndarray) and result.ndim == 0
+    )
 
 # Input validation
 @pytest.mark.parametrize("f,sxx", [
@@ -56,7 +58,9 @@ def test_get_sxx_reduced_freq_nonpositive(freq):
     with pytest.raises(ValueError, match="positive scalar"):
         get_sxx_reduced(_f_wide, _sxx_flat, freq)
 
-@pytest.mark.parametrize("freq", [np.array([10.0]), np.array([10.0, 20.0]), [10.0]])
+@pytest.mark.parametrize(
+    "freq", [np.array([10.0]), np.array([10.0, 20.0]), [10.0]]
+)
 def test_get_sxx_reduced_freq_not_scalar(freq):
     with pytest.raises(ValueError, match="positive scalar"):
         get_sxx_reduced(_f_wide, _sxx_flat, freq)
@@ -108,18 +112,28 @@ def test_get_sfactor_zero_difference():
     assert np.isclose(result, 0.0)
 
 def test_get_sfactor_accepts_lists():
-    result = get_sfactor(list(_f_wide), list(_spar_flat), list(_sper_flat), 10.0)
+    result = get_sfactor(
+        list(_f_wide), list(_spar_flat), list(_sper_flat), 10.0
+    )
     assert np.isclose(result, 1.0)
 
 def test_get_sfactor_returns_scalar():
     result = get_sfactor(_f_wide, _spar_flat, _sper_flat, 10.0)
-    assert np.isscalar(result) or (isinstance(result, np.ndarray) and result.ndim == 0)
+    assert np.isscalar(result) or (
+        isinstance(result, np.ndarray) and result.ndim == 0
+    )
 
 # Input validation
 @pytest.mark.parametrize("f,spar,sper", [
-    (np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0]), np.array([1.0, 2.0, 3.0])),  # spar too short
-    (np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0])),  # sper too short
-    (np.array([1.0, 2.0]), np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0])),  # f too short
+    # spar too short
+    (np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0]),
+     np.array([1.0, 2.0, 3.0])),
+    # sper too short
+    (np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 3.0]),
+     np.array([1.0, 2.0])),
+    # f too short
+    (np.array([1.0, 2.0]), np.array([1.0, 2.0, 3.0]),
+     np.array([1.0, 2.0, 3.0])),
 ])
 def test_get_sfactor_shape_mismatch(f, spar, sper):
     with pytest.raises(ValueError, match="same shape"):
@@ -130,7 +144,9 @@ def test_get_sfactor_freq_nonpositive(freq):
     with pytest.raises(ValueError, match="positive scalar"):
         get_sfactor(_f_wide, _spar_flat, _sper_flat, freq)
 
-@pytest.mark.parametrize("freq", [np.array([10.0]), np.array([10.0, 20.0]), [10.0]])
+@pytest.mark.parametrize(
+    "freq", [np.array([10.0]), np.array([10.0, 20.0]), [10.0]]
+)
 def test_get_sfactor_freq_not_scalar(freq):
     with pytest.raises(ValueError, match="positive scalar"):
         get_sfactor(_f_wide, _spar_flat, _sper_flat, freq)

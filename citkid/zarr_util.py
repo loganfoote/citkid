@@ -1,5 +1,4 @@
 import numpy as np
-import copy
 import re
 
 # Sweep series (power sweeps, blackbody sweeps, ...) save one target sweep per
@@ -145,24 +144,3 @@ def write_single_array(root, name, value, dtype = None):
  
     root.create_array(name, data = value) # no chunking
         
-def deep_union(a, b):
-    """
-    Return the union of two dictionaries a and b, both of which
-    may have nested sub-dictionaries.
-    This function is used for merging dependencies dictionaries
-    when writing to DataSet.deps_map.
-    
-    Parameters:
-    a (dictionary): Dictionary 1
-    b (dictionary): Dictionary 2
-    
-    Returns:
-    out (dictionary): Merged dictionary
-    """
-    out = copy.deepcopy(a)
-    for k, v in b.items():
-        if k in out and isinstance(out[k], dict) and isinstance(v, dict):
-            out[k] = deep_union(out[k], v)
-        else:
-            out[k] = v
-    return out

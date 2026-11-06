@@ -7,7 +7,6 @@ Covers module ownership (``module_idxs``), ``global_control``, ``attach``,
 depends on them.
 """
 
-import os
 import pytest
 import numpy as np
 import zarr
@@ -402,7 +401,7 @@ def dec_crs(mock_rfmux_base):
                        global_control = global_control)
         crs.analog_bank_high = False
         return crs
-    with patch('citkid.crs.instrument.time.sleep'):
+    with patch('citkid.crs.instrument.asyncio.sleep', new_callable = AsyncMock):
         yield factory, device
 
 
@@ -515,7 +514,8 @@ async def test_set_decimation_unchanged_does_not_sleep(mock_rfmux_base):
     crs = make_crs()
     crs.analog_bank_high = False
 
-    with patch('citkid.crs.instrument.time.sleep') as mock_sleep:
+    with patch('citkid.crs.instrument.asyncio.sleep',
+               new_callable = AsyncMock) as mock_sleep:
         await crs.set_decimation(6, short = False, module_idxs = [1, 2])
         await crs.set_decimation(6, short = False, module_idxs = [2, 1])
     mock_sleep.assert_called_once()
@@ -555,7 +555,7 @@ async def test_capture_ts_clears_only_owned_modules(configured_crs, tmp_path):
     grp = zarr.open_group(tmp_path / 'data.zarr', mode = 'w')
 
     with patch('citkid.crs.instrument.util.write_system_cfg_to_zarr'), \
-         patch('citkid.crs.instrument.time.sleep'):
+         patch('citkid.crs.instrument.asyncio.sleep', new_callable = AsyncMock):
         await crs.capture_ts([4.0e9], [-50.], 1.0, 6, grp, verbose = False,
                              tmp_directory = str(tmp_path / 'tmp'))
 
@@ -834,7 +834,7 @@ async def test_capture_ts_saves_written_and_requested_fres(
     grp = zarr.open_group(tmp_path / 'data.zarr', mode = 'w')
 
     with patch('citkid.crs.instrument.util.write_system_cfg_to_zarr'), \
-         patch('citkid.crs.instrument.time.sleep'):
+         patch('citkid.crs.instrument.asyncio.sleep', new_callable = AsyncMock):
         await crs.capture_ts(fres, [-50.] * 3, 1.0, 6, grp, verbose = False,
                              allow_missing = True,
                              tmp_directory = str(tmp_path / 'tmp'))
@@ -879,7 +879,7 @@ async def test_capture_ts_clears_if_config_write_fails(
 
     with patch('citkid.crs.instrument.util.write_system_cfg_to_zarr',
                side_effect = ValueError('cfg failed')), \
-         patch('citkid.crs.instrument.time.sleep'):
+         patch('citkid.crs.instrument.asyncio.sleep', new_callable = AsyncMock):
         with pytest.raises(ValueError, match = 'cfg failed'):
             await crs.capture_ts([4.0e9], [-50.], 1.0, 6, grp,
                                  verbose = False,

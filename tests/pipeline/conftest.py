@@ -38,5 +38,7 @@ def _delete_qt_windows_on_main_thread():
     for widget in app.topLevelWidgets():
         if isinstance(widget, QtWidgets.QMainWindow):
             widget.deleteLater()
-    QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.Type.DeferredDelete)
+    QtCore.QCoreApplication.sendPostedEvents(
+        None, QtCore.QEvent.Type.DeferredDelete
+    )
     gc.collect()

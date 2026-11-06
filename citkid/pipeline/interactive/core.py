@@ -12,7 +12,6 @@ Core concepts:
 
 import concurrent.futures
 import traceback
-from html import escape
 import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
@@ -30,6 +29,15 @@ from ...qt_compat import (
     get_qapp,
     scroll_area_content_height,
     vbox_height_for_width,
+    WIDGET_FONT_PT,
+    TICK_FONT_PT,
+    LABEL_FONT_PT,
+    font_px,
+    widget_font_stylesheet,
+    hint_label,
+    help_html,
+    toggle_help_dialog,
+    scale_plot_fonts,
 )
 from ...signal.iq import density_subsample as _density_subsample
 
@@ -60,6 +68,15 @@ def register_panel(*step_names):
             ...
     """
     def decorator(cls):
+        """
+        Register ``cls`` for ``step_names``.
+
+        Parameters:
+        cls (type): StepPanel subclass.
+
+        Returns:
+        cls (type): the same class.
+        """
         _PANEL_REGISTRY[tuple(step_names)] = cls
         return cls
     return decorator
@@ -90,47 +107,6 @@ def get_panel_class(step_names):
 ################################################################################
 # Fonts
 ################################################################################
-
-# Base font sizes in points at ui_scale = 1. Fonts are always set explicitly,
-# so text size depends only on ui_scale, not on the system default font.
-WIDGET_FONT_PT = 10
-TICK_FONT_PT = 9
-LABEL_FONT_PT = 11
-
-
-def font_px(point_size, ui_scale=1.0, minimum=8):
-    """
-    Convert a font size in points to logical pixels.
-
-    Fonts are set in logical pixels, like every window and widget size, so
-    text keeps the same size relative to the window on every system. In
-    points, text grows with the system's text scaling (e.g. a larger
-    Xft.dpi on Linux) while the windows don't. On Windows (96 logical DPI)
-    the result is the same size as the point size.
-
-    Parameters:
-    point_size (float): size in points at ui_scale = 1.
-    ui_scale (float): font size multiplier. Default 1.0.
-    minimum (int): smallest size returned, in pixels. Default 8.
-
-    Returns:
-    px (int): size in logical pixels (point_size * ui_scale * 96 / 72).
-    """
-    return max(int(minimum), round(point_size * ui_scale * 96 / 72))
-
-
-def widget_font_stylesheet(ui_scale):
-    """
-    Return a stylesheet that sets the font size of every widget.
-
-    Parameters:
-    ui_scale (float): Font size multiplier.
-
-    Returns:
-    stylesheet (str): ``'* { font-size: Npx; }'`` with
-        N = ``font_px(WIDGET_FONT_PT, ui_scale)``.
-    """
-    return f"* {{ font-size: {font_px(WIDGET_FONT_PT, ui_scale)}px; }}"
 
 
 def compact_combo(combo, n_chars=14):
@@ -171,6 +147,10 @@ class StatusLabel(QtWidgets.QLabel):
     """
 
     def __init__(self, text='', min_width=0, parent=None):
+        """
+        Set the text and fixed minimum width. See the class docstring for
+        parameters.
+        """
         super().__init__(text, parent)
         self._min_width = int(min_width)
         self.setMinimumWidth(self._min_width)
@@ -181,108 +161,6 @@ class StatusLabel(QtWidgets.QLabel):
         """
         hint = super().minimumSizeHint()
         return QtCore.QSize(self._min_width, hint.height())
-
-
-def hint_label(text):
-    """
-    Return a label for keyboard-shortcut hints.
-
-    The text word-wraps, so put the label on a row of its own (full width);
-    beside other widgets it can be squeezed to nothing. Its color is a mix
-    of the theme's text and background colors, so it is muted but readable
-    with any theme (``palette(mid)`` can match the background on some Linux
-    themes).
-
-    Parameters:
-    text (str): the hints.
-
-    Returns:
-    label (QLabel): the label.
-    """
-    label = QtWidgets.QLabel(text)
-    label.setWordWrap(True)
-    palette = label.palette()
-    fg = palette.color(QtGui.QPalette.ColorRole.WindowText)
-    bg = palette.color(QtGui.QPalette.ColorRole.Window)
-    pairs = ((fg.red(), bg.red()), (fg.green(), bg.green()),
-             (fg.blue(), bg.blue()))
-    r, g, b = [round(0.65 * f + 0.35 * b) for f, b in pairs]
-    label.setStyleSheet(f"color: rgb({r}, {g}, {b}); font-style: italic;")
-    return label
-
-
-def help_html(title, sections):
-    """
-    Format a help dialog's text as HTML.
-
-    Parameters:
-    title (str): heading.
-    sections (list): ``(heading, items)`` pairs, where items is a list of
-        ``(keys, description)`` string pairs; an empty ``keys`` shows the
-        description alone. Plain text: ``<``, ``>`` and ``&`` are escaped.
-
-    Returns:
-    html (str): the help text.
-    """
-    parts = [f'<h3>{escape(title)}</h3>']
-    for heading, items in sections:
-        parts.append(f'<p><b>{escape(heading)}</b></p><ul>')
-        parts.extend(f'<li><b>{escape(keys)}:</b> {escape(text)}</li>'
-                     if keys else f'<li>{escape(text)}</li>'
-                     for keys, text in items)
-        parts.append('</ul>')
-    return ''.join(parts)
-
-
-def toggle_help_dialog(window, title, sections):
-    """
-    Show or hide a window's help dialog (the H key), building it on first use.
-
-    The dialog lists the window's keyboard shortcuts, buttons and mouse
-    controls. It scrolls if it is taller than the screen, and H (or Esc)
-    closes it again.
-
-    Parameters:
-    window (QWidget): window the dialog belongs to; the dialog is kept in
-        ``window._help_dialog`` and centered on the window.
-    title (str): window name, e.g. 'IQ Series'.
-    sections (list): ``(heading, items)`` pairs (see ``help_html``).
-
-    Returns:
-    dlg (QDialog): the dialog.
-    """
-    dlg = getattr(window, '_help_dialog', None)
-    if dlg is None:
-        dlg = QtWidgets.QDialog(window)
-        dlg.setWindowTitle(f'{title} Help  (H to close)')
-        label = QtWidgets.QLabel(help_html(f'{title} Controls', sections))
-        label.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        label.setWordWrap(True)
-        label.setMargin(8)
-        scroll = QtWidgets.QScrollArea()
-        scroll.setWidget(label)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        layout = QtWidgets.QVBoxLayout(dlg)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(scroll)
-        QtGui.QShortcut(QtGui.QKeySequence('H'), dlg, activated=dlg.hide)
-        geom = available_screen_geometry()
-        width = min(620, geom.width() - 40)
-        label.setFixedWidth(width - 30)
-        height = min(label.heightForWidth(width - 30) + 20,
-                     geom.height() - TITLE_BAR_MARGIN - 40)
-        dlg.resize(width, height)
-        window._help_dialog = dlg
-    if dlg.isVisible():
-        dlg.hide()
-        return dlg
-    dlg.show()
-    frame = dlg.frameGeometry()
-    frame.moveCenter(window.frameGeometry().center())
-    dlg.move(frame.topLeft())
-    dlg.raise_()
-    return dlg
 
 
 # Help dialog sections shared by the pipeline windows
@@ -392,28 +270,6 @@ def shrink_to_fit(window, content_height, plot_widgets, ui_scale, max_height,
     return plot_factor, font_scale
 
 
-def scale_plot_fonts(ui_scale, *plot_items):
-    """
-    Set tick, axis-label and title fonts of pyqtgraph plots from ui_scale.
-
-    Plot text isn't affected by widget stylesheets, so it is set here.
-
-    Parameters:
-    ui_scale (float): Font size multiplier.
-    *plot_items (pg.PlotItem): Plots to style.
-    """
-    tick_font = QtGui.QFont()
-    tick_font.setPixelSize(font_px(TICK_FONT_PT, ui_scale))
-    label_font = QtGui.QFont()
-    label_font.setPixelSize(font_px(LABEL_FONT_PT, ui_scale, minimum=9))
-    for plot in plot_items:
-        for ax_name in ('bottom', 'left', 'top', 'right'):
-            ax = plot.getAxis(ax_name)
-            ax.setStyle(tickFont=tick_font)
-            ax.label.setFont(label_font)
-        plot.titleLabel.item.setFont(label_font)
-
-
 ################################################################################
 # Base panel
 ################################################################################
@@ -465,9 +321,12 @@ class StepPanel(QtWidgets.QWidget):
         downstream panels as needing a re-run.
 
     Parameters:
-    AR (AnalysisRunner): The analysis runner whose execute_step will be called.
-    step_names (tuple of str): Names of the steps this panel executes, in order.
-    data_idx (int or None): Initial data index for per-row steps. None until set.
+    AR (AnalysisRunner): The analysis runner whose execute_step will be
+        called.
+    step_names (tuple of str): Names of the steps this panel executes, in
+        order.
+    data_idx (int or None): Initial data index for per-row steps. None until
+        set.
     ui_scale (float): Font and widget size multiplier. Default 1.0.
     plot_scale (float): Plot area height multiplier. Default 1.0.
     parent (QWidget or None): Parent widget.
@@ -482,6 +341,13 @@ class StepPanel(QtWidgets.QWidget):
         self, AR: AnalysisRunner, step_names: tuple, data_idx=None,
         ui_scale: float = 1.0, plot_scale: float = 1.0, parent=None,
     ):
+        """
+        Resolve the panel's steps and build its widgets. See the class
+        docstring for parameters.
+
+        Raises:
+        ValueError: If a step name is not in ``AR.analysis_steps``.
+        """
         super().__init__(parent)
         self.AR = AR
         self.step_names = tuple(step_names)
@@ -491,9 +357,12 @@ class StepPanel(QtWidgets.QWidget):
         self.panel_index: int | None = None  # set by InteractiveAnalysisWindow
         self._has_run = False
         self._last_error: Exception | None = None
-        self._dirty: bool = False  # True after run_steps succeeds; cleared after save
-        self._needs_run: bool = False  # True when an upstream panel invalidated this panel
-        self._autorange_next: bool = True  # auto-scale plots on first update_plots per index
+        # True after run_steps succeeds; cleared after save
+        self._dirty: bool = False
+        # True when an upstream panel invalidated this panel
+        self._needs_run: bool = False
+        # auto-scale plots on first update_plots per index
+        self._autorange_next: bool = True
 
         # Resolve plStep objects from the runner
         available = {s.name: s for s in AR.analysis_steps}
@@ -589,16 +458,20 @@ class StepPanel(QtWidgets.QWidget):
         scatter for its bounds, so old all-NaN points warn too. The scatter is
         therefore cleared as well.
         """
-        views = self.findChildren(pg.GraphicsLayoutWidget) + self.findChildren(pg.PlotWidget)
+        views = (self.findChildren(pg.GraphicsLayoutWidget)
+                 + self.findChildren(pg.PlotWidget))
         for view in views:
-            plots = view.ci.items if isinstance(view, pg.GraphicsLayoutWidget) else [view.getPlotItem()]
+            plots = (view.ci.items
+                     if isinstance(view, pg.GraphicsLayoutWidget)
+                     else [view.getPlotItem()])
             for plot in plots:
                 if not hasattr(plot, 'listDataItems'):
                     continue
                 for item in plot.listDataItems():
                     x, y = item.getData()
                     if x is not None and len(x):
-                        finite = np.isfinite(np.asarray(x, dtype=float)) & np.isfinite(np.asarray(y, dtype=float))
+                        finite = (np.isfinite(np.asarray(x, dtype=float))
+                                  & np.isfinite(np.asarray(y, dtype=float)))
                         if finite.any():
                             continue
                         item.setData([], [])
@@ -642,7 +515,8 @@ class StepPanel(QtWidgets.QWidget):
         # Read the widgets here, on the GUI thread.
         plan = [
             (step,
-             None if step.func_type in ("global", "global-res") else self.data_idx,
+             None if step.func_type in ("global", "global-res")
+             else self.data_idx,
              self.get_params_for_step(step))
             for step in self.steps
         ]
@@ -757,7 +631,8 @@ class StepPanel(QtWidgets.QWidget):
         AR = self.AR
         plan = [
             (step,
-             None if step.func_type in ("global", "global-res") else self.data_idx,
+             None if step.func_type in ("global", "global-res")
+             else self.data_idx,
              self.get_params_for_step(step))
             for step in self.steps
         ]
@@ -856,13 +731,18 @@ class StepPanel(QtWidgets.QWidget):
             DS = self.AR.DS
             di = int(self.data_idx)
             data_idx_arr = np.atleast_1d(np.asarray([di], dtype=np.int32))
-            producers = {name: self._find_output_step(name) for name in nan_vals}
-            outputs = [name for name, step in producers.items() if step is not None]
-            downstream, delete = self._downstream_of(list(nan_vals), data_idx_arr)
-            DS.invalidate_memory_params(sorted(downstream) + outputs, data_idx=data_idx_arr)
+            producers = {name: self._find_output_step(name)
+                         for name in nan_vals}
+            outputs = [name for name, step in producers.items()
+                       if step is not None]
+            downstream, delete = self._downstream_of(list(nan_vals),
+                                                     data_idx_arr)
+            DS.invalidate_memory_params(sorted(downstream) + outputs,
+                                        data_idx=data_idx_arr)
             for name in outputs:
                 producer, value = producers[name], nan_vals[name]
-                pipeline_scope, step_index = self.AR._resolve_step_scope(producer)
+                pipeline_scope, step_index = self.AR._resolve_step_scope(
+                    producer)
                 DS._store_param(
                     name,
                     [value],
@@ -948,23 +828,55 @@ class StepPanel(QtWidgets.QWidget):
         if hasattr(self, "_status_label"):
             self._status_label.setText("Needs run")
 
-    def prefetch_plot_data(self, di):
+    def prefetch_plot_data(self, di, AR=None):
         """
         Pre-compute numpy arrays needed by update_plots for di.
 
         Called from the background prefetch thread before the user navigates
-        to di. Implementations must be thread-safe: only read from AR.DS,
-        only write to self._plot_cache. Never touch any Qt object here.
+        to di. Implementations must be thread-safe: only read from
+        ``AR.DS``, only write to ``self._plot_cache``, and never touch a Qt
+        object or a panel attribute the GUI thread changes.
 
         The base implementation is a no-op. Sub-classes with expensive numpy
         work inside update_plots (e.g. large array loads, np.polyval,
         subsampling) should override this method and store results in
-        self._plot_cache[di]. update_plots can then consume the cache and
-        skip the numpy work entirely.
+        ``self._plot_cache[self._cache_key(AR, di)]``; update_plots then
+        takes them with ``self._pop_plot_cache()``.
 
         Parameters:
         di (int): Data index to prefetch.
+        AR (AnalysisRunner or None): Runner to read from. None (default)
+            uses ``self.AR``. The series window passes the runner of the
+            series point that will be shown, without changing ``self.AR``.
         """
+
+    def _cache_key(self, AR, di):
+        """
+        Return the plot-cache key of a runner and row, so data prefetched
+        for one series point is never shown for another.
+
+        Parameters:
+        AR (AnalysisRunner or None): Runner, or None for ``self.AR``.
+        di (int): Data index.
+
+        Returns:
+        key (tuple): (id of the runner, data index).
+        """
+        return (id(self.AR if AR is None else AR), int(di))
+
+    def _pop_plot_cache(self):
+        """
+        Remove and return the prefetched plot data of the current runner and
+        row.
+
+        Returns:
+        cache (dict or None): Data stored by ``prefetch_plot_data``, or None
+            if nothing was prefetched for them.
+        """
+        cache = getattr(self, '_plot_cache', None)
+        if not cache:
+            return None
+        return cache.pop(self._cache_key(None, self.data_idx), None)
 
     def on_data_idx_changing(self):
         """
@@ -1009,7 +921,8 @@ class StepPanel(QtWidgets.QWidget):
         try:
             step = next(s for s in self.steps if s.name == step_name)
             yaml_params = self.AR._get_yaml_params(step)
-            if param_name in yaml_params and yaml_params[param_name] is not None:
+            if (param_name in yaml_params
+                    and yaml_params[param_name] is not None):
                 return yaml_params[param_name]
         except Exception:
             pass
@@ -1114,10 +1027,12 @@ class StepPanel(QtWidgets.QWidget):
                     break
             if not already_done:
                 try:
-                    run_responsive(self.AR.execute_step, step, data_idx=None, save=False)
+                    run_responsive(self.AR.execute_step, step, data_idx=None,
+                                   save=False)
                 except Exception as exc:
                     print(
-                        f"Warning: auto-prerequisite '{step.name}' failed: {exc}"
+                        f"Warning: auto-prerequisite '{step.name}' failed: "
+                        f"{exc}"
                     )
 
     def _on_step_error(self, step, exc):
@@ -1137,6 +1052,9 @@ class StepPanel(QtWidgets.QWidget):
         print(tb)
 
     def _on_save_clicked(self):
+        """
+        Save the panel's outputs, after confirming if later panels are stale.
+        """
         window = self.window()
         if hasattr(window, '_confirm_stale_downstream_before_save'):
             if not window._confirm_stale_downstream_before_save(self):
@@ -1149,9 +1067,15 @@ class StepPanel(QtWidgets.QWidget):
             print(f"Save error: {exc}")
 
     def _on_run_clicked(self):
+        """
+        Run this panel only (Run button).
+        """
         self.run_current()
 
     def _on_bad_data_clicked(self):
+        """
+        Mark the current row's outputs bad (NaN) and mark later panels stale.
+        """
         self._status_label.setText("Marking bad…")
         QtWidgets.QApplication.processEvents()
         ok = self._write_nan_outputs()
@@ -1171,10 +1095,13 @@ class DefaultStepPanel(StepPanel):
     Generic fallback panel for steps that have no registered custom panel.
 
     Displays the step names, a *Run+* button, and a status indicator.
-    On success it calls :meth:`trigger_downstream` to cascade re-runs.
+    On success it calls ``trigger_downstream`` to cascade re-runs.
     """
 
     def setup_ui(self):
+        """
+        Build the step-name label, Run, Run+, and Save buttons, and status.
+        """
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
 
@@ -1187,8 +1114,10 @@ class DefaultStepPanel(StepPanel):
         layout.addWidget(self._run_btn)
 
         self._run_through_btn = QtWidgets.QPushButton("Run+")
-        self._run_through_btn.setToolTip("Run this panel and all following panels")
-        self._run_through_btn.clicked.connect(lambda: self.run_from_here.emit())
+        self._run_through_btn.setToolTip(
+            "Run this panel and all following panels")
+        self._run_through_btn.clicked.connect(
+            lambda: self.run_from_here.emit())
         layout.addWidget(self._run_through_btn)
 
         self._save_btn = QtWidgets.QPushButton("Save")
@@ -1200,9 +1129,19 @@ class DefaultStepPanel(StepPanel):
         layout.addWidget(self._status_label)
 
     def _on_save_clicked(self):
+        """
+        Save the panel's outputs (same as the base class).
+        """
         super()._on_save_clicked()
 
     def _on_step_error(self, step, exc: Exception):
+        """
+        Show a step error in the status label and print its traceback.
+
+        Parameters:
+        step (plStep): The step that failed.
+        exc (Exception): The exception it raised.
+        """
         msg = f"Error in '{step.name}': {exc}"
         if hasattr(self, "_status_label"):
             self._status_label.setText(msg)
@@ -1218,13 +1157,21 @@ class DefaultStepPanel(StepPanel):
 
 class _SectionHeader(QtWidgets.QWidget):
     """
-    Wraps a :class:`StepPanel` with a collapsible toggle button.
+    Wraps a ``StepPanel`` with a collapsible toggle button.
 
     The button text shows the panel number and step names joined by ``'→'``.
     Clicking the button hides or shows the wrapped panel.
+
+    Parameters:
+    panel (StepPanel): Panel to wrap.
+    parent (QWidget or None): Parent widget.
     """
 
     def __init__(self, panel: StepPanel, parent=None):
+        """
+        Build the toggle button and add the panel below it. See the class
+        docstring for parameters.
+        """
         super().__init__(parent)
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 2, 0, 0)
@@ -1258,6 +1205,16 @@ class _SectionHeader(QtWidgets.QWidget):
 
     @staticmethod
     def _label_text(arrow: str, panel: StepPanel) -> str:
+        """
+        Build the header button text.
+
+        Parameters:
+        arrow (str): Expand/collapse arrow ('▼' or '▶').
+        panel (StepPanel): The wrapped panel.
+
+        Returns:
+        text (str): Arrow, panel number, step names, and shortcut hint.
+        """
         idx = panel.panel_index
         num_str = f"{idx + 1}: " if idx is not None else ""
         names_str = "  →  ".join(panel.step_names)
@@ -1268,6 +1225,12 @@ class _SectionHeader(QtWidgets.QWidget):
         return f"{arrow}  {num_str}{names_str}"
 
     def _on_toggle(self, checked: bool):
+        """
+        Show or hide the panel and update the arrow.
+
+        Parameters:
+        checked (bool): True to show the panel.
+        """
         self._panel.setVisible(checked)
         arrow = "▼" if checked else "▶"
         self._btn.setText(self._label_text(arrow, self._panel))
@@ -1308,6 +1271,10 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         data_idxs=None, title: str = "Interactive Analysis",
         ui_scale: float = 1.0, plot_scale: float = 1.0, parent=None,
     ):
+        """
+        Build the toolbar, panels, and shortcuts, and schedule the first run.
+        See the class docstring for parameters.
+        """
         super().__init__(parent)
         delete_on_close(self)  # destroy on the GUI thread when closed
         self.AR = AR
@@ -1317,11 +1284,14 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
 
         # Prefetch state — background thread pre-runs the next data index
         self._prefetch_thread: threading.Thread | None = None
-        self._prefetching_idx: int | None = None  # index currently being prefetched
-        self._prefetched_idx: int | None = None   # index whose prefetch completed
+        # index currently being prefetched
+        self._prefetching_idx: int | None = None
+        # index whose prefetch completed
+        self._prefetched_idx: int | None = None
         self._prefetch_status_changed.connect(self._on_prefetch_status)
 
-        # Background save state — single-worker thread pool serialises zarr writes
+        # Background save state — single-worker thread pool serialises zarr
+        # writes
         self._save_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="citkid-save"
         )
@@ -1338,8 +1308,13 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             data_idxs = list(range(n))
         self._data_idxs: list = list(data_idxs)
         # Resolve starting position: start_idx is an index *into* data_idxs
-        self._nav_pos: int = max(0, min(int(start_idx), len(self._data_idxs) - 1)) if self._data_idxs else 0
+        self._nav_pos: int = (
+            max(0, min(int(start_idx), len(self._data_idxs) - 1))
+            if self._data_idxs else 0)
         start_di = self._data_idxs[self._nav_pos] if self._data_idxs else 0
+        # Row shown in the panels. It can be outside data_idxs if typed into
+        # the spinbox; _nav_pos is then the nearest entry of data_idxs.
+        self._current_di: int = start_di
 
         # Central widget + outer layout
         central = QtWidgets.QWidget()
@@ -1399,8 +1374,10 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             seq = str(idx)
             _sc = QtGui.QShortcut(QtGui.QKeySequence(seq), self)
             _sc.activated.connect(lambda _i=idx-1: self._run_through_panel(_i))
-            _sc_shift = QtGui.QShortcut(QtGui.QKeySequence(f"Shift+{seq}"), self)
-            _sc_shift.activated.connect(lambda _i=idx-1: self._run_panel_by_index(_i))
+            _sc_shift = QtGui.QShortcut(QtGui.QKeySequence(f"Shift+{seq}"),
+                                        self)
+            _sc_shift.activated.connect(
+                lambda _i=idx-1: self._run_panel_by_index(_i))
 
         self._fit_to_screen(round(1200 * ui_scale))
         # Initialise panels in order once the event loop is running so that
@@ -1429,18 +1406,21 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         # font and width.
         self.ensurePolished()
         self.layout().activate()
-        fit_window_to_screen(self, frac=0.9, size=(width, 1), height_margin=TITLE_BAR_MARGIN)
+        fit_window_to_screen(self, frac=0.9, size=(width, 1),
+                             height_margin=TITLE_BAR_MARGIN)
         geom = available_screen_geometry()
         plots = [w for panel in self.panels
                  for w in panel.findChildren(pg.GraphicsLayoutWidget)]
         shrink_to_fit(self, self._content_height, plots, self._ui_scale,
                       geom.height() - TITLE_BAR_MARGIN, geom.width())
-        fit_window_to_screen(self, frac=0.9, size=(self.width(), self._content_height()),
+        fit_window_to_screen(self, frac=0.9,
+                             size=(self.width(), self._content_height()),
                              height_margin=TITLE_BAR_MARGIN)
 
     def _scroll_width(self) -> int:
         """
-        Return the width the panel scroll area gets at the current window width.
+        Return the width the panel scroll area gets at the current window
+        width.
 
         Returns:
         width (int): Window width minus the central layout's margins, in
@@ -1460,7 +1440,8 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         """
         return vbox_height_for_width(
             self.centralWidget().layout(), self.width(),
-            {self._scroll: scroll_area_content_height(self._scroll, width=self._scroll_width())},
+            {self._scroll: scroll_area_content_height(
+                self._scroll, width=self._scroll_width())},
         )
 
     def _build_toolbar(self, data_idx) -> QtWidgets.QWidget:
@@ -1546,17 +1527,36 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         return w
 
     def _update_nav_label(self):
+        """
+        Show the position in ``data_idxs``, or that the shown row (typed
+        into the spinbox) is not in it.
+        """
         n = len(self._data_idxs)
-        self._nav_label.setText(f"{self._nav_pos + 1} / {n}")
+        current = getattr(self, '_current_di', None)
+        if n and current is not None and current not in self._data_idxs:
+            self._nav_label.setText(f"not in list ({n})")
+        else:
+            self._nav_label.setText(f"{self._nav_pos + 1} / {n}")
 
     def _submit_save(self, steps, AR, di, panel_names):
-        """Submit a save task for *di* to the single-worker background thread."""
+        """
+        Submit a save task for ``di`` to the single-worker background thread.
+
+        Parameters:
+        steps (list of plStep): Steps whose outputs are saved.
+        AR (AnalysisRunner): Runner that saves them.
+        di (int): Data index of the outputs.
+        panel_names (tuple of str): Step names of the panel, for messages.
+        """
         with self._save_count_lock:
             self._saves_in_flight += 1
             count = self._saves_in_flight
         self._save_status_changed.emit(f"saving… ({count})")
 
         def _do_save():
+            """
+            Save each step's outputs and update the in-flight count.
+            """
             try:
                 for step in steps:
                     step_di = (
@@ -1600,9 +1600,16 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
                     f"Warning: save failed for {panel.step_names}: {exc}"
                 )
 
-        new_pos = max(0, min(len(self._data_idxs) - 1, self._nav_pos + delta))
-        if new_pos == self._nav_pos:
-            return  # already at boundary
+        if (self._data_idxs
+                and self._current_di != self._data_idxs[self._nav_pos]):
+            # Showing a typed row outside data_idxs: return to the nearest
+            # entry of data_idxs first
+            new_pos = self._nav_pos
+        else:
+            new_pos = max(0, min(len(self._data_idxs) - 1,
+                                 self._nav_pos + delta))
+            if new_pos == self._nav_pos:
+                return  # already at boundary
         self._nav_pos = new_pos
         new_di = self._data_idxs[new_pos]
 
@@ -1668,7 +1675,13 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             panel.autoscale_plots()
 
     def _run_through_panel(self, index: int):
-        """Run panel *index* and all panels that follow it, stopping on first failure."""
+        """
+        Run panel ``index`` and all panels that follow it, stopping on the
+        first failure.
+
+        Parameters:
+        index (int): 0-based panel position.
+        """
         if index >= len(self.panels):
             return
         for panel in self.panels[index:]:
@@ -1693,7 +1706,12 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_panel_rerun(self, source_panel: StepPanel):
-        """Mark every panel that comes after *source_panel* as needing a rerun."""
+        """
+        Mark every panel that comes after ``source_panel`` as needing a rerun.
+
+        Parameters:
+        source_panel (StepPanel): Panel that was rerun.
+        """
         try:
             src_idx = self.panels.index(source_panel)
         except ValueError:
@@ -1717,8 +1735,9 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         If the next index was fully pre-computed by the background prefetch
         thread, panels skip ``run_steps`` and go straight to ``update_plots``.
         """
-        current_di = self._data_idxs[self._nav_pos] if self._data_idxs else value
-        if value != current_di and not self._confirm_stale_downstream_before_leave():
+        current_di = self._current_di
+        if (value != current_di
+                and not self._confirm_stale_downstream_before_leave()):
             self._idx_spin.blockSignals(True)
             self._idx_spin.setValue(current_di)
             self._idx_spin.blockSignals(False)
@@ -1734,10 +1753,15 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
                 except Exception as exc:
                     print(f"Warning: save failed for {panel.step_names}: {exc}")
 
-        # Sync nav position when spinbox is changed manually
+        # Sync nav position when spinbox is changed manually. A row outside
+        # data_idxs keeps the nearest entry as the nav position.
+        self._current_di = value
         if value in self._data_idxs:
             self._nav_pos = self._data_idxs.index(value)
-            self._update_nav_label()
+        elif self._data_idxs:
+            self._nav_pos = int(np.argmin(
+                np.abs(np.asarray(self._data_idxs) - value)))
+        self._update_nav_label()
         for panel in self.panels:
             panel.data_idx = value
 
@@ -1806,6 +1830,9 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         self._prefetch_status_changed.emit(f"⟳ prefetch {next_di}")
 
         def _worker():
+            """
+            Prefetch every panel's plot data for ``next_di``.
+            """
             try:
                 # Pre-compute numpy plot data for each panel so update_plots
                 # only has to call setData() when the user navigates here.
@@ -1827,7 +1854,13 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         self._prefetch_thread.start()
 
     def _on_prefetch_status(self, msg: str):
-        """Update the prefetch status label (always called on the UI thread via signal)."""
+        """
+        Update the prefetch status label (always called on the UI thread via
+        signal).
+
+        Parameters:
+        msg (str): Status text.
+        """
         self._prefetch_label.setText(msg)
         # Auto-clear the "done" message after 4 seconds.
         if msg.startswith("✓"):
@@ -1836,11 +1869,23 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             QtCore.QTimer.singleShot(4000, self._prefetch_label.clear)
 
     def _on_save_status(self, msg: str):
-        """Update the save status label (always called on the UI thread via signal)."""
+        """
+        Update the save status label (always called on the UI thread via
+        signal).
+
+        Parameters:
+        msg (str): Status text.
+        """
         self._save_label.setText(msg)
 
     def closeEvent(self, event):
-        """Submit any remaining dirty panels, then flush all background saves."""
+        """
+        Submit any remaining dirty panels, then flush all background saves.
+
+        Parameters:
+        event (QCloseEvent): The close event (ignored while work is running
+            or if the user cancels).
+        """
         if responsive_busy():
             event.ignore()  # work in progress; close when it has finished
             return
@@ -1882,7 +1927,8 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
                 start_index = self.panels.index(source_panel) + 1
             except ValueError:
                 start_index = 0
-        return [panel for panel in self.panels[start_index:] if panel._needs_run]
+        return [panel for panel in self.panels[start_index:]
+                if panel._needs_run]
 
     def _confirm_stale_downstream_before_save(self, source_panel):
         """
@@ -1895,9 +1941,11 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         reply = QtWidgets.QMessageBox.question(
             self,
             "Downstream Panels Need Run",
-            "Saving now will keep later panel outputs missing for this data index.\n\n"
+            "Saving now will keep later panel outputs missing for this data "
+            "index.\n\n"
             f"Panels needing a rerun: {names}\n\nContinue saving?",
-            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
             QtWidgets.QMessageBox.StandardButton.No,
         )
         return reply == QtWidgets.QMessageBox.StandardButton.Yes
@@ -1913,9 +1961,11 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         reply = QtWidgets.QMessageBox.question(
             self,
             "Panels Need Run",
-            "Earlier panel changes invalidated later panel outputs for this data index.\n\n"
+            "Earlier panel changes invalidated later panel outputs for this "
+            "data index.\n\n"
             f"Panels needing a rerun: {names}\n\nLeave anyway?",
-            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
             QtWidgets.QMessageBox.StandardButton.No,
         )
         return reply == QtWidgets.QMessageBox.StandardButton.Yes

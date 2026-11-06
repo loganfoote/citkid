@@ -9,8 +9,8 @@ the nonlinearity ``a`` against power) for each resonator (``data_idx``).
 guesses.
 
 This is a deliberately small store rather than a ``DataSet``: a fit turns all
-series points of one row into a few numbers, so it doesn't need the calibration and
-invalidation machinery of the pipeline.
+series points of one row into a few numbers, so it doesn't need the calibration
+and invalidation machinery of the pipeline.
 """
 
 from collections import namedtuple
@@ -82,7 +82,8 @@ class SeriesXYFit:
         self.name = str(name)
         self.group = group
         self.n_samples = int(n_samples)
-        self.min_points = len(param_names) if min_points is None else int(min_points)
+        self.min_points = (len(param_names) if min_points is None
+                           else int(min_points))
         self.uses_guess = bool(uses_guess)
         self.inverse = inverse
 
@@ -113,8 +114,8 @@ class SeriesXYFit:
         values = np.asarray(values, dtype=float).ravel()
         if len(values) != self.n_params:
             raise ValueError(
-                f"fit returned {len(values)} {what} values, but param_names has "
-                f"{self.n_params}: {self.param_names}")
+                f"fit returned {len(values)} {what} values, but param_names "
+                f"has {self.n_params}: {self.param_names}")
         return values
 
     def run(self, x, y, p0=None):
@@ -141,7 +142,8 @@ class SeriesXYFit:
         Exception: Anything ``fit`` raises.
         """
         if p0 is not None and not self.uses_guess:
-            raise ValueError(f"xy fit '{self.name}' doesn't use guesses (uses_guess=False)")
+            raise ValueError(f"xy fit '{self.name}' doesn't use guesses "
+                             f"(uses_guess=False)")
         xs, ys = usable_points(x, y)
         if len(xs) < self.min_points:
             return None, None
@@ -154,9 +156,10 @@ class SeriesXYFit:
                         and self.n_params > 1 and np.ndim(result[0]) == 0)
         if forgot_guess or not (isinstance(result, tuple) and len(result) == 2):
             raise ValueError(
-                f"xy fit '{self.name}' uses guesses, so fit must return (popt, p0); "
-                f"got {type(result).__name__}")
-        return self._as_params(result[0], 'parameter'), self._as_params(result[1], 'guess')
+                f"xy fit '{self.name}' uses guesses, so fit must return "
+                f"(popt, p0); got {type(result).__name__}")
+        return (self._as_params(result[0], 'parameter'),
+                self._as_params(result[1], 'guess'))
 
     def curve(self, x, popt, log_x=False):
         """
@@ -185,7 +188,8 @@ class SeriesXYFit:
             return None, None
         spacing = np.geomspace if log_x else np.linspace
         xs = spacing(finite.min(), finite.max(), self.n_samples)
-        return xs, np.asarray(self.model(xs, *[float(p) for p in popt]), dtype=float)
+        return xs, np.asarray(self.model(xs, *[float(p) for p in popt]),
+                              dtype=float)
 
     def x_at_y(self, popt, y, x=None, log_x=False):
         """
@@ -213,8 +217,9 @@ class SeriesXYFit:
             return np.nan
         if self.inverse is not None:
             with np.errstate(all='ignore'):
-                value = float(np.asarray(self.inverse(np.asarray(popt, dtype=float), float(y)),
-                                         dtype=float).ravel()[0])
+                value = float(np.asarray(
+                    self.inverse(np.asarray(popt, dtype=float), float(y)),
+                    dtype=float).ravel()[0])
             return value if np.isfinite(value) else np.nan
         if x is None:
             return np.nan
@@ -267,7 +272,8 @@ def usable_points(x, y):
     return x[keep][order], y[keep][order]
 
 
-SavedXYFit = namedtuple('SavedXYFit', ['fit_x', 'fit_y', 'popt', 'p0', 'p0_user'])
+SavedXYFit = namedtuple('SavedXYFit',
+                        ['fit_x', 'fit_y', 'popt', 'p0', 'p0_user'])
 SavedXYFit.__doc__ = """
 One resonator's saved xy fit.
 
@@ -370,8 +376,8 @@ class SeriesXYFitStore:
             return 'The xy fit group contains data from an unknown source.'
         stored = dict(stored)
         names = stored.get('param_names', stored.get('output_names'))
-        return (f"The xy fit group already contains fits from '{stored.get('name')}' "
-                f"with parameters {names}.")
+        return (f"The xy fit group already contains fits from "
+                f"'{stored.get('name')}' with parameters {names}.")
 
     def clear(self):
         """
@@ -401,7 +407,8 @@ class SeriesXYFitStore:
         with self._lock:
             if 'row_exists' not in self.group:
                 return False
-            return bool(_retry_io(lambda: self.group['row_exists'][int(data_idx)]))
+            return bool(_retry_io(
+                lambda: self.group['row_exists'][int(data_idx)]))
 
     def fitted_rows(self):
         """
@@ -413,7 +420,8 @@ class SeriesXYFitStore:
         with self._lock:
             if 'row_exists' not in self.group:
                 return np.zeros(self.nrows, dtype=bool)
-            return np.asarray(_retry_io(lambda: self.group['row_exists'][...]), dtype=bool)
+            return np.asarray(
+                _retry_io(lambda: self.group['row_exists'][...]), dtype=bool)
 
     def popt(self):
         """
@@ -426,7 +434,8 @@ class SeriesXYFitStore:
         with self._lock:
             if 'popt' not in self.group:
                 return np.full((self.nrows, self.xy_fit.n_params), np.nan)
-            return np.asarray(_retry_io(lambda: self.group['popt'][...]), dtype=float)
+            return np.asarray(_retry_io(lambda: self.group['popt'][...]),
+                              dtype=float)
 
     def all_fits(self):
         """
@@ -442,9 +451,11 @@ class SeriesXYFitStore:
             """
             Read both arrays, or their NaN defaults.
             """
-            fit_x = (np.asarray(self.group['fit_x'][...], dtype=float) if 'fit_x' in self.group
+            fit_x = (np.asarray(self.group['fit_x'][...], dtype=float)
+                     if 'fit_x' in self.group
                      else np.full((self.nrows, self.n_series), np.nan))
-            popt = (np.asarray(self.group['popt'][...], dtype=float) if 'popt' in self.group
+            popt = (np.asarray(self.group['popt'][...], dtype=float)
+                    if 'popt' in self.group
                     else np.full((self.nrows, self.xy_fit.n_params), np.nan))
             return fit_x, popt
 
@@ -454,8 +465,11 @@ class SeriesXYFitStore:
     @property
     def y_target(self):
         """
-        The target y the chosen x values are for (``run_iq_series``'s
-        ``y_target``), or None if none was saved.
+        Return the target y the chosen x values are for (``run_iq_series``'s
+        ``y_target``).
+
+        Returns:
+        y_target (float or None): the target y, or None if none was saved.
         """
         with self._lock:
             value = self.group.attrs.get('y_target')
@@ -463,6 +477,12 @@ class SeriesXYFitStore:
 
     @y_target.setter
     def y_target(self, value):
+        """
+        Save the target y the chosen x values are for.
+
+        Parameters:
+        value (float or None): the target y, or None to clear it.
+        """
         with self._lock:
             _retry_io(self.group.attrs.__setitem__, 'y_target',
                       None if value is None else float(value))
@@ -480,10 +500,12 @@ class SeriesXYFitStore:
             """
             Read both arrays, or their defaults.
             """
-            x = (np.asarray(self.group['x_chosen'][...], dtype=float) if 'x_chosen' in self.group
+            x = (np.asarray(self.group['x_chosen'][...], dtype=float)
+                 if 'x_chosen' in self.group
                  else np.full(self.nrows, np.nan))
             user = (np.asarray(self.group['x_chosen_user'][...], dtype=bool)
-                    if 'x_chosen_user' in self.group else np.zeros(self.nrows, dtype=bool))
+                    if 'x_chosen_user' in self.group
+                    else np.zeros(self.nrows, dtype=bool))
             return x, user
 
         with self._lock:
@@ -506,7 +528,8 @@ class SeriesXYFitStore:
             """
             Read one row of both arrays.
             """
-            x = float(self.group['x_chosen'][di]) if 'x_chosen' in self.group else np.nan
+            x = (float(self.group['x_chosen'][di])
+                 if 'x_chosen' in self.group else np.nan)
             user = (bool(self.group['x_chosen_user'][di])
                     if 'x_chosen_user' in self.group else False)
             return x, user
@@ -521,10 +544,12 @@ class SeriesXYFitStore:
         """
         if 'x_chosen' not in self.group:
             self.group.create_array(
-                'x_chosen', data=np.full(self.nrows, np.nan), chunks=(self.nrows,))
+                'x_chosen', data=np.full(self.nrows, np.nan),
+                chunks=(self.nrows,))
         if 'x_chosen_user' not in self.group:
             self.group.create_array(
-                'x_chosen_user', data=np.zeros(self.nrows, dtype=bool), chunks=(self.nrows,))
+                'x_chosen_user', data=np.zeros(self.nrows, dtype=bool),
+                chunks=(self.nrows,))
         return self.group['x_chosen'], self.group['x_chosen_user']
 
     def save_chosen_x(self, data_idx, x, user):
@@ -599,13 +624,15 @@ class SeriesXYFitStore:
             """
             Read one row of an array, or None if the array doesn't exist.
             """
-            return np.asarray(self.group[name][di], dtype=float) if name in self.group else None
+            return (np.asarray(self.group[name][di], dtype=float)
+                    if name in self.group else None)
 
         def read():
             """
             Read one row of every array.
             """
-            if 'row_exists' not in self.group or not self.group['row_exists'][di]:
+            if ('row_exists' not in self.group
+                    or not self.group['row_exists'][di]):
                 return None
             popt = optional('popt')
             if popt is not None and not np.all(np.isfinite(popt)):
@@ -613,9 +640,11 @@ class SeriesXYFitStore:
             p0 = optional('p0')
             if p0 is not None and not np.all(np.isfinite(p0)):
                 p0 = None
-            p0_user = bool(self.group['p0_user'][di]) if 'p0_user' in self.group else False
+            p0_user = (bool(self.group['p0_user'][di])
+                       if 'p0_user' in self.group else False)
             return SavedXYFit(np.asarray(self.group['fit_x'][di]),
-                              np.asarray(self.group['fit_y'][di]), popt, p0, p0_user)
+                              np.asarray(self.group['fit_y'][di]), popt, p0,
+                              p0_user)
 
         with self._lock:
             return _retry_io(read)
@@ -636,8 +665,10 @@ class SeriesXYFitStore:
         saved = self.load(data_idx)
         if saved is None:
             return False
-        return (np.array_equal(saved.fit_x, np.asarray(x, dtype=float), equal_nan=True)
-                and np.array_equal(saved.fit_y, np.asarray(y, dtype=float), equal_nan=True))
+        return (np.array_equal(saved.fit_x, np.asarray(x, dtype=float),
+                               equal_nan=True)
+                and np.array_equal(saved.fit_y, np.asarray(y, dtype=float),
+                                   equal_nan=True))
 
     def save(self, data_idx, x, y, popt, p0=None, p0_user=False):
         """
@@ -679,10 +710,12 @@ class SeriesXYFitStore:
             require('fit_x', (self.n_series,), float, np.nan)[di] = x
             require('fit_y', (self.n_series,), float, np.nan)[di] = y
             require('popt', (m,), float, np.nan)[di] = (
-                np.full(m, np.nan) if popt is None else np.asarray(popt, dtype=float))
+                np.full(m, np.nan) if popt is None
+                else np.asarray(popt, dtype=float))
             if self.xy_fit.uses_guess:
                 require('p0', (m,), float, np.nan)[di] = (
-                    np.full(m, np.nan) if p0 is None else np.asarray(p0, dtype=float))
+                    np.full(m, np.nan) if p0 is None
+                    else np.asarray(p0, dtype=float))
                 require('p0_user', (), bool, False)[di] = bool(p0_user)
             require('row_exists', (), bool, False)[di] = True
 

@@ -149,26 +149,24 @@ class AutoResFinder:
         f (np.ndarray): Frequency data in Hz (1D array).
         z (np.ndarray): Complex S21 data (1D array).
         zarr_grp (zarr.Group or str): Zarr group or path to save results.
-            The resonances are saved as 'fres_auto' in the group. A path
-            must end in '.h5' and its parent directory must exist.
+            The resonances are saved as 'fres_auto' in the group. The parent
+            directory of a path must exist.
 
         Raises:
-        ValueError: if ``zarr_grp`` is a path without an '.h5' extension.
         FileNotFoundError: if the parent directory of the path does not
             exist.
         RuntimeError: if the user cancels the overwrite popup.
         """
-        self.f = np.asarray(f, dtype = np.float64)
-        self.z = np.asarray(z, dtype = np.complex128)
+        # Sort by frequency: the plots and searchsorted assume ascending f
+        f = np.asarray(f, dtype = np.float64)
+        order = np.argsort(f, kind = 'stable')
+        self.f = f[order]
+        self.z = np.asarray(z, dtype = np.complex128)[order]
 
         # Resolve zarr_grp to a zarr group
         if isinstance(zarr_grp, (str, os.PathLike)):
             zarr_path = os.path.expanduser(str(zarr_grp))
-            
-            # Check for .h5 extension
-            if not zarr_path.endswith('.h5'):
-                raise ValueError("Output path must have .h5 extension")
-            
+
             # Check if parent directory exists
             parent_dir = os.path.dirname(zarr_path)
             if parent_dir and not os.path.isdir(parent_dir):
@@ -176,7 +174,8 @@ class AutoResFinder:
             
             # A regular file at the path blocks the zarr directory store
             if os.path.isfile(zarr_path):
-                if not _confirm_overwrite(f"A file already exists at\n{zarr_path}"):
+                if not _confirm_overwrite(
+                        f"A file already exists at\n{zarr_path}"):
                     raise RuntimeError("User cancelled operation")
                 os.remove(zarr_path)
 
@@ -405,7 +404,8 @@ class AutoResFinder:
         layout.addStretch()
         
         # Setup keyboard shortcuts (use string sequences for portability)
-        self.save_action = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"), self.win)
+        self.save_action = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"),
+                                           self.win)
         self.save_action.activated.connect(self.save_data)
 
         self.help_action = QtGui.QShortcut(QtGui.QKeySequence("H"), self.win)
@@ -446,7 +446,8 @@ class AutoResFinder:
         """
         # Add title
         title = ('<span style="color: #FFF; font-size: 10pt;">'
-                 '<b>Controls:</b> Z/X: Pan 20% | A/S: Pan 80% | Ctrl+S: Save | H: Help'
+                 '<b>Controls:</b> Z/X: Pan 20% | A/S: Pan 80% | '
+                 'Ctrl+S: Save | H: Help'
                  '</span>')
         self.plot_layout.addLabel(title, col = 0)
         self.plot_layout.nextRow()
@@ -492,7 +493,8 @@ class AutoResFinder:
         self.peak_markers_original = []
         
         # No separate sigRangeChanged needed — plots share the x-axis
-        # (setXLink) so the single debounced handler on plot_filtered covers both.
+        # (setXLink) so the single debounced handler on plot_filtered covers
+        # both.
         
         # Link x-axes
         self.plot_original.setXLink(self.plot_filtered)
@@ -688,7 +690,8 @@ class AutoResFinder:
         run in a worker thread (``run_responsive``), so the window keeps
         responding on long sweeps; the plots are updated afterwards.
         """
-        self.filtered_mag, fres = run_responsive(self._compute_peaks, dict(self.params))
+        self.filtered_mag, fres = run_responsive(self._compute_peaks,
+                                                 dict(self.params))
 
         # Update curves with visible slice only
         self._update_curves()
@@ -831,7 +834,8 @@ class AutoResFinder:
             "<h3>Auto Resonance Finder Controls</h3>"
             "<p><b>Controls:</b></p>"
             "<ul>"
-            "<li>Adjust parameters in the right panel to tune resonance detection</li>"
+            "<li>Adjust parameters in the right panel to tune resonance "
+            "detection</li>"
             "<li><b>Z/X:</b> Pan left/right by 20%</li>"
             "<li><b>A/S:</b> Pan left/right by 80%</li>"
             "<li><b>Mouse Wheel:</b> Zoom in/out</li>"
@@ -843,7 +847,8 @@ class AutoResFinder:
             "<li><b>Frequency Range:</b> Limit peak search to this range</li>"
             "<li><b>Smoothing Method:</b></li>"
             "<ul>"
-            "<li><b>highpass:</b> Remove slow baseline drift (cutoff in MHz)</li>"
+            "<li><b>highpass:</b> Remove slow baseline drift "
+            "(cutoff in MHz)</li>"
             "<li><b>polynomial:</b> Subtract polynomial baseline (order)</li>"
             "<li><b>none:</b> No smoothing</li>"
             "</ul>"
@@ -867,13 +872,17 @@ class AutoResFinder:
         Set up keyboard shortcuts for panning (Z/X: 20%, A/S: 80%).
         """
         # Pan shortcuts (20% pan by Z/X, 80% pan by A/S)
-        self.pan_left_action = QtGui.QShortcut(QtGui.QKeySequence("Z"), self.win)
+        self.pan_left_action = QtGui.QShortcut(QtGui.QKeySequence("Z"),
+                                               self.win)
         self.pan_left_action.activated.connect(self.pan_left)
-        self.pan_right_action = QtGui.QShortcut(QtGui.QKeySequence("X"), self.win)
+        self.pan_right_action = QtGui.QShortcut(QtGui.QKeySequence("X"),
+                                                self.win)
         self.pan_right_action.activated.connect(self.pan_right)
-        self.fast_pan_left_action = QtGui.QShortcut(QtGui.QKeySequence("A"), self.win)
+        self.fast_pan_left_action = QtGui.QShortcut(QtGui.QKeySequence("A"),
+                                                    self.win)
         self.fast_pan_left_action.activated.connect(self.fast_pan_left)
-        self.fast_pan_right_action = QtGui.QShortcut(QtGui.QKeySequence("S"), self.win)
+        self.fast_pan_right_action = QtGui.QShortcut(QtGui.QKeySequence("S"),
+                                                     self.win)
         self.fast_pan_right_action.activated.connect(self.fast_pan_right)
     
     def _pan(self, fraction):

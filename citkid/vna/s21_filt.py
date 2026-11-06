@@ -9,7 +9,7 @@ import numpy as np
 from scipy.signal import butter, filtfilt, find_peaks
 
 
-def highpass_filter(f, mag_db, cutoff_mhz=10.0):
+def highpass_s21(f, mag_db, cutoff_mhz=10.0):
     """
     Apply a high-pass Butterworth filter to remove slow baseline drift.
 
@@ -68,7 +68,7 @@ def filter_mag(f, mag_db, method='none', highpass_mhz=10.0, poly_order=3):
     Parameters:
     f (np.ndarray): Frequency array in Hz (1D).
     mag_db (np.ndarray): |S21| magnitude in dB (1D, same length as f).
-    method (str): Can be 'highpass' (``highpass_filter`` with
+    method (str): Can be 'highpass' (``highpass_s21`` with
         ``highpass_mhz``), 'polynomial' (``polynomial_baseline`` with
         ``poly_order``), or 'none' (default, a copy of ``mag_db``). Any
         other value is treated as 'none'.
@@ -79,7 +79,7 @@ def filter_mag(f, mag_db, method='none', highpass_mhz=10.0, poly_order=3):
     filtered_mag (np.ndarray): Filtered magnitude in dB.
     """
     if method == 'highpass':
-        return highpass_filter(f, mag_db, highpass_mhz)
+        return highpass_s21(f, mag_db, highpass_mhz)
     if method == 'polynomial':
         return polynomial_baseline(f, mag_db, poly_order)
     return np.array(mag_db, copy=True)

@@ -8,7 +8,8 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["PYQTGRAPH_QT_LIB"] = "PyQt5"
 import warnings
 
-# Suppress DeprecationWarning raised intentionally by code scheduled for removal.
+# Suppress DeprecationWarning raised intentionally by code scheduled for
+# removal.
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 # Also ignore common third-party deprecation/quality warnings we see in tests
@@ -36,7 +37,8 @@ try:
 except Exception:
     pass
 
-# Ignore generic runtime warnings exposed during tests (e.g., coroutine not awaited)
+# Ignore generic runtime warnings exposed during tests (e.g., coroutine not
+# awaited)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 def pytest_addoption(parser):

@@ -40,7 +40,7 @@ There are three kinds of saved CRS data:
 
 `CRS.stream_to_memory` returns a timestream as a NumPy array and saves
 nothing. `CRS.sweep`, `sweep_span`, `sweep_qres`, and `sweep_full` return
-arrays and save only the acquisition configuration (to `dec_grp`, if given);
+arrays and save only the acquisition configuration (to `acq_cfg_grp`, if given);
 saving the sweep data itself is up to the caller (see
 [5.3](#53-full-and-other-sweeps)).
 
@@ -249,7 +249,7 @@ ch_map = {int(name.removeprefix('chs_module')): cfg[name][:]
 | --- | --- | --- |
 | Timestream | attributes of `<tones grp>/crs_config` | `<stream grp>/crs_config` (attributes + `chs_module<N>` arrays) |
 | Target sweep | attributes of the target-sweep group itself (not a `crs_config` subgroup) | each sweep subgroup (`rough_sweep`, `gain_sweep`, `fine_sweep`) |
-| `CRS.sweep*` with `dec_grp` | not saved | `dec_grp` |
+| `CRS.sweep*` with `acq_cfg_grp` | not saved | `acq_cfg_grp` |
 
 Note the asymmetry: timestreams put the configuration in a `crs_config`
 subgroup, target sweeps put it directly on the group and its sweep
@@ -363,14 +363,14 @@ sweeps) to `root.require_group(set_name(i))` so the same loaders work.
 
 ### 5.3 Full and other sweeps
 
-`CRS.sweep_full(amplitude, npoints_per_tone, nsamps, ...)` sweeps the whole
+`CRS.sweep_full(amplitude, npoints_per_ch, nsamps, ...)` sweeps the whole
 band of every set NCO with 1024 tones per module and returns **1D** `f, z`,
 flattened and sorted by frequency ascending (same units as above). No
 citkid function saves full sweeps, and there is no defined layout for them.
-`dec_grp`, if given, only receives the acquisition configuration. Note that
+`acq_cfg_grp`, if given, only receives the acquisition configuration. Note that
 `procedures._save_sweep_data` requires 2D arrays, so it can't be used for
 `sweep_full` output. If you save full sweeps, a natural choice is to
-create `f` and `z` arrays in the same group you passed as `dec_grp`, but
+create `f` and `z` arrays in the same group you passed as `acq_cfg_grp`, but
 this is a convention you choose, not one the code defines.
 
 `CRS.sweep`, `sweep_span`, and `sweep_qres` return 2D `(ntones, npoints)`
@@ -461,8 +461,8 @@ What the loader reads (`target_sweep_steps(data_path, group, ts = ...)`):
 | `nrows` | `load_global_data` / global | `len(<group>/fres)` | |
 | `dt` | `load_global_data` / global (only if `ts`) | `<stream>/dt` | scalar |
 | `fres`, `qres`, `ares`, `res_idxs` | `load_global_res_data` / global-res | `<group>/fres`, `qres`, `ares`, `res_idxs` | |
-| `ff`, `zf` | `load_data_f` / per-row | `<group>/fine_sweep/f`, `z`, row `data_idx`, sorted ascending (optionally averaged by `f_avg`) | `(npoints_fine,)` |
-| `fg`, `zg` | `load_data_g` / per-row | `<group>/gain_sweep/f`, `z`, row `data_idx`, sorted ascending | `(npoints_gain,)` |
+| `ff`, `zf` | `load_sweep_f` / per-row | `<group>/fine_sweep/f`, `z`, row `data_idx`, sorted ascending (optionally averaged by `f_avg`) | `(npoints_fine,)` |
+| `fg`, `zg` | `load_sweep_g` / per-row | `<group>/gain_sweep/f`, `z`, row `data_idx`, sorted ascending | `(npoints_gain,)` |
 | `ft` | `load_ft` / vectorized (only if `ts`) | `<group>/<ts>/fres[data_idx]` (the written tone frequency) | scalar |
 | `zt` | `load_zt` / vectorized (only if `ts`) | `<stream>/z[:, data_idx, :ts_nsamps]`, converted to complex and scaled by `<stream>/counts_to_s21` | `(nsamples,)` |
 
@@ -474,9 +474,9 @@ Which calibration uses what:
 
 | Alias (`cal_yaml_path`) | YAML | Needs |
 | --- | --- | --- |
-| `'iq'` | `cal-iqonly.yaml` | `ff`, `zf`, `fg`, `zg` (no timestream; `ts = None`) |
-| `'ts'`, `'ts-fixed_theta'` | `cal-ts.yaml` | the above plus `ft`, `zt`, `dt` |
-| `'ts_offres'` | `cal-offres.yaml` | the above plus `ft`, `zt`, `dt` |
+| `'iq'` | `cal_iq.yaml` | `ff`, `zf`, `fg`, `zg` (no timestream; `ts = None`) |
+| `'ts'`, `'ts_fixed_theta'` | `cal_ts.yaml` | the above plus `ft`, `zt`, `dt` |
+| `'ts_offres'` | `cal_ts_offres.yaml` | the above plus `ft`, `zt`, `dt` |
 
 The default calibration steps then use these names: `rmv_gain_f` /
 `rmv_gain_t` (`xcal.gain.remove_gain` on `ff, zf` and `ft, zt`),
@@ -509,7 +509,7 @@ Requirements this places on the data:
 - `ft` is the rfmux-adjusted written frequency, which can differ from the
   requested `fres` and from the fine-sweep grid by tens of Hz.
 
-The generic template `citkid/pipeline/templates/custom_steps_template.py`
+The generic template `citkid/pipeline/templates/custom_steps_ts.py`
 shows hand-written loaders of the same kind; its paths are placeholders
 (see [10](#10-known-inconsistencies)).
 
@@ -650,10 +650,10 @@ Found while writing this document; not fixed here.
   bytes). Since streaming now writes only the `ntones` tones directly to
   Zarr, only the "processed" size reflects what is saved; the raw figure
   looks left over from the earlier parser-based approach.
-- `citkid/pipeline/templates/custom_steps_template.py:21-50`: placeholder
+- `citkid/pipeline/templates/custom_steps_ts.py:21-50`: placeholder
   paths are mixed: `load_global_data` reads `ts_00/dt` and `load_ft` reads
   `ts_00/fres`, but `load_zt` reads `z` and `counts_to_s21` from the root,
-  and `load_data_f` / `load_data_g` read the 2D sweep from the same root
+  and `load_sweep_f` / `load_sweep_g` read the 2D sweep from the same root
   `z` (and both from the same `f`). For CRS data, use the
   `sweep_series.target_sweep_steps` paths in [7](#7-feeding-a-citkidpipeline-dataset).
 - Layout asymmetry (design, not a bug): timestreams save the system

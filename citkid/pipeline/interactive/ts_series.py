@@ -11,13 +11,10 @@ For each resonator (data_idx), displays:
   - Left:  the selected y vs x for every series index, and a ``|S21|``
            waterfall.
   - Right: the TS panels (GainFitPanel, CircleFitPanel, and XCalPanel, or
-           XCalFixedThetaPanel with the 'ts-fixed_theta' analysis) for the
+           XCalFixedThetaPanel with the 'ts_fixed_theta' analysis) for the
            selected series index.
 
-Usage
------
-::
-
+Examples:
     import zarr
     from citkid.pipeline.interactive import run_ts_series
 
@@ -97,8 +94,8 @@ def normalize_quantities(quantities=None):
             getters[str(label)] = _float_or_none(source)
         else:
             raise TypeError(
-                f"quantity '{label}' must be a parameter name, a callable, or SeriesValues; "
-                f"got {source!r}")
+                f"quantity '{label}' must be a parameter name, a callable, "
+                f"or SeriesValues; got {source!r}")
     if not getters:
         raise ValueError('quantities must contain at least one quantity')
     return getters
@@ -156,9 +153,9 @@ class TSSeriesWindow(IQSeriesWindow):
         as ``x_name``. None (default) adds nothing.
     x_name (str or None): Dropdown label of ``x_values``. None (default)
         uses 'x'.
-    **kwargs: Other ``IQSeriesWindow`` arguments (``start_series_idx``,
-        ``start_idx``, ``data_idxs``, ``title``, ``ui_scale``,
-        ``plot_scale``, ``parent``, ``state_group``, ``xy_fit``,
+    **kwargs: Other ``IQSeriesWindow`` arguments (``start_idx``,
+        ``data_idxs``, ``title``, ``ui_scale``, ``plot_scale``, ``parent``,
+        ``state_group``, ``xy_fit``,
         ``background_fitting``, ``xscale``, ``yscale``).
 
     Raises:
@@ -182,7 +179,8 @@ class TSSeriesWindow(IQSeriesWindow):
         if x_values is not None:
             label = 'x' if x_name is None else x_name
             self._quantities[label] = (
-                x_values if isinstance(x_values, SeriesValues) else SeriesValues(x_values))
+                x_values if isinstance(x_values, SeriesValues)
+                else SeriesValues(x_values))
             if x is None:
                 x = label
         if x is None:
@@ -192,7 +190,8 @@ class TSSeriesWindow(IQSeriesWindow):
         for label in (x, y):
             if label not in self._quantities:
                 raise ValueError(
-                    f"'{label}' is not one of the quantities {list(self._quantities)}")
+                    f"'{label}' is not one of the quantities "
+                    f"{list(self._quantities)}")
         self._initial_x, self._initial_y = x, y
         kwargs.setdefault('title', 'TS Series')
         super().__init__(
@@ -248,7 +247,8 @@ class TSSeriesWindow(IQSeriesWindow):
         y = self._y_combo.currentText()
         if (x, y) == (self._x_key, self._y_key):
             return
-        self.set_quantities(x, self._quantities[x], x, y, self._quantities[y], y)
+        self.set_quantities(
+            x, self._quantities[x], x, y, self._quantities[y], y)
 
     def select_quantities(self, x=None, y=None):
         """
@@ -264,7 +264,8 @@ class TSSeriesWindow(IQSeriesWindow):
         for label in (x, y):
             if label is not None and label not in self._quantities:
                 raise ValueError(
-                    f"'{label}' is not one of the quantities {list(self._quantities)}")
+                    f"'{label}' is not one of the quantities "
+                    f"{list(self._quantities)}")
         if x is not None:
             self._x_combo.setCurrentText(x)
         if y is not None:
@@ -274,7 +275,7 @@ class TSSeriesWindow(IQSeriesWindow):
 def run_ts_series(
     make_custom_steps=None, root=None, n_series=None, x=None, y='sxx_10',
     quantities=None, cal_yaml_path='ts', analysis_yaml_path='ts',
-    start_series_idx=0, start_idx=None, data_idxs=None, title='TS Series',
+    start_idx=None, data_idxs=None, title='TS Series',
     ui_scale=1.0, plot_scale=1.0, xy_fit=None, datasets=None, x_values=None,
     x_name=None, xscale='linear', yscale='linear', hold_series_point=False,
 ):
@@ -289,7 +290,7 @@ def run_ts_series(
     Parameters:
     make_custom_steps (callable or None): ``make_custom_steps(series_idx) ->
         list[plStep]`` calibration steps that load one series point's data
-        (as for ``custom_steps_template.py``: global data, global-res data,
+        (as for ``custom_steps_ts.py``: global data, global-res data,
         ``ft``, ``zt``, and the fine and gain sweeps). Each point's DataSet is
         stored in ``root/series_{i:03d}``. None if ``datasets`` is given.
     root (zarr.Group or None): Parent zarr group for the series points (with
@@ -315,10 +316,9 @@ def run_ts_series(
     cal_yaml_path (str): Calibration YAML path or alias, for
         ``make_custom_steps``. Default 'ts'.
     analysis_yaml_path (str or None): Analysis YAML path or alias, e.g.
-        'ts' (default) or 'ts-fixed_theta' (x calibration mask at fixed
+        'ts' (default) or 'ts_fixed_theta' (x calibration mask at fixed
         theta offsets). With ``datasets``, None uses each DataSet's embedded
         analysis definition.
-    start_series_idx (int): Initial series index. Default 0.
     start_idx (int or None): Position in ``data_idxs`` to start at,
         regardless of the saved state. None (default) resumes the last
         session at the data index open when it closed, or at an earlier
@@ -355,8 +355,8 @@ def run_ts_series(
         ``xscale`` or ``yscale`` isn't 'linear' or 'log'.
     TypeError: If ``datasets`` contains something other than DataSets.
     """
-    ARs = series_runners(make_custom_steps, datasets, cal_yaml_path, analysis_yaml_path,
-                         root, n_series)
+    ARs = series_runners(make_custom_steps, datasets, cal_yaml_path,
+                         analysis_yaml_path, root, n_series)
     app = get_qapp(title)
     win = TSSeriesWindow(
         ARs,
@@ -365,7 +365,6 @@ def run_ts_series(
         quantities=quantities,
         x_values=x_values,
         x_name=x_name,
-        start_series_idx=start_series_idx,
         start_idx=start_idx,
         data_idxs=data_idxs,
         title=title,

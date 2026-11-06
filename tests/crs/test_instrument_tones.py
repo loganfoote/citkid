@@ -9,8 +9,6 @@ from unittest.mock import MagicMock, AsyncMock, patch, Mock
 import numpy as np
 import warnings
 
-from citkid.crs.instrument import CRS
-
 
 ################################################################################
 ############################# _clear_channels ##################################

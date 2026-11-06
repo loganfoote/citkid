@@ -3,7 +3,7 @@
 ### ----------------------------- ###
 # The 'ts' analysis, with an x calibration mask at fixed theta offsets from
 # the ends of the sweep (get_xcal_mask_fixed_theta) instead of the range the
-# timestream covers. The calibration is the same as 'ts' (cal-ts.yaml).
+# timestream covers. The calibration is the same as 'ts' (cal_ts.yaml).
 
 ANALYSIS_STEPS:
   1 :

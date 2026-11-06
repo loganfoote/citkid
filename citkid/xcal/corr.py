@@ -80,19 +80,38 @@ def pca(x, N_comp, sig = None, highpass_params = None):
 
 def calc_a(x, A):
     """
-    Calculate the values a that minimize |x - a @ A|^2.
+    Calculate the values a that minimize ||x - a @ A||^2 (least squares).
+    The common modes need not be orthogonal. If they are linearly dependent,
+    the minimum-norm solution is returned.
 
     Parameters:
-    x (np.array, (N, T)): Array of N timestreams of length T.
-    A (np.array, (C, T)): Array of C common modes of length T.
+    x (array-like, (N, T)): Array of N timestreams of length T.
+    A (array-like, (C, T)): Array of C common modes of length T.
 
     Returns:
     a (np.array, (N, C)): Scaling factors for each of C common modes that
-        minimize ||x - a @ A||^2.
+        minimize ||x - a @ A||^2. Complex if x or A is complex.
+
+    Raises:
+    ValueError: if x or A is not a non-empty, finite, numeric 2D array, or
+        their time lengths differ.
     """
-    cov = np.sum(x[:, :, np.newaxis] * A.T[np.newaxis, :, :], axis = 1)
-    a = cov / np.sum(np.real(A) ** 2, axis = 1)
-    return a
+    # Input validation
+    x = np.asarray(x)
+    A = np.asarray(A)
+    for name, arr in (('x', x), ('A', A)):
+        if arr.ndim != 2 or arr.size == 0:
+            raise ValueError(f"{name} must be a non-empty 2D array")
+        if not np.issubdtype(arr.dtype, np.number):
+            raise ValueError(f"{name} must be numeric")
+        if not np.all(np.isfinite(arr)):
+            raise ValueError(f"{name} must be finite")
+    if x.shape[1] != A.shape[1]:
+        raise ValueError("x and A must have the same length T")
+
+    # Solve A.T @ a.T = x.T in the least-squares sense
+    a_T = np.linalg.lstsq(A.T, x.T, rcond = None)[0]
+    return a_T.T
 
 ################################################################################
 ####################### Iterative common mode algorithm ########################
@@ -117,6 +136,7 @@ def calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params):
         sigma (but not in the calculation of A).
         frequency: highpass filter frequency in Hz.
         order: highpass filter order.
+        If None, no highpass filter is applied.
 
     Returns:
     a (array-like, (N, N_comp)): Scaling factors from A -> x.
@@ -149,18 +169,22 @@ def calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params):
     sig_iter = np.empty((N_iter, x.shape[0], N_comp), dtype = float)
 
     # Run iterative algorithm
+    if highpass_params is None:
+        pca_highpass = None
+    else:
+        pca_highpass = (dt, highpass_params[0], highpass_params[1])
     for i in range(N_iter):
         if i == N_iter - 1:
             # For last iteration, calculate a_full
-            a_full, A0 = pca(x, x.shape[0], sig, (dt, highpass_params[0], 
-                                                  highpass_params[1]))
+            a_full, A0 = pca(x, x.shape[0], sig, pca_highpass)
             a = a_full[:, :N_comp]
             A0 = A0[:N_comp, :]
         else:
-            a, A0 = pca(x, N_comp, sig, (dt, highpass_params[0], 
-                                         highpass_params[1]))
+            a, A0 = pca(x, N_comp, sig, pca_highpass)
         A = lowpass_filter(A0, dt, *lowpass_params)
-        y = highpass_filter(x - a @ A, dt, *highpass_params)
+        y = x - a @ A
+        if highpass_params is not None:
+            y = highpass_filter(y, dt, *highpass_params)
         sig = calc_sig(y)
         sig_iter[i] = sig
     return a, A0, sig_iter, a_full

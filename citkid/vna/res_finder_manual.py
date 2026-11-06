@@ -141,9 +141,13 @@ class ManualResFinder(QtCore.QObject):
             when auto-scaling y-axis. Default is 0.15 (15% margin).
         """
         super().__init__()
-        self.f = np.asarray(f, dtype = np.float64)
-        # Copy so the phase detrend below doesn't modify the caller's array
-        self.z = np.array(z, dtype = np.complex128)
+        # Sort by frequency: the plots and searchsorted assume ascending f.
+        # Indexing copies z, so the phase detrend below doesn't modify the
+        # caller's array
+        f = np.asarray(f, dtype = np.float64)
+        order = np.argsort(f, kind = 'stable')
+        self.f = f[order]
+        self.z = np.asarray(z, dtype = np.complex128)[order]
         self.fres = list(np.asarray(fres_initial, dtype = np.float64))
         self.margin_factor = margin_factor
 
@@ -230,7 +234,8 @@ class ManualResFinder(QtCore.QObject):
         load_btn.setToolTip('Load existing resonance list and continue editing')
         
         overwrite_btn = QtWidgets.QPushButton('Overwrite with Initial')
-        overwrite_btn.setToolTip('Replace zarr data with the provided fres_initial')
+        overwrite_btn.setToolTip(
+            'Replace zarr data with the provided fres_initial')
         
         cancel_btn = QtWidgets.QPushButton('Cancel')
         cancel_btn.setToolTip('Exit without doing anything')
@@ -258,7 +263,8 @@ class ManualResFinder(QtCore.QObject):
             reply = QtWidgets.QMessageBox.question(
                 dlg,
                 'Confirm Overwrite',
-                'Are you sure you want to overwrite the existing fres_manual?\n\n'
+                'Are you sure you want to overwrite the existing '
+                'fres_manual?\n\n'
                 'This will replace it with the provided fres_initial.',
                 QtWidgets.QMessageBox.StandardButton.Yes
                 | QtWidgets.QMessageBox.StandardButton.No,
@@ -339,7 +345,8 @@ class ManualResFinder(QtCore.QObject):
         
         # Initialize markers and auto-scale
         self.update_resonance_markers()
-        # Restore saved x-limits if present, otherwise start at beginning (first 10 MHz)
+        # Restore saved x-limits if present, otherwise start at beginning
+        # (first 10 MHz)
         _f_lo = float(self.f[0])
         if getattr(self, '_saved_xlims', None) is not None:
             try:
@@ -492,12 +499,14 @@ class ManualResFinder(QtCore.QObject):
         self.plot_mag.scene().sigMouseClicked.connect(self.on_click)
         self.plot_iq.scene().sigMouseClicked.connect(self.on_iq_click)
         self.plot_mag.sigRangeChanged.connect(self.on_range_changed)
-        self.plot_overview.scene().sigMouseClicked.connect(self.on_overview_click)
+        self.plot_overview.scene().sigMouseClicked.connect(
+            self.on_overview_click)
         
         # Connect mouse events for drag-to-remove functionality
         self.plot_mag.scene().sigMouseMoved.connect(self.on_mouse_moved)
         
-        # Install event filter on the scene to intercept mouse events before ViewBox
+        # Install event filter on the scene to intercept mouse events before
+        # ViewBox
         self.plot_mag.scene().installEventFilter(self)
         
         # Setup keyboard shortcuts
@@ -508,11 +517,13 @@ class ManualResFinder(QtCore.QObject):
         Set up keyboard shortcuts.
         """
         # Save shortcut (Ctrl+S, not S which is used for pan 80% right)
-        self.save_action = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"), self.win)
+        self.save_action = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+S"),
+                                           self.win)
         self.save_action.activated.connect(self.save_data)
 
         # Undo shortcut (Ctrl+Z)
-        self.undo_action = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Z"), self.win)
+        self.undo_action = QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Z"),
+                                           self.win)
         self.undo_action.activated.connect(self.undo)
 
         # Pan left/right shortcuts: tap pans 20%, hold scrolls smoothly
@@ -526,9 +537,11 @@ class ManualResFinder(QtCore.QObject):
         self.iq_action.activated.connect(self.toggle_iq)
 
         # Fast pan shortcuts (A/S = 80% jump, one resonance width)
-        self.fast_pan_left_action = QtGui.QShortcut(QtGui.QKeySequence("A"), self.win)
+        self.fast_pan_left_action = QtGui.QShortcut(QtGui.QKeySequence("A"),
+                                                    self.win)
         self.fast_pan_left_action.activated.connect(self.fast_pan_left)
-        self.fast_pan_right_action = QtGui.QShortcut(QtGui.QKeySequence("S"), self.win)
+        self.fast_pan_right_action = QtGui.QShortcut(QtGui.QKeySequence("S"),
+                                                     self.win)
         self.fast_pan_right_action.activated.connect(self.fast_pan_right)
 
         # Help shortcut
@@ -622,12 +635,14 @@ class ManualResFinder(QtCore.QObject):
                     # Start a pending shift interaction. It only becomes a
                     # drag selection after the pointer moves enough.
                     self._drag_selection_active = False
-                    mouse_point = self.plot_mag.vb.mapSceneToView(event.scenePos())
+                    mouse_point = self.plot_mag.vb.mapSceneToView(
+                        event.scenePos())
                     self._drag_start_freq = mouse_point.x()
                     self._drag_start_scene_pos = event.scenePos()
                     return False
         elif event.type() == QtCore.QEvent.Type.GraphicsSceneMouseMove:
-            if self._drag_start_freq is not None and self._drag_start_scene_pos is not None:
+            if (self._drag_start_freq is not None
+                    and self._drag_start_scene_pos is not None):
                 if not self._drag_selection_active:
                     distance = self._scene_drag_distance(
                         self._drag_start_scene_pos,
@@ -642,7 +657,8 @@ class ManualResFinder(QtCore.QObject):
                     self.on_mouse_moved(pos)
                 return True
         elif event.type() == QtCore.QEvent.Type.GraphicsSceneMouseRelease:
-            if self._drag_selection_active and self._drag_start_freq is not None:
+            if (self._drag_selection_active
+                    and self._drag_start_freq is not None):
                 self._drag_selection_active = False
                 
                 # Get the end position
@@ -752,9 +768,11 @@ class ManualResFinder(QtCore.QObject):
             # Save the previous list so undo can restore it
             self.undo_stack.append(('remove_range', f_min, f_max, fres_before))
             self.update_resonance_markers()
-            self.log(f"Removed {removed_count} resonance(s) in range [{f_min/1e9:.3f}, {f_max/1e9:.3f}] GHz")
+            self.log(f"Removed {removed_count} resonance(s) in range "
+                     f"[{f_min/1e9:.3f}, {f_max/1e9:.3f}] GHz")
         else:
-            self.log(f"No resonances found in range [{f_min/1e9:.3f}, {f_max/1e9:.3f}] GHz")
+            self.log(f"No resonances found in range "
+                     f"[{f_min/1e9:.3f}, {f_max/1e9:.3f}] GHz")
 
     def _local_df(self, freq):
         """
@@ -769,7 +787,8 @@ class ManualResFinder(QtCore.QObject):
         idx = int(np.searchsorted(self.f, freq))
         idx = int(np.clip(idx, 0, len(self.f) - 1))
         left = self.f[idx] - self.f[idx - 1] if idx > 0 else np.inf
-        right = self.f[idx + 1] - self.f[idx] if idx < len(self.f) - 1 else np.inf
+        right = (self.f[idx + 1] - self.f[idx] if idx < len(self.f) - 1
+                 else np.inf)
         return min(left, right)
 
     def _interpolate_z(self, freq):
@@ -1139,7 +1158,8 @@ class ManualResFinder(QtCore.QObject):
         mag_min, mag_max = float(visible_mag.min()), float(visible_mag.max())
         mag_margin = (mag_max - mag_min) * self.margin_factor
 
-        phase_min, phase_max = float(visible_phase.min()), float(visible_phase.max())
+        phase_min, phase_max = (float(visible_phase.min()),
+                                float(visible_phase.max()))
         phase_margin = (phase_max - phase_min) * self.margin_factor
 
         # Determine ranges and enforce minimum sensible ranges computed
@@ -1205,12 +1225,14 @@ class ManualResFinder(QtCore.QObject):
         if mag_ranges:
             med_mag = float(np.median(np.asarray(mag_ranges)))
         else:
-            med_mag = float(np.ptp(self.mag_db)) if len(self.mag_db) > 0 else 0.0
+            med_mag = (float(np.ptp(self.mag_db)) if len(self.mag_db) > 0
+                       else 0.0)
 
         if phase_ranges:
             med_phase = float(np.median(np.asarray(phase_ranges)))
         else:
-            med_phase = float(np.ptp(self.phase)) if len(self.phase) > 0 else 0.0
+            med_phase = (float(np.ptp(self.phase)) if len(self.phase) > 0
+                         else 0.0)
 
         # Use half the median per-bin range as a conservative minimum, but
         # don't go below absolute floors.
@@ -1353,7 +1375,8 @@ class ManualResFinder(QtCore.QObject):
             if xlims is not None:
                 if 'res_finder_manual_xlims' in self.zarr_group:
                     del self.zarr_group['res_finder_manual_xlims']
-                self.zarr_group.create_array('res_finder_manual_xlims', data = xlims)
+                self.zarr_group.create_array('res_finder_manual_xlims',
+                                             data = xlims)
 
         run_responsive(write)
         self.log(f"Saved {len(self.fres)} resonances to zarr group")

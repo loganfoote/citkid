@@ -114,9 +114,9 @@ def test_validate_sweep_input_frequencies_map_missing_module_idx():
 
 
 def test_validate_sweep_input_frequencies_map_value_not_2d():
-    """Test that 1D frequencies_map value raises TypeError."""
-    with pytest.raises(TypeError, match = 
-        'frequencies_map\\[1\\] must be 2D array-like of floats'):
+    """Test that 1D frequencies_map value raises ValueError (wrong shape)."""
+    with pytest.raises(ValueError, match =
+        'frequencies_map\\[1\\] must be a 2D array'):
         _validate_sweep_input(
             1, {1: 4.0e9},
             {1: [3.9e9, 4.0e9], 2: [[4.5e9]]}, {1: [-50]},
@@ -125,9 +125,9 @@ def test_validate_sweep_input_frequencies_map_value_not_2d():
 
 
 def test_validate_sweep_input_frequencies_map_value_3d():
-    """Test that 3D frequencies_map value raises TypeError."""
-    with pytest.raises(TypeError, match = 
-        'frequencies_map\\[1\\] must be 2D array-like of floats'):
+    """Test that 3D frequencies_map value raises ValueError (wrong shape)."""
+    with pytest.raises(ValueError, match =
+        'frequencies_map\\[1\\] must be a 2D array'):
         _validate_sweep_input(1, {1: 4.0e9}, 
                              {1: [[[3.9e9, 4.0e9]]], 2: [[4.5e9]]}, {1: [-50]},
                              {}, {}, 10, True, "Test")
@@ -162,9 +162,9 @@ def test_validate_sweep_input_ares_map_missing_module_idx():
 
 
 def test_validate_sweep_input_ares_map_value_not_1d():
-    """Test that 2D ares_map value raises TypeError."""
-    with pytest.raises(TypeError, match = 
-        'ares_map\\[1\\] must be 1D array-like of floats'):
+    """Test that 2D ares_map value raises ValueError (wrong shape)."""
+    with pytest.raises(ValueError, match =
+        'ares_map\\[1\\] must be a 1D array'):
         _validate_sweep_input(
             1, {1: 4.0e9}, {1: [[3.9e9]]}, 
             {1: [[-50, -51]], 2: [-52]}, {}, {}, 

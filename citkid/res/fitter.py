@@ -155,6 +155,17 @@ def fit_util(p0, bounds, fit_tau, f, z_stacked, z, downward = True):
         bounds = np.array([bounds[0][:7], bounds[1][:7]])
         p0 = p0[:7]
         def fit_func(x_lamb, a, b, c, d, e, f, g):
+            """
+            Evaluate the scaled nonlinear IQ model with tau fixed.
+
+            Parameters:
+            x_lamb (np.array): frequency data in Hz.
+            a, b, c, d, e, f, g (float): scaled fr, Qr, amp, phi, a, i0, q0.
+
+            Returns:
+            z_stacked (np.array): real and imaginary parts of the model,
+                stacked.
+            """
             return nonlinear_iq_for_fitter(x_lamb, a, b, c, d, e, f, g, tau,
                                            downward)
         p0 = np.asarray(p0, dtype = np.float64) 
@@ -167,6 +178,18 @@ def fit_util(p0, bounds, fit_tau, f, z_stacked, z, downward = True):
     else:
         # Fit without enforcing tau
         def fit_func(x_lamb, a, b, c, d, e, f, g, h):
+            """
+            Evaluate the scaled nonlinear IQ model.
+
+            Parameters:
+            x_lamb (np.array): frequency data in Hz.
+            a, b, c, d, e, f, g, h (float): scaled fr, Qr, amp, phi, a, i0,
+                q0, tau.
+
+            Returns:
+            z_stacked (np.array): real and imaginary parts of the model,
+                stacked.
+            """
             return nonlinear_iq_for_fitter(x_lamb, a, b, c, d, e, f, g, h,
                                            downward)
         p0 = np.asarray(p0, dtype = np.float64) 

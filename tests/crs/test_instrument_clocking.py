@@ -7,8 +7,6 @@ Tests clock source configuration and validation.
 import pytest
 from unittest.mock import AsyncMock
 
-from citkid.crs.instrument import CRS
-
 
 @pytest.fixture
 def mock_crs_for_set_clock(base_crs):

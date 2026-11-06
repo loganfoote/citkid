@@ -21,7 +21,8 @@ def pipeline_files(tmp_path):
         "    return 3, base_value\n"
         "\n"
         "custom_cal_steps = [\n"
-        "    plStep('import_base', import_base, ['base_value'], ['nrows', 'base_value_stored'], 'global'),\n"
+        "    plStep('import_base', import_base, ['base_value'], "
+        "['nrows', 'base_value_stored'], 'global'),\n"
         "]\n",
         encoding="utf-8",
     )
@@ -40,7 +41,8 @@ def pipeline_files(tmp_path):
         "    return y * 2\n"
         "\n"
         "custom_analysis_steps = [\n"
-        "    plStep('step1', step1, ['data_idx', 'base_value_stored'], ['x'], 'per-row'),\n"
+        "    plStep('step1', step1, ['data_idx', 'base_value_stored'], "
+        "['x'], 'per-row'),\n"
         "    plStep('step2', step2, ['x', 'offset'], ['y'], 'per-row'),\n"
         "    plStep('step3', step3, ['y'], ['z'], 'per-row'),\n"
         "]\n",
@@ -91,7 +93,9 @@ def test_rerunning_step_invalidates_downstream_outputs(pipeline_files):
         custom_path=str(files["analysis_custom"]),
     )
 
-    import_step = next(step for step in ds.cal_steps if step.name == "import_base")
+    import_step = next(
+        step for step in ds.cal_steps if step.name == "import_base"
+    )
     ar.execute_step(import_step, user_params={"base_value": 5}, save=True)
     ar.execute_path(data_idx=0, verbose=False, save=True)
 
@@ -150,7 +154,9 @@ def test_embedded_definitions_allow_reload_without_paths(pipeline_files):
         analysis_yaml_path=str(files["analysis_yaml"]),
         custom_path=str(files["analysis_custom"]),
     )
-    import_step = next(step for step in ds.cal_steps if step.name == "import_base")
+    import_step = next(
+        step for step in ds.cal_steps if step.name == "import_base"
+    )
     ar.execute_step(import_step, user_params={"base_value": 7}, save=True)
     ar.execute_path(data_idx=0, verbose=False, save=True)
 
@@ -180,7 +186,9 @@ def test_execute_step_does_not_rerun_earlier_analysis_steps(pipeline_files):
         custom_path=str(files["analysis_custom"]),
     )
 
-    import_step = next(step for step in ds.cal_steps if step.name == "import_base")
+    import_step = next(
+        step for step in ds.cal_steps if step.name == "import_base"
+    )
     ar.execute_step(import_step, user_params={"base_value": 5}, save=True)
 
     step2 = next(step for step in ar.analysis_steps if step.name == "step2")
@@ -264,7 +272,8 @@ def _write_main_dir_files(directory):
         "    return 1, globals()['main_dir']\n"
         "\n"
         "custom_cal_steps = [\n"
-        "    plStep('load_data', load_data, [], ['nrows', 'raw_dir'], 'global'),\n"
+        "    plStep('load_data', load_data, [], ['nrows', 'raw_dir'], "
+        "'global'),\n"
         "]\n",
         encoding="utf-8",
     )
@@ -284,7 +293,8 @@ def _write_main_dir_files(directory):
         "    return main_dir\n"
         "\n"
         "custom_analysis_steps = [\n"
-        "    plStep('get_dir', get_dir, ['raw_dir'], ['analysis_dir'], 'global'),\n"
+        "    plStep('get_dir', get_dir, ['raw_dir'], ['analysis_dir'], "
+        "'global'),\n"
         "]\n",
         encoding="utf-8",
     )
@@ -326,7 +336,9 @@ def test_moved_dataset_reloads_with_only_main_dir_overwrite(tmp_path, new_dir):
     shutil.move(str(zarr_path), str(moved_zarr_path))
     shutil.rmtree(tmp_path / "original")
 
-    DS_moved = DataSet(zarr_path=str(moved_zarr_path), custom_main_dir_overwrite=new_dir)
+    DS_moved = DataSet(
+        zarr_path=str(moved_zarr_path), custom_main_dir_overwrite=new_dir
+    )
     AR_moved = AnalysisRunner(DS_moved)
     AR_moved.execute_path()
 
@@ -346,7 +358,9 @@ def test_dataset_accepts_custom_source_that_differs_only_in_main_dir(tmp_path):
     )
     source = files["cal_custom"].read_text(encoding="utf-8")
     files["cal_custom"].write_text(
-        source.replace("main_dir = '/old/raw/path'", "main_dir = '/new/raw/path'"),
+        source.replace(
+            "main_dir = '/old/raw/path'", "main_dir = '/new/raw/path'"
+        ),
         encoding="utf-8",
     )
 
@@ -359,7 +373,9 @@ def test_dataset_accepts_custom_source_that_differs_only_in_main_dir(tmp_path):
     assert DS.raw_dir == "/new/raw/path"
 
 
-def test_dataset_warns_when_main_dir_overwrite_has_no_target(pipeline_files, tmp_path):
+def test_dataset_warns_when_main_dir_overwrite_has_no_target(
+    pipeline_files, tmp_path
+):
     zarr_path = tmp_path / "no_main_dir.zarr"
     DataSet(
         zarr_path=str(zarr_path),
@@ -368,7 +384,10 @@ def test_dataset_warns_when_main_dir_overwrite_has_no_target(pipeline_files, tmp
     )
 
     with pytest.warns(UserWarning, match="main_dir"):
-        DataSet(zarr_path=str(zarr_path), custom_main_dir_overwrite="/new/raw/path")
+        DataSet(
+            zarr_path=str(zarr_path),
+            custom_main_dir_overwrite="/new/raw/path",
+        )
 
 
 def test_moved_dataset_from_iq_template_and_default_yamls(tmp_path):
@@ -385,7 +404,10 @@ def test_moved_dataset_from_iq_template_and_default_yamls(tmp_path):
     (raw_dir / "fres_init").mkdir()
     np.save(raw_dir / "fres_init" / "fres.npy", np.ones(nrows))
 
-    template = Path(dataset_module.__file__).parent / "templates" / "custom_steps_iqonly_template.py"
+    template = (
+        Path(dataset_module.__file__).parent / "templates"
+        / "custom_steps_iq.py"
+    )
     zarr_path = raw_dir / "output.zarr"
     DS = DataSet(
         zarr_path=str(zarr_path),
@@ -398,8 +420,12 @@ def test_moved_dataset_from_iq_template_and_default_yamls(tmp_path):
 
     templates_dir = template.parent
     metadata = DS._read_metadata()
-    assert metadata["cal_yaml"] == (templates_dir / "cal-iqonly.yaml").read_text(encoding="utf-8")
-    assert metadata["analysis_yaml"] == (templates_dir / "iq_analysis.yaml").read_text(encoding="utf-8")
+    assert metadata["cal_yaml"] == (
+        (templates_dir / "cal_iq.yaml").read_text(encoding="utf-8")
+    )
+    assert metadata["analysis_yaml"] == (
+        (templates_dir / "analysis_iq.yaml").read_text(encoding="utf-8")
+    )
     assert metadata["cal_custom_source"] == template.read_text(encoding="utf-8")
     assert not any(key.endswith("_path") for key in metadata)
 
@@ -508,7 +534,9 @@ def test_apply_cal_single_data_idx_accepts_scalar_replacements(tmp_path):
     assert result['xt'] == 20.0
 
 
-def test_apply_cal_single_data_idx_returns_consistent_multi_output_shapes(tmp_path):
+def test_apply_cal_single_data_idx_returns_consistent_multi_output_shapes(
+    tmp_path
+):
     cal_custom = tmp_path / "custom_cal_steps.py"
     cal_custom.write_text(
         "from citkid.pipeline.framework import plStep\n"
@@ -521,7 +549,8 @@ def test_apply_cal_single_data_idx_returns_consistent_multi_output_shapes(tmp_pa
         "\n"
         "custom_cal_steps = [\n"
         "    plStep('load_data', load_data, [], ['nrows'], 'global'),\n"
-        "    plStep('calc_outputs', calc_outputs, ['zt'], ['zt_out', 'xt'], 'vectorized'),\n"
+        "    plStep('calc_outputs', calc_outputs, ['zt'], ['zt_out', 'xt'], "
+        "'vectorized'),\n"
         "]\n",
         encoding="utf-8",
     )
@@ -564,7 +593,8 @@ def pipeline_dependency_files(tmp_path):
         "    return y * 100\n"
         "\n"
         "custom_cal_steps = [\n"
-        "    plStep('import_base', import_base, ['base_value'], ['nrows', 'base_value_stored'], 'global'),\n"
+        "    plStep('import_base', import_base, ['base_value'], "
+        "['nrows', 'base_value_stored'], 'global'),\n"
         "    plStep('build_final', build_final, ['y'], ['final'], 'per-row'),\n"
         "]\n",
         encoding="utf-8",
@@ -584,7 +614,8 @@ def pipeline_dependency_files(tmp_path):
         "    return y * 2\n"
         "\n"
         "custom_analysis_steps = [\n"
-        "    plStep('step1', step1, ['data_idx', 'base_value_stored'], ['x'], 'per-row'),\n"
+        "    plStep('step1', step1, ['data_idx', 'base_value_stored'], "
+        "['x'], 'per-row'),\n"
         "    plStep('step2', step2, ['x', 'offset'], ['y'], 'per-row'),\n"
         "    plStep('step3', step3, ['y'], ['z'], 'per-row'),\n"
         "]\n",
@@ -639,7 +670,9 @@ def test_save_step_outputs_saves_inputs_and_deletes_targeted_downstream_rows(
         custom_path=str(files["analysis_custom"]),
     )
 
-    import_step = next(step for step in ds.cal_steps if step.name == "import_base")
+    import_step = next(
+        step for step in ds.cal_steps if step.name == "import_base"
+    )
     ar.execute_step(import_step, user_params={"base_value": 5}, save=True)
     ar.execute_path(data_idx=[0, 1, 2], verbose=False, save=True)
 
@@ -652,7 +685,9 @@ def test_save_step_outputs_saves_inputs_and_deletes_targeted_downstream_rows(
     assert bool(ds.root["final"]["row_exists"][2])
 
     step2 = next(step for step in ar.analysis_steps if step.name == "step2")
-    ar.execute_step(step2, data_idx=[0, 1], user_params={"offset": 20}, save=False)
+    ar.execute_step(
+        step2, data_idx=[0, 1], user_params={"offset": 20}, save=False
+    )
 
     assert ds._has_rows("final", [2])
     assert not ds._has_rows("final", [0])
@@ -692,7 +727,9 @@ def test_per_row_saved_arrays_use_sharding(pipeline_files):
         custom_path=str(files["analysis_custom"]),
     )
 
-    import_step = next(step for step in ds.cal_steps if step.name == "import_base")
+    import_step = next(
+        step for step in ds.cal_steps if step.name == "import_base"
+    )
     ar.execute_step(import_step, user_params={"base_value": 5}, save=True)
     ar.execute_path(data_idx=[0, 1, 2], verbose=False, save=True)
 
@@ -715,7 +752,8 @@ def pipeline_global_res_files(tmp_path):
         "\n"
         "custom_cal_steps = [\n"
         "    plStep('load_data', load_data, [], ['nrows'], 'global'),\n"
-        "    plStep('build_final', build_final, ['vector'], ['final'], 'vectorized'),\n"
+        "    plStep('build_final', build_final, ['vector'], ['final'], "
+        "'vectorized'),\n"
         "]\n",
         encoding="utf-8",
     )
@@ -729,7 +767,8 @@ def pipeline_global_res_files(tmp_path):
         "    return np.arange(4) * multiplier\n"
         "\n"
         "custom_analysis_steps = [\n"
-        "    plStep('load_vector', load_vector, ['multiplier'], ['vector'], 'global-res'),\n"
+        "    plStep('load_vector', load_vector, ['multiplier'], ['vector'], "
+        "'global-res'),\n"
         "]\n",
         encoding="utf-8",
     )
@@ -776,14 +815,18 @@ def test_save_step_outputs_uses_last_step_rows_when_data_idx_omitted(
         custom_path=str(files["analysis_custom"]),
     )
 
-    import_step = next(step for step in ds.cal_steps if step.name == "import_base")
+    import_step = next(
+        step for step in ds.cal_steps if step.name == "import_base"
+    )
     ar.execute_step(import_step, user_params={"base_value": 5}, save=True)
     ar.execute_path(data_idx=[0, 1, 2], verbose=False, save=True)
     _ = ds.final[[0, 1, 2]]
     ds.write_params(["final"], data_idx=[0, 1, 2])
 
     step2 = next(step for step in ar.analysis_steps if step.name == "step2")
-    ar.execute_step(step2, data_idx=[0, 1], user_params={"offset": 20}, save=False)
+    ar.execute_step(
+        step2, data_idx=[0, 1], user_params={"offset": 20}, save=False
+    )
     ar.save_step_outputs("step2")
 
     ds_reloaded = DataSet(zarr_path=str(files["zarr_path"]))
@@ -812,19 +855,29 @@ def test_global_res_save_overwrites_inputs_outputs_and_deletes_downstream(
         custom_path=str(files["analysis_custom"]),
     )
 
-    import_step = next(step for step in ds.cal_steps if step.name == "load_data")
+    import_step = next(
+        step for step in ds.cal_steps if step.name == "load_data"
+    )
     ar.execute_step(import_step, save=True)
 
-    load_vector_step = next(step for step in ar.analysis_steps if step.name == "load_vector")
+    load_vector_step = next(
+        step for step in ar.analysis_steps if step.name == "load_vector"
+    )
     ar.execute_step(load_vector_step, user_params={"multiplier": 2}, save=True)
 
-    np.testing.assert_array_equal(ds.vector[[0, 1, 2, 3]], np.array([0, 2, 4, 6]))
-    np.testing.assert_array_equal(ds.final[[0, 1, 2, 3]], np.array([1, 3, 5, 7]))
+    np.testing.assert_array_equal(
+        ds.vector[[0, 1, 2, 3]], np.array([0, 2, 4, 6])
+    )
+    np.testing.assert_array_equal(
+        ds.final[[0, 1, 2, 3]], np.array([1, 3, 5, 7])
+    )
     ds.write_params(["final"], data_idx=[0, 1, 2, 3])
     assert bool(ds.root["final"]["row_exists"][3])
 
     with pytest.raises(ValueError, match="allow_global_step_overwrite"):
-        ar.execute_step(load_vector_step, user_params={"multiplier": 5}, save=False)
+        ar.execute_step(
+            load_vector_step, user_params={"multiplier": 5}, save=False
+        )
 
     ar.execute_step(
         load_vector_step,
@@ -842,11 +895,15 @@ def test_global_res_save_overwrites_inputs_outputs_and_deletes_downstream(
     AnalysisRunner(ds_reloaded)
 
     assert int(ds_reloaded.multiplier) == 5
-    np.testing.assert_array_equal(ds_reloaded.vector[[0, 1, 2, 3]], np.array([0, 5, 10, 15]))
+    np.testing.assert_array_equal(
+        ds_reloaded.vector[[0, 1, 2, 3]], np.array([0, 5, 10, 15])
+    )
     assert "final" not in ds_reloaded.root
 
 
-def test_get_downstream_calibration_params_is_recursive(pipeline_global_res_files):
+def test_get_downstream_calibration_params_is_recursive(
+    pipeline_global_res_files
+):
     files = pipeline_global_res_files
     ds = DataSet(
         zarr_path=str(files["zarr_path"]),
@@ -944,7 +1001,9 @@ def test_concurrent_writes_from_two_datasets_on_one_store(tmp_path):
 
     assert errors == []
     assert bool(np.all(group["p"]["row_exists"][...]))
-    np.testing.assert_array_equal(group["p"]["data"][...], np.arange(nrows) + 0.5)
+    np.testing.assert_array_equal(
+        group["p"]["data"][...], np.arange(nrows) + 0.5
+    )
 
 
 def test_dataset_sees_parameters_saved_by_another_dataset(tmp_path):
@@ -1028,7 +1087,8 @@ def test_write_buffer_defers_rows_until_consolidated(tmp_path):
 
     group = ds.root["p"]
     assert not np.any(group["row_exists"][...])
-    assert sorted(np.flatnonzero(group["pending_row_exists"][...])) == [2, 5, 20]
+    pending = group["pending_row_exists"][...]
+    assert sorted(np.flatnonzero(pending)) == [2, 5, 20]
     assert group["data"].shards == (256,)
     assert group["pending_data"].shards is None
 
@@ -1061,13 +1121,19 @@ def test_pending_rows_override_and_are_cleared_by_direct_writes(tmp_path):
 
 
 def test_delete_saved_params_skips_unsaved_names(tmp_path, monkeypatch):
-    """Several names: one store listing, and no lookups for names never saved."""
+    """
+    Several names: one store listing, and no lookups for names never saved.
+    """
     ds = _make_io_dataset(tmp_path)
     _save_rows(ds, "p", [1, 2])
     looked_up = []
     original = ds._delete_saved_param
-    monkeypatch.setattr(ds, "_delete_saved_param",
-                        lambda name, data_idx=None: (looked_up.append(name), original(name, data_idx)))
+    monkeypatch.setattr(
+        ds, "_delete_saved_param",
+        lambda name, data_idx=None: (
+            looked_up.append(name), original(name, data_idx)
+        ),
+    )
 
     ds.delete_saved_params(["never_saved", "p", "also_never"], data_idx=[1])
 
@@ -1075,7 +1141,9 @@ def test_delete_saved_params_skips_unsaved_names(tmp_path, monkeypatch):
     assert sorted(np.flatnonzero(ds.root["p"]["row_exists"][...])) == [2]
 
 
-def test_delete_saved_params_without_listing_checks_each_name(tmp_path, monkeypatch):
+def test_delete_saved_params_without_listing_checks_each_name(
+    tmp_path, monkeypatch
+):
     """If the store can't be listed, every name is still handled."""
     ds = _make_io_dataset(tmp_path)
     _save_rows(ds, "p", [1, 2])
@@ -1101,18 +1169,26 @@ def test_delete_saved_param_clears_pending_rows(tmp_path):
 
 
 def test_consolidate_merges_rows_across_shards(tmp_path):
-    ds = DataSet(zarr_path=_make_io_dataset(tmp_path, nrows=600).root, write_buffer=True)
+    ds = DataSet(
+        zarr_path=_make_io_dataset(tmp_path, nrows=600).root,
+        write_buffer=True,
+    )
     rows = [0, 255, 256, 511, 599]
     _save_rows(ds, "p", rows)
 
     assert ds.consolidate_storage() == len(rows)
-    np.testing.assert_array_equal(ds.root["p"]["data"][rows], np.asarray(rows, dtype=float))
+    np.testing.assert_array_equal(
+        ds.root["p"]["data"][rows], np.asarray(rows, dtype=float)
+    )
     assert list(np.flatnonzero(ds.root["p"]["row_exists"][...])) == rows
 
 
 @pytest.mark.parametrize("write_buffer", [False, True])
 def test_non_contiguous_rows_of_2d_parameter(tmp_path, write_buffer):
-    ds = DataSet(zarr_path=_make_io_dataset(tmp_path, nrows=300).root, write_buffer=write_buffer)
+    ds = DataSet(
+        zarr_path=_make_io_dataset(tmp_path, nrows=300).root,
+        write_buffer=write_buffer,
+    )
     rows = np.array([0, 1, 3, 4, 5, 260, 262], dtype=np.int32)
     values = np.stack([np.full(3, r, dtype=float) for r in rows])
     ds._store_param(
@@ -1158,7 +1234,8 @@ def test_write_params_loads_saved_analysis_rows(tmp_path):
     _save_rows(ds, "p", [1, 2])
     reopened = DataSet(zarr_path=ds.root)
 
-    reopened.write_params(["p"], data_idx=[1])  # not in memory: loaded from zarr
+    # not in memory: loaded from zarr
+    reopened.write_params(["p"], data_idx=[1])
 
     np.testing.assert_array_equal(ds.root["p"]["data"][[1, 2]], [1.0, 2.0])
     with pytest.raises(ValueError, match="cannot be produced"):
@@ -1181,7 +1258,7 @@ def test_copy_of_embedded_dataset_shares_data_not_memory(tmp_path):
     assert copy.p[2] == 2.0                      # stored data is shared
     assert copy._per_row_cache is not ds._per_row_cache
     _save_rows(copy, "p", [3])
-    assert ds._has_rows("p", [3])                # and writes go to the same store
+    assert ds._has_rows("p", [3])  # and writes go to the same store
 
 
 def test_copy_of_dataset_built_from_custom_cal_steps(tmp_path):
@@ -1189,13 +1266,17 @@ def test_copy_of_dataset_built_from_custom_cal_steps(tmp_path):
 
     cal_yaml = tmp_path / "cal.yaml"
     cal_yaml.write_text(
-        "CAL_STEPS:\n  1:\n    task: load_n\n  2:\n    task: load_x\n", encoding="utf-8")
+        "CAL_STEPS:\n  1:\n    task: load_n\n  2:\n    task: load_x\n",
+        encoding="utf-8")
     steps = [
         plStep("load_n", lambda: 4, [], ["nrows"], "global"),
-        plStep("load_x", lambda data_idx: data_idx * 3.0, ["data_idx"], ["x"], "per-row"),
+        plStep("load_x", lambda data_idx: data_idx * 3.0, ["data_idx"],
+               ["x"], "per-row"),
     ]
     root = zarr.open_group(str(tmp_path / "steps.zarr"), mode="w")
-    ds = DataSet(zarr_path=root, cal_yaml_path=str(cal_yaml), custom_cal_steps=steps)
+    ds = DataSet(
+        zarr_path=root, cal_yaml_path=str(cal_yaml), custom_cal_steps=steps
+    )
 
     copy = ds.copy()
 
@@ -1252,10 +1333,10 @@ def test_analysis_runner_has_no_failures_before_running(pipeline_files):
 
 
 @pytest.mark.parametrize("cal_alias, analysis_alias, template", [
-    ("ts", "ts", "custom_steps_template.py"),
-    ("ts_offres", "ts_offres", "custom_steps_template.py"),
-    ("ts-fixed_theta", "ts-fixed_theta", "custom_steps_template.py"),
-    ("iq", "iq", "custom_steps_iqonly_template.py"),
+    ("ts", "ts", "custom_steps_ts.py"),
+    ("ts_offres", "ts_offres", "custom_steps_ts.py"),
+    ("ts_fixed_theta", "ts_fixed_theta", "custom_steps_ts.py"),
+    ("iq", "iq", "custom_steps_iq.py"),
 ])
 def test_every_template_pair_builds_a_runner(
     tmp_path, cal_alias, analysis_alias, template
@@ -1289,3 +1370,45 @@ def test_every_template_pair_builds_a_runner(
     assert DS.nrows == nrows
     assert [s["task"].name for s in AR.path][:2] == [
         "make_fr_spans", "fit_gain"]
+
+
+def _raw_dir_for_templates(tmp_path):
+    """
+    Write a tiny raw zarr store that the custom-steps templates can load.
+
+    Parameters:
+    tmp_path (Path): pytest temporary directory.
+
+    Returns:
+    raw_dir (Path): directory holding ``example.zarr``.
+    """
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    nrows, npts = 2, 5
+    raw = zarr.open_group(str(raw_dir / "example.zarr"), mode="w")
+    raw.create_array("f", data=np.ones((nrows, npts)))
+    raw.create_array("z", data=np.ones((2, nrows, npts)))
+    for name in ("fres", "fres_all", "ares", "qres"):
+        raw.create_array(name, data=np.ones(nrows))
+    raw.create_array("res_idxs", data=np.arange(nrows))
+    raw.create_array("ts_00/dt", data=np.array(1e-3))
+    return raw_dir
+
+
+def test_changed_template_mismatch_error_says_how_to_reopen(tmp_path):
+    """
+    Reopening with a calibration YAML that differs from the stored one
+    explains how to reopen with the stored definition.
+    """
+    raw_dir = _raw_dir_for_templates(tmp_path)
+    templates = Path(dataset_module.__file__).parent / "templates"
+    custom = str(templates / "custom_steps_iq.py")
+    zarr_path = str(raw_dir / "output.zarr")
+    DataSet(zarr_path=zarr_path, cal_yaml_path="iq", custom_path=custom,
+            custom_main_dir_overwrite=str(raw_dir))
+
+    with pytest.raises(ValueError, match="does not match the dataset "
+                       "definition. To reopen an existing dataset, omit"):
+        DataSet(zarr_path=zarr_path, cal_yaml_path="ts", custom_path=custom,
+                custom_main_dir_overwrite=str(raw_dir))
+    DataSet(zarr_path=zarr_path, custom_main_dir_overwrite=str(raw_dir))

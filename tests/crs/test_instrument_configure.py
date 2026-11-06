@@ -7,8 +7,6 @@ Tests system configuration, firmware validation, and parameter validation.
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from citkid.crs.instrument import CRS
-
 
 @pytest.fixture
 def mock_crs_for_configure(base_crs):
@@ -208,7 +206,12 @@ async def test_configure_system_suppress_dec_printout_stored(
     crs = mock_crs_for_configure
     crs.suppress_dec_printout = not expected
 
-    with patch.object(crs, 'set_clock_source', new_callable = AsyncMock),          patch.object(crs, 'set_extended_bw', new_callable = AsyncMock),          patch.object(crs, 'set_analog_bank', new_callable = AsyncMock),          patch.object(crs, 'set_decimation', new_callable = AsyncMock):
+    with (
+        patch.object(crs, 'set_clock_source', new_callable = AsyncMock),
+        patch.object(crs, 'set_extended_bw', new_callable = AsyncMock),
+        patch.object(crs, 'set_analog_bank', new_callable = AsyncMock),
+        patch.object(crs, 'set_decimation', new_callable = AsyncMock),
+    ):
 
         await crs.configure_system(**kwargs)
 
@@ -224,7 +227,13 @@ async def test_configure_system_suppress_dec_printout_output(
     crs = mock_crs_for_configure
     crs.d.set_decimation = AsyncMock()
 
-    with patch.object(crs, 'set_clock_source', new_callable = AsyncMock),          patch.object(crs, 'set_extended_bw', new_callable = AsyncMock),          patch.object(crs, 'set_analog_bank', new_callable = AsyncMock),          patch('citkid.crs.instrument.time.sleep'):
+    with (
+        patch.object(crs, 'set_clock_source', new_callable = AsyncMock),
+        patch.object(crs, 'set_extended_bw', new_callable = AsyncMock),
+        patch.object(crs, 'set_analog_bank', new_callable = AsyncMock),
+        patch('citkid.crs.instrument.asyncio.sleep',
+              new_callable = AsyncMock),
+    ):
 
         await crs.configure_system(suppress_dec_printout = suppress)
 

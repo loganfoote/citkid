@@ -65,195 +65,264 @@ class _WindowPanel(StepPanel):
         return True
 
 
-class TestStepPanel:
-    def test_default_panel_has_run_button(self, qt_app):
-        ar, _ = _make_ar('step_a')
-        panel = DefaultStepPanel(ar, ('step_a',))
-        assert hasattr(panel, '_run_btn')
-
-    def test_save_outputs_persists_user_params_before_outputs(self, qt_app):
-        ar, steps = _make_ar('step_b')
-        panel = _ParamPanel(ar, ('step_b',), data_idx=2)
-
-        panel.save_outputs()
-
-        ar._add_user_params.assert_called_once()
-        _, kwargs = ar._add_user_params.call_args
-        assert kwargs['data_idx'] == 2
-        assert kwargs['save'] is True
-        ar.save_step_outputs.assert_called_once_with(steps[0], data_idx=2)
-
-    def test_write_nan_outputs_is_row_scoped(self, qt_app):
-        ar, _ = _make_ar('step_c')
-        with patch.object(StepPanel, 'setup_ui'):
-            panel = StepPanel(ar, ('step_c',), data_idx=1)
-        panel._nan_outputs = lambda: {'y': np.nan}
-
-        assert panel._write_nan_outputs() is True
-
-        invalidate_args = ar.DS.invalidate_memory_params.call_args.kwargs
-        delete_args = ar.DS.delete_saved_params.call_args.kwargs
-        store_kwargs = ar.DS._store_param.call_args.kwargs
-        np.testing.assert_array_equal(invalidate_args['data_idx'], np.array([1], dtype=np.int32))
-        np.testing.assert_array_equal(delete_args['data_idx'], np.array([1], dtype=np.int32))
-        np.testing.assert_array_equal(store_kwargs['data_idx'], np.array([1], dtype=np.int32))
-        assert panel._dirty is True
-        assert panel._needs_run is False
-
-    def test_write_nan_outputs_invalidates_downstream(self, qt_app):
-        """Marking bad drops everything computed from the outputs, e.g. sxx from poly_x."""
-        ar, _ = _make_ar('step_c')
-        ar._build_invalidation_plan.return_value = {
-            'memory_invalidate': ['y', 'later_out', 'sxx_10'],
-            'zarr_delete': ['later_out', 'sxx_10'],
-        }
-        with patch.object(StepPanel, 'setup_ui'):
-            panel = StepPanel(ar, ('step_c',), data_idx=2)
-        panel._nan_outputs = lambda: {'y': np.nan}
-
-        assert panel._write_nan_outputs() is True
-
-        # One call each (the zarr store is listed once), outputs included.
-        ar.DS.invalidate_memory_params.assert_called_once()
-        ar.DS.delete_saved_params.assert_called_once()
-        assert ar.DS.invalidate_memory_params.call_args.args[0] == ['later_out', 'sxx_10', 'y']
-        assert ar.DS.delete_saved_params.call_args.args[0] == ['later_out', 'sxx_10', 'y']
-        plan_rows = ar._build_invalidation_plan.call_args.args[2]
-        np.testing.assert_array_equal(plan_rows, np.array([2], dtype=np.int32))
-
-    def test_write_nan_outputs_save_and_keep(self, qt_app):
-        """save=True writes the outputs instead of deleting them; keep is not deleted."""
-        ar, _ = _make_ar('step_c')
-        ar._build_invalidation_plan.return_value = {
-            'memory_invalidate': ['y', 'later_out', 'sxx_10'],
-            'zarr_delete': ['later_out', 'sxx_10'],
-        }
-        with patch.object(StepPanel, 'setup_ui'):
-            panel = StepPanel(ar, ('step_c',), data_idx=2)
-        panel._nan_outputs = lambda: {'y': np.nan}
-        panel.refresh_plots = MagicMock()
-
-        assert panel._write_nan_outputs(redraw=False, save=True, keep={'later_out'}) is True
-
-        assert ar.DS.delete_saved_params.call_args.args[0] == ['sxx_10']
-        assert ar.DS._write_per_row_param.call_args.args[0] == 'y'
-        assert panel._dirty is False
-        panel.refresh_plots.assert_not_called()
-
-    def test_store_nan_outputs_touches_only_memory(self, qt_app):
-        """The zarr work is returned as a job, so it can run in the background."""
-        ar, _ = _make_ar('step_c')
-        ar._build_invalidation_plan.return_value = {
-            'memory_invalidate': ['y', 'sxx_10'], 'zarr_delete': ['sxx_10']}
-        with patch.object(StepPanel, 'setup_ui'):
-            panel = StepPanel(ar, ('step_c',), data_idx=2)
-        panel._nan_outputs = lambda: {'y': np.nan}
-
-        job = panel._store_nan_outputs(save=True)
-
-        ar.DS.invalidate_memory_params.assert_called_once()
-        assert ar.DS._store_param.call_args.kwargs['save'] is False
-        ar.DS.delete_saved_params.assert_not_called()
-        ar.DS._write_per_row_param.assert_not_called()
-        assert (job.delete, job.write) == (['sxx_10'], ['y'])
-
-        job.run()
-
-        assert ar.DS.delete_saved_params.call_args.args[0] == ['sxx_10']
-        assert ar.DS._write_per_row_param.call_args.args[0] == 'y'
+def test_default_panel_has_run_button(qt_app):
+    ar, _ = _make_ar('step_a')
+    panel = DefaultStepPanel(ar, ('step_a',))
+    assert hasattr(panel, '_run_btn')
 
 
-class TestInteractiveWindow:
-    def _make_window(self, qt_app, monkeypatch):
-        step1 = _make_step('step1')
-        step2 = _make_step('step2')
-        ar = MagicMock()
-        ar.analysis_steps = [step1, step2]
-        ar._last_failures = {}
-        ar.execute_step.return_value = None
-        ar.DS = MagicMock()
-        ar.DS.nrows = 2
-        monkeypatch.setattr(icore, 'get_panel_class', lambda _names: _WindowPanel)
-        monkeypatch.setattr(icore.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
-        return InteractiveAnalysisWindow(
-            ar,
-            panels=[('step1',), ('step2',)],
-            start_idx=0,
-            data_idxs=[0, 1],
-            title='test',
-        )
+def test_save_outputs_persists_user_params_before_outputs(qt_app):
+    ar, steps = _make_ar('step_b')
+    panel = _ParamPanel(ar, ('step_b',), data_idx=2)
 
-    def test_run_panel_marks_downstream_stale(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
+    panel.save_outputs()
 
-        win._run_panel_by_index(0)
+    ar._add_user_params.assert_called_once()
+    _, kwargs = ar._add_user_params.call_args
+    assert kwargs['data_idx'] == 2
+    assert kwargs['save'] is True
+    ar.save_step_outputs.assert_called_once_with(steps[0], data_idx=2)
 
-        assert win.panels[0]._has_run is True
-        assert win.panels[1]._needs_run is True
-        assert win.panels[1].clear_calls == 1
-        assert win.AR.execute_step.call_count == 1
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
 
-    def test_navigation_cancel_keeps_current_index_when_stale(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-        win.panels[1]._needs_run = True
+def test_write_nan_outputs_is_row_scoped(qt_app):
+    ar, _ = _make_ar('step_c')
+    with patch.object(StepPanel, 'setup_ui'):
+        panel = StepPanel(ar, ('step_c',), data_idx=1)
+    panel._nan_outputs = lambda: {'y': np.nan}
 
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.No):
-            win._advance(+1)
+    assert panel._write_nan_outputs() is True
 
-        assert win._nav_pos == 0
-        assert win._idx_spin.value() == 0
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
+    invalidate_args = ar.DS.invalidate_memory_params.call_args.kwargs
+    delete_args = ar.DS.delete_saved_params.call_args.kwargs
+    store_kwargs = ar.DS._store_param.call_args.kwargs
+    np.testing.assert_array_equal(
+        invalidate_args['data_idx'], np.array([1], dtype=np.int32))
+    np.testing.assert_array_equal(
+        delete_args['data_idx'], np.array([1], dtype=np.int32))
+    np.testing.assert_array_equal(
+        store_kwargs['data_idx'], np.array([1], dtype=np.int32))
+    assert panel._dirty is True
+    assert panel._needs_run is False
 
-    def test_panel_save_cancel_skips_persist_when_downstream_stale(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-        win.panels[1]._needs_run = True
 
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.No):
-            win.panels[0]._on_save_clicked()
+def test_write_nan_outputs_invalidates_downstream(qt_app):
+    """
+    Marking bad drops everything computed from the outputs, e.g. sxx from
+    poly_x.
+    """
+    ar, _ = _make_ar('step_c')
+    ar._build_invalidation_plan.return_value = {
+        'memory_invalidate': ['y', 'later_out', 'sxx_10'],
+        'zarr_delete': ['later_out', 'sxx_10'],
+    }
+    with patch.object(StepPanel, 'setup_ui'):
+        panel = StepPanel(ar, ('step_c',), data_idx=2)
+    panel._nan_outputs = lambda: {'y': np.nan}
 
-        assert win.AR.save_step_outputs.call_count == 0
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
+    assert panel._write_nan_outputs() is True
 
-    @pytest.mark.parametrize('key, method', [('2', '_run_through_panel'), ('Shift+2', '_run_panel_by_index')])
-    def test_number_shortcuts(self, qt_app, monkeypatch, key, method):
-        win = self._make_window(qt_app, monkeypatch)
-        win._run_through_panel = MagicMock()
-        win._run_panel_by_index = MagicMock()
-        target = QtGui.QKeySequence(key)
-        (shortcut,) = [sc for sc in win.findChildren(QtGui.QShortcut) if sc.key() == target]
+    # One call each (the zarr store is listed once), outputs included.
+    ar.DS.invalidate_memory_params.assert_called_once()
+    ar.DS.delete_saved_params.assert_called_once()
+    assert ar.DS.invalidate_memory_params.call_args.args[0] == [
+        'later_out', 'sxx_10', 'y']
+    assert ar.DS.delete_saved_params.call_args.args[0] == [
+        'later_out', 'sxx_10', 'y']
+    plan_rows = ar._build_invalidation_plan.call_args.args[2]
+    np.testing.assert_array_equal(plan_rows, np.array([2], dtype=np.int32))
 
-        shortcut.activated.emit()
 
-        getattr(win, method).assert_called_once_with(1)
-        other = '_run_panel_by_index' if method == '_run_through_panel' else '_run_through_panel'
-        getattr(win, other).assert_not_called()
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
+def test_write_nan_outputs_save_and_keep(qt_app):
+    """
+    save=True writes the outputs instead of deleting them; keep is not
+    deleted.
+    """
+    ar, _ = _make_ar('step_c')
+    ar._build_invalidation_plan.return_value = {
+        'memory_invalidate': ['y', 'later_out', 'sxx_10'],
+        'zarr_delete': ['later_out', 'sxx_10'],
+    }
+    with patch.object(StepPanel, 'setup_ui'):
+        panel = StepPanel(ar, ('step_c',), data_idx=2)
+    panel._nan_outputs = lambda: {'y': np.nan}
+    panel.refresh_plots = MagicMock()
 
-    def test_no_run_all_button(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
+    assert panel._write_nan_outputs(
+        redraw=False, save=True, keep={'later_out'}) is True
 
-        assert 'Run All' not in [btn.text() for btn in win.findChildren(QtWidgets.QPushButton)]
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
+    assert ar.DS.delete_saved_params.call_args.args[0] == ['sxx_10']
+    assert ar.DS._write_per_row_param.call_args.args[0] == 'y'
+    assert panel._dirty is False
+    panel.refresh_plots.assert_not_called()
 
-    def test_toolbar_hints_wrap_instead_of_widening_window(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
 
-        _assert_hints_wrap(win)
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
+def test_store_nan_outputs_touches_only_memory(qt_app):
+    """The zarr work is returned as a job, so it can run in the background."""
+    ar, _ = _make_ar('step_c')
+    ar._build_invalidation_plan.return_value = {
+        'memory_invalidate': ['y', 'sxx_10'], 'zarr_delete': ['sxx_10']}
+    with patch.object(StepPanel, 'setup_ui'):
+        panel = StepPanel(ar, ('step_c',), data_idx=2)
+    panel._nan_outputs = lambda: {'y': np.nan}
 
-    def test_height_fits_panels_up_to_screen(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
+    job = panel._store_nan_outputs(save=True)
 
-        _assert_height_fits_content(qt_app, win, win._scroll, width=1200)
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
+    ar.DS.invalidate_memory_params.assert_called_once()
+    assert ar.DS._store_param.call_args.kwargs['save'] is False
+    ar.DS.delete_saved_params.assert_not_called()
+    ar.DS._write_per_row_param.assert_not_called()
+    assert (job.delete, job.write) == (['sxx_10'], ['y'])
+
+    job.run()
+
+    assert ar.DS.delete_saved_params.call_args.args[0] == ['sxx_10']
+    assert ar.DS._write_per_row_param.call_args.args[0] == 'y'
+
+
+def _make_window(qt_app, monkeypatch):
+    """
+    Build an InteractiveAnalysisWindow over a two-step mock runner.
+
+    Parameters:
+    qt_app (QApplication): Qt application fixture.
+    monkeypatch (pytest.MonkeyPatch): Fixture used to stub panels/timers.
+
+    Returns:
+    win (InteractiveAnalysisWindow): The window.
+    """
+    step1 = _make_step('step1')
+    step2 = _make_step('step2')
+    ar = MagicMock()
+    ar.analysis_steps = [step1, step2]
+    ar._last_failures = {}
+    ar.execute_step.return_value = None
+    ar.DS = MagicMock()
+    ar.DS.nrows = 2
+    monkeypatch.setattr(icore, 'get_panel_class', lambda _names: _WindowPanel)
+    monkeypatch.setattr(
+        icore.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
+    return InteractiveAnalysisWindow(
+        ar,
+        panels=[('step1',), ('step2',)],
+        start_idx=0,
+        data_idxs=[0, 1],
+        title='test',
+    )
+
+
+def test_analysis_window_run_panel_marks_downstream_stale(qt_app, monkeypatch):
+    win = _make_window(qt_app, monkeypatch)
+
+    win._run_panel_by_index(0)
+
+    assert win.panels[0]._has_run is True
+    assert win.panels[1]._needs_run is True
+    assert win.panels[1].clear_calls == 1
+    assert win.AR.execute_step.call_count == 1
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
+
+
+def test_navigation_cancel_keeps_current_index_when_stale(qt_app, monkeypatch):
+    win = _make_window(qt_app, monkeypatch)
+    win.panels[1]._needs_run = True
+
+    with patch.object(
+        QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.No
+    ):
+        win._advance(+1)
+
+    assert win._nav_pos == 0
+    assert win._idx_spin.value() == 0
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
+
+
+def test_analysis_window_panel_save_cancel_skips_persist_when_downstream_stale(
+    qt_app, monkeypatch
+):
+    win = _make_window(qt_app, monkeypatch)
+    win.panels[1]._needs_run = True
+
+    with patch.object(
+        QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.No
+    ):
+        win.panels[0]._on_save_clicked()
+
+    assert win.AR.save_step_outputs.call_count == 0
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
+
+
+@pytest.mark.parametrize(
+    'key, method',
+    [('2', '_run_through_panel'), ('Shift+2', '_run_panel_by_index')]
+)
+def test_analysis_window_number_shortcuts(qt_app, monkeypatch, key, method):
+    win = _make_window(qt_app, monkeypatch)
+    win._run_through_panel = MagicMock()
+    win._run_panel_by_index = MagicMock()
+    target = QtGui.QKeySequence(key)
+    (shortcut,) = [
+        sc for sc in win.findChildren(QtGui.QShortcut) if sc.key() == target
+    ]
+
+    shortcut.activated.emit()
+
+    getattr(win, method).assert_called_once_with(1)
+    other = ('_run_panel_by_index' if method == '_run_through_panel'
+             else '_run_through_panel')
+    getattr(win, other).assert_not_called()
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
+
+
+def test_analysis_window_no_run_all_button(qt_app, monkeypatch):
+    win = _make_window(qt_app, monkeypatch)
+
+    assert 'Run All' not in [
+        btn.text() for btn in win.findChildren(QtWidgets.QPushButton)]
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
+
+
+def test_analysis_window_toolbar_hints_wrap_instead_of_widening_window(
+    qt_app, monkeypatch
+):
+    win = _make_window(qt_app, monkeypatch)
+
+    _assert_hints_wrap(win)
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
+
+
+def test_analysis_window_height_fits_panels_up_to_screen(qt_app, monkeypatch):
+    win = _make_window(qt_app, monkeypatch)
+
+    _assert_height_fits_content(qt_app, win, win._scroll, width=1200)
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
 
 
 def _assert_height_fits_content(qt_app, win, scroll, width):
@@ -301,7 +370,8 @@ def _assert_hints_wrap(win):
         if 'run+following' in label.text()
     ]
     assert hints.wordWrap()
-    full_width = QtGui.QFontMetrics(hints.font()).horizontalAdvance(hints.text())
+    full_width = QtGui.QFontMetrics(hints.font()).horizontalAdvance(
+        hints.text())
     assert hints.minimumSizeHint().width() < full_width / 2
     # On a row of its own (directly in the toolbar's rows), so other widgets
     # can't squeeze it to nothing
@@ -310,1296 +380,1515 @@ def _assert_hints_wrap(win):
     assert hints.width() >= toolbar.width() - 20 and hints.height() > 0
 
 
-class TestIQSeriesWindow:
-    def _make_window(
-        self, qt_app, monkeypatch, nrows=2, data_idxs=None, start_idx=0,
-        state_group=None, xy_fit=None, hold_series_point=False, y_target=None,
-        xscale='linear',
-    ):
-        """
-        Build a IQSeriesWindow over two mock series runners.
+def _make_series_window(
+    qt_app, monkeypatch, nrows=2, data_idxs=None, start_idx=0,
+    state_group=None, xy_fit=None, hold_series_point=False, y_target=None,
+    xscale='linear',
+):
+    """
+    Build a IQSeriesWindow over two mock series runners.
 
-        Parameters:
-        qt_app (QApplication): Qt application fixture.
-        monkeypatch (pytest.MonkeyPatch): Fixture used to stub panels/timers.
-        nrows (int): Number of rows reported by each mock dataset.
-        data_idxs (list of int or None): Subset passed to the window.
-        start_idx (int or None): Starting position in ``data_idxs``; None
-            resumes from ``state_group``.
-        state_group (zarr.Group or None): Group for persistent state.
-        xy_fit (SeriesXYFit or None): Optional y vs x fit.
-        hold_series_point (bool): Initial state of the Hold Series Point
-            toggle.
-        y_target (float or None): Target y, to choose an x per resonator.
-        xscale (str): Series-plot x scale.
+    Parameters:
+    qt_app (QApplication): Qt application fixture.
+    monkeypatch (pytest.MonkeyPatch): Fixture used to stub panels/timers.
+    nrows (int): Number of rows reported by each mock dataset.
+    data_idxs (list of int or None): Subset passed to the window.
+    start_idx (int or None): Starting position in ``data_idxs``; None
+        resumes from ``state_group``.
+    state_group (zarr.Group or None): Group for persistent state.
+    xy_fit (SeriesXYFit or None): Optional y vs x fit.
+    hold_series_point (bool): Initial state of the Hold Series Point
+        toggle.
+    y_target (float or None): Target y, to choose an x per resonator.
+    xscale (str): Series-plot x scale.
 
-        Returns:
-        win (IQSeriesWindow): The window.
-        """
-        step1 = _make_step('fit_gain')
-        step2 = _make_step('fit_iq')
-        ars = []
-        for _ in range(2):
-            ar = MagicMock()
-            ar.analysis_steps = [step1, step2]
-            ar.path = [{'task': step1}, {'task': step2}]
-            ar._last_failures = {}
-            ar.execute_step.return_value = None
-            ar.DS = MagicMock()
-            ar.DS.nrows = nrows
-            ars.append(ar)
-        monkeypatch.setattr(iseries, 'get_panel_class', lambda _names: _WindowPanel)
-        monkeypatch.setattr(iseries.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
-        return IQSeriesWindow(
-            ars,
-            x_param_name='x',
-            x_name='X',
-            y_func=lambda _ar, _di: None,
-            y_name='Y',
-            start_series_idx=0,
-            start_idx=start_idx,
-            data_idxs=data_idxs,
-            title='test',
-            state_group=state_group,
-            xy_fit=xy_fit,
-            hold_series_point=hold_series_point,
-            y_target=y_target,
-            xscale=xscale,
-        )
-
-    @staticmethod
-    def _line_fit(group=None, fail=False, uses_guess=False):
-        """
-        Build a linear SeriesXYFit that counts its calls.
-
-        Parameters:
-        group (zarr.Group or None): Group to save fits to.
-        fail (bool): If True, the fit raises.
-        uses_guess (bool): If True, the fit takes a guess p0 and returns
-            (popt, p0); its own guess is (1, 0).
-
-        Returns:
-        xy_fit (SeriesXYFit): The fit.
-        calls (list): One entry per fit call: (x, y), plus p0 if used.
-        """
-        calls = []
-
-        def fit(x, y, *p0):
-            calls.append((x.copy(), y.copy(), *p0))
-            if fail:
-                raise RuntimeError('bad fit')
-            popt = np.polyfit(x, y, 1)
-            if not uses_guess:
-                return popt
-            return popt, (np.array([1.0, 0.0]) if p0[0] is None else p0[0])
-
-        xy_fit = iseries.SeriesXYFit(
-            fit=fit, param_names=['slope', 'intercept'],
-            model=lambda xs, slope, intercept: slope * xs + intercept,
-            name='line', group=group, uses_guess=uses_guess,
-        )
-        return xy_fit, calls
-
-    @staticmethod
-    def _stub_refresh(win):
-        """
-        Replace plot refresh and row initialization with no-op mocks.
-
-        Parameters:
-        win (IQSeriesWindow): Window to stub.
-        """
-        for name in (
-            '_update_series_combo_items', '_update_series_scatter',
-            '_update_waterfall', '_autoscale_all', '_ensure_data_idx_initialized',
-        ):
-            setattr(win, name, MagicMock())
-        win._all_series_outputs_exist = lambda _di: True
-
-    @staticmethod
-    def _close(win):
-        """
-        Close the window, accepting any confirmation prompt.
-
-        Parameters:
-        win (IQSeriesWindow): Window to close.
-        """
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
-
-    def test_default_data_idxs_covers_all_rows(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch, nrows=3)
-
-        assert win._data_idxs == [0, 1, 2]
-        assert win._data_idx == 0
-        assert win._res_label.text() == '1 / 3'
-        self._close(win)
-
-    def test_data_idxs_subset_navigation(self, qt_app, monkeypatch):
-        # Sorted to [1, 3, 4]
-        win = self._make_window(qt_app, monkeypatch, nrows=6, data_idxs=[4, 1, 3], start_idx=1)
-        self._stub_refresh(win)
-
-        assert win._data_idxs == [1, 3, 4]
-        assert win._data_idx == 3
-        assert win._res_label.text() == '2 / 3'
-        assert (win._data_idx_spin.minimum(), win._data_idx_spin.maximum()) == (1, 4)
-
-        win._advance_resonator(+1)
-        assert (win._data_idx, win._nav_pos) == (4, 2)
-        assert win._res_label.text() == '3 / 3'
-
-        win._advance_resonator(+1)
-        assert win._data_idx == 4
-
-        win._advance_resonator(-5)
-        assert (win._data_idx, win._nav_pos) == (1, 0)
-        assert win._data_idx_spin.value() == 1
-        self._close(win)
-
-    @pytest.mark.parametrize(
-        'spin_value, expected',
-        [(2, 3), (4, 4), (0, 1), (5, 1)],
+    Returns:
+    win (IQSeriesWindow): The window.
+    """
+    step1 = _make_step('fit_gain')
+    step2 = _make_step('fit_iq')
+    ars = []
+    for _ in range(2):
+        ar = MagicMock()
+        ar.analysis_steps = [step1, step2]
+        ar.path = [{'task': step1}, {'task': step2}]
+        ar._last_failures = {}
+        ar.execute_step.return_value = None
+        ar.DS = MagicMock()
+        ar.DS.nrows = nrows
+        ars.append(ar)
+    monkeypatch.setattr(
+        iseries, 'get_panel_class', lambda _names: _WindowPanel)
+    monkeypatch.setattr(
+        iseries.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
+    return IQSeriesWindow(
+        ars,
+        x_param_name='x',
+        x_name='X',
+        y_func=lambda _ar, _di: None,
+        y_name='Y',
+        start_idx=start_idx,
+        data_idxs=data_idxs,
+        title='test',
+        state_group=state_group,
+        xy_fit=xy_fit,
+        hold_series_point=hold_series_point,
+        y_target=y_target,
+        xscale=xscale,
     )
-    def test_spin_box_snaps_to_subset(self, qt_app, monkeypatch, spin_value, expected):
-        win = self._make_window(qt_app, monkeypatch, nrows=6, data_idxs=[1, 3, 4])
-        self._stub_refresh(win)
-        win._data_idx_spin.setMaximum(5)
-        win._data_idx_spin.setMinimum(0)
 
-        win._data_idx_spin.setValue(spin_value)
 
-        assert win._data_idx == expected
-        assert win._data_idx_spin.value() == expected
-        self._close(win)
+def _line_fit(group=None, fail=False, uses_guess=False):
+    """
+    Build a linear SeriesXYFit that counts its calls.
 
-    def test_prefetch_uses_next_subset_index(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch, nrows=6, data_idxs=[5, 2])
-        win._get_x_array = MagicMock()
-        win._get_y_array = MagicMock()
+    Parameters:
+    group (zarr.Group or None): Group to save fits to.
+    fail (bool): If True, the fit raises.
+    uses_guess (bool): If True, the fit takes a guess p0 and returns
+        (popt, p0); its own guess is (1, 0).
 
-        win._prefetch_next()
+    Returns:
+    xy_fit (SeriesXYFit): The fit.
+    calls (list): One entry per fit call: (x, y), plus p0 if used.
+    """
+    calls = []
+
+    def fit(x, y, *p0):
+        calls.append((x.copy(), y.copy(), *p0))
+        if fail:
+            raise RuntimeError('bad fit')
+        popt = np.polyfit(x, y, 1)
+        if not uses_guess:
+            return popt
+        return popt, (np.array([1.0, 0.0]) if p0[0] is None else p0[0])
+
+    xy_fit = iseries.SeriesXYFit(
+        fit=fit, param_names=['slope', 'intercept'],
+        model=lambda xs, slope, intercept: slope * xs + intercept,
+        name='line', group=group, uses_guess=uses_guess,
+    )
+    return xy_fit, calls
+
+
+def _stub_refresh(win):
+    """
+    Replace plot refresh and row initialization with no-op mocks.
+
+    Parameters:
+    win (IQSeriesWindow): Window to stub.
+    """
+    for name in (
+        '_update_series_combo_items', '_update_series_scatter',
+        '_update_waterfall', '_autoscale_all', '_ensure_data_idx_initialized',
+    ):
+        setattr(win, name, MagicMock())
+    win._all_series_outputs_exist = lambda _di: True
+
+
+def _close(win):
+    """
+    Close the window, accepting any confirmation prompt.
+
+    Parameters:
+    win (IQSeriesWindow): Window to close.
+    """
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
+
+
+def test_default_data_idxs_covers_all_rows(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch, nrows=3)
+
+    assert win._data_idxs == [0, 1, 2]
+    assert win._data_idx == 0
+    assert win._res_label.text() == '1 / 3'
+    _close(win)
+
+
+def test_data_idxs_subset_navigation(qt_app, monkeypatch):
+    # Sorted to [1, 3, 4]
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=6, data_idxs=[4, 1, 3], start_idx=1)
+    _stub_refresh(win)
+
+    assert win._data_idxs == [1, 3, 4]
+    assert win._data_idx == 3
+    assert win._res_label.text() == '2 / 3'
+    assert (win._data_idx_spin.minimum(),
+            win._data_idx_spin.maximum()) == (1, 4)
+
+    win._advance_resonator(+1)
+    assert (win._data_idx, win._nav_pos) == (4, 2)
+    assert win._res_label.text() == '3 / 3'
+
+    win._advance_resonator(+1)
+    assert win._data_idx == 4
+
+    win._advance_resonator(-5)
+    assert (win._data_idx, win._nav_pos) == (1, 0)
+    assert win._data_idx_spin.value() == 1
+    _close(win)
+
+
+@pytest.mark.parametrize(
+    'spin_value, expected',
+    [(2, 3), (4, 4), (0, 1), (5, 1)],
+)
+def test_spin_box_snaps_to_subset(qt_app, monkeypatch, spin_value, expected):
+    win = _make_series_window(qt_app, monkeypatch, nrows=6, data_idxs=[1, 3, 4])
+    _stub_refresh(win)
+    win._data_idx_spin.setMaximum(5)
+    win._data_idx_spin.setMinimum(0)
+
+    win._data_idx_spin.setValue(spin_value)
+
+    assert win._data_idx == expected
+    assert win._data_idx_spin.value() == expected
+    _close(win)
+
+
+def test_prefetch_uses_next_subset_index(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch, nrows=6, data_idxs=[5, 2])
+    win._get_x_array = MagicMock()
+    win._get_y_array = MagicMock()
+
+    win._prefetch_next()
+    win._prefetch_thread.join(timeout=2)
+
+    win._get_x_array.assert_called_once_with(5)  # sorted: [2, 5]
+    _close(win)
+
+
+def test_background_init_only_visits_subset(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch, nrows=6, data_idxs=[5, 2, 0])
+    win._background_fitting = True
+    win._all_series_outputs_exist = lambda _di: False
+    win._make_worker_ars = MagicMock(return_value=[])
+    visited = []
+    win._initialize_remaining_data_indices = (
+        lambda _ars, dis: visited.extend(dis))
+
+    win._start_background_initialize_remaining()
+    win._init_all_thread.join(timeout=2)
+
+    assert visited == [2, 5]  # sorted: [0, 2, 5], starting at 0
+    _close(win)
+
+
+@pytest.mark.parametrize('data_idxs', [[], [0, 2], [-1]])
+def test_invalid_data_idxs_raise(qt_app, monkeypatch, data_idxs):
+    with pytest.raises(ValueError, match='data_idxs'):
+        _make_series_window(qt_app, monkeypatch, nrows=2, data_idxs=data_idxs)
+
+
+def test_background_init_continues_after_failed_fit(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch, nrows=3)
+    worker_ars = [MagicMock(), MagicMock()]
+    attempted = []
+
+    def fake_init(ar, di):
+        attempted.append((worker_ars.index(ar), di))
+        if (worker_ars.index(ar), di) == (0, 1):
+            raise PermissionError('locked')
+
+    win._runner_outputs_exist = lambda _ar, _di: False
+    win._initialize_runner_outputs = fake_init
+
+    win._initialize_remaining_data_indices(worker_ars, [1, 2])
+
+    assert attempted == [(0, 1), (1, 1), (0, 2), (1, 2)]
+    assert {1, 2} <= win._initialized_data_idxs
+    worker_ars[0].release_rows.assert_any_call(1)
+    _close(win)
+
+
+def test_background_init_stops_between_series(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch, nrows=3)
+    worker_ars = [MagicMock(), MagicMock()]
+    attempted = []
+
+    def fake_init(ar, di):
+        attempted.append((worker_ars.index(ar), di))
+        win._init_all_stop.set()
+
+    win._runner_outputs_exist = lambda _ar, _di: False
+    win._initialize_runner_outputs = fake_init
+
+    win._initialize_remaining_data_indices(worker_ars, [1, 2])
+
+    assert attempted == [(0, 1)]
+    assert 1 not in win._initialized_data_idxs
+    _close(win)
+
+
+def test_attempted_rows_are_not_refit(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch, nrows=4)
+    win._initialized_data_idxs = {0, 2}
+    win._all_series_outputs_exist = lambda _di: False
+    win._initialize_all_series_for_data_idx = MagicMock()
+
+    win._ensure_data_idx_initialized(2)
+    win._initialize_all_series_for_data_idx.assert_not_called()
+
+    win._background_fitting = True
+    win._make_worker_ars = MagicMock(return_value=[])
+    visited = []
+    win._initialize_remaining_data_indices = (
+        lambda _ars, dis: visited.extend(dis))
+    win._start_background_initialize_remaining()
+    win._init_all_thread.join(timeout=2)
+
+    assert visited == [1, 3]
+    _close(win)
+
+
+def test_background_order_starts_after_current_position(qt_app, monkeypatch):
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=6, data_idxs=[5, 4, 3, 2, 1], start_idx=2)
+    win._background_fitting = True
+    win._make_worker_ars = MagicMock(return_value=[])
+    visited = []
+    win._initialize_remaining_data_indices = (
+        lambda _ars, dis: visited.extend(dis))
+
+    win._start_background_initialize_remaining()
+    win._init_all_thread.join(timeout=2)
+
+    # Sorted: [1, 2, 3, 4, 5], starting at 3
+    assert visited == [4, 5, 1, 2]
+    _close(win)
+
+
+def test_resume_starts_at_first_unviewed_index(qt_app, monkeypatch, tmp_path):
+    state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+
+    # Session 1 reviews a subset and closes on data_idx 3.
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=6, data_idxs=[0, 1, 3, 4, 5],
+        start_idx=None, state_group=state_group)
+    _stub_refresh(win)
+    assert win._data_idx == 0
+    win._advance_resonator(+1)
+    win._advance_resonator(+1)
+    assert win._data_idx == 3
+    _close(win)
+    state = reopen_group(state_group).attrs['series_state']
+    # The row open at closing is not viewed; it is where to resume.
+    assert state['viewed_data_idxs'] == [0, 1]
+    assert state['last_data_idx'] == 3
+
+    # Session 2 over all rows starts at 2, the first row never viewed.
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=6, start_idx=None, state_group=state_group)
+    assert win._data_idx == 2
+    assert win._res_label.text() == '3 / 6'
+    _close(win)
+
+
+@pytest.mark.parametrize('keep', [False, True])
+def test_hold_series_point_across_data_indices(qt_app, monkeypatch, keep):
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=3, hold_series_point=keep)
+    _stub_refresh(win)
+    win._run_all_panels = MagicMock()
+    assert win._hold_series_btn.isCheckable()
+    assert win._hold_series_btn.isChecked() == keep
+
+    win._set_series_idx(1)
+    win._advance_resonator(+1)
+    assert win._data_idx == 1
+    if keep:
+        assert win._series_idx == 1
+        assert win._series_combo.currentIndex() == 1
+        assert all(panel.AR is win._ARs[1] and panel.data_idx == 1
+                   for panel in win.panels)
+    else:
+        assert (win._series_idx is None
+                and win._series_combo.currentIndex() == -1)
+
+    # The toggle switches the behavior
+    win._hold_series_btn.setChecked(not keep)
+    win._set_series_idx(0)
+    win._advance_resonator(+1)
+    assert win._series_idx == (None if keep else 0)
+    _close(win)
+
+
+def test_resume_at_the_row_open_when_closed(qt_app, monkeypatch, tmp_path):
+    state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=6, start_idx=None, state_group=state_group)
+    _stub_refresh(win)
+    win._advance_resonator(+1)
+    win._advance_resonator(+1)
+    # Rows pre-fitted in the background are not viewed
+    win._mark_attempted(3)
+    win._mark_attempted(4)
+    _close(win)
+
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=6, start_idx=None, state_group=state_group)
+    assert win._data_idx == 2 and win._data_idxs == list(range(6))
+    _stub_refresh(win)
+    win._advance_resonator(+1)
+    state = reopen_group(state_group).attrs['series_state']
+    # The open row is saved as it changes (e.g. in case of a crash)
+    assert state['viewed_data_idxs'] == [0, 1, 2]
+    assert state['last_data_idx'] == 3
+    _close(win)
+
+
+def test_resume_starts_at_an_earlier_unviewed_row(
+    qt_app, monkeypatch, tmp_path
+):
+    state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+    # Viewed 0, 2 and 3, closed on 4 (1 was never viewed)
+    state_group.attrs['series_state'] = {
+        'viewed_data_idxs': [0, 2, 3], 'prefit_attempted': [],
+        'last_data_idx': 4}
+
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=6, start_idx=None, state_group=state_group)
+    assert win._data_idxs == list(range(6))
+    assert win._data_idx == 1 and win._res_label.text() == '2 / 6'
+    _close(win)
+
+
+def test_start_idx_overrides_saved_state_and_data_idxs_are_sorted(
+    qt_app, monkeypatch, tmp_path
+):
+    state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+    state_group.attrs['series_state'] = {
+        'viewed_data_idxs': [], 'prefit_attempted': [], 'last_data_idx': 4}
+
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=6, data_idxs=[5, 1, 3, 1], start_idx=1,
+        state_group=state_group)
+    assert win._data_idxs == [1, 3, 5]
+    assert win._data_idx == 3
+    _stub_refresh(win)
+    win._advance_resonator(+1)
+    assert win._data_idx == 5
+    _close(win)
+
+
+def test_resume_with_everything_viewed_or_explicit_start(
+    qt_app, monkeypatch, tmp_path
+):
+    state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+    state_group.attrs['series_state'] = {
+        'viewed_data_idxs': [0, 1, 2], 'prefit_attempted': [1]}
+
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=3, start_idx=None, state_group=state_group)
+    assert win._data_idx == 0
+    assert win._initialized_data_idxs == {1}
+    _close(win)
+
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=3, start_idx=2, state_group=state_group)
+    assert win._data_idx == 2
+    _close(win)
+
+
+def test_state_is_reread_when_the_store_was_deleted(
+    qt_app, monkeypatch, tmp_path
+):
+    """A group object held across sessions keeps stale attributes."""
+    import shutil
+    path = tmp_path / 'state.zarr'
+    state_group = zarr.open_group(str(path), mode='w')
+    state_group.attrs['series_state'] = {
+        'viewed_data_idxs': [0, 1], 'prefit_attempted': [0, 1]}
+    shutil.rmtree(path)
+    assert 'series_state' in state_group.attrs  # stale
+
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=3, start_idx=None, state_group=state_group)
+    assert win._data_idx == 0
+    assert win._initialized_data_idxs == set()
+    _close(win)
+
+
+def test_attempted_rows_are_saved(qt_app, monkeypatch, tmp_path):
+    state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=4, state_group=state_group)
+    win._runner_outputs_exist = lambda _ar, _di: False
+    win._initialize_runner_outputs = lambda _ar, _di: None
+
+    win._initialize_remaining_data_indices([MagicMock()], [2, 3])
+
+    state = reopen_group(state_group).attrs['series_state']
+    assert state['prefit_attempted'] == [2, 3]
+    _close(win)
+
+
+def test_close_waits_for_worker_and_consolidates(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch, nrows=3)
+    release = threading.Event()
+    win._init_all_thread = threading.Thread(target=release.wait, daemon=True)
+    win._init_all_thread.start()
+    order = []
+    win._consolidate_storage = (
+        lambda: order.append(win._init_all_thread.is_alive()))
+    threading.Timer(0.2, release.set).start()
+
+    _close(win)
+
+    assert win._init_all_stop.is_set()
+    assert order == [False]
+
+
+def test_consolidate_storage_runs_for_every_series(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch, nrows=3)
+
+    _close(win)
+
+    for ar in win._ARs:
+        ar.DS.consolidate_storage.assert_called_once()
+
+
+def test_worker_skips_rows_saved_in_one_mask_read(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch, nrows=4)
+    worker_ars = [MagicMock(), MagicMock()]
+    for ar, done_rows in zip(worker_ars, ([1, 2], [2])):
+        mask = np.zeros(4, dtype=bool)
+        mask[done_rows] = True
+        ar.path = [{'task': _make_step('fit_iq', return_names=['z'])}]
+        ar.DS.saved_row_mask.return_value = mask
+    win._runner_outputs_exist = MagicMock(
+        side_effect=AssertionError('should use the mask'))
+    fitted = []
+    win._initialize_runner_outputs = (
+        lambda ar, di: fitted.append((worker_ars.index(ar), di)))
+
+    win._initialize_remaining_data_indices(worker_ars, [1, 2, 3])
+
+    assert fitted == [(1, 1), (0, 3), (1, 3)]
+    _close(win)
+
+
+@pytest.mark.parametrize(
+    'key, method',
+    [('2', '_run_through_panel'), ('Shift+2', '_run_panel_by_index')]
+)
+def test_series_window_number_shortcuts(qt_app, monkeypatch, key, method):
+    win = _make_series_window(qt_app, monkeypatch)
+    win._run_through_panel = MagicMock()
+    win._run_panel_by_index = MagicMock()
+    target = QtGui.QKeySequence(key)
+    (shortcut,) = [
+        sc for sc in win.findChildren(QtGui.QShortcut) if sc.key() == target
+    ]
+
+    shortcut.activated.emit()
+
+    getattr(win, method).assert_called_once_with(1)
+    other = ('_run_panel_by_index' if method == '_run_through_panel'
+             else '_run_through_panel')
+    getattr(win, other).assert_not_called()
+    _close(win)
+
+
+def test_series_window_no_run_all_button(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch)
+
+    assert 'Run All' not in [
+        btn.text() for btn in win.findChildren(QtWidgets.QPushButton)]
+    _close(win)
+
+
+def test_series_window_toolbar_hints_wrap_instead_of_widening_window(
+    qt_app, monkeypatch
+):
+    win = _make_series_window(qt_app, monkeypatch)
+
+    _assert_hints_wrap(win)
+    _close(win)
+
+
+def test_series_window_height_fits_panels_up_to_screen(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch)
+
+    _assert_height_fits_content(qt_app, win, win._right_scroll, width=1400)
+    _close(win)
+
+
+def test_xy_fit_on_scatter_refresh_and_refit_only_on_change(
+    qt_app, monkeypatch
+):
+    xy_fit, calls = _line_fit()
+    win = _make_series_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit)
+    win._x_cache[0] = np.array([1.0, 2.0])
+    win._y_cache[0] = np.array([3.0, 5.0])
+
+    win._update_series_scatter()
+
+    assert len(calls) == 1
+    np.testing.assert_allclose(win._xy_store.load(0).popt, [2.0, 1.0])
+    xs, ys = win._xy_fit_curve.getData()
+    np.testing.assert_allclose(ys, 2.0 * xs + 1.0)
+    assert 'line: slope = 2, intercept = 1' in win._plot_series.titleLabel.text
+
+    win._update_series_scatter()
+    assert len(calls) == 1
+
+    win._y_cache[0] = np.array([3.0, 7.0])
+    win._update_series_scatter()
+    assert len(calls) == 2
+    assert win._xy_store.load(0).popt[0] == pytest.approx(4.0)
+    _close(win)
+
+
+def test_xy_fit_failure_is_shown_and_saved(qt_app, monkeypatch):
+    xy_fit, _ = _line_fit(fail=True)
+    win = _make_series_window(qt_app, monkeypatch, xy_fit=xy_fit)
+    win._x_cache[0] = np.array([1.0, 2.0])
+    win._y_cache[0] = np.array([3.0, 5.0])
+
+    win._update_series_scatter()
+
+    assert ('fit failed (RuntimeError: bad fit)'
+            in win._plot_series.titleLabel.text)
+    assert win._apply_status_label.text() == 'xy fit failed'
+    assert win._xy_store.has_fit(0)
+    assert (win._xy_fit_curve.getData()[0] is None
+            or len(win._xy_fit_curve.getData()[0]) == 0)
+    _close(win)
+
+
+def test_xy_fit_in_background_after_each_row(qt_app, monkeypatch):
+    xy_fit, _ = _line_fit()
+    win = _make_series_window(qt_app, monkeypatch, nrows=4, xy_fit=xy_fit)
+    worker_ars = [MagicMock(), MagicMock()]
+    win._x_of = lambda ar, di: float(worker_ars.index(ar) + 1)
+    win._y_of = lambda ar, di: 2.0 * (worker_ars.index(ar) + 1) + di
+    win._runner_outputs_exist = lambda _ar, _di: False
+    prefit = []
+    win._initialize_runner_outputs = lambda ar, di: prefit.append(di)
+    win._initialized_data_idxs = {3}   # pre-fitted in an earlier session
+
+    win._initialize_remaining_data_indices(worker_ars, [1, 2, 3])
+
+    assert prefit == [1, 1, 2, 2]
+    assert list(np.flatnonzero(win._xy_store.fitted_rows())) == [1, 2, 3]
+    for di in (1, 2, 3):
+        slope, intercept = win._xy_store.load(di).popt
+        assert slope == pytest.approx(2.0)
+        assert intercept == pytest.approx(di)
+    _close(win)
+
+
+def test_background_revisits_attempted_rows_without_xy_fit(qt_app, monkeypatch):
+    xy_fit, _ = _line_fit()
+    win = _make_series_window(qt_app, monkeypatch, nrows=4, xy_fit=xy_fit)
+    win._initialized_data_idxs = {0, 1, 2, 3}
+    x = np.array([1.0, 2.0])
+    win._xy_store.save(2, x, x, xy_fit.run(x, x)[0])
+    win._background_fitting = True
+    win._make_worker_ars = MagicMock(return_value=[])
+    visited = []
+    win._initialize_remaining_data_indices = (
+        lambda _ars, dis: visited.extend(dis))
+
+    win._start_background_initialize_remaining()
+    win._init_all_thread.join(timeout=2)
+
+    assert visited == [1, 3]
+    _close(win)
+
+
+@pytest.mark.parametrize('overwrite', [True, False])
+def test_xy_fit_definition_mismatch_asks(qt_app, monkeypatch, overwrite):
+    group = zarr.open_group(zarr.storage.MemoryStore(), mode='w')
+    old = iseries.SeriesXYFit(fit=lambda x, y: y.mean(), param_names=['mean'],
+                            model=lambda xs, m: xs, name='mean', group=group)
+    x = np.array([1.0, 2.0])
+    iseries.SeriesXYFitStore(group, old, 2, 2).save(0, x, x, old.run(x, x)[0])
+    asked = []
+    monkeypatch.setattr(iseries, '_confirm_overwrite_xy_fit',
+                        lambda message: asked.append(message) or overwrite)
+    xy_fit, _ = _line_fit(group=group)
+
+    if overwrite:
+        win = _make_series_window(qt_app, monkeypatch, xy_fit=xy_fit)
+        assert 'popt' not in group
+        assert not win._xy_store.has_fit(0)
+        _close(win)
+    else:
+        with pytest.raises(RuntimeError, match='User cancelled operation'):
+            _make_series_window(qt_app, monkeypatch, xy_fit=xy_fit)
+    assert len(asked) == 1 and "'mean'" in asked[0]
+
+
+def test_series_plot_range_ignores_fit_curve(qt_app, monkeypatch):
+    xy_fit = iseries.SeriesXYFit(
+        fit=lambda x, y: (1.0,), param_names=['k'],
+        model=lambda xs, k: 1e6 * np.sin(xs),   # far outside the data
+        name='wild',
+    )
+    win = _make_series_window(qt_app, monkeypatch, xy_fit=xy_fit)
+    win._x_cache[0] = np.array([1.0, 2.0])
+    win._y_cache[0] = np.array([3.0, 5.0])
+    win._update_series_scatter()
+    assert np.nanmax(np.abs(win._xy_fit_curve.getData()[1])) > 1e5
+
+    win._plot_series.autoRange()
+
+    y_min, y_max = win._plot_series.viewRange()[1]
+    assert y_min > 0 and y_max < 10
+    _close(win)
+
+
+def test_xy_fit_defaults_to_state_group(qt_app, monkeypatch, tmp_path):
+    state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+    xy_fit, _ = _line_fit()
+    win = _make_series_window(
+        qt_app, monkeypatch, state_group=state_group, xy_fit=xy_fit)
+    win._x_cache[0] = np.array([1.0, 2.0])
+    win._y_cache[0] = np.array([3.0, 5.0])
+
+    win._update_series_scatter()
+
+    assert state_group['xy_fit/popt'].shape == (2, 2)
+    _close(win)
+
+
+def test_xy_guess_inputs_show_and_take_the_guess(qt_app, monkeypatch):
+    xy_fit, calls = _line_fit(uses_guess=True)
+    win = _make_series_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit)
+    win._x_cache[0] = np.array([1.0, 2.0])
+    win._y_cache[0] = np.array([3.0, 5.0])
+
+    win._update_series_scatter()                  # the fit's own guess, shown
+
+    assert [e.text() for e in win._guess_edits] == ['1', '0']
+    assert calls[-1][2] is None
+    assert 'automatic' in win._guess_status.text()
+
+    win._guess_edits[0].setText('4')               # the user's guess refits
+    win._guess_edits[0].editingFinished.emit()
+    np.testing.assert_array_equal(calls[-1][2], [4.0, 0.0])
+    saved = win._xy_store.load(0)
+    np.testing.assert_array_equal(saved.p0, [4.0, 0.0])
+    assert saved.p0_user and 'yours' in win._guess_status.text()
+    n = len(calls)
+    win._guess_edits[0].editingFinished.emit()     # unchanged: no refit
+    assert len(calls) == n
+
+    win._y_cache[0] = np.array([3.0, 9.0])  # new data keeps the user's guess
+    win._update_series_scatter()
+    np.testing.assert_array_equal(calls[-1][2], [4.0, 0.0])
+
+    win._reset_xy_guess()                          # back to the fit's own guess
+    assert calls[-1][2] is None and not win._xy_store.load(0).p0_user
+    assert [e.text() for e in win._guess_edits] == ['1', '0']
+    _close(win)
+
+
+def test_xy_guess_input_rejects_text(qt_app, monkeypatch):
+    xy_fit, calls = _line_fit(uses_guess=True)
+    win = _make_series_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit)
+    win._x_cache[0] = np.array([1.0, 2.0])
+    win._y_cache[0] = np.array([3.0, 5.0])
+    win._update_series_scatter()
+
+    win._guess_edits[1].setText('abc')
+    win._guess_edits[1].editingFinished.emit()
+
+    assert 'must be a number' in win._apply_status_label.text()
+    assert win._guess_edits[1].text() == '0'
+    assert not win._xy_store.load(0).p0_user
+    _close(win)
+
+
+def test_no_guess_inputs_without_uses_guess(qt_app, monkeypatch):
+    xy_fit, _ = _line_fit()
+    win = _make_series_window(qt_app, monkeypatch, xy_fit=xy_fit)
+    assert win._guess_edits == [] and win._plots_widget is win._gw
+    assert win._chosen_x_line is None
+    _close(win)
+
+
+def test_y_target_needs_an_xy_fit(qt_app, monkeypatch):
+    with pytest.raises(ValueError, match='y_target'):
+        _make_series_window(qt_app, monkeypatch, y_target=4.0)
+
+
+def test_chosen_x_from_the_fit_is_shown_and_saved(qt_app, monkeypatch):
+    xy_fit, _ = _line_fit()           # numerical inverse of y = 2 x + 1
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=3, xy_fit=xy_fit, y_target=4.0)
+    line = win._chosen_x_line
+    assert line is not None and not line.isVisible()
+    assert win._y_target_edit.text() == '4' and win._xy_store.y_target == 4.0
+    win._x_cache[0] = np.array([1.0, 2.0])
+    win._y_cache[0] = np.array([3.0, 5.0])
+
+    win._update_series_scatter()
+
+    assert line.isVisible() and line.value() == pytest.approx(1.5)
+    assert line.pen == win._chosen_x_pens[False]
+    assert win._chosen_x_label.textItem.toPlainText() == '1.5'
+    x, user = win._xy_store.load_chosen_x(0)
+    assert x == pytest.approx(1.5) and not user
+    assert 'from the fit' in win._chosen_status.text()
+    assert not win._chosen_reset_btn.isEnabled()
+
+    win._y_target_edit.setText('100')      # beyond the data: no x
+    win._y_target_edit.editingFinished.emit()
+    assert win._xy_store.y_target == 100.0
+    assert not line.isVisible() and 'none' in win._chosen_status.text()
+    assert np.isnan(win._xy_store.load_chosen_x(0)[0])
+
+    win._y_target_edit.setText('abc')      # rejected, target kept
+    win._y_target_edit.editingFinished.emit()
+    assert 'must be a number' in win._apply_status_label.text()
+    assert win._y_target_edit.text() == '100' and win._y_target == 100.0
+    _close(win)
+
+
+def test_user_chosen_x_by_drag_shift_click_and_reset(qt_app, monkeypatch):
+    xy_fit, _ = _line_fit()
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=3, xy_fit=xy_fit, y_target=4.0)
+    win._x_cache[0] = np.array([1.0, 2.0])
+    win._y_cache[0] = np.array([3.0, 5.0])
+    win._update_series_scatter()
+    line = win._chosen_x_line
+
+    line.setValue(1.8)                     # dragged
+    win._on_chosen_x_dragged(line)
+    assert win._xy_store.load_chosen_x(0) == (1.8, True)
+    assert line.pen == win._chosen_x_pens[True]
+    assert ('by you' in win._chosen_status.text()
+            and win._chosen_reset_btn.isEnabled())
+
+    win._y_cache[0] = np.array([3.0, 9.0])   # refit keeps the user's x
+    win._update_series_scatter()
+    assert win._xy_store.load_chosen_x(0) == (1.8, True)
+    win._y_target_edit.setText('6')          # so does a new target
+    win._y_target_edit.editingFinished.emit()
+    assert win._xy_store.load_chosen_x(0) == (1.8, True)
+    assert line.value() == pytest.approx(1.8)
+
+    # Shift+click chooses the x under the cursor; a plain click doesn't
+    win.show()
+    qt_app.processEvents()
+    vb = win._plot_series.vb
+    vb.setRange(xRange=(0.0, 3.0), yRange=(0.0, 10.0), padding=0)
+    qt_app.processEvents()
+    shift_click = MagicMock()
+    shift_click.button.return_value = _Qt.LeftButton
+    shift_click.modifiers.return_value = _Qt.ShiftModifier
+    shift_click.scenePos.return_value = vb.mapViewToScene(
+        QtCore.QPointF(1.2, 4.0))
+    win._on_series_plot_clicked(shift_click)
+    assert win._xy_store.load_chosen_x(0)[0] == pytest.approx(1.2, abs=1e-3)
+    shift_click.accept.assert_called_once()
+    click = MagicMock()
+    click.button.return_value = _Qt.LeftButton
+    click.modifiers.return_value = _Qt.NoModifier
+    click.scenePos.return_value = vb.mapViewToScene(QtCore.QPointF(2.5, 4.0))
+    win._on_series_plot_clicked(click)
+    assert win._xy_store.load_chosen_x(0)[0] == pytest.approx(1.2, abs=1e-3)
+    outside = MagicMock()
+    outside.button.return_value = _Qt.LeftButton
+    outside.modifiers.return_value = _Qt.ShiftModifier
+    outside.scenePos.return_value = QtCore.QPointF(-1e4, -1e4)
+    win._on_series_plot_clicked(outside)
+    assert win._xy_store.load_chosen_x(0)[0] == pytest.approx(1.2, abs=1e-3)
+
+    # Shift+click on a point doesn't select it; a plain click does
+    win._set_series_idx = MagicMock()
+    spot = MagicMock()
+    spot.data.return_value = 1
+    win._on_scatter_clicked(None, [spot], shift_click)
+    win._set_series_idx.assert_not_called()
+    win._on_scatter_clicked(None, [spot], click)
+    win._set_series_idx.assert_called_once_with(1)
+
+    win._chosen_reset_btn.click()  # back to the fit's x (y = 6 x - 3 at 6)
+    x, user = win._xy_store.load_chosen_x(0)
+    assert x == pytest.approx(1.5) and not user
+    assert line.pen == win._chosen_x_pens[False]
+    _close(win)
+
+
+def test_status_texts_do_not_resize_the_panes(qt_app, monkeypatch):
+    xy_fit, _ = _line_fit(uses_guess=True)
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=3, xy_fit=xy_fit, y_target=4.0)
+    win._x_name = 'Tone power (dBm)'
+    win.show()
+    qt_app.processEvents()
+    left_min = win._plots_widget.minimumSizeHint().width()
+    toolbar_min = (win.centralWidget().layout().itemAt(0).widget()
+                   .minimumSizeHint().width())
+    assert left_min == win._gw.minimumWidth()
+
+    win._x_cache[0] = np.array([-50.0, -40.0])
+    win._y_cache[0] = np.array([3.0, 5.0])
+    win._update_series_scatter()                 # fit text, guess text
+    win._set_user_chosen_x(-45.123)              # Shift+click text
+    long = ('a status message that is much longer '
+            'than the room the label has ') * 3
+    for label in (win._chosen_status, win._guess_status,
+                  win._apply_status_label, win._prefetch_label):
+        label.setText(long)
+    qt_app.processEvents()
+
+    assert win._plots_widget.minimumSizeHint().width() == left_min
+    toolbar = win.centralWidget().layout().itemAt(0).widget()
+    assert toolbar.minimumSizeHint().width() == toolbar_min
+    _close(win)
+
+
+def test_chosen_x_line_on_a_log_x_axis(qt_app, monkeypatch):
+    xy_fit, _ = _line_fit()
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=3, xy_fit=xy_fit, y_target=4.0,
+        xscale='log')
+    win._x_cache[0] = np.array([10.0, 100.0])
+    win._y_cache[0] = np.array([3.0, 5.0])   # y = 4 at x = 55
+
+    win._update_series_scatter()
+
+    line = win._chosen_x_line
+    assert line.value() == pytest.approx(np.log10(55.0), abs=1e-9)
+    assert win._chosen_x_label.textItem.toPlainText() == '55'
+    assert win._xy_store.load_chosen_x(0)[0] == pytest.approx(55.0)
+
+    line.setValue(1.0)                       # dragged to x = 10
+    win._on_chosen_x_dragged(line)
+    assert win._xy_store.load_chosen_x(0) == (pytest.approx(10.0), True)
+    _close(win)
+
+
+def test_fit_saves_chosen_x_but_keeps_the_users(qt_app, monkeypatch):
+    xy_fit, _ = _line_fit()
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=3, xy_fit=xy_fit, y_target=4.0)
+    win._xy_store.save_chosen_x(2, 7.0, user=True)
+    x, y = np.array([1.0, 2.0]), np.array([3.0, 5.0])
+
+    win._fit_and_save_xy(1, x, y)            # as the background worker does
+    win._fit_and_save_xy(2, x, y)
+
+    chosen, user = win._xy_store.chosen_x()
+    np.testing.assert_allclose(chosen[1:], [1.5, 7.0])
+    assert list(user) == [False, False, True]
+    _close(win)
+
+
+def test_chosen_x_recomputed_at_startup_for_a_new_target(
+    qt_app, monkeypatch, tmp_path
+):
+    state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+    xy_fit, _ = _line_fit()
+    win = _make_series_window(
+        qt_app, monkeypatch, state_group=state_group, xy_fit=xy_fit,
+        y_target=4.0)
+    win._x_cache[0] = np.array([1.0, 2.0])
+    win._y_cache[0] = np.array([3.0, 5.0])
+    win._update_series_scatter()
+    assert state_group['xy_fit/x_chosen'][0] == pytest.approx(1.5)
+    _close(win)
+
+    xy_fit, calls = _line_fit()
+    win = _make_series_window(
+        qt_app, monkeypatch, state_group=state_group, xy_fit=xy_fit,
+        y_target=3.5)
+    assert calls == []                       # from the saved fits, no refit
+    assert win._xy_store.load_chosen_x(0)[0] == pytest.approx(1.25)
+    assert state_group['xy_fit'].attrs['y_target'] == 3.5
+    _close(win)
+
+
+def test_closed_window_is_destroyed_but_keeps_python_state(
+    qt_app, monkeypatch, tmp_path
+):
+    state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
+    win = _make_series_window(
+        qt_app, monkeypatch, nrows=3, state_group=state_group)
+
+    _close(win)
+    iseries.QtCore.QCoreApplication.sendPostedEvents(
+        None, iseries.QtCore.QEvent.Type.DeferredDelete)
+
+    with pytest.raises(RuntimeError):
+        win.isVisible()
+    assert win._data_idx == 0 and win._viewed_data_idxs == set()
+    state = reopen_group(state_group).attrs['series_state']
+    assert state['viewed_data_idxs'] == [] and state['last_data_idx'] == 0
+
+
+def test_worker_ars_are_built_once(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch, nrows=3)
+    win._background_fitting = True
+    win._make_worker_ars = MagicMock(return_value=['ar'])
+    win._initialize_remaining_data_indices = lambda _ars, _dis: None
+
+    for _ in range(2):
+        win._start_background_initialize_remaining()
+        win._init_all_thread.join(timeout=2)
+
+    win._make_worker_ars.assert_called_once()
+    _close(win)
+
+
+def test_series_window_run_panel_marks_downstream_stale(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch)
+    win._series_idx = 0
+    win._update_series_point = MagicMock()
+
+    win._run_panel_by_index(0)
+
+    assert win.panels[0]._has_run is True
+    assert win.panels[1]._needs_run is True
+    assert win.panels[1].clear_calls == 1
+    win._update_series_point.assert_called_once_with(0)
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
+
+
+def test_data_idx_navigation_cancel_keeps_state_when_stale(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch)
+    win.panels[1]._needs_run = True
+
+    with patch.object(
+        QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.No
+    ):
+        win._set_data_idx(1)
+
+    assert win._data_idx == 0
+    assert win._data_idx_spin.value() == 0
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
+
+
+def test_series_window_panel_save_cancel_skips_persist_when_downstream_stale(
+    qt_app, monkeypatch
+):
+    win = _make_series_window(qt_app, monkeypatch)
+    win._series_idx = 0
+    win.panels[1]._needs_run = True
+
+    with patch.object(
+        QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.No
+    ):
+        win.panels[0]._on_save_clicked()
+
+    assert win._ARs[0].save_step_outputs.call_count == 0
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
+
+
+def test_prefetch_next_does_not_execute_pipeline(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch)
+    win._series_idx = 0
+
+    win._prefetch_next()
+    if win._prefetch_thread is not None:
         win._prefetch_thread.join(timeout=2)
 
-        win._get_x_array.assert_called_once_with(5)  # sorted: [2, 5]
-        self._close(win)
-
-    def test_background_init_only_visits_subset(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch, nrows=6, data_idxs=[5, 2, 0])
-        win._background_fitting = True
-        win._all_series_outputs_exist = lambda _di: False
-        win._make_worker_ars = MagicMock(return_value=[])
-        visited = []
-        win._initialize_remaining_data_indices = lambda _ars, dis: visited.extend(dis)
-
-        win._start_background_initialize_remaining()
-        win._init_all_thread.join(timeout=2)
-
-        assert visited == [2, 5]  # sorted: [0, 2, 5], starting at 0
-        self._close(win)
-
-    @pytest.mark.parametrize('data_idxs', [[], [0, 2], [-1]])
-    def test_invalid_data_idxs_raise(self, qt_app, monkeypatch, data_idxs):
-        with pytest.raises(ValueError, match='data_idxs'):
-            self._make_window(qt_app, monkeypatch, nrows=2, data_idxs=data_idxs)
-
-    def test_background_init_continues_after_failed_fit(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch, nrows=3)
-        worker_ars = [MagicMock(), MagicMock()]
-        attempted = []
-
-        def fake_init(ar, di):
-            attempted.append((worker_ars.index(ar), di))
-            if (worker_ars.index(ar), di) == (0, 1):
-                raise PermissionError('locked')
-
-        win._runner_outputs_exist = lambda _ar, _di: False
-        win._initialize_runner_outputs = fake_init
-
-        win._initialize_remaining_data_indices(worker_ars, [1, 2])
-
-        assert attempted == [(0, 1), (1, 1), (0, 2), (1, 2)]
-        assert {1, 2} <= win._initialized_data_idxs
-        worker_ars[0].release_rows.assert_any_call(1)
-        self._close(win)
-
-    def test_background_init_stops_between_series(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch, nrows=3)
-        worker_ars = [MagicMock(), MagicMock()]
-        attempted = []
-
-        def fake_init(ar, di):
-            attempted.append((worker_ars.index(ar), di))
-            win._init_all_stop.set()
-
-        win._runner_outputs_exist = lambda _ar, _di: False
-        win._initialize_runner_outputs = fake_init
-
-        win._initialize_remaining_data_indices(worker_ars, [1, 2])
-
-        assert attempted == [(0, 1)]
-        assert 1 not in win._initialized_data_idxs
-        self._close(win)
-
-    def test_attempted_rows_are_not_refit(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch, nrows=4)
-        win._initialized_data_idxs = {0, 2}
-        win._all_series_outputs_exist = lambda _di: False
-        win._initialize_all_series_for_data_idx = MagicMock()
-
-        win._ensure_data_idx_initialized(2)
-        win._initialize_all_series_for_data_idx.assert_not_called()
-
-        win._background_fitting = True
-        win._make_worker_ars = MagicMock(return_value=[])
-        visited = []
-        win._initialize_remaining_data_indices = lambda _ars, dis: visited.extend(dis)
-        win._start_background_initialize_remaining()
-        win._init_all_thread.join(timeout=2)
-
-        assert visited == [1, 3]
-        self._close(win)
-
-    def test_background_order_starts_after_current_position(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch, nrows=6, data_idxs=[5, 4, 3, 2, 1], start_idx=2)
-        win._background_fitting = True
-        win._make_worker_ars = MagicMock(return_value=[])
-        visited = []
-        win._initialize_remaining_data_indices = lambda _ars, dis: visited.extend(dis)
-
-        win._start_background_initialize_remaining()
-        win._init_all_thread.join(timeout=2)
-
-        # Sorted: [1, 2, 3, 4, 5], starting at 3
-        assert visited == [4, 5, 1, 2]
-        self._close(win)
-
-    def test_resume_starts_at_first_unviewed_index(self, qt_app, monkeypatch, tmp_path):
-        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
-
-        # Session 1 reviews a subset and closes on data_idx 3.
-        win = self._make_window(qt_app, monkeypatch, nrows=6, data_idxs=[0, 1, 3, 4, 5],
-                                start_idx=None, state_group=state_group)
-        self._stub_refresh(win)
-        assert win._data_idx == 0
-        win._advance_resonator(+1)
-        win._advance_resonator(+1)
-        assert win._data_idx == 3
-        self._close(win)
-        state = reopen_group(state_group).attrs['series_state']
-        # The row open at closing is not viewed; it is where to resume.
-        assert state['viewed_data_idxs'] == [0, 1]
-        assert state['last_data_idx'] == 3
-
-        # Session 2 over all rows starts at 2, the first row never viewed.
-        win = self._make_window(qt_app, monkeypatch, nrows=6, start_idx=None,
-                                state_group=state_group)
-        assert win._data_idx == 2
-        assert win._res_label.text() == '3 / 6'
-        self._close(win)
-
-    @pytest.mark.parametrize('keep', [False, True])
-    def test_hold_series_point_across_data_indices(self, qt_app, monkeypatch, keep):
-        win = self._make_window(qt_app, monkeypatch, nrows=3, hold_series_point=keep)
-        self._stub_refresh(win)
-        win._run_all_panels = MagicMock()
-        assert win._hold_series_btn.isCheckable()
-        assert win._hold_series_btn.isChecked() == keep
-
-        win._set_series_idx(1)
-        win._advance_resonator(+1)
-        assert win._data_idx == 1
-        if keep:
-            assert win._series_idx == 1
-            assert win._series_combo.currentIndex() == 1
-            assert all(panel.AR is win._ARs[1] and panel.data_idx == 1
-                       for panel in win.panels)
-        else:
-            assert win._series_idx is None and win._series_combo.currentIndex() == -1
-
-        # The toggle switches the behavior
-        win._hold_series_btn.setChecked(not keep)
-        win._set_series_idx(0)
-        win._advance_resonator(+1)
-        assert win._series_idx == (None if keep else 0)
-        self._close(win)
-
-    def test_resume_at_the_row_open_when_closed(self, qt_app, monkeypatch, tmp_path):
-        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
-        win = self._make_window(qt_app, monkeypatch, nrows=6, start_idx=None,
-                                state_group=state_group)
-        self._stub_refresh(win)
-        win._advance_resonator(+1)
-        win._advance_resonator(+1)
-        # Rows pre-fitted in the background are not viewed
-        win._mark_attempted(3)
-        win._mark_attempted(4)
-        self._close(win)
-
-        win = self._make_window(qt_app, monkeypatch, nrows=6, start_idx=None,
-                                state_group=state_group)
-        assert win._data_idx == 2 and win._data_idxs == list(range(6))
-        self._stub_refresh(win)
-        win._advance_resonator(+1)
-        state = reopen_group(state_group).attrs['series_state']
-        # The open row is saved as it changes (e.g. in case of a crash)
-        assert state['viewed_data_idxs'] == [0, 1, 2]
-        assert state['last_data_idx'] == 3
-        self._close(win)
-
-    def test_resume_starts_at_an_earlier_unviewed_row(self, qt_app, monkeypatch, tmp_path):
-        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
-        # Viewed 0, 2 and 3, closed on 4 (1 was never viewed)
-        state_group.attrs['series_state'] = {'viewed_data_idxs': [0, 2, 3], 'prefit_attempted': [],
-                                             'last_data_idx': 4}
-
-        win = self._make_window(qt_app, monkeypatch, nrows=6, start_idx=None,
-                                state_group=state_group)
-        assert win._data_idxs == list(range(6))
-        assert win._data_idx == 1 and win._res_label.text() == '2 / 6'
-        self._close(win)
-
-    def test_start_idx_overrides_saved_state_and_data_idxs_are_sorted(
-        self, qt_app, monkeypatch, tmp_path
+    assert all(ar.execute_path.call_count == 0 for ar in win._ARs)
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
     ):
-        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
-        state_group.attrs['series_state'] = {'viewed_data_idxs': [], 'prefit_attempted': [],
-                                             'last_data_idx': 4}
-
-        win = self._make_window(qt_app, monkeypatch, nrows=6, data_idxs=[5, 1, 3, 1],
-                                start_idx=1, state_group=state_group)
-        assert win._data_idxs == [1, 3, 5]
-        assert win._data_idx == 3
-        self._stub_refresh(win)
-        win._advance_resonator(+1)
-        assert win._data_idx == 5
-        self._close(win)
-
-    def test_resume_with_everything_viewed_or_explicit_start(self, qt_app, monkeypatch, tmp_path):
-        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
-        state_group.attrs['series_state'] = {'viewed_data_idxs': [0, 1, 2], 'prefit_attempted': [1]}
-
-        win = self._make_window(qt_app, monkeypatch, nrows=3, start_idx=None, state_group=state_group)
-        assert win._data_idx == 0
-        assert win._initialized_data_idxs == {1}
-        self._close(win)
-
-        win = self._make_window(qt_app, monkeypatch, nrows=3, start_idx=2, state_group=state_group)
-        assert win._data_idx == 2
-        self._close(win)
-
-    def test_state_is_reread_when_the_store_was_deleted(self, qt_app, monkeypatch, tmp_path):
-        """A group object held across sessions keeps stale attributes."""
-        import shutil
-        path = tmp_path / 'state.zarr'
-        state_group = zarr.open_group(str(path), mode='w')
-        state_group.attrs['series_state'] = {'viewed_data_idxs': [0, 1], 'prefit_attempted': [0, 1]}
-        shutil.rmtree(path)
-        assert 'series_state' in state_group.attrs  # stale
-
-        win = self._make_window(qt_app, monkeypatch, nrows=3, start_idx=None, state_group=state_group)
-        assert win._data_idx == 0
-        assert win._initialized_data_idxs == set()
-        self._close(win)
-
-    def test_attempted_rows_are_saved(self, qt_app, monkeypatch, tmp_path):
-        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
-        win = self._make_window(qt_app, monkeypatch, nrows=4, state_group=state_group)
-        win._runner_outputs_exist = lambda _ar, _di: False
-        win._initialize_runner_outputs = lambda _ar, _di: None
-
-        win._initialize_remaining_data_indices([MagicMock()], [2, 3])
-
-        assert reopen_group(state_group).attrs['series_state']['prefit_attempted'] == [2, 3]
-        self._close(win)
-
-    def test_close_waits_for_worker_and_consolidates(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch, nrows=3)
-        release = threading.Event()
-        win._init_all_thread = threading.Thread(target=release.wait, daemon=True)
-        win._init_all_thread.start()
-        order = []
-        win._consolidate_storage = lambda: order.append(win._init_all_thread.is_alive())
-        threading.Timer(0.2, release.set).start()
-
-        self._close(win)
-
-        assert win._init_all_stop.is_set()
-        assert order == [False]
-
-    def test_consolidate_storage_runs_for_every_series(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch, nrows=3)
-
-        self._close(win)
-
-        for ar in win._ARs:
-            ar.DS.consolidate_storage.assert_called_once()
-
-    def test_worker_skips_rows_saved_in_one_mask_read(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch, nrows=4)
-        worker_ars = [MagicMock(), MagicMock()]
-        for ar, done_rows in zip(worker_ars, ([1, 2], [2])):
-            mask = np.zeros(4, dtype=bool)
-            mask[done_rows] = True
-            ar.path = [{'task': _make_step('fit_iq', return_names=['z'])}]
-            ar.DS.saved_row_mask.return_value = mask
-        win._runner_outputs_exist = MagicMock(side_effect=AssertionError('should use the mask'))
-        fitted = []
-        win._initialize_runner_outputs = lambda ar, di: fitted.append((worker_ars.index(ar), di))
-
-        win._initialize_remaining_data_indices(worker_ars, [1, 2, 3])
-
-        assert fitted == [(1, 1), (0, 3), (1, 3)]
-        self._close(win)
-
-    @pytest.mark.parametrize('key, method', [('2', '_run_through_panel'), ('Shift+2', '_run_panel_by_index')])
-    def test_number_shortcuts(self, qt_app, monkeypatch, key, method):
-        win = self._make_window(qt_app, monkeypatch)
-        win._run_through_panel = MagicMock()
-        win._run_panel_by_index = MagicMock()
-        target = QtGui.QKeySequence(key)
-        (shortcut,) = [sc for sc in win.findChildren(QtGui.QShortcut) if sc.key() == target]
-
-        shortcut.activated.emit()
-
-        getattr(win, method).assert_called_once_with(1)
-        other = '_run_panel_by_index' if method == '_run_through_panel' else '_run_through_panel'
-        getattr(win, other).assert_not_called()
-        self._close(win)
-
-    def test_no_run_all_button(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-
-        assert 'Run All' not in [btn.text() for btn in win.findChildren(QtWidgets.QPushButton)]
-        self._close(win)
-
-    def test_toolbar_hints_wrap_instead_of_widening_window(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-
-        _assert_hints_wrap(win)
-        self._close(win)
-
-    def test_height_fits_panels_up_to_screen(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-
-        _assert_height_fits_content(qt_app, win, win._right_scroll, width=1400)
-        self._close(win)
-
-    def test_xy_fit_on_scatter_refresh_and_refit_only_on_change(self, qt_app, monkeypatch):
-        xy_fit, calls = self._line_fit()
-        win = self._make_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit)
-        win._x_cache[0] = np.array([1.0, 2.0])
-        win._y_cache[0] = np.array([3.0, 5.0])
-
-        win._update_series_scatter()
-
-        assert len(calls) == 1
-        np.testing.assert_allclose(win._xy_store.load(0).popt, [2.0, 1.0])
-        xs, ys = win._xy_fit_curve.getData()
-        np.testing.assert_allclose(ys, 2.0 * xs + 1.0)
-        assert 'line: slope = 2, intercept = 1' in win._plot_series.titleLabel.text
-
-        win._update_series_scatter()
-        assert len(calls) == 1
-
-        win._y_cache[0] = np.array([3.0, 7.0])
-        win._update_series_scatter()
-        assert len(calls) == 2
-        assert win._xy_store.load(0).popt[0] == pytest.approx(4.0)
-        self._close(win)
-
-    def test_xy_fit_failure_is_shown_and_saved(self, qt_app, monkeypatch):
-        xy_fit, _ = self._line_fit(fail=True)
-        win = self._make_window(qt_app, monkeypatch, xy_fit=xy_fit)
-        win._x_cache[0] = np.array([1.0, 2.0])
-        win._y_cache[0] = np.array([3.0, 5.0])
-
-        win._update_series_scatter()
-
-        assert 'fit failed (RuntimeError: bad fit)' in win._plot_series.titleLabel.text
-        assert win._apply_status_label.text() == 'xy fit failed'
-        assert win._xy_store.has_fit(0)
-        assert win._xy_fit_curve.getData()[0] is None or len(win._xy_fit_curve.getData()[0]) == 0
-        self._close(win)
-
-    def test_xy_fit_in_background_after_each_row(self, qt_app, monkeypatch):
-        xy_fit, _ = self._line_fit()
-        win = self._make_window(qt_app, monkeypatch, nrows=4, xy_fit=xy_fit)
-        worker_ars = [MagicMock(), MagicMock()]
-        win._x_of = lambda ar, di: float(worker_ars.index(ar) + 1)
-        win._y_of = lambda ar, di: 2.0 * (worker_ars.index(ar) + 1) + di
-        win._runner_outputs_exist = lambda _ar, _di: False
-        prefit = []
-        win._initialize_runner_outputs = lambda ar, di: prefit.append(di)
-        win._initialized_data_idxs = {3}   # pre-fitted in an earlier session
-
-        win._initialize_remaining_data_indices(worker_ars, [1, 2, 3])
-
-        assert prefit == [1, 1, 2, 2]
-        assert list(np.flatnonzero(win._xy_store.fitted_rows())) == [1, 2, 3]
-        for di in (1, 2, 3):
-            slope, intercept = win._xy_store.load(di).popt
-            assert slope == pytest.approx(2.0)
-            assert intercept == pytest.approx(di)
-        self._close(win)
-
-    def test_background_revisits_attempted_rows_without_xy_fit(self, qt_app, monkeypatch):
-        xy_fit, _ = self._line_fit()
-        win = self._make_window(qt_app, monkeypatch, nrows=4, xy_fit=xy_fit)
-        win._initialized_data_idxs = {0, 1, 2, 3}
-        x = np.array([1.0, 2.0])
-        win._xy_store.save(2, x, x, xy_fit.run(x, x)[0])
-        win._background_fitting = True
-        win._make_worker_ars = MagicMock(return_value=[])
-        visited = []
-        win._initialize_remaining_data_indices = lambda _ars, dis: visited.extend(dis)
-
-        win._start_background_initialize_remaining()
-        win._init_all_thread.join(timeout=2)
-
-        assert visited == [1, 3]
-        self._close(win)
-
-    @pytest.mark.parametrize('overwrite', [True, False])
-    def test_xy_fit_definition_mismatch_asks(self, qt_app, monkeypatch, overwrite):
-        group = zarr.open_group(zarr.storage.MemoryStore(), mode='w')
-        old = iseries.SeriesXYFit(fit=lambda x, y: y.mean(), param_names=['mean'],
-                                model=lambda xs, m: xs, name='mean', group=group)
-        x = np.array([1.0, 2.0])
-        iseries.SeriesXYFitStore(group, old, 2, 2).save(0, x, x, old.run(x, x)[0])
-        asked = []
-        monkeypatch.setattr(iseries, '_confirm_overwrite_xy_fit',
-                            lambda message: asked.append(message) or overwrite)
-        xy_fit, _ = self._line_fit(group=group)
-
-        if overwrite:
-            win = self._make_window(qt_app, monkeypatch, xy_fit=xy_fit)
-            assert 'popt' not in group
-            assert not win._xy_store.has_fit(0)
-            self._close(win)
-        else:
-            with pytest.raises(RuntimeError, match='User cancelled operation'):
-                self._make_window(qt_app, monkeypatch, xy_fit=xy_fit)
-        assert len(asked) == 1 and "'mean'" in asked[0]
-
-    def test_series_plot_range_ignores_fit_curve(self, qt_app, monkeypatch):
-        xy_fit = iseries.SeriesXYFit(
-            fit=lambda x, y: (1.0,), param_names=['k'],
-            model=lambda xs, k: 1e6 * np.sin(xs),   # far outside the data
-            name='wild',
-        )
-        win = self._make_window(qt_app, monkeypatch, xy_fit=xy_fit)
-        win._x_cache[0] = np.array([1.0, 2.0])
-        win._y_cache[0] = np.array([3.0, 5.0])
-        win._update_series_scatter()
-        assert np.nanmax(np.abs(win._xy_fit_curve.getData()[1])) > 1e5
-
-        win._plot_series.autoRange()
-
-        y_min, y_max = win._plot_series.viewRange()[1]
-        assert y_min > 0 and y_max < 10
-        self._close(win)
-
-    def test_xy_fit_defaults_to_state_group(self, qt_app, monkeypatch, tmp_path):
-        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
-        xy_fit, _ = self._line_fit()
-        win = self._make_window(qt_app, monkeypatch, state_group=state_group, xy_fit=xy_fit)
-        win._x_cache[0] = np.array([1.0, 2.0])
-        win._y_cache[0] = np.array([3.0, 5.0])
-
-        win._update_series_scatter()
-
-        assert state_group['xy_fit/popt'].shape == (2, 2)
-        self._close(win)
-
-    def test_xy_guess_inputs_show_and_take_the_guess(self, qt_app, monkeypatch):
-        xy_fit, calls = self._line_fit(uses_guess=True)
-        win = self._make_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit)
-        win._x_cache[0] = np.array([1.0, 2.0])
-        win._y_cache[0] = np.array([3.0, 5.0])
-
-        win._update_series_scatter()                  # the fit's own guess, shown
-
-        assert [e.text() for e in win._guess_edits] == ['1', '0']
-        assert calls[-1][2] is None
-        assert 'automatic' in win._guess_status.text()
-
-        win._guess_edits[0].setText('4')               # the user's guess refits
-        win._guess_edits[0].editingFinished.emit()
-        np.testing.assert_array_equal(calls[-1][2], [4.0, 0.0])
-        saved = win._xy_store.load(0)
-        np.testing.assert_array_equal(saved.p0, [4.0, 0.0])
-        assert saved.p0_user and 'yours' in win._guess_status.text()
-        n = len(calls)
-        win._guess_edits[0].editingFinished.emit()     # unchanged: no refit
-        assert len(calls) == n
-
-        win._y_cache[0] = np.array([3.0, 9.0])         # new data keeps the user's guess
-        win._update_series_scatter()
-        np.testing.assert_array_equal(calls[-1][2], [4.0, 0.0])
-
-        win._reset_xy_guess()                          # back to the fit's own guess
-        assert calls[-1][2] is None and not win._xy_store.load(0).p0_user
-        assert [e.text() for e in win._guess_edits] == ['1', '0']
-        self._close(win)
-
-    def test_xy_guess_input_rejects_text(self, qt_app, monkeypatch):
-        xy_fit, calls = self._line_fit(uses_guess=True)
-        win = self._make_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit)
-        win._x_cache[0] = np.array([1.0, 2.0])
-        win._y_cache[0] = np.array([3.0, 5.0])
-        win._update_series_scatter()
-
-        win._guess_edits[1].setText('abc')
-        win._guess_edits[1].editingFinished.emit()
-
-        assert 'must be a number' in win._apply_status_label.text()
-        assert win._guess_edits[1].text() == '0'
-        assert not win._xy_store.load(0).p0_user
-        self._close(win)
-
-    def test_no_guess_inputs_without_uses_guess(self, qt_app, monkeypatch):
-        xy_fit, _ = self._line_fit()
-        win = self._make_window(qt_app, monkeypatch, xy_fit=xy_fit)
-        assert win._guess_edits == [] and win._plots_widget is win._gw
-        assert win._chosen_x_line is None
-        self._close(win)
-
-    def test_y_target_needs_an_xy_fit(self, qt_app, monkeypatch):
-        with pytest.raises(ValueError, match='y_target'):
-            self._make_window(qt_app, monkeypatch, y_target=4.0)
-
-    def test_chosen_x_from_the_fit_is_shown_and_saved(self, qt_app, monkeypatch):
-        xy_fit, _ = self._line_fit()           # numerical inverse of y = 2 x + 1
-        win = self._make_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit, y_target=4.0)
-        line = win._chosen_x_line
-        assert line is not None and not line.isVisible()
-        assert win._y_target_edit.text() == '4' and win._xy_store.y_target == 4.0
-        win._x_cache[0] = np.array([1.0, 2.0])
-        win._y_cache[0] = np.array([3.0, 5.0])
-
-        win._update_series_scatter()
-
-        assert line.isVisible() and line.value() == pytest.approx(1.5)
-        assert line.pen == win._chosen_x_pens[False]
-        assert win._chosen_x_label.textItem.toPlainText() == '1.5'
-        x, user = win._xy_store.load_chosen_x(0)
-        assert x == pytest.approx(1.5) and not user
-        assert 'from the fit' in win._chosen_status.text()
-        assert not win._chosen_reset_btn.isEnabled()
-
-        win._y_target_edit.setText('100')      # beyond the data: no x
-        win._y_target_edit.editingFinished.emit()
-        assert win._xy_store.y_target == 100.0
-        assert not line.isVisible() and 'none' in win._chosen_status.text()
-        assert np.isnan(win._xy_store.load_chosen_x(0)[0])
-
-        win._y_target_edit.setText('abc')      # rejected, target kept
-        win._y_target_edit.editingFinished.emit()
-        assert 'must be a number' in win._apply_status_label.text()
-        assert win._y_target_edit.text() == '100' and win._y_target == 100.0
-        self._close(win)
-
-    def test_user_chosen_x_by_drag_shift_click_and_reset(self, qt_app, monkeypatch):
-        xy_fit, _ = self._line_fit()
-        win = self._make_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit, y_target=4.0)
-        win._x_cache[0] = np.array([1.0, 2.0])
-        win._y_cache[0] = np.array([3.0, 5.0])
-        win._update_series_scatter()
-        line = win._chosen_x_line
-
-        line.setValue(1.8)                     # dragged
-        win._on_chosen_x_dragged(line)
-        assert win._xy_store.load_chosen_x(0) == (1.8, True)
-        assert line.pen == win._chosen_x_pens[True]
-        assert 'by you' in win._chosen_status.text() and win._chosen_reset_btn.isEnabled()
-
-        win._y_cache[0] = np.array([3.0, 9.0])   # refit keeps the user's x
-        win._update_series_scatter()
-        assert win._xy_store.load_chosen_x(0) == (1.8, True)
-        win._y_target_edit.setText('6')          # so does a new target
-        win._y_target_edit.editingFinished.emit()
-        assert win._xy_store.load_chosen_x(0) == (1.8, True)
-        assert line.value() == pytest.approx(1.8)
-
-        # Shift+click chooses the x under the cursor; a plain click doesn't
-        win.show()
-        qt_app.processEvents()
-        vb = win._plot_series.vb
-        vb.setRange(xRange=(0.0, 3.0), yRange=(0.0, 10.0), padding=0)
-        qt_app.processEvents()
-        shift_click = MagicMock()
-        shift_click.button.return_value = _Qt.LeftButton
-        shift_click.modifiers.return_value = _Qt.ShiftModifier
-        shift_click.scenePos.return_value = vb.mapViewToScene(QtCore.QPointF(1.2, 4.0))
-        win._on_series_plot_clicked(shift_click)
-        assert win._xy_store.load_chosen_x(0)[0] == pytest.approx(1.2, abs=1e-3)
-        shift_click.accept.assert_called_once()
-        click = MagicMock()
-        click.button.return_value = _Qt.LeftButton
-        click.modifiers.return_value = _Qt.NoModifier
-        click.scenePos.return_value = vb.mapViewToScene(QtCore.QPointF(2.5, 4.0))
-        win._on_series_plot_clicked(click)
-        assert win._xy_store.load_chosen_x(0)[0] == pytest.approx(1.2, abs=1e-3)
-        outside = MagicMock()
-        outside.button.return_value = _Qt.LeftButton
-        outside.modifiers.return_value = _Qt.ShiftModifier
-        outside.scenePos.return_value = QtCore.QPointF(-1e4, -1e4)
-        win._on_series_plot_clicked(outside)
-        assert win._xy_store.load_chosen_x(0)[0] == pytest.approx(1.2, abs=1e-3)
-
-        # Shift+click on a point doesn't select it; a plain click does
-        win._set_series_idx = MagicMock()
-        spot = MagicMock()
-        spot.data.return_value = 1
-        win._on_scatter_clicked(None, [spot], shift_click)
-        win._set_series_idx.assert_not_called()
-        win._on_scatter_clicked(None, [spot], click)
-        win._set_series_idx.assert_called_once_with(1)
-
-        win._chosen_reset_btn.click()            # back to the fit's x (y = 6 x - 3 at 6)
-        x, user = win._xy_store.load_chosen_x(0)
-        assert x == pytest.approx(1.5) and not user
-        assert line.pen == win._chosen_x_pens[False]
-        self._close(win)
-
-    def test_status_texts_do_not_resize_the_panes(self, qt_app, monkeypatch):
-        xy_fit, _ = self._line_fit(uses_guess=True)
-        win = self._make_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit, y_target=4.0)
-        win._x_name = 'Tone power (dBm)'
-        win.show()
-        qt_app.processEvents()
-        left_min = win._plots_widget.minimumSizeHint().width()
-        toolbar_min = win.centralWidget().layout().itemAt(0).widget().minimumSizeHint().width()
-        assert left_min == win._gw.minimumWidth()
-
-        win._x_cache[0] = np.array([-50.0, -40.0])
-        win._y_cache[0] = np.array([3.0, 5.0])
-        win._update_series_scatter()                 # fit text, guess text
-        win._set_user_chosen_x(-45.123)              # Shift+click text
-        long = 'a status message that is much longer than the room the label has ' * 3
-        for label in (win._chosen_status, win._guess_status,
-                      win._apply_status_label, win._prefetch_label):
-            label.setText(long)
-        qt_app.processEvents()
-
-        assert win._plots_widget.minimumSizeHint().width() == left_min
-        toolbar = win.centralWidget().layout().itemAt(0).widget()
-        assert toolbar.minimumSizeHint().width() == toolbar_min
-        self._close(win)
-
-    def test_chosen_x_line_on_a_log_x_axis(self, qt_app, monkeypatch):
-        xy_fit, _ = self._line_fit()
-        win = self._make_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit, y_target=4.0,
-                                xscale='log')
-        win._x_cache[0] = np.array([10.0, 100.0])
-        win._y_cache[0] = np.array([3.0, 5.0])   # y = 4 at x = 55
-
-        win._update_series_scatter()
-
-        line = win._chosen_x_line
-        assert line.value() == pytest.approx(np.log10(55.0), abs=1e-9)
-        assert win._chosen_x_label.textItem.toPlainText() == '55'
-        assert win._xy_store.load_chosen_x(0)[0] == pytest.approx(55.0)
-
-        line.setValue(1.0)                       # dragged to x = 10
-        win._on_chosen_x_dragged(line)
-        assert win._xy_store.load_chosen_x(0) == (pytest.approx(10.0), True)
-        self._close(win)
-
-    def test_fit_saves_chosen_x_but_keeps_the_users(self, qt_app, monkeypatch):
-        xy_fit, _ = self._line_fit()
-        win = self._make_window(qt_app, monkeypatch, nrows=3, xy_fit=xy_fit, y_target=4.0)
-        win._xy_store.save_chosen_x(2, 7.0, user=True)
-        x, y = np.array([1.0, 2.0]), np.array([3.0, 5.0])
-
-        win._fit_and_save_xy(1, x, y)            # as the background worker does
-        win._fit_and_save_xy(2, x, y)
-
-        chosen, user = win._xy_store.chosen_x()
-        np.testing.assert_allclose(chosen[1:], [1.5, 7.0])
-        assert list(user) == [False, False, True]
-        self._close(win)
-
-    def test_chosen_x_recomputed_at_startup_for_a_new_target(self, qt_app, monkeypatch, tmp_path):
-        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
-        xy_fit, _ = self._line_fit()
-        win = self._make_window(qt_app, monkeypatch, state_group=state_group, xy_fit=xy_fit,
-                                y_target=4.0)
-        win._x_cache[0] = np.array([1.0, 2.0])
-        win._y_cache[0] = np.array([3.0, 5.0])
-        win._update_series_scatter()
-        assert state_group['xy_fit/x_chosen'][0] == pytest.approx(1.5)
-        self._close(win)
-
-        xy_fit, calls = self._line_fit()
-        win = self._make_window(qt_app, monkeypatch, state_group=state_group, xy_fit=xy_fit,
-                                y_target=3.5)
-        assert calls == []                       # from the saved fits, no refit
-        assert win._xy_store.load_chosen_x(0)[0] == pytest.approx(1.25)
-        assert state_group['xy_fit'].attrs['y_target'] == 3.5
-        self._close(win)
-
-    def test_closed_window_is_destroyed_but_keeps_python_state(self, qt_app, monkeypatch, tmp_path):
-        state_group = zarr.open_group(str(tmp_path / 'state.zarr'), mode='w')
-        win = self._make_window(qt_app, monkeypatch, nrows=3, state_group=state_group)
-
-        self._close(win)
-        iseries.QtCore.QCoreApplication.sendPostedEvents(
-            None, iseries.QtCore.QEvent.Type.DeferredDelete)
-
-        with pytest.raises(RuntimeError):
-            win.isVisible()
-        assert win._data_idx == 0 and win._viewed_data_idxs == set()
-        state = reopen_group(state_group).attrs['series_state']
-        assert state['viewed_data_idxs'] == [] and state['last_data_idx'] == 0
-
-    def test_worker_ars_are_built_once(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch, nrows=3)
-        win._background_fitting = True
-        win._make_worker_ars = MagicMock(return_value=['ar'])
-        win._initialize_remaining_data_indices = lambda _ars, _dis: None
-
-        for _ in range(2):
-            win._start_background_initialize_remaining()
-            win._init_all_thread.join(timeout=2)
-
-        win._make_worker_ars.assert_called_once()
-        self._close(win)
-
-    def test_run_panel_marks_downstream_stale(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-        win._series_idx = 0
-        win._update_series_point = MagicMock()
-
-        win._run_panel_by_index(0)
-
-        assert win.panels[0]._has_run is True
-        assert win.panels[1]._needs_run is True
-        assert win.panels[1].clear_calls == 1
-        win._update_series_point.assert_called_once_with(0)
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
-
-    def test_data_idx_navigation_cancel_keeps_state_when_stale(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-        win.panels[1]._needs_run = True
-
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.No):
-            win._set_data_idx(1)
-
-        assert win._data_idx == 0
-        assert win._data_idx_spin.value() == 0
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
-
-    def test_panel_save_cancel_skips_persist_when_downstream_stale(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-        win._series_idx = 0
-        win.panels[1]._needs_run = True
-
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.No):
-            win.panels[0]._on_save_clicked()
-
-        assert win._ARs[0].save_step_outputs.call_count == 0
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
-
-    def test_prefetch_next_does_not_execute_pipeline(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-        win._series_idx = 0
-
-        win._prefetch_next()
-        if win._prefetch_thread is not None:
-            win._prefetch_thread.join(timeout=2)
-
-        assert all(ar.execute_path.call_count == 0 for ar in win._ARs)
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
-
-    def test_batch_init_runs_global_prefix_once_then_suffix_per_index(self, qt_app, monkeypatch):
-        global_step = _make_step('global_step', func_type='global', return_names=['g'])
-        per_row_step = _make_step('fit_gain', return_names=['y'])
-        final_step = _make_step('fit_iq', return_names=['z'])
+        win.close()
+
+
+def test_batch_init_runs_global_prefix_once_then_suffix_per_index(
+    qt_app, monkeypatch
+):
+    global_step = _make_step(
+        'global_step', func_type='global', return_names=['g'])
+    per_row_step = _make_step('fit_gain', return_names=['y'])
+    final_step = _make_step('fit_iq', return_names=['z'])
+    ar = MagicMock()
+    ar.analysis_steps = [global_step, per_row_step, final_step]
+    ar.path = [
+        {'task': global_step}, {'task': per_row_step}, {'task': final_step}]
+    ar._last_failures = {}
+    ar.execute_step.return_value = None
+    ar.execute_path.return_value = None
+    ar.DS = MagicMock()
+    ar.DS.nrows = 3
+
+    ars = [ar]
+    monkeypatch.setattr(
+        iseries, 'get_panel_class', lambda _names: _WindowPanel)
+    monkeypatch.setattr(
+        iseries.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
+
+    win = IQSeriesWindow(
+        ars,
+        x_param_name='x',
+        x_name='X',
+        y_func=lambda _ar, _di: None,
+        y_name='Y',
+        start_idx=0,
+        title='test',
+    )
+
+    global_ready = {'done': False}
+
+    def fake_step_outputs_exist(_ar, step, data_idx):
+        if step.name == 'global_step':
+            return global_ready['done']
+        return False
+
+    def fake_execute_step(step, data_idx=None, save=False, **_kwargs):
+        if step.name == 'global_step':
+            global_ready['done'] = True
+
+    ar.execute_step.side_effect = fake_execute_step
+    win._step_outputs_exist = fake_step_outputs_exist
+    win._runner_outputs_exist = lambda _ar, _di: False
+
+    win._batch_init_all_series()
+    win._data_idx = 1
+    win._batch_init_all_series()
+
+    assert ar.execute_step.call_count == 1
+    ar.execute_step.assert_called_with(global_step, data_idx=None, save=True)
+    assert ar.execute_path.call_count == 2
+    assert ar.execute_path.call_args_list[0].kwargs['step_start_idx'] == 1
+    assert ar.execute_path.call_args_list[0].kwargs['data_idx'] == 0
+    assert ar.execute_path.call_args_list[1].kwargs['step_start_idx'] == 1
+    assert ar.execute_path.call_args_list[1].kwargs['data_idx'] == 1
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
+
+
+def test_initialize_remaining_data_indices_runs_all_remaining_rows(
+    qt_app, monkeypatch
+):
+    step1 = _make_step('fit_gain')
+    step2 = _make_step('fit_iq')
+    ars = []
+    for _ in range(2):
         ar = MagicMock()
-        ar.analysis_steps = [global_step, per_row_step, final_step]
-        ar.path = [{'task': global_step}, {'task': per_row_step}, {'task': final_step}]
+        ar.analysis_steps = [step1, step2]
+        ar.path = [{'task': step1}, {'task': step2}]
         ar._last_failures = {}
         ar.execute_step.return_value = None
         ar.execute_path.return_value = None
         ar.DS = MagicMock()
         ar.DS.nrows = 3
+        ars.append(ar)
 
-        ars = [ar]
-        monkeypatch.setattr(iseries, 'get_panel_class', lambda _names: _WindowPanel)
-        monkeypatch.setattr(iseries.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        iseries, 'get_panel_class', lambda _names: _WindowPanel)
+    monkeypatch.setattr(
+        iseries.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
+    win = IQSeriesWindow(
+        ars,
+        x_param_name='x',
+        x_name='X',
+        y_func=lambda _ar, _di: None,
+        y_name='Y',
+        start_idx=0,
+        title='test',
+    )
 
-        win = IQSeriesWindow(
-            ars,
-            x_param_name='x',
-            x_name='X',
-            y_func=lambda _ar, _di: None,
-            y_name='Y',
-            start_series_idx=0,
-            start_idx=0,
-            title='test',
-        )
+    worker_ars = [MagicMock(), MagicMock()]
+    for worker_ar in worker_ars:
+        worker_ar.execute_path.return_value = None
 
-        global_ready = {'done': False}
+    initialized = []
+    win._runner_outputs_exist = lambda _ar, di: False
+    win._initialize_runner_outputs = lambda ar, di: initialized.append((ar, di))
 
-        def fake_step_outputs_exist(_ar, step, data_idx):
-            if step.name == 'global_step':
-                return global_ready['done']
+    win._initialize_remaining_data_indices(worker_ars, [1, 2])
+
+    assert initialized == [
+        (worker_ars[0], 1),
+        (worker_ars[1], 1),
+        (worker_ars[0], 2),
+        (worker_ars[1], 2),
+    ]
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
+
+
+def test_ensure_data_idx_initialized_runs_sync_when_row_not_ready(
+    qt_app, monkeypatch
+):
+    win = _make_series_window(qt_app, monkeypatch)
+    win._initialized_data_idxs = {0}
+    win._all_series_outputs_exist = lambda _di: False
+    win._start_background_initialize_remaining = MagicMock()
+    win._initialize_all_series_for_data_idx = MagicMock()
+
+    class _DeadThread:
+        def is_alive(self):
             return False
 
-        def fake_execute_step(step, data_idx=None, save=False, **_kwargs):
-            if step.name == 'global_step':
-                global_ready['done'] = True
+    win._init_all_thread = _DeadThread()
 
-        ar.execute_step.side_effect = fake_execute_step
-        win._step_outputs_exist = fake_step_outputs_exist
-        win._runner_outputs_exist = lambda _ar, _di: False
+    win._ensure_data_idx_initialized(1)
 
-        win._batch_init_all_series()
-        win._data_idx = 1
-        win._batch_init_all_series()
-
-        assert ar.execute_step.call_count == 1
-        ar.execute_step.assert_called_with(global_step, data_idx=None, save=True)
-        assert ar.execute_path.call_count == 2
-        assert ar.execute_path.call_args_list[0].kwargs['step_start_idx'] == 1
-        assert ar.execute_path.call_args_list[0].kwargs['data_idx'] == 0
-        assert ar.execute_path.call_args_list[1].kwargs['step_start_idx'] == 1
-        assert ar.execute_path.call_args_list[1].kwargs['data_idx'] == 1
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
-
-    def test_initialize_remaining_data_indices_runs_all_remaining_rows(self, qt_app, monkeypatch):
-        step1 = _make_step('fit_gain')
-        step2 = _make_step('fit_iq')
-        ars = []
-        for _ in range(2):
-            ar = MagicMock()
-            ar.analysis_steps = [step1, step2]
-            ar.path = [{'task': step1}, {'task': step2}]
-            ar._last_failures = {}
-            ar.execute_step.return_value = None
-            ar.execute_path.return_value = None
-            ar.DS = MagicMock()
-            ar.DS.nrows = 3
-            ars.append(ar)
-
-        monkeypatch.setattr(iseries, 'get_panel_class', lambda _names: _WindowPanel)
-        monkeypatch.setattr(iseries.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
-        win = IQSeriesWindow(
-            ars,
-            x_param_name='x',
-            x_name='X',
-            y_func=lambda _ar, _di: None,
-            y_name='Y',
-            start_series_idx=0,
-            start_idx=0,
-            title='test',
-        )
-
-        worker_ars = [MagicMock(), MagicMock()]
-        for worker_ar in worker_ars:
-            worker_ar.execute_path.return_value = None
-
-        initialized = []
-        win._runner_outputs_exist = lambda _ar, di: False
-        win._initialize_runner_outputs = lambda ar, di: initialized.append((ar, di))
-
-        win._initialize_remaining_data_indices(worker_ars, [1, 2])
-
-        assert initialized == [
-            (worker_ars[0], 1),
-            (worker_ars[1], 1),
-            (worker_ars[0], 2),
-            (worker_ars[1], 2),
-        ]
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
-
-    def test_ensure_data_idx_initialized_runs_sync_when_row_not_ready(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-        win._initialized_data_idxs = {0}
-        win._all_series_outputs_exist = lambda _di: False
-        win._start_background_initialize_remaining = MagicMock()
-        win._initialize_all_series_for_data_idx = MagicMock()
-
-        class _DeadThread:
-            def is_alive(self):
-                return False
-
-        win._init_all_thread = _DeadThread()
-
-        win._ensure_data_idx_initialized(1)
-
-        win._initialize_all_series_for_data_idx.assert_called_once_with(1)
-        assert 1 in win._initialized_data_idxs
-        win._start_background_initialize_remaining.assert_called_once()
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
-
-    def test_ensure_data_idx_initialized_skips_ready_rows(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-        win._initialized_data_idxs = {0, 1}
-        win._initialize_all_series_for_data_idx = MagicMock()
-
-        win._ensure_data_idx_initialized(1)
-
-        win._initialize_all_series_for_data_idx.assert_not_called()
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
-
-    def test_set_data_idx_does_not_trust_prefetch_when_outputs_missing(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-        win._prefetched_idx = 1
-        win._all_series_outputs_exist = lambda di: False if di == 1 else True
-        win._ensure_data_idx_initialized = MagicMock()
-        win._update_series_scatter = MagicMock()
-        win._update_waterfall = MagicMock()
-        win._autoscale_all = MagicMock()
-
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win._set_data_idx(1)
-
-        win._ensure_data_idx_initialized.assert_called_once_with(1)
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
-
-    @pytest.mark.parametrize('key, called, not_called', [
-        ('Key_B', '_mark_bad_above', '_mark_all_series_bad'),
-        ('Key_A', None, '_apply_to_all'),
-    ])
-    def test_ctrl_shift_shortcuts(self, qt_app, monkeypatch, key, called, not_called):
-        win = self._make_window(qt_app, monkeypatch)
-        for name in ('_mark_bad_above', '_mark_all_series_bad', '_apply_to_all'):
-            setattr(win, name, MagicMock())
-
-        handled = win._handle_modified_letter_shortcut(
-            getattr(iseries.QtCore.Qt.Key, key),
-            iseries._Qt.ShiftModifier | iseries._Qt.ControlModifier,
-        )
-
-        assert handled is (called is not None)
-        if called:
-            getattr(win, called).assert_called_once()
-        getattr(win, not_called).assert_not_called()
-        self._close(win)
-
-    @pytest.mark.parametrize('x, selected, expected', [
-        ([3.0, 1.0, 2.0], 2, [0, 2]),          # selected plus larger x
-        ([3.0, 1.0, 2.0], 0, [0]),             # nothing larger
-        ([3.0, 1.0, 2.0], 1, [0, 1, 2]),       # everything at or above
-        ([np.nan, 1.0, 2.0], 1, [1, 2]),       # unknown x is left alone
-        ([1.0, np.nan, 2.0], 1, [1]),          # selected x unknown: only it
-    ])
-    def test_mark_bad_above_selects_points(self, qt_app, monkeypatch, x, selected, expected):
-        win = self._make_window(qt_app, monkeypatch)
-        win._n_series = len(x)
-        win._series_idx = selected
-        win._get_x_array = lambda _di: np.asarray(x)
-        win._mark_series_bad = MagicMock()
-
-        win._mark_bad_above()
-
-        win._mark_series_bad.assert_called_once_with(expected)
-        self._close(win)
-
-    def test_mark_bad_above_needs_a_selection(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-        win._series_idx = None
-        win._mark_series_bad = MagicMock()
-
-        win._mark_bad_above()
-
-        win._mark_series_bad.assert_not_called()
-        assert 'Select a series point' in win._apply_status_label.text()
-        self._close(win)
-
-    @staticmethod
-    def _record_marks(win, gate=None):
-        """
-        Replace the panels' bad marking with recorders.
-
-        Parameters:
-        win (IQSeriesWindow): Window.
-        gate (threading.Event or None): If given, each job's ``run`` waits
-            for it, to hold the background writer.
-
-        Returns:
-        stored (list): ``(series_idx, save)`` per in-memory mark.
-        ran (list): ``(series_idx, thread name)`` per job run.
-        """
-        stored, ran = [], []
-
-        def store(p, save=False, keep=()):
-            si = win._ARs.index(p.AR)
-            stored.append((si, save))
-
-            def run():
-                if gate is not None:
-                    gate.wait(5)
-                ran.append((si, threading.current_thread().name))
-            return MagicMock(run=run, rows=np.array([0]))
-
-        for panel in win.panels:
-            panel._store_nan_outputs = lambda p=panel, **kw: store(p, **kw)
-        return stored, ran
-
-    def test_mark_series_bad_saves_chosen_series_in_background(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-        stored, ran = self._record_marks(win)
-        original_ar = win.panels[0].AR
-        win._update_series_scatter = MagicMock()
-
-        win._mark_series_bad([1])
-        win._wait_for_marks()
-
-        assert stored == [(1, True)] * len(win.panels)
-        assert [si for si, _ in ran] == [1] * len(win.panels)
-        assert all(name.startswith('series-mark-bad') for _, name in ran)
-        assert all(panel.AR is original_ar for panel in win.panels)
-        win._update_series_scatter.assert_called_once()
-        assert win._apply_status_label.text() == 'Bad marks saved \u2713'
-        self._close(win)
-
-    def test_mark_series_bad_returns_before_saving(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-        gate = threading.Event()
-        _, ran = self._record_marks(win, gate)
-        win._update_series_scatter = MagicMock()
-
-        win._mark_series_bad([0, 1])
-
-        assert ran == []                               # still saving
-        win._update_series_scatter.assert_called_once()
-        assert win._apply_status_label.text() == 'Marked 2 series point(s) bad, saving\u2026'
-        gate.set()
-        win._wait_for_marks()
-        assert len(ran) == 2 * len(win.panels)
-        self._close(win)
-
-    @pytest.mark.parametrize('action', ['run_through', 'run_panel', 'select', 'mark_one'])
-    def test_using_the_row_waits_for_its_saves(self, qt_app, monkeypatch, action):
-        win = self._make_window(qt_app, monkeypatch)
-        gate = threading.Event()
-        _, ran = self._record_marks(win, gate)
-        win._update_series_scatter = MagicMock()
-        win._update_series_point = MagicMock()
-        win._run_all_panels = MagicMock()
-        win._mark_series_bad([0, 1])
-        waited = []
-        win._make_busy_dialog = lambda *_a: (waited.append(len(ran)), gate.set(),
-                                             MagicMock())[2]
-        for panel in win.panels:
-            panel.run_steps = lambda: (waited.append(len(ran)), True)[1]
-            panel.run_current = lambda: waited.append(len(ran))
-            panel._write_nan_outputs = lambda **_kw: waited.append(len(ran))
-
-        {'run_through': lambda: win._run_through_panel(0),
-         'run_panel': lambda: win._run_panel_by_index(0),
-         'select': lambda: win._set_series_idx(1),
-         'mark_one': win._mark_all_bad}[action]()
-
-        assert waited[0] == 0                         # the busy dialog came first
-        assert len(ran) == 2 * len(win.panels)        # and the saves finished before use
-        assert all(n == len(ran) for n in waited[1:])
-        self._close(win)
-
-    def test_other_rows_and_close_dont_lose_pending_saves(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch, nrows=3, data_idxs=[0, 1, 2])
-        gate = threading.Event()
-        _, ran = self._record_marks(win, gate)
-        win._update_series_scatter = MagicMock()
-        win._mark_series_bad([0, 1])
-
-        assert win._pending_marks[0]
-        threading.Timer(0.2, gate.set).start()
-        self._close(win)                              # waits for the writer
-
-        assert len(ran) == 2 * len(win.panels)
-
-    @pytest.mark.parametrize('selected, marked, cleared', [
-        (1, [0, 1], True),     # the shown point was marked: blank the panels
-        (None, [0, 1], True),  # nothing selected: panels stay blank
-        (0, [1], False),       # another point was marked: redraw the shown one
-    ])
-    def test_mark_series_bad_redraws_or_blanks_panels(
-        self, qt_app, monkeypatch, selected, marked, cleared
+    win._initialize_all_series_for_data_idx.assert_called_once_with(1)
+    assert 1 in win._initialized_data_idxs
+    win._start_background_initialize_remaining.assert_called_once()
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
     ):
-        win = self._make_window(qt_app, monkeypatch)
-        self._record_marks(win)
-        for panel in win.panels:
-            panel.clear_calls = panel.update_calls = 0
-        win._series_idx = selected
-        win._update_series_scatter = MagicMock()
+        win.close()
 
-        win._mark_series_bad(marked)
 
-        for panel in win.panels:
-            assert (panel.clear_calls, panel.update_calls) == ((1, 0) if cleared else (0, 1))
-        self._close(win)
+def test_ensure_data_idx_initialized_skips_ready_rows(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch)
+    win._initialized_data_idxs = {0, 1}
+    win._initialize_all_series_for_data_idx = MagicMock()
 
-    def test_mark_series_bad_keeps_shown_point_state(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-        self._record_marks(win)
-        for panel in win.panels:
-            panel._dirty = True                    # unsaved work on the shown point
-        win._series_idx = 0
-        win._update_series_scatter = MagicMock()
+    win._ensure_data_idx_initialized(1)
 
-        win._mark_series_bad([1])
+    win._initialize_all_series_for_data_idx.assert_not_called()
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
 
-        assert all(panel._dirty for panel in win.panels)
-        self._close(win)
 
-    def test_failed_background_save_is_reported(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-        for panel in win.panels:
-            panel._store_nan_outputs = lambda **_kw: MagicMock(
-                run=MagicMock(side_effect=OSError('disk full')), rows=np.array([0]))
-        win._update_series_scatter = MagicMock()
+def test_set_data_idx_does_not_trust_prefetch_when_outputs_missing(
+    qt_app, monkeypatch
+):
+    win = _make_series_window(qt_app, monkeypatch)
+    win._prefetched_idx = 1
+    win._all_series_outputs_exist = lambda di: False if di == 1 else True
+    win._ensure_data_idx_initialized = MagicMock()
+    win._update_series_scatter = MagicMock()
+    win._update_waterfall = MagicMock()
+    win._autoscale_all = MagicMock()
 
-        win._mark_series_bad([1])
-        win._wait_for_marks()
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win._set_data_idx(1)
 
-        assert 'failed' in win._apply_status_label.text()
-        assert win._pending_marks == {}
-        self._close(win)
+    win._ensure_data_idx_initialized.assert_called_once_with(1)
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
 
-    def test_shift_b_shortcut_marks_all_series_bad(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-        win._mark_all_series_bad = MagicMock()
 
-        handled = win._handle_modified_letter_shortcut(
-            iseries.QtCore.Qt.Key.Key_B,
-            iseries._Qt.ShiftModifier,
-        )
+@pytest.mark.parametrize('key, called, not_called', [
+    ('Key_B', '_mark_bad_above', '_mark_all_series_bad'),
+    ('Key_A', None, '_apply_to_all'),
+])
+def test_ctrl_shift_shortcuts(qt_app, monkeypatch, key, called, not_called):
+    win = _make_series_window(qt_app, monkeypatch)
+    for name in ('_mark_bad_above', '_mark_all_series_bad', '_apply_to_all'):
+        setattr(win, name, MagicMock())
 
-        assert handled is True
-        win._mark_all_series_bad.assert_called_once()
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
+    handled = win._handle_modified_letter_shortcut(
+        getattr(iseries.QtCore.Qt.Key, key),
+        iseries._Qt.ShiftModifier | iseries._Qt.ControlModifier,
+    )
 
-    def test_shift_a_shortcut_applies_to_all(self, qt_app, monkeypatch):
-        win = self._make_window(qt_app, monkeypatch)
-        win._apply_to_all = MagicMock()
+    assert handled is (called is not None)
+    if called:
+        getattr(win, called).assert_called_once()
+    getattr(win, not_called).assert_not_called()
+    _close(win)
 
-        handled = win._handle_modified_letter_shortcut(
-            iseries.QtCore.Qt.Key.Key_A,
-            iseries._Qt.ShiftModifier,
-        )
 
-        assert handled is True
-        win._apply_to_all.assert_called_once()
-        with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
-            win.close()
+@pytest.mark.parametrize('x, selected, expected', [
+    ([3.0, 1.0, 2.0], 2, [0, 2]),          # selected plus larger x
+    ([3.0, 1.0, 2.0], 0, [0]),             # nothing larger
+    ([3.0, 1.0, 2.0], 1, [0, 1, 2]),       # everything at or above
+    ([np.nan, 1.0, 2.0], 1, [1, 2]),       # unknown x is left alone
+    ([1.0, np.nan, 2.0], 1, [1]),          # selected x unknown: only it
+])
+def test_mark_bad_above_selects_points(
+    qt_app, monkeypatch, x, selected, expected
+):
+    win = _make_series_window(qt_app, monkeypatch)
+    win._n_series = len(x)
+    win._series_idx = selected
+    win._get_x_array = lambda _di: np.asarray(x)
+    win._mark_series_bad = MagicMock()
+
+    win._mark_bad_above()
+
+    win._mark_series_bad.assert_called_once_with(expected)
+    _close(win)
+
+
+def test_mark_bad_above_needs_a_selection(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch)
+    win._series_idx = None
+    win._mark_series_bad = MagicMock()
+
+    win._mark_bad_above()
+
+    win._mark_series_bad.assert_not_called()
+    assert 'Select a series point' in win._apply_status_label.text()
+    _close(win)
+
+
+def _record_marks(win, gate=None):
+    """
+    Replace the panels' bad marking with recorders.
+
+    Parameters:
+    win (IQSeriesWindow): Window.
+    gate (threading.Event or None): If given, each job's ``run`` waits
+        for it, to hold the background writer.
+
+    Returns:
+    stored (list): ``(series_idx, save)`` per in-memory mark.
+    ran (list): ``(series_idx, thread name)`` per job run.
+    """
+    stored, ran = [], []
+
+    def store(p, save=False, keep=()):
+        si = win._ARs.index(p.AR)
+        stored.append((si, save))
+
+        def run():
+            if gate is not None:
+                gate.wait(5)
+            ran.append((si, threading.current_thread().name))
+        return MagicMock(run=run, rows=np.array([0]))
+
+    for panel in win.panels:
+        panel._store_nan_outputs = lambda p=panel, **kw: store(p, **kw)
+    return stored, ran
+
+
+def test_mark_series_bad_saves_chosen_series_in_background(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch)
+    stored, ran = _record_marks(win)
+    original_ar = win.panels[0].AR
+    win._update_series_scatter = MagicMock()
+
+    win._mark_series_bad([1])
+    win._wait_for_marks()
+
+    assert stored == [(1, True)] * len(win.panels)
+    assert [si for si, _ in ran] == [1] * len(win.panels)
+    assert all(name.startswith('series-mark-bad') for _, name in ran)
+    assert all(panel.AR is original_ar for panel in win.panels)
+    win._update_series_scatter.assert_called_once()
+    assert win._apply_status_label.text() == 'Bad marks saved \u2713'
+    _close(win)
+
+
+def test_mark_series_bad_returns_before_saving(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch)
+    gate = threading.Event()
+    _, ran = _record_marks(win, gate)
+    win._update_series_scatter = MagicMock()
+
+    win._mark_series_bad([0, 1])
+
+    assert ran == []                               # still saving
+    win._update_series_scatter.assert_called_once()
+    assert win._apply_status_label.text() == (
+        'Marked 2 series point(s) bad, saving\u2026')
+    gate.set()
+    win._wait_for_marks()
+    assert len(ran) == 2 * len(win.panels)
+    _close(win)
+
+
+@pytest.mark.parametrize(
+    'action', ['run_through', 'run_panel', 'select', 'mark_one'])
+def test_using_the_row_waits_for_its_saves(qt_app, monkeypatch, action):
+    win = _make_series_window(qt_app, monkeypatch)
+    gate = threading.Event()
+    _, ran = _record_marks(win, gate)
+    win._update_series_scatter = MagicMock()
+    win._update_series_point = MagicMock()
+    win._run_all_panels = MagicMock()
+    win._mark_series_bad([0, 1])
+    waited = []
+    win._make_busy_dialog = lambda *_a: (waited.append(len(ran)), gate.set(),
+                                         MagicMock())[2]
+    for panel in win.panels:
+        panel.run_steps = lambda: (waited.append(len(ran)), True)[1]
+        panel.run_current = lambda: waited.append(len(ran))
+        panel._write_nan_outputs = lambda **_kw: waited.append(len(ran))
+
+    if action in ('run_through', 'run_panel'):
+        win._series_idx = 0  # runs need a selected series point
+    {'run_through': lambda: win._run_through_panel(0),
+     'run_panel': lambda: win._run_panel_by_index(0),
+     'select': lambda: win._set_series_idx(1),
+     'mark_one': win._mark_all_bad}[action]()
+
+    assert waited[0] == 0                         # the busy dialog came first
+    # and the saves finished before use
+    assert len(ran) == 2 * len(win.panels)
+    assert all(n == len(ran) for n in waited[1:])
+    _close(win)
+
+
+def test_panels_need_a_selected_series_point(qt_app, monkeypatch):
+    """
+    With no series point selected, panels are disabled and run
+    shortcuts do nothing (results there would never be saved).
+    """
+    win = _make_series_window(qt_app, monkeypatch)
+    ran = []
+    for panel in win.panels:
+        panel.run_steps = lambda: (ran.append(1), True)[1]
+        panel.run_current = lambda: ran.append(1)
+    win._series_idx = None
+    win._update_series_combo_selection()
+
+    assert not any(p.isEnabled() for p in win.panels)
+    win._run_through_panel(0)
+    win._run_panel_by_index(0)
+    win._run_all_panels()
+    assert ran == []
+    assert win._apply_status_label.text() == 'Select a series point first'
+
+    win._series_idx = 0
+    win._update_series_combo_selection()
+    assert all(p.isEnabled() for p in win.panels)
+    _close(win)
+
+
+def test_other_rows_and_close_dont_lose_pending_saves(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch, nrows=3, data_idxs=[0, 1, 2])
+    gate = threading.Event()
+    _, ran = _record_marks(win, gate)
+    win._update_series_scatter = MagicMock()
+    win._mark_series_bad([0, 1])
+
+    assert win._pending_marks[0]
+    threading.Timer(0.2, gate.set).start()
+    _close(win)                              # waits for the writer
+
+    assert len(ran) == 2 * len(win.panels)
+
+
+@pytest.mark.parametrize('selected, marked, cleared', [
+    (1, [0, 1], True),     # the shown point was marked: blank the panels
+    (None, [0, 1], True),  # nothing selected: panels stay blank
+    (0, [1], False),       # another point was marked: redraw the shown one
+])
+def test_mark_series_bad_redraws_or_blanks_panels(
+    qt_app, monkeypatch, selected, marked, cleared
+):
+    win = _make_series_window(qt_app, monkeypatch)
+    _record_marks(win)
+    for panel in win.panels:
+        panel.clear_calls = panel.update_calls = 0
+    win._series_idx = selected
+    win._update_series_scatter = MagicMock()
+
+    win._mark_series_bad(marked)
+
+    for panel in win.panels:
+        assert (panel.clear_calls, panel.update_calls) == (
+            (1, 0) if cleared else (0, 1))
+    _close(win)
+
+
+def test_mark_series_bad_keeps_shown_point_state(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch)
+    _record_marks(win)
+    for panel in win.panels:
+        panel._dirty = True                    # unsaved work on the shown point
+    win._series_idx = 0
+    win._update_series_scatter = MagicMock()
+
+    win._mark_series_bad([1])
+
+    assert all(panel._dirty for panel in win.panels)
+    _close(win)
+
+
+def test_failed_background_save_is_reported(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch)
+    for panel in win.panels:
+        panel._store_nan_outputs = lambda **_kw: MagicMock(
+            run=MagicMock(side_effect=OSError('disk full')), rows=np.array([0]))
+    win._update_series_scatter = MagicMock()
+
+    win._mark_series_bad([1])
+    win._wait_for_marks()
+
+    assert 'failed' in win._apply_status_label.text()
+    assert win._pending_marks == {}
+    _close(win)
+
+
+def test_shift_b_shortcut_marks_all_series_bad(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch)
+    win._mark_all_series_bad = MagicMock()
+
+    handled = win._handle_modified_letter_shortcut(
+        iseries.QtCore.Qt.Key.Key_B,
+        iseries._Qt.ShiftModifier,
+    )
+
+    assert handled is True
+    win._mark_all_series_bad.assert_called_once()
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
+
+
+def test_shift_a_shortcut_applies_to_all(qt_app, monkeypatch):
+    win = _make_series_window(qt_app, monkeypatch)
+    win._apply_to_all = MagicMock()
+
+    handled = win._handle_modified_letter_shortcut(
+        iseries.QtCore.Qt.Key.Key_A,
+        iseries._Qt.ShiftModifier,
+    )
+
+    assert handled is True
+    win._apply_to_all.assert_called_once()
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
+
 
 def test_every_registered_panel_can_clear_its_plots():
-    """Series windows clear panels when the resonator changes; none may skip it."""
-    from citkid.pipeline.interactive import circ, fit_iq, gain, xcal  # noqa: F401 (register)
+    """
+    Series windows clear panels when the resonator changes; none may skip it.
+    """
+    # Imported to register their panels
+    from citkid.pipeline.interactive import (  # noqa: F401
+        circ, fit_iq, gain, xcal)
 
     missing = [cls.__name__ for cls in set(icore._PANEL_REGISTRY.values())
                if cls.clear_plots is StepPanel.clear_plots]
@@ -1625,7 +1914,8 @@ def test_ts_panels_clear_every_curve(qt_app, module, steps):
 
     panel.clear_plots()
 
-    assert all(len(curve.getData()[0] if curve.getData()[0] is not None else []) == 0
+    assert all(len(curve.getData()[0]
+                   if curve.getData()[0] is not None else []) == 0
                for curve in curves)
     assert panel._status_label.text() == '\u2014'
 
@@ -1718,14 +2008,15 @@ def test_panel_step_error_is_reported_on_the_gui_thread(qt_app):
         panel = StepPanel(ar, ('step_a', 'step_b'), data_idx=1)
     seen = []
     panel._on_step_error = lambda step, exc: seen.append(
-        (step.name, str(exc), threading.current_thread() is threading.main_thread()))
+        (step.name, str(exc),
+         threading.current_thread() is threading.main_thread()))
 
     assert panel.run_steps() is False
     assert seen == [('step_b', 'bad fit', True)]
 
 
 def test_series_window_refuses_to_close_while_busy(qt_app, monkeypatch):
-    win = TestIQSeriesWindow()._make_window(qt_app, monkeypatch)
+    win = _make_series_window(qt_app, monkeypatch)
     monkeypatch.setattr(iseries, 'responsive_busy', lambda: True)
     win._confirm_stale_downstream_before_leave = MagicMock(return_value=True)
 
@@ -1758,7 +2049,7 @@ def test_xcal_panel_loads_outputs_missing_from_prefetch_cache(qt_app):
         thetat=[np.zeros(50)], zt_cent=[np.zeros(50, dtype=complex)],
     )
     panel = icore.get_panel_class(steps)(ar, steps, data_idx=0)
-    panel._plot_cache[0] = dict(
+    panel._plot_cache[panel._cache_key(None, 0)] = dict(
         ff=ff, ff_plot=(ff - ff.mean()) * 1e-3, f_center=float(ff.mean()),
         zf_rmv=zf, zf_cent=zf, amp_db=20 * np.log10(np.abs(zf)),
         xcal_mask=None, zt_cent_bulk=None, zt_cent_tail=None,
@@ -1835,6 +2126,7 @@ def test_launchers_pass_their_panels_to_run_interactive(module, func, panels):
 # Fonts, hints and fitting to the screen
 ################################################################################
 
+
 def test_fonts_are_in_logical_pixels():
     """Pixel sizes keep text in proportion to the windows on every system."""
     assert icore.font_px(10) == 13 and icore.font_px(9, 0.5) == 8
@@ -1842,23 +2134,27 @@ def test_fonts_are_in_logical_pixels():
     import pyqtgraph as pg
     plot = pg.PlotItem()
     icore.scale_plot_fonts(1.0, plot)
-    assert plot.titleLabel.item.font().pixelSize() == icore.font_px(icore.LABEL_FONT_PT)
+    assert plot.titleLabel.item.font().pixelSize() == icore.font_px(
+        icore.LABEL_FONT_PT)
 
 
 def test_hint_label_contrasts_even_when_mid_matches_the_background(qt_app):
     palette = QtWidgets.QApplication.palette()
     bad = QtGui.QPalette(palette)
-    bad.setColor(QtGui.QPalette.ColorRole.Mid, palette.color(QtGui.QPalette.ColorRole.Window))
+    bad.setColor(QtGui.QPalette.ColorRole.Mid,
+                 palette.color(QtGui.QPalette.ColorRole.Window))
     QtWidgets.QApplication.setPalette(bad)
     try:
         label = icore.hint_label('hints')
     finally:
         QtWidgets.QApplication.setPalette(palette)
     import re
-    rgb = [int(v) for v in re.search(r'rgb\((\d+), (\d+), (\d+)\)', label.styleSheet()).groups()]
+    match = re.search(r'rgb\((\d+), (\d+), (\d+)\)', label.styleSheet())
+    rgb = [int(v) for v in match.groups()]
     bg = palette.color(QtGui.QPalette.ColorRole.Window)
     assert label.wordWrap()
-    assert max(abs(rgb[0] - bg.red()), abs(rgb[1] - bg.green()), abs(rgb[2] - bg.blue())) > 80
+    assert max(abs(rgb[0] - bg.red()), abs(rgb[1] - bg.green()),
+               abs(rgb[2] - bg.blue())) > 80
 
 
 def _tall_window(qt_app, n_plots=3, plot_height=300):
@@ -1902,8 +2198,8 @@ def test_shrink_to_fit_shrinks_plots_first(qt_app):
     win, plots = _tall_window(qt_app)
     assert _height(win) > 600
 
-    plot_factor, font_scale = icore.shrink_to_fit(win, lambda: _height(win), plots, 1.0,
-                                                  max_height=600, max_width=5000)
+    plot_factor, font_scale = icore.shrink_to_fit(
+        win, lambda: _height(win), plots, 1.0, max_height=600, max_width=5000)
 
     assert _height(win) <= 600
     assert icore.MIN_PLOT_FACTOR <= plot_factor < 1 and font_scale == 1.0
@@ -1914,8 +2210,8 @@ def test_shrink_to_fit_shrinks_plots_first(qt_app):
 def test_shrink_to_fit_then_fonts_down_to_the_limits(qt_app):
     win, plots = _tall_window(qt_app)
 
-    plot_factor, font_scale = icore.shrink_to_fit(win, lambda: _height(win), plots, 1.0,
-                                                  max_height=50, max_width=5000)
+    plot_factor, font_scale = icore.shrink_to_fit(
+        win, lambda: _height(win), plots, 1.0, max_height=50, max_width=5000)
 
     assert plot_factor == icore.MIN_PLOT_FACTOR
     assert font_scale == pytest.approx(icore.MIN_FONT_FACTOR)
@@ -1925,10 +2221,12 @@ def test_shrink_to_fit_then_fonts_down_to_the_limits(qt_app):
 
 def test_shrink_to_fit_leaves_fitting_windows_and_useless_font_steps(qt_app):
     win, plots = _tall_window(qt_app, plot_height=50)
-    assert icore.shrink_to_fit(win, lambda: _height(win), plots, 1.0, 5000, 5000) == (1.0, 1.0)
+    assert icore.shrink_to_fit(
+        win, lambda: _height(win), plots, 1.0, 5000, 5000) == (1.0, 1.0)
     # Too wide because of a fixed minimum width: smaller fonts don't help
     plots[0].setMinimumWidth(3000)
-    assert icore.shrink_to_fit(win, lambda: _height(win), plots, 1.0, 5000, 1000) == (1.0, 1.0)
+    assert icore.shrink_to_fit(
+        win, lambda: _height(win), plots, 1.0, 5000, 1000) == (1.0, 1.0)
     assert 'font-size: 13px' in win.centralWidget().styleSheet()
     win.deleteLater()
 
@@ -1942,19 +2240,23 @@ def test_windows_shrink_to_fit_the_screen(qt_app, monkeypatch, kind):
 
     def spy(window, content_height, plots, ui_scale, max_height, max_width):
         calls.append((max_height, max_width))
-        return real(window, content_height, plots, ui_scale, max_height, max_width)
+        return real(window, content_height, plots, ui_scale, max_height,
+                    max_width)
 
     small = QtCore.QRect(0, 0, 1300, 700)
     module = icore if kind == 'analysis' else iseries
     monkeypatch.setattr(module, 'available_screen_geometry', lambda: small)
     monkeypatch.setattr(module, 'shrink_to_fit', spy)
     if kind == 'analysis':
-        win = TestInteractiveWindow()._make_window(qt_app, monkeypatch)
+        win = _make_window(qt_app, monkeypatch)
     else:
-        win = TestIQSeriesWindow()._make_window(qt_app, monkeypatch)
+        win = _make_series_window(qt_app, monkeypatch)
     from citkid.qt_compat import TITLE_BAR_MARGIN
     assert calls == [(700 - TITLE_BAR_MARGIN, 1300)]
-    with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
         win.close()
 
 
@@ -1962,20 +2264,25 @@ def test_compact_combo_ignores_long_items(qt_app):
     combo = icore.compact_combo(QtWidgets.QComboBox(), 10)
     combo.addItems(['short', 'a very long quantity name ' * 4])
     assert combo.minimumContentsLength() == 10
-    item_width = QtGui.QFontMetrics(combo.font()).horizontalAdvance(combo.itemText(1))
+    item_width = QtGui.QFontMetrics(combo.font()).horizontalAdvance(
+        combo.itemText(1))
     assert combo.minimumSizeHint().width() < item_width / 2
 
 
 def test_section_headers_clip_long_step_names(qt_app, monkeypatch):
     """Long step names must not set the panels' minimum width."""
-    win = TestInteractiveWindow()._make_window(qt_app, monkeypatch)
+    win = _make_window(qt_app, monkeypatch)
     headers = win.findChildren(icore._SectionHeader)
     assert headers
     for header in headers:
         btn = header._btn
-        assert btn.sizePolicy().horizontalPolicy() == QtWidgets.QSizePolicy.Policy.Ignored
+        assert (btn.sizePolicy().horizontalPolicy()
+                == QtWidgets.QSizePolicy.Policy.Ignored)
         assert btn.toolTip() == '  →  '.join(header._panel.step_names)
-    with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
         win.close()
 
 
@@ -2000,7 +2307,8 @@ def test_resume_position(data_idxs, viewed, last, start):
 
 
 def test_help_html_escapes_and_lists_items():
-    html = icore.help_html('W <1>', [('Keys', [('A & B', 'x < y'), ('', 'note')])])
+    html = icore.help_html(
+        'W <1>', [('Keys', [('A & B', 'x < y'), ('', 'note')])])
     assert html.startswith('<h3>W &lt;1&gt;</h3>')
     assert '<li><b>A &amp; B:</b> x &lt; y</li>' in html
     assert '<li>note</li>' in html
@@ -2008,7 +2316,8 @@ def test_help_html_escapes_and_lists_items():
 
 def test_help_dialog_fits_a_small_screen(qt_app, monkeypatch):
     from pyqtgraph.Qt import QtCore
-    monkeypatch.setattr(icore, 'available_screen_geometry',
+    import citkid.qt_compat as qt_compat
+    monkeypatch.setattr(qt_compat, 'available_screen_geometry',
                         lambda: QtCore.QRect(0, 0, 500, 300))
     parent = QtWidgets.QWidget()
     items = [(f'key {i}', 'a description ' * 8) for i in range(40)]
@@ -2043,27 +2352,31 @@ def help_text(win):
 
 
 def test_analysis_window_help(qt_app, monkeypatch):
-    win = TestInteractiveWindow()._make_window(qt_app, monkeypatch)
+    win = _make_window(qt_app, monkeypatch)
     text = help_text(win)
     for item in ('Shift+1-9', 'Run+', 'Bad Data', 'Reset Mask', 'Shift+drag'):
         assert item in text
-    with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
         win.close()
 
 
 def test_series_window_help(qt_app, monkeypatch):
-    win = TestIQSeriesWindow()._make_window(qt_app, monkeypatch)
+    win = _make_series_window(qt_app, monkeypatch)
     text = help_text(win)
     for item in ('W / S', 'Ctrl+Shift+B', 'Mark Bad Above', 'Hold Series Point',
                  'Click a point', 'Bad Data'):
         assert item in text
     assert 'Fit curve' not in text  # no xy fit
-    TestIQSeriesWindow._close(win)
+    _close(win)
 
 
 ################################################################################
 # Nearby-tone default IQ mask
 ################################################################################
+
 
 def _tone_ds(res_idxs=(0, -1, 2)):
     """
@@ -2079,7 +2392,8 @@ def _tone_ds(res_idxs=(0, -1, 2)):
     from types import SimpleNamespace
     fres = np.array([1000., 1002., 1004.])
     ff = np.array([np.linspace(fr - 10, fr + 10, 201) for fr in fres])
-    DS = SimpleNamespace(ff=ff, zf_rmv=np.ones_like(ff, dtype=complex), fres=fres)
+    DS = SimpleNamespace(
+        ff=ff, zf_rmv=np.ones_like(ff, dtype=complex), fres=fres)
     if res_idxs is not None:
         DS.res_idxs = np.array(res_idxs)
     return DS
@@ -2088,10 +2402,12 @@ def _tone_ds(res_idxs=(0, -1, 2)):
 def test_nearby_tone_iq_mask_skips_calibration_tones():
     DS = _tone_ds()
     # Row 0: the 1002 Hz tone is a calibration tone, so the cut is at 1002
-    np.testing.assert_array_equal(iseries.nearby_tone_iq_mask(DS, 0), DS.ff[0] <= 1002.)
+    np.testing.assert_array_equal(
+        iseries.nearby_tone_iq_mask(DS, 0), DS.ff[0] <= 1002.)
     # Without res_idxs every other tone counts
     DS = _tone_ds(res_idxs=None)
-    np.testing.assert_array_equal(iseries.nearby_tone_iq_mask(DS, 0), DS.ff[0] <= 1001.)
+    np.testing.assert_array_equal(
+        iseries.nearby_tone_iq_mask(DS, 0), DS.ff[0] <= 1001.)
     # A row with tones on both sides keeps 25% of its sweep
     assert iseries.nearby_tone_iq_mask(DS, 1).sum() == 51
 
@@ -2107,7 +2423,8 @@ def test_fit_iq_panel_starts_and_resets_to_the_default_mask(qt_app):
     panel.on_data_idx_changing()
     assert panel._mask is None  # whole sweep
 
-    panel.default_iq_mask = lambda AR, di: IQSeriesWindow._default_iq_mask(None, AR, di)
+    panel.default_iq_mask = (
+        lambda AR, di: IQSeriesWindow._default_iq_mask(None, AR, di))
     panel.on_data_idx_changing()
     expected = ar.DS.ff[0] <= 1001.
     np.testing.assert_array_equal(panel._mask, expected)
@@ -2147,13 +2464,16 @@ def test_prefits_use_the_nearby_tone_mask(monkeypatch, enabled):
 
     paths = [call.kwargs for call in AR.execute_path.call_args_list]
     if not enabled:
-        assert [(c['step_start_idx'], c.get('step_end_idx')) for c in paths] == [(1, None)]
+        assert [(c['step_start_idx'], c.get('step_end_idx'))
+                for c in paths] == [(1, None)]
         AR.execute_step.assert_not_called()
         return
-    assert [(c['step_start_idx'], c.get('step_end_idx')) for c in paths] == [(1, 2), (3, None)]
+    assert [(c['step_start_idx'], c.get('step_end_idx'))
+            for c in paths] == [(1, 2), (3, None)]
     (step,), kwargs = AR.execute_step.call_args
     assert step is steps[2] and kwargs['data_idx'] == 3
-    assert kwargs['user_params']['iq_mask'] is mask and kwargs['user_params']['other'] == 1
+    assert kwargs['user_params']['iq_mask'] is mask
+    assert kwargs['user_params']['other'] == 1
 
     AR._last_failures = {3: 'boom'}
     with pytest.raises(RuntimeError, match="'fit_iq' failed for data_idx 3"):
@@ -2163,6 +2483,7 @@ def test_prefits_use_the_nearby_tone_mask(monkeypatch, enabled):
 ################################################################################
 # Fixed-theta x calibration panel
 ################################################################################
+
 
 def _xcal_ds():
     """
@@ -2221,7 +2542,9 @@ def test_fixed_theta_panel_mask_follows_the_offsets(qt_app):
     panel._hi_line.setValue(2.5)
     panel._on_line_moved(panel._hi_line)
     assert panel._max_spin.value() == pytest.approx(0.5)
-    assert panel.get_params_for_step(_make_step('get_xcal_mask_fixed_theta')) == {
+    params = panel.get_params_for_step(
+        _make_step('get_xcal_mask_fixed_theta'))
+    assert params == {
         'xcal_theta_min_offset': 1.0, 'xcal_theta_max_offset': 0.5}
     # Offsets that leave nothing: all excluded, said so
     panel._min_spin.setValue(6.0)
@@ -2253,22 +2576,28 @@ def test_ts_panels_follow_the_analysis_path():
                for name in group]
     assert ts_analysis.ts_panels(ar) == ts_analysis._TS_PANELS
     ar.path = [{'task': _make_step(name)}
-               for group in ts_analysis._TS_FIXED_THETA_PANELS for name in group]
-    assert ts_analysis.ts_panels(ar)[-1] == ('get_xcal_mask_fixed_theta', 'fit_x_theta')
+               for group in ts_analysis._TS_FIXED_THETA_PANELS
+               for name in group]
+    assert ts_analysis.ts_panels(ar)[-1] == (
+        'get_xcal_mask_fixed_theta', 'fit_x_theta')
     assert ts_analysis.ts_panels(ar)[:2] == ts_analysis._TS_PANELS[:2]
 
 
 def test_iq_ts_panels_append_fit_iq_and_leave_ts_panels_alone():
     from citkid.pipeline.interactive import ts_analysis, iq_ts_analysis
     ar = MagicMock()
-    for grouping in (ts_analysis._TS_PANELS, ts_analysis._TS_FIXED_THETA_PANELS):
-        ar.path = [{'task': _make_step(name)} for group in grouping for name in group]
-        assert iq_ts_analysis.iq_ts_panels(ar) == list(grouping) + [('fit_iq',)]
-        assert ts_analysis.ts_panels(ar) == list(grouping)   # the TS list is not modified
+    for grouping in (ts_analysis._TS_PANELS,
+                     ts_analysis._TS_FIXED_THETA_PANELS):
+        ar.path = [{'task': _make_step(name)}
+                   for group in grouping for name in group]
+        assert iq_ts_analysis.iq_ts_panels(ar) == list(grouping) + [
+            ('fit_iq',)]
+        # the TS list is not modified
+        assert ts_analysis.ts_panels(ar) == list(grouping)
 
 
-
-@pytest.mark.parametrize("amp,qi_text", [(0.5, "Qi = 2,000"), (1 - 1e-7, "Qi = inf")])
+@pytest.mark.parametrize(
+    "amp,qi_text", [(0.5, "Qi = 2,000"), (1 - 1e-7, "Qi = inf")])
 def test_fit_iq_panel_legend_handles_pinned_amp(qt_app, amp, qi_text):
     from citkid.pipeline.interactive import fit_iq
     steps = ('fit_iq',)
@@ -2282,3 +2611,102 @@ def test_fit_iq_panel_legend_handles_pinned_amp(qt_app, amp, qi_text):
     assert qi_text in text
     assert "Qc = 1,000" in text or "Qc = 2,000" in text
     assert len(panel._iq_fit.getData()[0]) == 1000  # overlay not cleared
+
+
+def test_typed_row_outside_list_saves_and_returns_to_nearest(
+    qt_app, monkeypatch
+):
+    """
+    A row typed into the spinbox that isn't in data_idxs is shown and
+    tracked: leaving it saves its dirty panels, and Next returns to the
+    nearest listed row.
+    """
+    ar, _ = _make_ar('step1', 'step2')
+    ar.DS.nrows = 10
+    monkeypatch.setattr(icore, 'get_panel_class', lambda _names: _WindowPanel)
+    monkeypatch.setattr(icore.QtCore.QTimer, 'singleShot',
+                        lambda *_a, **_k: None)
+    win = InteractiveAnalysisWindow(
+        ar, panels=[('step1',), ('step2',)], start_idx=0,
+        data_idxs=[0, 4, 8], title='test')
+
+    win._idx_spin.setValue(5)  # not in data_idxs
+    assert win._current_di == 5
+    assert win._data_idxs[win._nav_pos] == 4  # nearest
+    assert win._nav_label.text() == 'not in list (3)'
+    assert all(p.data_idx == 5 for p in win.panels)
+
+    win.panels[0]._dirty = True
+    saved = []
+    win.panels[0].save_outputs = lambda: saved.append(win.panels[0].data_idx)
+    win._advance(+1)  # back to the nearest listed row first
+    assert saved == [5]
+    assert win._current_di == 4 and win._idx_spin.value() == 4
+    assert win._nav_label.text() == '2 / 3'
+
+    win._advance(+1)
+    assert win._current_di == 8
+    with patch.object(QtWidgets.QMessageBox, 'question',
+                      return_value=QtWidgets.QMessageBox.Yes):
+        win.close()
+
+
+def test_prefetch_caches_per_runner_and_leaves_panel_runner_alone(qt_app):
+    """
+    Prefetching for another series point's runner neither changes
+    ``panel.AR`` nor gets used when the panel shows a different runner.
+    """
+    import importlib
+    from types import SimpleNamespace
+
+    importlib.import_module('citkid.pipeline.interactive.xcal')
+    steps = ('get_xcal_mask', 'fit_x_theta')
+    ar1, _ = _make_ar(*steps)
+    ar2, _ = _make_ar(*steps)
+    n = 20
+    for ar, scale in ((ar1, 1.0), (ar2, 2.0)):
+        ff = np.linspace(1e9, 1e9 + 1e5, n)
+        zf = scale * np.exp(1j * np.linspace(0, np.pi, n))
+        ar.DS = SimpleNamespace(
+            nrows=1, ff=[ff], zf_rmv=[zf], zf_cent=[zf],
+            xcal_mask=[np.ones(n, dtype=bool)],
+            thetaf=[np.linspace(-1, 1, n)], xf=[np.linspace(0, 1e-4, n)],
+            poly_x=[np.array([1e-5, 0.0])], thetat=[np.zeros(50)],
+            zt_cent=[np.zeros(50, dtype=complex)],
+        )
+    panel = icore.get_panel_class(steps)(ar1, steps, data_idx=0)
+
+    panel.prefetch_plot_data(0, AR=ar2)
+
+    assert panel.AR is ar1
+    assert panel._cache_key(ar2, 0) in panel._plot_cache
+    assert panel._pop_plot_cache() is None  # shows ar1: not ar2's data
+    panel.AR = ar2
+    cache = panel._pop_plot_cache()
+    np.testing.assert_allclose(np.abs(cache['zf_rmv']), 2.0)
+
+
+def test_circle_panel_marks_bad_rows_with_idx_t_minus_one(qt_app):
+    """
+    A bad row gets idx_t = -1 (not 0, a real index), and no tone marker is
+    drawn for it.
+    """
+    import importlib
+    from types import SimpleNamespace
+
+    importlib.import_module('citkid.pipeline.interactive.circ')
+    steps = ('fit_iq_circle', 'get_idx_t', 'get_theta_phase_offset')
+    ar, _ = _make_ar(*steps)
+    n = 20
+    ff = np.linspace(1e9, 1e9 + 1e5, n)
+    zf = 0.5 + 0.5 * np.exp(1j * np.linspace(0, 2 * np.pi, n))
+    ar.DS = SimpleNamespace(
+        nrows=1, ff=[ff], zf_rmv=[zf], idx_t=[np.int64(-1)],
+        circ_origin=[np.complex128(np.nan)], circ_radius=[np.nan],
+        zt_rmv=[np.zeros(10, dtype=complex)], circ_mask=[None])
+    panel = icore.get_panel_class(steps)(ar, steps, data_idx=0)
+
+    assert panel._nan_outputs()['idx_t'] == -1
+    panel.update_plots()
+    x, _ = panel._idx_t_amp.getData()
+    assert x is None or len(x) == 0

@@ -16,10 +16,10 @@ from .dataset import (
 
 
 _ANALYSIS_YAML_ALIASES = {
-    "iq": "iq_analysis.yaml",
-    "ts": "ts_analysis.yaml",
-    "ts_offres": "ts_offres_analysis.yaml",
-    "ts-fixed_theta": "ts-fixed_theta_analysis.yaml",
+    "iq": "analysis_iq.yaml",
+    "ts": "analysis_ts.yaml",
+    "ts_offres": "analysis_ts_offres.yaml",
+    "ts_fixed_theta": "analysis_ts_fixed_theta.yaml",
 }
 
 _MASK_SHAPE_SOURCES = {
@@ -58,13 +58,15 @@ class AnalysisRunner:
         """
         self.DS = DS
 
-        resolved = self._resolve_analysis_definition(analysis_yaml_path, custom_path)
+        resolved = self._resolve_analysis_definition(analysis_yaml_path,
+                                                     custom_path)
         self.analysis_yaml_path = resolved["yaml_path"]
         self.custom_path = resolved["custom_path"]
         self.analysis_yaml_text = resolved["yaml_text"]
         self.analysis_custom_source = resolved["custom_source"]
 
-        self.analysis_steps = list(_load_custom_analysis_steps_from_source(self.analysis_custom_source))
+        self.analysis_steps = list(_load_custom_analysis_steps_from_source(
+            self.analysis_custom_source))
         for step in default_steps.default_analysis_steps:
             if step.name not in [s.name for s in self.analysis_steps]:
                 self.analysis_steps.append(step)
@@ -75,9 +77,11 @@ class AnalysisRunner:
         self.step_indices = {}
         if self.analysis_yaml_text is not None:
             yaml_dict = yaml.safe_load(self.analysis_yaml_text) or {}
-            self.analysis_pl = _convert_yaml_to_steps(yaml_dict, self.analysis_steps)
+            self.analysis_pl = _convert_yaml_to_steps(
+                yaml_dict, self.analysis_steps)
             if list(self.analysis_pl.keys()) != ["ANALYSIS_STEPS"]:
-                raise ValueError("analysis YAML must contain only 'ANALYSIS_STEPS' key")
+                raise ValueError(
+                    "analysis YAML must contain only 'ANALYSIS_STEPS' key")
             pf.check_pl_tree_structure(self.analysis_pl, cal=False)
             path_dict = self.analysis_pl["ANALYSIS_STEPS"]
             max_task = _validate_task_idxs(path_dict.keys())
@@ -86,7 +90,6 @@ class AnalysisRunner:
                 step_dict["task"].name: index
                 for index, step_dict in enumerate(self.path, start=1)
             }
-            self.DS.set_analysis_step_names({index: step_dict["task"].name for index, step_dict in enumerate(self.path, start=1)})
 
     def execute_path(
         self, data_idx=None, step_start_idx=0, step_end_idx=None, verbose=True,
@@ -134,9 +137,11 @@ class AnalysisRunner:
         path_steps = self.path[step_start_idx:step_end_idx]
         if not path_steps:
             raise ValueError(
-                f"step_start_idx={step_start_idx} and step_end_idx={step_end_idx} select no "
-                f"steps of the analysis path ({len(self.path)} steps, indices 0 to "
-                f"{len(self.path) - 1}). These count analysis steps, not data indices."
+                f"step_start_idx={step_start_idx} and "
+                f"step_end_idx={step_end_idx} select no "
+                f"steps of the analysis path ({len(self.path)} steps, "
+                f"indices 0 to {len(self.path) - 1}). These count analysis "
+                f"steps, not data indices."
             )
         self._validate_execute_path_scope(path_steps, data_idx)
         failed = {}  # data_idx -> (step name, traceback)
@@ -178,12 +183,15 @@ class AnalysisRunner:
                         vectorize=False,
                     )
                     if self._last_failures:
-                        # The rest of this row's path can't run without this step.
-                        failed[int(row)] = (step.name, self._last_failures[int(row)])
+                        # The rest of this row's path can't run without this
+                        # step.
+                        failed[int(row)] = (step.name,
+                                            self._last_failures[int(row)])
                         break
             self._raise_if_all_failed(rows, failed)
             return
-        remaining = None   # rows still being processed (set at the first per-row step)
+        # rows still being processed (set at the first per-row step)
+        remaining = None
         requested = None
         path_iter = path_steps
         if verbose:
@@ -194,7 +202,8 @@ class AnalysisRunner:
             )
         for step_dict in path_iter:
             if verbose:
-                path_iter.set_description(f"Executing step: {step_dict['task'].name}")
+                path_iter.set_description(
+                    f"Executing step: {step_dict['task'].name}")
             step = step_dict["task"]
             params = step_dict.get("params", {})
             if step.func_type in ("global", "global-res"):
@@ -203,7 +212,8 @@ class AnalysisRunner:
                 if remaining is None:
                     remaining = self.DS._normalize_rows(data_idx)
                     if remaining is None:
-                        remaining = np.arange(int(self.DS.nrows), dtype=np.int32)
+                        remaining = np.arange(int(self.DS.nrows),
+                                              dtype=np.int32)
                     requested = remaining
                 step_data_idx = remaining
             self.execute_step(
@@ -217,7 +227,8 @@ class AnalysisRunner:
                 # Later steps can't use rows whose step failed: drop them.
                 for di, message in self._last_failures.items():
                     failed[int(di)] = (step.name, message)
-                remaining = np.asarray([di for di in remaining if int(di) not in failed],
+                remaining = np.asarray([di for di in remaining
+                                        if int(di) not in failed],
                                        dtype=np.int32)
                 if len(remaining) == 0:
                     break
@@ -285,12 +296,14 @@ class AnalysisRunner:
 
         if step.func_type in ("per-row", "vectorized") and data_idx is None:
             data_idx = np.arange(int(self.DS.nrows), dtype=np.int32)
-        elif step.func_type in ("global", "global-res") and data_idx is not None:
+        elif (step.func_type in ("global", "global-res")
+              and data_idx is not None):
             raise ValueError(
                 f"data_idx must be None for global func_type '{step.func_type}'"
             )
 
-        user_params = self._expand_none_masks(user_params, step.func_type, data_idx)
+        user_params = self._expand_none_masks(user_params, step.func_type,
+                                              data_idx)
         pipeline_scope, step_index = self._resolve_step_scope(step)
         self._validate_global_step_overwrite(
             step,
@@ -344,7 +357,8 @@ class AnalysisRunner:
         if failures:
             first = min(failures)
             warnings.warn(
-                f"Step '{step.name}' failed for {len(failures)} row(s): {sorted(failures)}. "
+                f"Step '{step.name}' failed for {len(failures)} row(s): "
+                f"{sorted(failures)}. "
                 f"First failure (data_idx {first}):\n{failures[first]}"
                 f"All tracebacks are in AnalysisRunner._last_failures.",
                 RuntimeWarning,
@@ -382,9 +396,11 @@ class AnalysisRunner:
         step = self._resolve_step(step)
         state = self._step_state.get(step.name)
         if state is None:
-            raise ValueError(f"Step '{step.name}' has not been executed in this AnalysisRunner")
+            raise ValueError(f"Step '{step.name}' has not been executed in "
+                             f"this AnalysisRunner")
 
-        save_rows = state["data_idx"] if data_idx is None else self.DS._normalize_rows(data_idx)
+        save_rows = (state["data_idx"] if data_idx is None
+                     else self.DS._normalize_rows(data_idx))
         plan = self._build_invalidation_plan(
             step,
             state["user_params"],
@@ -412,18 +428,27 @@ class AnalysisRunner:
             data_idx=None if invalidation_plan["is_global"] else data_idx,
         )
 
-    def _build_invalidation_plan(self, step, user_params, data_idx, pipeline_scope, step_index):
+    def _build_invalidation_plan(
+        self, step, user_params, data_idx, pipeline_scope, step_index
+    ):
         """
         Build the save and invalidation plan for a step execution.
         """
         input_names = list(user_params.keys())
         output_names = list(step.return_names)
-        downstream_analysis = self._downstream_analysis_outputs(pipeline_scope, step_index)
-        cal_sources = _ordered_unique(input_names + output_names + downstream_analysis)
+        downstream_analysis = self._downstream_analysis_outputs(
+            pipeline_scope, step_index)
+        cal_sources = _ordered_unique(
+            input_names + output_names + downstream_analysis)
         downstream_cal = self.DS.get_downstream_calibration_params(cal_sources)
         overwrite_names = _ordered_unique(input_names + output_names)
-        zarr_delete = [name for name in _ordered_unique(downstream_analysis + downstream_cal) if name not in overwrite_names]
-        memory_invalidate = _ordered_unique(output_names + downstream_analysis + downstream_cal)
+        zarr_delete = [
+            name
+            for name in _ordered_unique(downstream_analysis + downstream_cal)
+            if name not in overwrite_names
+        ]
+        memory_invalidate = _ordered_unique(
+            output_names + downstream_analysis + downstream_cal)
         return {
             "input_names": input_names,
             "output_names": output_names,
@@ -468,7 +493,8 @@ class AnalysisRunner:
             return self.DS._normalize_rows(data_idx)
         rows = self.DS._normalize_rows(data_idx)
         failed_rows = {int(di) for di in failures.keys()}
-        return np.asarray([int(di) for di in rows if int(di) not in failed_rows], dtype=np.int32)
+        return np.asarray([int(di) for di in rows
+                           if int(di) not in failed_rows], dtype=np.int32)
 
     def _step_rows(self, step, data_idx):
         """
@@ -500,19 +526,23 @@ class AnalysisRunner:
             if param_name == "data_idx":
                 continue
 
-            param_scope_data_idx = None if step.func_type in ("global", "global-res") else data_idx
+            param_scope_data_idx = (
+                None if step.func_type in ("global", "global-res")
+                else data_idx)
             if self._param_available(param_name, param_scope_data_idx):
                 continue
 
             if pf.find_pl_path(self.DS.cal_pl, param_name) is not None:
-                self.DS._ensure_loaded(param_name, data_idx=param_scope_data_idx)
+                self.DS._ensure_loaded(param_name,
+                                       data_idx=param_scope_data_idx)
                 continue
 
             if pipeline_scope == "analysis" and step_index is not None:
                 self._ensure_analysis_param(param_name, step_index)
 
             raise ValueError(
-                f"Step '{step.name}' requires parameter '{param_name}', but it is not available"
+                f"Step '{step.name}' requires parameter '{param_name}', "
+                f"but it is not available"
             )
 
     def _ensure_analysis_param(self, param_name, before_step_index):
@@ -539,26 +569,13 @@ class AnalysisRunner:
         if producer_idx is None:
             return
         raise ValueError(
-            f"Parameter '{param_name}' is produced by earlier analysis step '{producer_name}'. "
-            f"Run that step explicitly, or use execute_path(step_start_idx={producer_idx - 1}) "
+            f"Parameter '{param_name}' is produced by earlier analysis step "
+            f"'{producer_name}'. "
+            f"Run that step explicitly, or use "
+            f"execute_path(step_start_idx={producer_idx - 1}) "
             f"after the required earlier analysis outputs have been created."
         )
 
-    def _step_outputs_exist(self, step, data_idx):
-        """
-        Check whether a step's outputs are already available.
-
-        Parameters:
-        step (plStep): Step whose outputs should be checked.
-        data_idx (int, array-like, or None): Relevant rows for per-row steps.
-
-        Returns:
-        bool: True if all outputs exist.
-        """
-        for name in step.return_names:
-            if not self._param_available(name, data_idx if step.func_type not in ("global", "global-res") else None):
-                return False
-        return True
 
     def _param_available(self, name, data_idx):
         """
@@ -570,9 +587,10 @@ class AnalysisRunner:
             parameters.
 
         Returns:
-        bool: True if the parameter is available.
+        available (bool): True if the parameter is available.
         """
-        meta = self.DS._param_meta.get(name) or self.DS._refresh_param_meta(name)
+        meta = (self.DS._param_meta.get(name)
+                or self.DS._refresh_param_meta(name))
         if meta is None:
             return False
         if meta["global"]:
@@ -590,8 +608,8 @@ class AnalysisRunner:
         step (plStep): Step whose YAML parameters should be returned.
 
         Returns:
-        dict: Parameter mapping defined in the YAML, or {} if the step is not
-            in the analysis path (e.g. a calibration step).
+        params (dict): Parameter mapping defined in the YAML, or {} if the
+            step is not in the analysis path (e.g. a calibration step).
         """
         for step_dict in self.path:
             if step_dict["task"].name == step.name:
@@ -608,18 +626,31 @@ class AnalysisRunner:
         data_idx (int, array-like, or None): Rows being processed.
 
         Returns:
-        dict: User parameter mapping with concrete mask arrays.
+        user_params (dict): User parameter mapping with concrete mask arrays.
         """
         def is_null(value):
-            return value is None or (isinstance(value, str) and value.strip().lower() == "none")
+            """
+            Check whether a parameter value means None.
 
-        if not any(is_null(value) and name in _MASK_SHAPE_SOURCES for name, value in user_params.items()):
+            Parameters:
+            value: parameter value.
+
+            Returns:
+            null (bool): True if ``value`` is None or the string 'none' (any
+                case, surrounding whitespace ignored).
+            """
+            return value is None or (isinstance(value, str)
+                                     and value.strip().lower() == "none")
+
+        if not any(is_null(value) and name in _MASK_SHAPE_SOURCES
+                   for name, value in user_params.items()):
             return user_params
 
         expanded = dict(user_params)
         for name, value in list(expanded.items()):
             if is_null(value) and name in _MASK_SHAPE_SOURCES:
-                expanded[name] = self._expand_none_mask(name, func_type, data_idx)
+                expanded[name] = self._expand_none_mask(name, func_type,
+                                                        data_idx)
         return expanded
 
     def _expand_none_mask(self, mask_name, func_type, data_idx):
@@ -632,13 +663,14 @@ class AnalysisRunner:
         data_idx (int, array-like, or None): Rows being processed.
 
         Returns:
-        np.ndarray: Mask array with the correct per-row inner shape.
+        mask (np.ndarray): Mask array with the correct per-row inner shape.
         """
         source_name = _MASK_SHAPE_SOURCES[mask_name]
         source = getattr(self.DS, source_name)
         shape = source.shape
         if not shape:
-            probe_idx = 0 if data_idx is None else int(np.atleast_1d(np.asarray(data_idx, dtype=np.int32))[0])
+            probe_idx = 0 if data_idx is None else int(
+                np.atleast_1d(np.asarray(data_idx, dtype=np.int32))[0])
             shape = np.asarray(source[probe_idx]).shape
         else:
             shape = shape[1:]
@@ -647,9 +679,13 @@ class AnalysisRunner:
             return np.ones(shape, dtype=bool)
         if np.ndim(data_idx) == 0:
             return np.ones(shape, dtype=bool)
-        return np.ones((len(np.atleast_1d(np.asarray(data_idx, dtype=np.int32))), *shape), dtype=bool)
+        return np.ones(
+            (len(np.atleast_1d(np.asarray(data_idx, dtype=np.int32))), *shape),
+            dtype=bool)
 
-    def _add_user_params(self, step, user_params, data_idx, save, pipeline_scope, step_index):
+    def _add_user_params(
+        self, step, user_params, data_idx, save, pipeline_scope, step_index
+    ):
         """
         Store user-provided parameters in the dataset before step execution.
 
@@ -701,8 +737,8 @@ class AnalysisRunner:
         step (plStep): Step to classify.
 
         Returns:
-        tuple: ``(pipeline_scope, step_index)`` or ``(None, None)`` when the
-            step is not part of a known path.
+        scope (tuple): ``(pipeline_scope, step_index)`` or ``(None, None)``
+            when the step is not part of a known path.
         """
         if step.name in self.step_indices:
             return "analysis", self.step_indices[step.name]
@@ -729,10 +765,14 @@ class AnalysisRunner:
                 continue
             suggested_start = self.step_indices.get(step.name, offset + 1)
             raise ValueError(
-                f"Partial execute_path would execute {step.func_type} step '{step.name}', "
-                f"which can overwrite downstream products for rows outside data_idx. "
-                f"Run the global step for all rows, or rerun with step_start_idx={suggested_start} "
-                f"if that step has already been executed. If you need different values per row, "
+                f"Partial execute_path would execute {step.func_type} step "
+                f"'{step.name}', "
+                f"which can overwrite downstream products for rows outside "
+                f"data_idx. "
+                f"Run the global step for all rows, or rerun with "
+                f"step_start_idx={suggested_start} "
+                f"if that step has already been executed. If you need "
+                f"different values per row, "
                 f"refactor that step to be per-row instead of global."
             )
 
@@ -741,23 +781,31 @@ class AnalysisRunner:
         allow_global_step_overwrite,
     ):
         """
-        Raise before rerunning a global or global-res step that would overwrite data.
+        Raise before rerunning a global or global-res step that would
+        overwrite data.
         """
-        if step.func_type not in ("global", "global-res") or allow_global_step_overwrite:
+        if (step.func_type not in ("global", "global-res")
+                or allow_global_step_overwrite):
             return
 
-        if not self._global_step_would_overwrite(step, user_params, pipeline_scope, step_index):
+        if not self._global_step_would_overwrite(step, user_params,
+                                                 pipeline_scope, step_index):
             return
 
         raise ValueError(
-            f"Re-running {step.func_type} step '{step.name}' would overwrite its existing outputs "
-            f"or downstream products for all rows. Pass allow_global_step_overwrite=True only if "
+            f"Re-running {step.func_type} step '{step.name}' would "
+            f"overwrite its existing outputs "
+            f"or downstream products for all rows. Pass "
+            f"allow_global_step_overwrite=True only if "
             f"you intend to invalidate and overwrite all dependent data."
         )
 
-    def _global_step_would_overwrite(self, step, user_params, pipeline_scope, step_index):
+    def _global_step_would_overwrite(
+        self, step, user_params, pipeline_scope, step_index
+    ):
         """
-        Return True when running a global or global-res step would overwrite existing data.
+        Return True when running a global or global-res step would overwrite
+        existing data.
         """
         plan = self._build_invalidation_plan(
             step,
@@ -767,7 +815,8 @@ class AnalysisRunner:
             step_index,
         )
         affected_names = _ordered_unique(
-            plan["output_names"] + plan["memory_invalidate"] + plan["zarr_delete"]
+            plan["output_names"] + plan["memory_invalidate"]
+            + plan["zarr_delete"]
         )
         return any(self._param_available(name, None) for name in affected_names)
 
@@ -783,7 +832,8 @@ class AnalysisRunner:
 
     def _resolve_analysis_definition(self, analysis_yaml_path, custom_path):
         """
-        Resolve the analysis definition from explicit inputs or dataset metadata.
+        Resolve the analysis definition from explicit inputs or dataset
+        metadata.
 
         Only the contents are embedded, not file paths. The dataset's
         ``custom_main_dir_overwrite`` is applied to the top-level ``main_dir``
@@ -795,10 +845,10 @@ class AnalysisRunner:
         custom_path (str or None): Requested custom analysis step file.
 
         Returns:
-        dict: Definition with keys ``yaml_path`` (path read this session, or
-            None if embedded), ``custom_path`` (same), ``yaml_text`` and
-            ``custom_source`` (source that is executed, after the
-            ``main_dir`` overwrite).
+        definition (dict): Definition with keys ``yaml_path`` (path read
+            this session, or None if embedded), ``custom_path`` (same),
+            ``yaml_text`` and ``custom_source`` (source that is executed,
+            after the ``main_dir`` overwrite).
 
         Raises:
         ValueError: If the supplied definition conflicts with the dataset's
@@ -828,10 +878,26 @@ class AnalysisRunner:
         elif stored_custom is not None:
             custom_source = stored_custom
 
-        if stored_yaml is not None and yaml_text is not None and yaml_text != stored_yaml:
-            raise ValueError("Provided analysis YAML does not match the dataset definition")
-        if stored_custom is not None and not _custom_sources_match(custom_source, stored_custom):
-            raise ValueError("Provided analysis custom steps do not match the dataset definition")
+        if (stored_yaml is not None and yaml_text is not None
+                and yaml_text != stored_yaml):
+            raise ValueError(
+                "Provided analysis YAML does not match the dataset "
+                "definition. To reopen an existing dataset, omit "
+                "analysis_yaml_path and custom_path (the definition "
+                "stored in the dataset is used). The citkid "
+                "templates may have changed since the dataset was "
+                "created."
+            )
+        if stored_custom is not None and not _custom_sources_match(
+                custom_source, stored_custom):
+            raise ValueError(
+                "Provided analysis custom steps do not match the dataset "
+                "definition. To reopen an existing dataset, omit "
+                "analysis_yaml_path and custom_path (the definition "
+                "stored in the dataset is used). The citkid "
+                "templates may have changed since the dataset was "
+                "created."
+            )
 
         if yaml_text is not None:
             self.DS.register_analysis_definition(yaml_text, custom_source)
@@ -857,7 +923,7 @@ def _resolve_analysis_yaml_path(analysis_yaml_path):
     analysis_yaml_path (str): Alias or path supplied by the caller.
 
     Returns:
-    str: Resolved YAML file path.
+    path (str): Resolved YAML file path.
 
     Raises:
     ValueError: If the path does not point to a YAML file.
@@ -868,8 +934,10 @@ def _resolve_analysis_yaml_path(analysis_yaml_path):
             "templates",
             _ANALYSIS_YAML_ALIASES[analysis_yaml_path],
         )
-    if not (analysis_yaml_path.endswith(".yaml") or analysis_yaml_path.endswith(".yml")):
-        raise ValueError("analysis_yaml_path must point to a .yaml or .yml file")
+    if not (analysis_yaml_path.endswith(".yaml")
+            or analysis_yaml_path.endswith(".yml")):
+        raise ValueError(
+            "analysis_yaml_path must point to a .yaml or .yml file")
     return analysis_yaml_path
 
 
@@ -882,7 +950,8 @@ def _load_custom_analysis_steps_from_source(source):
         ``custom_analysis_steps`` list.
 
     Returns:
-    list: Custom analysis steps, or an empty list when no source is given.
+    steps (list): Custom analysis steps, or an empty list when no source is
+        given.
     """
     if source is None:
         return []
@@ -899,7 +968,7 @@ def _validate_task_idxs(task_idxs):
     task_idxs (iterable): Step indices from the YAML mapping.
 
     Returns:
-    int: Largest valid task index.
+    max_idx (int): Largest valid task index.
 
     Raises:
     ValueError: If the indices are empty, non-integer, or non-consecutive.
@@ -912,7 +981,8 @@ def _validate_task_idxs(task_idxs):
     expected = set(range(1, max_idx + 1))
     if set(task_idxs) != expected or len(task_idxs) != max_idx:
         raise ValueError(
-            "task_idxs must be consecutive integers starting at 1 with no gaps or duplicates"
+            "task_idxs must be consecutive integers starting at 1 with no "
+            "gaps or duplicates"
         )
     return max_idx
 

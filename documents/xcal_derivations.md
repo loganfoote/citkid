@@ -40,7 +40,7 @@ with:
 | $\Delta t$ | `dt` | timestream sample time in s |
 
 Sweep arrays are sorted by ascending frequency by the loader steps
-(`load_data_f`, `load_data_g` in the custom-steps templates); several steps
+(`load_sweep_f`, `load_sweep_g` in the custom-steps templates); several steps
 below rely on this.
 
 Throughout, subscript $f$ means "fine sweep" and $t$ means "timestream".
@@ -69,8 +69,8 @@ calibration steps (transformations) in the calibration YAML templates, both
 in `citkid/pipeline/templates/`. Calibration outputs are computed on demand
 when an analysis step needs them (`pipeline.analysis.AnalysisRunner`).
 
-For the on-resonance timestream case (`ts_analysis.yaml` +
-`cal-ts.yaml`), the order of operations is:
+For the on-resonance timestream case (`analysis_ts.yaml` +
+`cal_ts.yaml`), the order of operations is:
 
 | # | Step | Function | Produces |
 | --- | --- | --- | --- |
@@ -91,7 +91,7 @@ For the on-resonance timestream case (`ts_analysis.yaml` +
 | C | `get_sxx` | `signal.psd.get_psd` | `f_sxx`, `sxx` |
 | C | `get_sxx_reduced`, `get_sfactor_reduced` | `xcal.reduced_params.get_*_reduced_default_freqs` | `sxx_0p1`, ..., `sfactor_300` |
 
-A = analysis step, C = calibration step. `ts-fixed_theta_analysis.yaml` is
+A = analysis step, C = calibration step. `analysis_ts_fixed_theta.yaml` is
 identical except that A6 is `get_xcal_mask_fixed_theta`
 (`xcal.xcal.get_xcal_mask_fixed_theta`). The off-resonance and IQ-only
 templates are described in Section 12.
@@ -273,7 +273,7 @@ for the x(theta) fit.
 ### Timestream range: `xcal.xcal.get_xcal_mask`
 
 Arguments `idx0_offset`, `idx1_offset`, `std_cutoff` (function defaults
-3, 7, 12; `ts_analysis.yaml` uses 3, 9, 16).
+3, 7, 12; `analysis_ts.yaml` uses 3, 9, 16).
 
 1. Glitch cut (`xcal.xcal.get_theta_t_bulk_mask`): keep timestream points
    with $|\theta_t - \overline{\theta_t}| < n_\sigma \,\mathrm{std}(\theta_t)$,
@@ -308,7 +308,7 @@ $$
 
 $\Delta_\mathrm{min}$, $\Delta_\mathrm{max}$ = `xcal_theta_min_offset`,
 `xcal_theta_max_offset` (0.2 rad each by default and in
-`ts-fixed_theta_analysis.yaml`). NaNs are never kept, and the mask need not
+`analysis_ts_fixed_theta.yaml`). NaNs are never kept, and the mask need not
 be contiguous. It raises if no point is in the band. This covers most of the
 loop, so it is useful when the timestream range is large or unreliable, at
 the cost of fitting a wide range of $\theta$ with a cubic (Section 14).
@@ -343,12 +343,12 @@ The calibration maps each timestream sample to the sweep state with the same
 angle around the circle center, i.e. it assumes the timestream moves along
 the sweep's IQ loop (Section 14).
 
-A placeholder `xcal.xcal.create_xcal` collects the per-row calibration into
+The per-row calibration can be written compactly as
 $z_\mathrm{cent} = z_t z_1 + z_2$ with
 $z_1 = e^{-i\varphi_0} / (10^{P_\mathrm{amp}(f_t)/20} e^{i P_\mathrm{phase}(f_t)})$,
 $z_2 = -c\, e^{-i\varphi_0}$, then $x_t = P_x(\arg z_\mathrm{cent})$. This
-is the same transformation written compactly; it is not used by the
-pipeline steps.
+is the same transformation as the pipeline steps above, which apply it
+one step at a time.
 
 ## 10. Noise spectra: Sxx, Spar, Sper
 
@@ -433,18 +433,18 @@ Meaning:
 
 ## 12. Off-resonance and IQ-only templates
 
-- **Off-resonance** (`ts_offres_analysis.yaml` + `cal-offres.yaml`): no
+- **Off-resonance** (`analysis_ts_offres.yaml` + `cal_ts_offres.yaml`): no
   circle fit. `get_theta_phase_offset_offres` uses center $c = 0$, so
   $\varphi_0$ is the angle of the median of $z_{\mathrm{rmv},t}$ (real
   and imaginary parts separately) and
-  `rotate_offres_t`/`rotate_offres_f` give
+  `rotate_t_offres`/`rotate_f_offres` give
   $z_\mathrm{cent} = z_\mathrm{rmv} e^{-i\varphi_0}$. Then $\theta$ is the
   phase of the gain-removed transmission relative to its median and $A$ its
   amplitude. There is no x calibration. Note: `get_sparper` takes
   `circ_radius`, which neither off-resonance template produces, so
   $S_\parallel$/sfactor are only available if `circ_radius` is supplied
   some other way.
-- **IQ only** (`iq_analysis.yaml` + `cal-iqonly.yaml`): gain fit, then a
+- **IQ only** (`analysis_iq.yaml` + `cal_iq.yaml`): gain fit, then a
   resonator fit (`fit_iq`) to `zf_rmv`. The calibration YAML lists
   `center_f`, `get_thetaf`, and `get_xf`, but the IQ-only analysis and
   loader template do not produce `circ_origin`, `theta_phase_offset`,

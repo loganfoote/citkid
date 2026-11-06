@@ -1,4 +1,3 @@
-import pytest
 import numpy as np
 from citkid.signal.iq import density_subsample
 
@@ -122,4 +121,6 @@ def test_density_subsample_idx_matches_density_subsample():
     idx = density_subsample_idx(z, n_keep=700)
     assert len(idx) == 700 and len(np.unique(idx)) == 700
     np.testing.assert_array_equal(z[idx], density_subsample(z, n_keep=700))
-    np.testing.assert_array_equal(density_subsample_idx(z[:50], n_keep=700), np.arange(50))
+    np.testing.assert_array_equal(
+        density_subsample_idx(z[:50], n_keep=700), np.arange(50)
+    )

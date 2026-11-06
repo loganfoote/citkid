@@ -223,6 +223,16 @@ def fit_responsivity_int_x0_fixed_R0(
     scale = np.array([1e16, 1e6])
     R0_scaled = R0 * 1e-9
     def model(log_power, P0, x0):
+        """
+        Evaluate the scaled responsivity model with R0 fixed.
+
+        Parameters:
+        log_power (np.array): log10 of the power.
+        P0, x0 (float): scaled fit parameters.
+
+        Returns:
+        x (np.array): scaled model fractional frequency shift.
+        """
         return responsivity_int_x0_for_fitter(log_power, R0_scaled, P0, x0)
     power, x = np.array(power, dtype = float), np.array(x, dtype = float)
     ix = np.argsort(power)

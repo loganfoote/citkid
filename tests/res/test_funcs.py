@@ -221,8 +221,9 @@ def test_linear_iq_consistency(fr, Qr, amp, phi, i0, q0, tau):
     for downward in [True, False]:
         assert np.allclose(z, funcs.nonlinear_iq(f, fr, Qr, amp, phi, 0., i0,
                                                  q0, tau, downward))
-        assert np.allclose(s21_res, funcs.nonlinear_iq_nogain(f, fr, Qr, amp,
-                                                              phi, 0., downward))
+        assert np.allclose(s21_res, funcs.nonlinear_iq_nogain(
+            f, fr, Qr, amp, phi, 0., downward
+        ))
 
 ################################################################################
 ################################# product_s21 ##################################

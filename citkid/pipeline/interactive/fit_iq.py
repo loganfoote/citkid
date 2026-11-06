@@ -1,26 +1,22 @@
 """
 Interactive panel for the IQ resonance fitting step (fit_iq).
 
-Plots
------
-Left : ``20*log10(|zf_rmv|)`` vs ``ff`` with a
-       :class:`~pyqtgraph.LinearRegionItem` that defines the fit mask (only
-       data inside the region is fitted).
-Right: IQ loop — ``zf_rmv.imag`` vs ``zf_rmv.real`` — with the model
-       curve from :func:`citkid.res.funcs.nonlinear_iq` overlaid in red
-       after a successful fit.
+Plots:
+- Left: ``20*log10(|zf_rmv|)`` vs ``ff`` with a ``pyqtgraph.LinearRegionItem``
+  that defines the fit mask (only data inside the region is fitted).
+- Right: IQ loop (``zf_rmv.imag`` vs ``zf_rmv.real``) with the model curve
+  from ``citkid.res.funcs.nonlinear_iq`` overlaid in red after a successful
+  fit.
 
-Mask interaction
-----------------
+Mask interaction:
 Hold **Shift** and left-click-drag on the amplitude plot to draw the mask
-window.  The shaded region updates in real time as you drag.  Click
-**Run** to apply the new mask and refit.
+window. The shaded region updates in real time as you drag. Click **Run** to
+apply the new mask and refit.
 
 Press **Reset Mask** to restore the full frequency range (all samples
 included).
 
-Cascade behaviour
------------------
+Cascade behaviour:
 After a successful run the panel emits ``downstream_rerun`` so that
 subsequent panels are automatically updated.
 """
@@ -36,15 +32,30 @@ from ...res.util import qi_qc
 
 
 class _MaskViewBox(pg.ViewBox):
-    """ViewBox that emits ``sig_range_selected(lo, hi)`` on Shift + left-drag."""
+    """
+    ViewBox that emits ``sig_range_selected(lo, hi)`` on Shift + left-drag.
+    """
 
     sig_range_selected = QtCore.pyqtSignal(float, float)
 
     def __init__(self, *args, **kwargs):
+        """
+        Build the ViewBox.
+
+        Parameters:
+        *args, **kwargs: Passed to ``pg.ViewBox``.
+        """
         super().__init__(*args, **kwargs)
         self._drag_origin_x = None
 
     def mouseDragEvent(self, ev, axis=None):
+        """
+        Emit the dragged x range on Shift+drag; otherwise pan/zoom as usual.
+
+        Parameters:
+        ev (MouseDragEvent): The drag event.
+        axis (int or None): Axis to restrict the default drag to.
+        """
         if ev.modifiers() & _Qt.ShiftModifier:
             ev.accept()
             if ev.isStart():
@@ -100,7 +111,11 @@ class IQFitPanel(StepPanel):
     default_iq_mask = None
 
     def setup_ui(self):
-        root = QtWidgets.QVBoxLayout(self)
+        """
+        Build the buttons, status label, amplitude plot with mask region, and
+        IQ loop plot with fit legend.
+        """
+        root =QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(6, 4, 6, 6)
         root.setSpacing(4)
 
@@ -120,8 +135,10 @@ class IQFitPanel(StepPanel):
 
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setFixedWidth(55)
-        self._run_through_btn.setToolTip("Run this panel and all following panels")
-        self._run_through_btn.clicked.connect(lambda: self.run_from_here.emit())
+        self._run_through_btn.setToolTip(
+            "Run this panel and all following panels")
+        self._run_through_btn.clicked.connect(
+            lambda: self.run_from_here.emit())
         ctrl.addWidget(self._run_through_btn)
 
         self._save_btn = QtWidgets.QPushButton("Save")
@@ -131,7 +148,8 @@ class IQFitPanel(StepPanel):
 
         self._bad_btn = QtWidgets.QPushButton("Bad Data")
         self._bad_btn.setFixedWidth(75)
-        self._bad_btn.setToolTip("Mark this index as bad: fill all outputs with NaN")
+        self._bad_btn.setToolTip(
+            "Mark this index as bad: fill all outputs with NaN")
         self._bad_btn.clicked.connect(self._on_bad_data_clicked)
         ctrl.addWidget(self._bad_btn)
 
@@ -161,17 +179,26 @@ class IQFitPanel(StepPanel):
 
         self._scale_plot_fonts(self._plot_amp, self._plot_iq)
 
-        # Data scatter plots — included (blue) and excluded (orange) for contrast
+        # Data scatter plots — included (blue) and excluded (orange) for
+        # contrast
         _inc_brush = pg.mkBrush(100, 180, 255, 210)
         _exc_brush = pg.mkBrush(255, 140, 50, 180)
-        self._amp_data     = self._plot_amp.plot(pen=None, symbolBrush=_inc_brush,
-                                                  symbolPen=None, symbolSize=4, name='data')
-        self._amp_excl     = self._plot_amp.plot(pen=None, symbolBrush=_exc_brush,
-                                                  symbolPen=None, symbolSize=4, name='excluded')
-        self._iq_data      = self._plot_iq.plot(pen=None, symbolBrush=_inc_brush,
-                                                 symbolPen=None, symbolSize=4, name='data')
-        self._iq_data_excl = self._plot_iq.plot(pen=None, symbolBrush=_exc_brush,
-                                                  symbolPen=None, symbolSize=4, name='excluded')
+        self._amp_data     = self._plot_amp.plot(pen=None,
+                                                 symbolBrush=_inc_brush,
+                                                 symbolPen=None, symbolSize=4,
+                                                 name='data')
+        self._amp_excl     = self._plot_amp.plot(pen=None,
+                                                 symbolBrush=_exc_brush,
+                                                 symbolPen=None, symbolSize=4,
+                                                 name='excluded')
+        self._iq_data      = self._plot_iq.plot(pen=None,
+                                                symbolBrush=_inc_brush,
+                                                symbolPen=None, symbolSize=4,
+                                                name='data')
+        self._iq_data_excl = self._plot_iq.plot(pen=None,
+                                                symbolBrush=_exc_brush,
+                                                symbolPen=None, symbolSize=4,
+                                                name='excluded')
 
         # Fit overlay curve on IQ loop (red line)
         _fit_pen = pg.mkPen(color=(255, 80, 80), width=2)
@@ -198,7 +225,8 @@ class IQFitPanel(StepPanel):
         self._plot_amp.addItem(self._region)
 
         # Connect Shift+drag signal from the custom ViewBox
-        self._plot_amp.getViewBox().sig_range_selected.connect(self._on_range_selected)
+        self._plot_amp.getViewBox().sig_range_selected.connect(
+            self._on_range_selected)
 
         # Current mask state (None = full range, i.e. all True)
         self._mask: np.ndarray | None = None
@@ -232,12 +260,25 @@ class IQFitPanel(StepPanel):
             self._build_mask(self._ff_cache)
 
     def get_params_for_step(self, step):
+        """
+        Return the current IQ mask for fit_iq.
+
+        Parameters:
+        step (plStep): The step about to be executed.
+
+        Returns:
+        params (dict): ``{'iq_mask': mask}`` for fit_iq, else {}.
+        """
         if step.name == 'fit_iq':
             return {'iq_mask': self._mask}
         return {}
 
     def update_plots(self):
-        di = self.data_idx
+        """
+        Plot the amplitude and IQ loop data (in and out of the mask), the
+        model fit, and the fit-parameter legend.
+        """
+        di =self.data_idx
         DS = self.AR.DS
 
         try:
@@ -330,10 +371,16 @@ class IQFitPanel(StepPanel):
     # ------------------------------------------------------------------
 
     def autoscale_plots(self):
+        """
+        Auto-range the amplitude and IQ loop plots.
+        """
         self._plot_amp.autoRange()
         self._plot_iq.autoRange()
 
     def clear_plots(self):
+        """
+        Empty every curve and the fit legend, and reset the status label.
+        """
         for curve in (self._amp_data, self._amp_excl, self._amp_fit,
                       self._iq_data, self._iq_data_excl, self._iq_fit):
             curve.setData([], [])
@@ -341,7 +388,9 @@ class IQFitPanel(StepPanel):
         self._status_label.setText("—")
 
     def _reposition_fit_text(self):
-        """Keep the fit-parameter label in the top-right corner of the IQ view."""
+        """
+        Keep the fit-parameter label in the top-right corner of the IQ view.
+        """
         vb = self._plot_iq.getViewBox()
         xr, yr = vb.viewRange()
         self._fit_text.setPos(xr[1], yr[1])
@@ -404,19 +453,38 @@ class IQFitPanel(StepPanel):
     # ------------------------------------------------------------------
 
     def prepare_run(self):
-        """Rebuild the mask from the current region before run_steps is called."""
+        """
+        Rebuild the mask from the current region before run_steps is called.
+        """
         if self._ff_cache is not None:
             self._build_mask(self._ff_cache)
 
     def _on_step_error(self, step, exc):
+        """
+        Show and print a step error.
+
+        Parameters:
+        step (plStep): The step that failed.
+        exc (Exception): The exception it raised.
+        """
         msg = f"'{step.name}' failed: {exc}"
         self._status_label.setText(msg)
         print(msg)
 
     def _on_bad_data_clicked(self):
+        """
+        Mark the current row bad (same as the base class).
+        """
         super()._on_bad_data_clicked()
 
     def _nan_outputs(self) -> dict:
+        """
+        Return bad-data placeholders for the fit_iq outputs.
+
+        Returns:
+        outputs (dict): NaN ``iq_p0`` and ``iq_popt`` (8 each) and
+            ``iq_nrmse``.
+        """
         return {
             'iq_p0': np.full(8, np.nan),
             'iq_popt': np.full(8, np.nan),

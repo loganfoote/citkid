@@ -1,10 +1,8 @@
-import matplotlib.pyplot as plt
 import os
 from io import BytesIO
 import warnings
 import itertools
 import numpy as np
-from PIL import Image
 import time
 import threading
 from tqdm.auto import tqdm
@@ -27,6 +25,7 @@ def save_fig(
     Returns:
     None
     """
+    import matplotlib.pyplot as plt
     # Input validation
     if not isinstance(filename, str):
         raise TypeError('filename must be a string')
@@ -112,7 +111,8 @@ def to_scientific_notation(number):
 
 def combine_figs_vert(figs, dpi = 200, rescale_to = 'max'):
     """
-    Combine a list of matplotlib figures vertically into a single matplotlib figure.
+    Combine a list of matplotlib figures vertically into a single matplotlib
+    figure.
 
     Parameters:
     figs (list of plt.Figure): Figures to combine (any length >= 1).
@@ -123,6 +123,8 @@ def combine_figs_vert(figs, dpi = 200, rescale_to = 'max'):
     Returns:
     plt.Figure: Combined figure.
     """
+    import matplotlib.pyplot as plt
+    from PIL import Image
     if not isinstance(dpi, (int, np.integer)):
         raise TypeError('dpi must be an integer')
     if dpi <= 0:
@@ -208,12 +210,14 @@ def combine_figs_horz(figs, dpi = 200, rescale_to = 'max'):
     Parameters:
     figs (list of plt.Figure): Figures to combine (any length >= 1).
     dpi (int): Dots per inch for the combined figure.
-    rescale_to (str): 'max' to scale images up to the max height, 'min' to scale 
-        down to min height.
+    rescale_to (str): 'max' to scale images up to the max height, 'min' to
+        scale down to min height.
 
     Returns:
     plt.Figure: Combined figure.
     """
+    import matplotlib.pyplot as plt
+    from PIL import Image
     if not isinstance(dpi, (int, np.integer)):
         raise TypeError('dpi must be an integer')
     if dpi <= 0:
@@ -367,13 +371,12 @@ def run_with_time_bar(fn, duration_s, desc, *args, **kwargs):
     fn (callable): Function to run.
     duration_s (float): Duration in seconds for the progress bar.
     desc (str): Description for the progress bar.
-
     *args: Positional arguments to pass to fn.
     **kwargs: Keyword arguments to pass to fn.
-    
+
     Returns:
-    The return value of fn.
-        """
+    result: the return value of fn.
+    """
     # Input validation
     if not callable(fn):
         raise TypeError('fn must be callable')
@@ -387,6 +390,12 @@ def run_with_time_bar(fn, duration_s, desc, *args, **kwargs):
     stop = threading.Event()
 
     def progress():
+        """
+        Update the time progress bar until ``stop`` is set.
+
+        Returns:
+        None
+        """
         start = time.monotonic()
         with tqdm(
             total = duration_s, 
@@ -414,7 +423,6 @@ def run_with_time_bar(fn, duration_s, desc, *args, **kwargs):
         t.join()
 
 
-
 def combine_figures_vertically_legacy(fig1, fig2, dpi = 200):
     """
     Combine two matplotlib figures vertically for saving as a single file
@@ -425,7 +433,9 @@ def combine_figures_vertically_legacy(fig1, fig2, dpi = 200):
     Returns:
     fig (pyplot.figure): combined figure
     """
-    with save_figure_to_memory_legacy(fig1) as buf1, save_figure_to_memory_legacy(fig2) as buf2:
+    import matplotlib.pyplot as plt
+    with save_figure_to_memory_legacy(fig1) as buf1, \
+            save_figure_to_memory_legacy(fig2) as buf2:
         plt.close(fig1)
         plt.close(fig2)
         fig, axs = plt.subplots(2, 1, dpi = dpi, layout = 'tight')
@@ -436,26 +446,6 @@ def combine_figures_vertically_legacy(fig1, fig2, dpi = 200):
         fig.tight_layout()
     return fig
 
-def combine_figures_horizontally_legacy(fig1, fig2, dpi = 200):
-    """
-    Combine two matplotlib figures horizontally for saving as a single file
-
-    Parameters:
-    fig1, fig2 (pyplot.figure): figures to combine
-
-    Returns:
-    fig (pyplot.figure): combined figure
-    """
-    with save_figure_to_memory_legacy(fig1) as buf1, save_figure_to_memory_legacy(fig2) as buf2:
-        plt.close(fig1)
-        plt.close(fig2)
-        fig, axs = plt.subplots(1, 2, dpi = dpi, layout = 'tight')
-        for ax in axs:
-            ax.set_axis_off()
-        axs[0].imshow(plt.imread(buf1))
-        axs[1].imshow(plt.imread(buf2))
-        fig.tight_layout()
-    return fig
 
 def save_figure_to_memory_legacy(fig):
     """

@@ -1,5 +1,5 @@
 """
-Interactive panel for the fixed-theta x-calibration steps ('ts-fixed_theta').
+Interactive panel for the fixed-theta x-calibration steps ('ts_fixed_theta').
 
 Covers two linked analysis steps:
 
@@ -7,23 +7,23 @@ Covers two linked analysis steps:
        least a fixed offset above its minimum and below its maximum
     7. fit_x_theta               — fits a polynomial x vs theta calibration
 
-Plots
------
-Left   : ``20*log10(|zf_rmv|)`` vs ``ff``, colored by the mask (blue =
-         included, orange = excluded).
-Middle : IQ loop — ``zf_cent`` colored by the mask, with the timestream
-         ``zt_cent`` overlaid (light green).
-Right  : x vs theta — ``xf`` vs ``thetaf`` colored by the mask, the timestream
-         ``xt`` vs ``thetat`` (light green) and the polynomial fit (red), with
-         two dashed lines at the edges of the theta band. Drag them to change
-         the offsets.
+Plots:
+- Left: ``20*log10(|zf_rmv|)`` vs ``ff``, colored by the mask (blue =
+  included, orange = excluded).
+- Middle: IQ loop: ``zf_cent`` colored by the mask, with the timestream
+  ``zt_cent`` overlaid (light green).
+- Right: x vs theta: ``xf`` vs ``thetaf`` colored by the mask, the timestream
+  ``xt`` vs ``thetat`` (light green) and the polynomial fit (red), with two
+  dashed lines at the edges of the theta band. Drag them to change the
+  offsets.
 
 The mask colors follow the offsets as you change them; click Run to apply.
 
-User parameters
----------------
-``xcal_theta_min_offset``  float — rad up from the minimum of thetaf (0.2)
-``xcal_theta_max_offset``  float — rad down from the maximum of thetaf (0.2)
+User parameters:
+xcal_theta_min_offset (float): rad up from the minimum of thetaf. Default
+    0.2.
+xcal_theta_max_offset (float): rad down from the maximum of thetaf. Default
+    0.2.
 """
 
 import numpy as np
@@ -177,6 +177,18 @@ class XCalFixedThetaPanel(StepPanel):
         ts = pg.mkBrush(160, 220, 160, 120)    # timestream (light green)
 
         def scatter(plot, brush, size, name):
+            """
+            Add a scatter-only data item to a plot.
+
+            Parameters:
+            plot (pg.PlotItem): Plot to add it to.
+            brush (QBrush): Symbol brush.
+            size (int): Symbol size.
+            name (str): Legend name.
+
+            Returns:
+            item (pg.PlotDataItem): The new data item.
+            """
             return plot.plot(pen=None, symbolBrush=brush, symbolPen=None,
                              symbolSize=size, name=name)
 
@@ -265,7 +277,7 @@ class XCalFixedThetaPanel(StepPanel):
     def update_plots(self):
         """Plot the sweep, timestream, fit and mask of the current row."""
         di = self.data_idx
-        arrays = self._plot_cache.pop(di, None)
+        arrays = self._pop_plot_cache()
         if arrays is None:
             try:
                 arrays = _load_arrays(self.AR.DS, di)
@@ -305,10 +317,17 @@ class XCalFixedThetaPanel(StepPanel):
             self._plot_iq.autoRange()
             self._range_xcal()
 
-    def prefetch_plot_data(self, di: int):
-        """Load the plot data of row *di* in the background prefetch thread."""
+    def prefetch_plot_data(self, di: int, AR=None):
+        """
+        Load the plot data of row *di* in the background prefetch thread.
+
+        Parameters:
+        di (int): Data index to prefetch.
+        AR (AnalysisRunner or None): Runner to read from (None: ``self.AR``).
+        """
+        AR = self.AR if AR is None else AR
         try:
-            self._plot_cache[di] = _load_arrays(self.AR.DS, di)
+            self._plot_cache[self._cache_key(AR, di)] = _load_arrays(AR.DS, di)
         except Exception:
             pass
 

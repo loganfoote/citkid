@@ -123,16 +123,16 @@ templates are in `citkid/pipeline/templates/` and can be given by alias:
 
 | Alias | Calibration YAML | Analysis YAML | Use |
 |---|---|---|---|
-| `'ts'` | `cal-ts.yaml` | `ts_analysis.yaml` | On-resonance timestreams: gain, circle, x calibration, PSDs |
-| `'ts-fixed_theta'` | `cal-ts.yaml` | `ts-fixed_theta_analysis.yaml` | As `'ts'`, but the x calibration mask is a fixed theta range |
-| `'ts_offres'` | `cal-offres.yaml` | `ts_offres_analysis.yaml` | Off-resonance timestreams (no circle fit) |
-| `'iq'` | `cal-iqonly.yaml` | `iq_analysis.yaml` | Target sweeps only: gain and nonlinear IQ fit |
+| `'ts'` | `cal_ts.yaml` | `analysis_ts.yaml` | On-resonance timestreams: gain, circle, x calibration, PSDs |
+| `'ts_fixed_theta'` | `cal_ts.yaml` | `analysis_ts_fixed_theta.yaml` | As `'ts'`, but the x calibration mask is a fixed theta range |
+| `'ts_offres'` | `cal_ts_offres.yaml` | `analysis_ts_offres.yaml` | Off-resonance timestreams (no circle fit) |
+| `'iq'` | `cal_iq.yaml` | `analysis_iq.yaml` | Target sweeps only: gain and nonlinear IQ fit |
 
 Anything that isn't an alias must be a path ending in `.yaml` or `.yml`.
 
 ### Calibration YAML
 
-The calibration YAML is a tree. This is `cal-ts.yaml`:
+The calibration YAML is a tree. This is `cal_ts.yaml`:
 
 ```yaml
 CAL_STEPS:
@@ -167,7 +167,7 @@ CAL_STEPS:
             task: get_sxx_reduced
     F_STEPS:
       1:
-        task: load_data_f # must be sorted on axis 1
+        task: load_sweep_f # must be sorted on axis 1
       2:
         task: rmv_gain_f
       3:
@@ -178,7 +178,7 @@ CAL_STEPS:
         task: get_xf
     G_STEPS:
       1:
-        task: load_data_g
+        task: load_sweep_g
 ```
 
 Rules (checked by `framework.check_pl_tree_structure`):
@@ -196,7 +196,7 @@ Rules (checked by `framework.check_pl_tree_structure`):
 step that outputs it: every step before it in its own sequence, every
 ancestor, and each ancestor's earlier siblings (but not their branches).
 For `xf` in the tree above the path is `load_global_data`,
-`load_global_res_data`, `load_data_f`, `rmv_gain_f`, `center_f`,
+`load_global_res_data`, `load_sweep_f`, `rmv_gain_f`, `center_f`,
 `get_thetaf`, `get_xf`, even though `get_xf` itself only needs `ff` and
 `ft`. Inputs that aren't on the path (here `ft`) are produced through their
 own paths when the step asks for them. Put independent chains in separate
@@ -207,7 +207,7 @@ see a path.
 ### Analysis YAML
 
 The analysis YAML is a flat, ordered list under `ANALYSIS_STEPS` (the only
-allowed key), with optional `params` per step. This is `ts_analysis.yaml`:
+allowed key), with optional `params` per step. This is `analysis_ts.yaml`:
 
 ```yaml
 ANALYSIS_STEPS:
@@ -259,7 +259,7 @@ Calibration steps:
 |---|---|---|---|
 | `rmv_gain_f` / `rmv_gain_t` | `xcal.gain.remove_gain` | `ff`/`ft`, `zf`/`zt`, `p_amp`, `p_phase` | `zf_rmv` / `zt_rmv` |
 | `center_f` / `center_t` | `xcal.circle.cent_rot_s21` | `zf_rmv`/`zt_rmv`, `circ_origin`, `theta_phase_offset` | `zf_cent` / `zt_cent` |
-| `rotate_offres_f` / `rotate_offres_t` | `cent_rot_s21` with origin 0 | `zf_rmv`/`zt_rmv`, `theta_phase_offset` | `zf_cent` / `zt_cent` |
+| `rotate_f_offres` / `rotate_t_offres` | `cent_rot_s21` with origin 0 | `zf_rmv`/`zt_rmv`, `theta_phase_offset` | `zf_cent` / `zt_cent` |
 | `get_thetaf` | `xcal.circle.convert_to_theta` (unwrapped at `idx_t`) | `zf_cent`, `idx_t` | `thetaf` |
 | `get_thetat` | `convert_to_theta` | `zt_cent` | `thetat` |
 | `get_xf` | `xcal.xcal.calc_x` | `ff`, `ft` | `xf` |
@@ -271,7 +271,7 @@ Calibration steps:
 | `get_sfactor_reduced` | `xcal.reduced_params.get_sfactor_reduced_default_freqs` | `f_sparper`, `spar`, `sper` | `sfactor_0p1`, ..., `sfactor_300` |
 
 All are per-row. The loading steps (`load_global_data`,
-`load_global_res_data`, `load_data_f`, `load_data_g`, `load_ft`,
+`load_global_res_data`, `load_sweep_f`, `load_sweep_g`, `load_ft`,
 `load_zt`) are not built in: you provide them (see
 [Custom steps](#custom-steps)).
 
@@ -299,8 +299,8 @@ mix degrees across datasets).
 
 You write the steps that load your raw data, and optionally extra
 calibration or analysis steps, in a Python file. Start from
-`templates/custom_steps_template.py` (timestreams) or
-`templates/custom_steps_iqonly_template.py` (target sweeps only). The file
+`templates/custom_steps_ts.py` (timestreams) or
+`templates/custom_steps_iq.py` (target sweeps only). The file
 must define `custom_cal_steps` (a list of `plStep`), and may define
 `custom_analysis_steps`:
 
@@ -326,13 +326,13 @@ def load_global_res_data():
     return (root['fres'][...], root['qres'][...], root['ares'][...],
             root['res_idxs'][...])
 
-def load_data_f(data_idx):
+def load_sweep_f(data_idx):
     ff = np.array(root['f'][data_idx, :])
     zf = np.array(root['z'][data_idx, :])
     idx = np.argsort(ff)              # sweeps must be sorted by frequency
     return ff[idx], zf[idx]
 
-def load_data_g(data_idx):
+def load_sweep_g(data_idx):
     fg = np.array(root['f'][data_idx, :])
     zg = np.array(root['z'][data_idx, :])
     idx = np.argsort(fg)
@@ -343,8 +343,8 @@ custom_cal_steps = [
            [], ['fres_all', 'qres_all', 'nrows'], 'global'),
     plStep('load_global_res_data', load_global_res_data,
            [], ['fres', 'qres', 'ares', 'res_idxs'], 'global-res'),
-    plStep('load_data_f', load_data_f, ['data_idx'], ['ff', 'zf'], 'per-row'),
-    plStep('load_data_g', load_data_g, ['data_idx'], ['fg', 'zg'], 'per-row'),
+    plStep('load_sweep_f', load_sweep_f, ['data_idx'], ['ff', 'zf'], 'per-row'),
+    plStep('load_sweep_g', load_sweep_g, ['data_idx'], ['fg', 'zg'], 'per-row'),
 ]
 custom_analysis_steps = []
 ```
@@ -599,7 +599,7 @@ run_ts_analysis(AR, start_idx = 0, data_idxs = on_res,
 | Launcher | Panels | For |
 |---|---|---|
 | `run_iq_analysis` | gain fit, IQ fit | `'iq'` |
-| `run_ts_analysis` | gain fit, circle fit, x calibration | `'ts'`, `'ts-fixed_theta'` |
+| `run_ts_analysis` | gain fit, circle fit, x calibration | `'ts'`, `'ts_fixed_theta'` |
 | `run_iq_ts_analysis` | the `run_ts_analysis` panels, then IQ fit | `'ts'` plus an IQ fit |
 | `run_gain_only_analysis` | gain fit | e.g. `'ts_offres'` |
 | `run_interactive(AR, panels = None, ...)` | one panel per step of `AR.path`, or your grouping | any analysis |
@@ -675,19 +675,6 @@ and `notebooks/ts_series.ipynb`.
 
 ## Limitations of the templates
 
-Some calibration steps in the templates need outputs that the matching
-analysis template never produces. They fail if you access them; the rest of
-the calibration works.
-
-- `cal-iqonly.yaml` (`'iq'`): of the `F_STEPS`, only `load_data_f` and
-  `rmv_gain_f` (`zf_rmv`) work. `center_f` needs `circ_origin` and
-  `theta_phase_offset`, `get_thetaf` needs `idx_t`, and `get_xf` needs
-  `ft`; `iq_analysis.yaml` produces none of these, and the IQ calibration
-  loads no `ft`. Because of the path order, `xf` fails at `center_f`.
-- `cal-offres.yaml` (`'ts_offres'`): `get_sparper` needs `circ_radius`,
-  which `ts_offres_analysis.yaml` doesn't produce (there is no circle fit
-  off resonance), so `f_sparper`, `spar`, `sper` and the `sfactor_*`
-  outputs are unavailable.
 - `fit_x_theta` is fixed at degree 3 (see [Built-in steps](#built-in-steps)).
 
 ## Common errors
@@ -711,12 +698,49 @@ explicitly, ...`** `execute_step` needs an output of an earlier analysis
 step that doesn't exist for these rows. Run the earlier steps first (or
 `execute_path` from that step).
 
+**`Provided calibration YAML does not match the dataset definition.`**
+(or the analysis YAML, or custom steps). A dataset stores its YAML and
+custom steps and compares them, as text, with any `cal_yaml_path`,
+`analysis_yaml_path` or `custom_path` you pass. If the citkid templates or
+your custom file changed since the dataset was created, they no longer
+match. To reopen an existing dataset, pass only `zarr_path` (and
+`custom_main_dir_overwrite` if the data moved), so the stored definition is
+used.
+
+**`Step 'rotate_offres_t' has been renamed to 'rotate_t_offres'`.** The
+dataset was created before citkid renamed some built-in steps (listed in
+`citkid.pipeline.migrate.RENAMED_STEPS`). Update it once, while nothing
+else has it open:
+
+```python
+from citkid.pipeline import migrate_step_names
+migrate_step_names(zarr_path, dry_run = True)  # prints the planned changes
+migrate_step_names(zarr_path)
+```
+
+This renames the steps in the stored YAML, the `step_name` labels of saved
+parameters and the `_failures` records, and keeps the original YAML in the
+dataset metadata (`before_step_rename_cal_yaml`). Migrated datasets can't be
+opened by citkid versions from before the rename. If the old name comes
+from your own YAML file, rename the task there instead.
+
+**`Step 'load_data_f' has been renamed to 'load_sweep_f' in the
+templates`.** The template loaders `load_data_f`/`_g` are now
+`load_sweep_f`/`_g`; use the new names in your YAML. (Old datasets don't
+need updating for these: they store their own custom steps, which still
+define the old names.)
+
+**`Step 'load_sweep_f' not found, but the custom steps define
+'load_data_f', its old name`.** Your custom-steps file was copied from an
+older template. Rename the step (and its function) in that file to the new
+name to use it with the current templates.
+
 **`Step 'x' requires parameter 'y', but it is not available`.** No step
 produces `y` and it isn't stored. Check the spelling in `plStep`, and that
 the step producing it is in the YAML.
 
 **`Parameter 'ff' is missing rows [0] and cannot be produced, because
-calibration step 'load_data_f' failed for data_idx 0: ...`.** A
+calibration step 'load_sweep_f' failed for data_idx 0: ...`.** A
 calibration step raised. The message includes the traceback into your
 function and a summary of its inputs (type, shape, dtype). Run
 `DS.check_cal(0)` for a full report.

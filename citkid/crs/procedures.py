@@ -77,7 +77,7 @@ async def target_sweep(
                 npoints = npoints_rough,
                 nsamps = nsamps,
                 ch_map = ch_map,
-                dec_grp = grpr,
+                acq_cfg_grp = grpr,
                 verbose = verbose,
                 pbar_description = 'Rough sweep',
             )
@@ -119,7 +119,7 @@ async def target_sweep(
                 npoints = npoints_gain,
                 nsamps = nsamps,
                 ch_map = ch_map,
-                dec_grp = grpg,
+                acq_cfg_grp = grpg,
                 verbose = verbose,
                 pbar_description = 'Gain sweep',
             )
@@ -139,7 +139,7 @@ async def target_sweep(
                 npoints = npoints_fine,
                 nsamps = nsamps,
                 ch_map = ch_map,
-                dec_grp = grpf,
+                acq_cfg_grp = grpf,
                 verbose = verbose,
                 pbar_description = 'Fine sweep',
             )
@@ -319,6 +319,19 @@ def _validate_target_sweep_inputs(
     if not isinstance(grp, zarr.core.group.Group):
         raise TypeError("grp must be a zarr Group instance.")
     def zarr_key_exists_check(grp, name):
+        """
+        Raise an error if a Zarr group already contains a key.
+
+        Parameters:
+        grp (zarr.Group): Zarr group to check.
+        name (str): key to look for.
+
+        Returns:
+        None
+
+        Raises:
+        ValueError: if ``name`` is in ``grp``.
+        """
         if name in grp:
             raise ValueError(f"Zarr group already contains dataset '{name}'.")
     for name in ['ares', 'qres', 'res_idxs', 'fres']:

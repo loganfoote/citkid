@@ -100,7 +100,8 @@ def test_fit_gain_full_cut_warns_nan():
     assert mask.shape == f.shape and (~mask).all()
 
 @pytest.mark.parametrize("fr_spans", [
-    [(14.5, 29)],                    # leading cut: points 0-29 removed (more than are left)
+    # leading cut: points 0-29 removed (more than are left)
+    [(14.5, 29)],
     [(15, 6), (35, 6)],              # two interior cuts
     [(3, 7), (25, 4), (45, 3)],      # leading, interior, and trailing cuts
 ])
@@ -109,7 +110,8 @@ def test_fit_gain_phase_with_cuts(fr_spans):
     # cuts are (a leading cut used to leave no data and return NaN)
     f = np.arange(50, dtype = np.float64)
     p_amp_exp, p_phase_exp = [0, 0.1, -20], [0.05, 0.3]
-    z = 10 ** (np.polyval(p_amp_exp, f) / 20) * np.exp(1j * np.polyval(p_phase_exp, f))
+    z = (10 ** (np.polyval(p_amp_exp, f) / 20)
+         * np.exp(1j * np.polyval(p_phase_exp, f)))
     p_amp, p_phase, mask = gain.fit_gain(f, z, fr_spans)
     np.testing.assert_allclose(p_amp, p_amp_exp, atol = 1e-9)
     np.testing.assert_allclose(p_phase, p_phase_exp, atol = 1e-9)
@@ -122,7 +124,9 @@ def test_fit_gain_phase_runs_do_not_straddle_cuts():
     phase = 0.05 * f + 0.3 + 0.4 * (f > 14) + 0.4 * (f > 32)
     z = np.exp(1j * phase)
     p_amp, p_phase, mask = gain.fit_gain(f, z, fr_spans)
-    np.testing.assert_equal(np.flatnonzero(~mask), [10, 11, 12, 13, 14, 30, 31, 32])
+    np.testing.assert_equal(
+        np.flatnonzero(~mask), [10, 11, 12, 13, 14, 30, 31, 32]
+    )
     np.testing.assert_allclose(p_phase[0], 0.05, atol = 1e-9)
 
 @pytest.mark.parametrize("f,z,fr_spans", [

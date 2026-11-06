@@ -1,11 +1,9 @@
 """
 IQ-data utilities for citkid.
 
-Functions
----------
-density_subsample
-    Subsample a complex IQ array while preserving density in sparse tail
-    regions, using PCA-guided inverse-density weighting.
+Functions:
+density_subsample: subsample a complex IQ array while preserving density in
+    sparse tail regions, using PCA-guided inverse-density weighting.
 """
 
 import numpy as np

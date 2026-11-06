@@ -35,7 +35,7 @@ def test_plot_circle_invalid_input(z, A, B, R):
 
 ################################################################################
 ################################ plot_gain_fit #################################
-################################################################################    
+################################################################################
 @pytest.mark.parametrize("f,z,mask,p_amp,p_phase", [
     ([1, 2, 3, 4], [1 + 1j, 2 + 2j, 3 + 3j, 4 + 4j], [True, True, False, True],
      [0, 0, 0], [0, 1])
@@ -85,27 +85,37 @@ def test_plots_draw_into_given_axes():
     f = np.linspace(1e9, 1.001e9, 50)
     z = np.exp(1j * np.linspace(0, 3, 50))
     zt = np.exp(1j * np.random.default_rng(0).normal(0, 0.01, 20_000))
-    out_fig, out_axs = plot.plot_s21(f, z, zt=zt, axs=axs[0, :2], max_points=300)
+    out_fig, out_axs = plot.plot_s21(
+        f, z, zt=zt, axs=axs[0, :2], max_points=300
+    )
     assert out_fig is fig and list(out_axs) == list(axs[0, :2])
     noise = [l for l in axs[0, 1].lines if l.get_label() == 'Noise'][0]
     assert len(noise.get_xdata()) == 300
-    out_fig, out_ax = plot.plot_circfit(z, 0, 1, zt=zt, ax=axs[0, 2], max_points=None)
+    out_fig, out_ax = plot.plot_circfit(
+        z, 0, 1, zt=zt, ax=axs[0, 2], max_points=None
+    )
     assert out_ax is axs[0, 2] and len(out_ax.lines[-1].get_xdata()) == 20_000
     thetat = np.angle(zt)
-    out_fig, out_axs = plot.plot_xcal(np.angle(z), np.angle(z) * 1e-6, z, np.ones(50, bool),
-                                      [1e-6, 0], thetat=thetat, zt_cent=zt, std_cutoff=2,
-                                      axs=axs[1, :2], max_points=1000)
+    out_fig, out_axs = plot.plot_xcal(
+        np.angle(z), np.angle(z) * 1e-6, z, np.ones(50, bool), [1e-6, 0],
+        thetat=thetat, zt_cent=zt, std_cutoff=2, axs=axs[1, :2],
+        max_points=1000
+    )
     # timestream points drawn in both plots: 1000 in total, split by the cutoff
     n_theta = sum(len(l.get_xdata()) for l in axs[1, 0].lines[2:])
     n_iq = sum(len(l.get_xdata()) for l in axs[1, 1].lines[2:4])
     assert n_theta == n_iq == 1000
     with pytest.raises(ValueError, match='expected 2 axes'):
-        plot.plot_gain_fit(f, z, np.ones(50, bool), [0, 0, 0], [0, 0], axs=axs[1, 2])
+        plot.plot_gain_fit(
+            f, z, np.ones(50, bool), [0, 0, 0], [0, 0], axs=axs[1, 2]
+        )
     plt.close(fig)
 
 
 def test_nonlinear_iq_fit_plot_with_failed_fit():
-    """A failed fit (NaN parameters) still plots the data, centered on the sweep."""
+    """
+    A failed fit (NaN parameters) still plots the data, centered on the sweep.
+    """
     f = np.linspace(1e9, 1.001e9, 50)
     z = np.exp(1j * np.linspace(0, 3, 50))
     fig, axs = plot.plot_nonlinear_iq_fit(f, z, np.full(8, np.nan), None)

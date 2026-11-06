@@ -7,7 +7,7 @@ For each resonator (data_idx), displays:
            a ``|S21|`` waterfall for all series indices.
   - Right: GainFitPanel + IQFitPanel driven by the selected series index.
 
-One :class:`~citkid.pipeline.analysis.AnalysisRunner` is created per series
+One ``citkid.pipeline.analysis.AnalysisRunner`` is created per series
 index.  Each runner manages its own DataSet, storing results in a dedicated
 zarr subgroup (``series_000/``, ``series_001/``, …).
 
@@ -15,10 +15,7 @@ Unlike pipeline.interactive (which uses runs), pipeline has a single active
 state per series index. Re-running a step automatically invalidates downstream
 outputs.
 
-Usage
------
-::
-
+Examples:
     import zarr
     from citkid.pipeline.interactive.iq_series import run_iq_series
 
@@ -38,8 +35,7 @@ Usage
         data_idxs=[0, 3, 7],  # optional subset of resonators; None = all
     )
 
-Keyboard shortcuts
-------------------
+Keyboard shortcuts:
 A / ←       previous resonator
 D / →       next resonator
 W / ↑       previous series index
@@ -52,8 +48,7 @@ Ctrl+⇧B     mark the selected series point and all points with larger x bad
 Shift+N     run panel N only
 H           show / hide the help dialog
 
-Mouse (series plot)
--------------------
+Mouse (series plot):
 Click a point   select that series point
 Shift+click     with ``y_target``: choose the x under the cursor for this
                 resonator, instead of the x its fit gives
@@ -72,7 +67,8 @@ from ..dataset import DataSet, _io_lock_for, _retry_io, reopen_group
 from ...res.mask import nearby_tone_mask
 from ...res.util import qi_qc
 from ..framework import LazyAttr
-from ..series_xy_fit import SeriesXYFit, SeriesXYFitStore  # noqa: F401 (SeriesXYFit re-exported)
+# SeriesXYFit is re-exported.
+from ..series_xy_fit import SeriesXYFit, SeriesXYFitStore  # noqa: F401
 from ...qt_compat import (
     TITLE_BAR_MARGIN,
     Qt as _Qt,
@@ -258,7 +254,8 @@ class SeriesValues:
         """
         values = np.asarray(values, dtype=float)
         if values.ndim != 1 or values.size == 0:
-            raise ValueError('series values must be a non-empty 1-D list of numbers')
+            raise ValueError(
+                'series values must be a non-empty 1-D list of numbers')
         self.values = values
 
     def __len__(self):
@@ -288,7 +285,8 @@ class SeriesValues:
         Raises:
         TypeError: Always.
         """
-        raise TypeError('SeriesValues are looked up by series index, not by runner')
+        raise TypeError(
+            'SeriesValues are looked up by series index, not by runner')
 
 
 def _check_series_values(getter, n_series):
@@ -304,7 +302,8 @@ def _check_series_values(getter, n_series):
     """
     if isinstance(getter, SeriesValues) and len(getter) != n_series:
         raise ValueError(
-            f'series values have {len(getter)} entries but there are {n_series} series points')
+            f'series values have {len(getter)} entries but there are '
+            f'{n_series} series points')
 
 
 def dataset_quantity(name):
@@ -353,6 +352,14 @@ class _ChosenXLabel(pg.InfLineLabel):
     """
 
     def __init__(self, line, to_value, **kwds):
+        """
+        Store the value converter and initialize the label.
+
+        Parameters:
+        line (pg.InfiniteLine): The line.
+        to_value (callable): Plot coordinate to data value converter.
+        **kwds: ``pg.InfLineLabel`` arguments.
+        """
         self._to_value = to_value   # before the base class formats the label
         super().__init__(line, **kwds)
 
@@ -362,7 +369,8 @@ class _ChosenXLabel(pg.InfLineLabel):
         """
         if not self.isVisible():
             return
-        self.setText(self.format.format(value=self._to_value(self.line.value())))
+        self.setText(
+            self.format.format(value=self._to_value(self.line.value())))
         self.updatePosition()
 
 
@@ -390,7 +398,6 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         each (series_idx, data_idx) pair to get the scatter y value.  Return
         ``None`` if the result is not yet available.
     y_name (str): Label for the y-axis of the series plot.
-    start_series_idx (int): Initial series index. Default 0.
     start_idx (int or None): Position in ``data_idxs`` to start at (not a
         ``data_idx``), clamped to the valid range, regardless of the saved
         state. None (default) resumes the last session (see
@@ -487,9 +494,9 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
     _MARK_BAD_ABOVE = True
 
     def __init__(
-        self, ARs, x_param_name, x_name, y_func, y_name, start_series_idx=0,
-        start_idx=None, data_idxs=None, title="IQ Series", ui_scale=1.0,
-        plot_scale=1.0, parent=None, state_group=None, xy_fit=None, panels=None,
+        self, ARs, x_param_name, x_name, y_func, y_name, start_idx=None,
+        data_idxs=None, title="IQ Series", ui_scale=1.0, plot_scale=1.0,
+        parent=None, state_group=None, xy_fit=None, panels=None,
         precompute_values=False, background_fitting=False, x_values=None,
         xscale='linear', yscale='linear', hold_series_point=False,
         mask_nearby_tones=False, y_target=None,
@@ -501,7 +508,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         """
         for name, scale in (('xscale', xscale), ('yscale', yscale)):
             if scale not in _AXIS_SCALES:
-                raise ValueError(f"{name} must be one of {_AXIS_SCALES}; got {scale!r}")
+                raise ValueError(
+                    f"{name} must be one of {_AXIS_SCALES}; got {scale!r}")
         if y_target is not None and xy_fit is None:
             raise ValueError('y_target needs an xy_fit to choose x from')
         super().__init__(parent)
@@ -519,23 +527,28 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._y_key = y_name
         self._x_getter = dataset_quantity(x_param_name)
         if x_values is not None:
-            self._x_getter = x_values if isinstance(x_values, SeriesValues) else SeriesValues(x_values)
+            self._x_getter = (
+                x_values if isinstance(x_values, SeriesValues)
+                else SeriesValues(x_values))
             self._x_key = f'series values: {x_name}'
         _check_series_values(self._x_getter, len(self._ARs))
         _check_series_values(self._y_func, len(self._ARs))
-        self._panel_spec = list(panels) if panels is not None else list(_IQ_PANELS)
+        self._panel_spec = (
+            list(panels) if panels is not None else list(_IQ_PANELS))
         self._precompute_values = bool(precompute_values)
         self._background_fitting = bool(background_fitting)
         # Buffer writes during the session; restored in closeEvent.
         self._original_write_buffer = []
         for AR in self._ARs:
-            self._original_write_buffer.append(getattr(AR.DS, 'write_buffer', False))
+            self._original_write_buffer.append(
+                getattr(AR.DS, 'write_buffer', False))
             AR.DS.write_buffer = True
         self._ui_scale = ui_scale
         self._plot_scale = plot_scale
         self._n_series = len(self._ARs)
 
-        self._series_idx: int | None = None  # nothing selected until user clicks
+        # Nothing selected until the user clicks.
+        self._series_idx: int | None = None
 
         try:
             self._nrows = int(self._ARs[0].DS.nrows)
@@ -565,11 +578,14 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._state_group = state_group
         self._state_lock = threading.Lock()
         state = self._load_state()
-        self._viewed_data_idxs: set[int] = set(state.get('viewed_data_idxs', []))
+        self._viewed_data_idxs: set[int] = set(
+            state.get('viewed_data_idxs', []))
         last_data_idx = state.get('last_data_idx')
-        # Rows already attempted for every series point (fitted, loaded, or failed).
-        # They are not fitted again automatically; the user can rerun panels.
-        self._initialized_data_idxs: set[int] = set(state.get('prefit_attempted', []))
+        # Rows already attempted for every series point (fitted, loaded, or
+        # failed). They are not fitted again automatically; the user can
+        # rerun panels.
+        self._initialized_data_idxs: set[int] = set(
+            state.get('prefit_attempted', []))
 
         # Optional y vs x fit, one per resonator
         self._xy_fit = xy_fit
@@ -579,8 +595,10 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             if group is not None:
                 group = reopen_group(group)
             else:
-                group = (state_group.require_group('xy_fit') if state_group is not None
-                         else zarr.open_group(zarr.storage.MemoryStore(), mode='w'))
+                group = (
+                    state_group.require_group('xy_fit')
+                    if state_group is not None
+                    else zarr.open_group(zarr.storage.MemoryStore(), mode='w'))
             store = SeriesXYFitStore(group, xy_fit, self._nrows, self._n_series)
             if not store.matches_definition():
                 if not _confirm_overwrite_xy_fit(store.describe_existing()):
@@ -682,6 +700,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                 lambda p=panel: self._run_through_panel(p.panel_index)
             )
             self._add_panel(panel)
+        self._update_panels_enabled()
 
         # ---- keyboard shortcuts ----
         for seq in ('D', 'Right'):
@@ -705,9 +724,11 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         # N: run panel N and all following ("Run +"). Shift+N: panel N only.
         for idx in range(1, 10):
             _sc = QtGui.QShortcut(QtGui.QKeySequence(str(idx)), self)
-            _sc.activated.connect(lambda _i=idx - 1: self._run_through_panel(_i))
+            _sc.activated.connect(
+                lambda _i=idx - 1: self._run_through_panel(_i))
             _sc_s = QtGui.QShortcut(QtGui.QKeySequence(f'Shift+{idx}'), self)
-            _sc_s.activated.connect(lambda _i=idx - 1: self._run_panel_by_index(_i))
+            _sc_s.activated.connect(
+                lambda _i=idx - 1: self._run_panel_by_index(_i))
 
         self._fit_to_screen(round(1400 * ui_scale))
         QtCore.QTimer.singleShot(0, self._auto_initialize_all)
@@ -732,7 +753,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         # font and width.
         self.ensurePolished()
         self.layout().activate()
-        fit_window_to_screen(self, frac=0.9, size=(width, 1), height_margin=TITLE_BAR_MARGIN)
+        fit_window_to_screen(self, frac=0.9, size=(width, 1),
+                             height_margin=TITLE_BAR_MARGIN)
         self._splitter.setSizes(self._splitter_sizes())
         geom = available_screen_geometry()
         plots = [w for panel in self.panels
@@ -740,7 +762,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         shrink_to_fit(self, self._content_height, plots, self._ui_scale,
                       geom.height() - TITLE_BAR_MARGIN, geom.width())
         self._splitter.setSizes(self._splitter_sizes())
-        fit_window_to_screen(self, frac=0.9, size=(self.width(), self._content_height()),
+        fit_window_to_screen(self, frac=0.9,
+                             size=(self.width(), self._content_height()),
                              height_margin=TITLE_BAR_MARGIN)
 
     def _splitter_sizes(self) -> list:
@@ -759,7 +782,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         # The splitter honours an explicit minimum width as well as the hint.
         plots = self._plots_widget
         plots_min = max(plots.minimumSizeHint().width(), plots.minimumWidth())
-        panels = max(round(0.6 * total), scroll_area_min_width(self._right_scroll))
+        panels = max(round(0.6 * total),
+                     scroll_area_min_width(self._right_scroll))
         panels = min(panels, total - plots_min)
         return [total - panels, panels]
 
@@ -777,8 +801,10 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             height, in logical pixels.
         """
         splitter_height = max(
-            scroll_area_content_height(self._right_scroll, width=self._splitter_sizes()[1]),
-            max(self._plots_widget.minimumSizeHint().height(), self._plots_widget.minimumHeight()),
+            scroll_area_content_height(self._right_scroll,
+                                       width=self._splitter_sizes()[1]),
+            max(self._plots_widget.minimumSizeHint().height(),
+                self._plots_widget.minimumHeight()),
         )
         return vbox_height_for_width(
             self.centralWidget().layout(), self.width(),
@@ -839,14 +865,17 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
         layout.addSpacing(16)
 
-        # Series selection — dropdown showing index + x value for each series point
-        self._series_combo_label = QtWidgets.QLabel(f'series index, {self._x_name}:')
+        # Series selection — dropdown showing index + x value for each series
+        # point
+        self._series_combo_label = QtWidgets.QLabel(
+            f'series index, {self._x_name}:')
         layout.addWidget(self._series_combo_label)
         self._series_combo = compact_combo(QtWidgets.QComboBox(), 16)
         for i in range(self._n_series):
             self._series_combo.addItem(f'{i + 1}, —')
         self._series_combo.setCurrentIndex(-1)  # nothing selected on startup
-        self._series_combo.currentIndexChanged.connect(self._on_series_combo_changed)
+        self._series_combo.currentIndexChanged.connect(
+            self._on_series_combo_changed)
         layout.addWidget(self._series_combo)
 
         self._add_toolbar_controls(layout)
@@ -854,7 +883,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         layout.addStretch()
 
         # Row 2: batch actions. Row 3: word-wrapping shortcut hints.
-        bad_above = '   [Ctrl+⇧B] mark bad above' if self._MARK_BAD_ABOVE else ''
+        bad_above = ('   [Ctrl+⇧B] mark bad above' if self._MARK_BAD_ABOVE
+                     else '')
         choose = '   [⇧click] choose x' if self._y_target is not None else ''
         self._hints_label = hint_label(
             '[A/D] resonator   [W/S] series point   [R] rescale   [B] mark bad'
@@ -864,7 +894,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
         apply_all_btn = QtWidgets.QPushButton('Apply to All')
         apply_all_btn.setToolTip(
-            'Apply current panel settings to every dataset in the active series and save'
+            'Apply current panel settings to every dataset in the active '
+            'series and save'
         )
         apply_all_btn.clicked.connect(self._apply_to_all)
         row2.addWidget(apply_all_btn)
@@ -879,8 +910,9 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         if self._MARK_BAD_ABOVE:
             mark_bad_above_btn = QtWidgets.QPushButton('Mark Bad Above')
             mark_bad_above_btn.setToolTip(
-                'Mark the selected series point and every point with a larger x '
-                f'({self._x_name}) as bad for the current resonator (Ctrl+Shift+B)'
+                'Mark the selected series point and every point with a '
+                f'larger x ({self._x_name}) as bad for the current resonator '
+                '(Ctrl+Shift+B)'
             )
             mark_bad_above_btn.clicked.connect(self._mark_bad_above)
             row2.addWidget(mark_bad_above_btn)
@@ -901,7 +933,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         layout.addWidget(self._apply_status_label, 1)
 
         self._prefetch_label = StatusLabel(min_width=110)
-        self._prefetch_label.setToolTip('Background prefetch status for the next resonator')
+        self._prefetch_label.setToolTip(
+            'Background prefetch status for the next resonator')
         layout.addWidget(self._prefetch_label)
 
         row2.addStretch(1)
@@ -966,7 +999,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                 ('Drag the line', 'Same as Shift+click'),
                 (f'target {self._y_name}', 'Edit and press Enter to recompute '
                                            "the fit's x for every data index"),
-                ('Reset', "Drop your choice for this data index; use the fit's x"),
+                ('Reset', 'Drop your choice for this data index; use the '
+                          "fit's x"),
             ]
         return [('Keyboard', keys), ('Toolbar', toolbar),
                 ('Series plot', series), PANEL_HELP, PLOT_HELP]
@@ -993,7 +1027,13 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         """
 
     def _build_series_plots(self) -> QtWidgets.QWidget:
-        """Build the left-side series-plot widget."""
+        """
+        Build the left-side series-plot widget.
+
+        Returns:
+        widget (QWidget): The series and waterfall plots, with any inputs
+            below them.
+        """
         gw = pg.GraphicsLayoutWidget()
         gw.setMinimumWidth(380)
 
@@ -1005,8 +1045,10 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         # Axes and the fit curve follow the log mode; the scatter points are
         # placed in log coordinates by _plot_coords. Also redraw when log
         # mode is toggled from the right-click menu.
-        self._plot_series.setLogMode(x=self._xscale == 'log', y=self._yscale == 'log')
-        for check in (self._plot_series.ctrl.logXCheck, self._plot_series.ctrl.logYCheck):
+        self._plot_series.setLogMode(x=self._xscale == 'log',
+                                     y=self._yscale == 'log')
+        for check in (self._plot_series.ctrl.logXCheck,
+                      self._plot_series.ctrl.logYCheck):
             check.toggled.connect(self._on_series_log_mode_changed)
 
         # One ScatterPlotItem per series index so each gets its own colour.
@@ -1057,18 +1099,22 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                 self._chosen_x_line, self._x_from_plot, text='{value:.4g}',
                 position=0.92, color=color)
             self._chosen_x_line.setVisible(False)
-            self._chosen_x_line.sigPositionChangeFinished.connect(self._on_chosen_x_dragged)
+            self._chosen_x_line.sigPositionChangeFinished.connect(
+                self._on_chosen_x_dragged)
             self._plot_series.addItem(self._chosen_x_line, ignoreBounds=True)
-            self._plot_series.scene().sigMouseClicked.connect(self._on_series_plot_clicked)
+            self._plot_series.scene().sigMouseClicked.connect(
+                self._on_series_plot_clicked)
 
         # Bottom: |S21| waterfall
-        self._plot_waterfall = gw.addPlot(row=1, col=0, title='|S21| Waterfall')
+        self._plot_waterfall = gw.addPlot(row=1, col=0,
+                                          title='|S21| Waterfall')
         self._plot_waterfall.setLabel('left', '|S21| + offset (dB)')
         self._plot_waterfall.setLabel('bottom', 'Frequency (Hz)')
         self._plot_waterfall.showGrid(x=True, y=True, alpha=0.3)
         self._waterfall_curves: list = []
 
-        scale_plot_fonts(self._ui_scale, self._plot_series, self._plot_waterfall)
+        scale_plot_fonts(self._ui_scale, self._plot_series,
+                         self._plot_waterfall)
 
         self._gw = gw
         self._plots_widget = gw
@@ -1103,11 +1149,12 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._y_target_edit = QtWidgets.QLineEdit(f'{self._y_target:.6g}')
         self._y_target_edit.setMaximumWidth(80)
         self._y_target_edit.setToolTip(
-            f'Target {self._y_name}; press Enter to recompute the x chosen from '
-            'each fit (not the ones you chose)')
+            f'Target {self._y_name}; press Enter to recompute the x chosen '
+            'from each fit (not the ones you chose)')
         self._y_target_edit.editingFinished.connect(self._on_y_target_edited)
         row.addWidget(self._y_target_edit)
-        self._chosen_status = StatusLabel()   # text changes mustn't resize the pane
+        # Text changes mustn't resize the pane.
+        self._chosen_status = StatusLabel()
         row.addWidget(self._chosen_status, 1)
         self._chosen_reset_btn = QtWidgets.QPushButton('Reset')
         self._chosen_reset_btn.setToolTip(
@@ -1127,7 +1174,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         box = QtWidgets.QWidget()
         grid = QtWidgets.QGridLayout(box)
         grid.setContentsMargins(4, 2, 4, 2)
-        self._guess_status = StatusLabel('xy fit guess')   # text changes mustn't resize the pane
+        # Text changes mustn't resize the pane.
+        self._guess_status = StatusLabel('xy fit guess')
         reset = QtWidgets.QPushButton('Reset')
         reset.setToolTip("Refit with the fit's own guess")
         reset.clicked.connect(self._reset_xy_guess)
@@ -1144,8 +1192,21 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         return box
 
     def eventFilter(self, obj, event):
-        if event.type() == QtCore.QEvent.Type.KeyPress and self.isActiveWindow():
-            if self._handle_modified_letter_shortcut(event.key(), event.modifiers()):
+        """
+        Intercept modified-letter key presses while this window is active.
+
+        Parameters:
+        obj (QObject): Object the event was sent to.
+        event (QEvent): The event.
+
+        Returns:
+        handled (bool): True if the event was handled here (and filtered
+            out).
+        """
+        if (event.type() == QtCore.QEvent.Type.KeyPress
+                and self.isActiveWindow()):
+            if self._handle_modified_letter_shortcut(event.key(),
+                                                     event.modifiers()):
                 return True
         return super().eventFilter(obj, event)
 
@@ -1182,6 +1243,13 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         return False
 
     def _add_panel(self, panel):
+        """
+        Add a panel to the panel stack, under a collapsible section header.
+
+        Parameters:
+        panel (StepPanel): The panel. A separator is added before it unless
+            it is the first panel.
+        """
         if self.panels:
             sep = QtWidgets.QFrame()
             sep.setFrameShape(QtWidgets.QFrame.Shape.HLine)
@@ -1231,7 +1299,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             }
             try:
                 with _io_lock_for(self._state_group):
-                    _retry_io(self._state_group.attrs.__setitem__, _STATE_ATTR, state)
+                    _retry_io(self._state_group.attrs.__setitem__,
+                              _STATE_ATTR, state)
             except Exception as exc:
                 print(f'Warning: could not save series window state: {exc}')
 
@@ -1249,7 +1318,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     def _mark_attempted(self, data_idx: int):
         """
-        Record that a row has been pre-fitted for every series point, and save it.
+        Record that a row has been pre-fitted for every series point, and
+        save it.
 
         Parameters:
         data_idx (int): Row that was fitted, loaded, or failed.
@@ -1265,7 +1335,11 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
 
     def _update_res_label(self):
-        self._res_label.setText(f'{self._nav_pos + 1} / {len(self._data_idxs)}')
+        """
+        Show the position in ``data_idxs`` (1-based) and its length.
+        """
+        self._res_label.setText(
+            f'{self._nav_pos + 1} / {len(self._data_idxs)}')
 
     def _update_series_combo_items(self, data_idx: int):
         """Repopulate every combo item text with the x value for *data_idx*."""
@@ -1277,12 +1351,39 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._series_combo.blockSignals(False)
 
     def _update_series_combo_selection(self):
-        """Sync the combo's selected index to self._series_idx."""
+        """
+        Sync the combo's selected index to ``self._series_idx``, and enable
+        the panels only while a series point is selected.
+        """
         self._series_combo.blockSignals(True)
         self._series_combo.setCurrentIndex(
             -1 if self._series_idx is None else self._series_idx
         )
         self._series_combo.blockSignals(False)
+        self._update_panels_enabled()
+
+    def _update_panels_enabled(self):
+        """
+        Enable the panels only while a series point is selected. Before
+        that, the panels hold a placeholder runner, and results run there
+        would never be saved.
+        """
+        enabled = self._series_idx is not None
+        for panel in getattr(self, 'panels', []):
+            panel.setEnabled(enabled)
+
+    def _require_series_point(self):
+        """
+        Check that a series point is selected, and say so in the status
+        label if not.
+
+        Returns:
+        selected (bool): True if a series point is selected.
+        """
+        if self._series_idx is not None:
+            return True
+        self._apply_status_label.setText('Select a series point first')
+        return False
 
     # ------------------------------------------------------------------
     # Navigation
@@ -1301,6 +1402,14 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             self._set_data_idx(new_di)
 
     def _advance_series(self, delta: int):
+        """
+        Move ``delta`` series points, clamped to the ends. With nothing
+        selected, moving forward starts at the first point and moving back
+        at the last.
+
+        Parameters:
+        delta (int): Number of series points to move (negative moves back).
+        """
         base = self._series_idx if self._series_idx is not None else (
             -1 if delta > 0 else self._n_series
         )
@@ -1342,11 +1451,22 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._hold_series_point = bool(checked)
 
     def _on_series_combo_changed(self, value: int):
+        """
+        Select the series point chosen in the series combo box.
+
+        Parameters:
+        value (int): New combo index (the series index).
+        """
         if value != self._series_idx:
             self._set_series_idx(value)
 
     def _set_data_idx(self, new_di: int):
-        """Change the active resonator, load/run data, and refresh the scatter."""
+        """
+        Change the active resonator, load/run data, and refresh the scatter.
+
+        Parameters:
+        new_di (int): New data index.
+        """
         if not self._confirm_stale_downstream_before_leave():
             self._data_idx_spin.blockSignals(True)
             self._data_idx_spin.setValue(self._data_idx)
@@ -1380,9 +1500,9 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             if hasattr(panel, '_marked_bad_label'):
                 panel._marked_bad_label.setText('')
 
-        # Silently run (or load) the full pipeline for every series runner at the
-        # new data_idx, so the scatter and waterfall are fully populated and
-        # the active panels can show results immediately.
+        # Silently run (or load) the full pipeline for every series runner at
+        # the new data_idx, so the scatter and waterfall are fully populated
+        # and the active panels can show results immediately.
         self._ensure_data_idx_initialized(new_di)
         self._update_series_combo_items(new_di)
         self._update_series_scatter()
@@ -1398,7 +1518,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             self._update_series_combo_selection()
             return
         self._wait_for_marks(self._data_idx)
-        self._save_dirty_panels()  # persist results for the outgoing series point
+        # Persist results for the outgoing series point.
+        self._save_dirty_panels()
         self._series_idx = new_si
         self._update_series_combo_selection()
 
@@ -1421,7 +1542,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         Select a series index by clicking its scatter point. Shift+click
         chooses an x instead (``_on_series_plot_clicked``).
         """
-        if not spots or (ev is not None and ev.modifiers() & _Qt.ShiftModifier):
+        if not spots or (ev is not None
+                         and ev.modifiers() & _Qt.ShiftModifier):
             return
         si = spots[0].data()
         if si is not None:
@@ -1472,6 +1594,10 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             self._forget_values(data_idx, changed)
 
     def _auto_initialize_all(self):
+        """
+        Initialize the starting row for every series point, draw the series
+        plots, and start the background fitting and prefetching.
+        """
         self._batch_init_all_series()
         self._update_series_combo_items(self._data_idx)
         self._update_series_scatter()
@@ -1501,25 +1627,24 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._prefetching_idx = next_di
         self._prefetch_status_changed.emit(f'\u27f3 prefetch {next_di}')
         ARs = list(self._ARs)
+        series_idx = self._series_idx
 
         def _worker():
+            """
+            Compute the next row's series values and panel plot data.
+            """
             try:
                 self._get_x_array(next_di)
                 self._get_y_array(next_di)
-                if self._series_idx is not None:
-                    active_ar = ARs[self._series_idx]
+                if series_idx is not None:
+                    # Pass the runner instead of swapping panel.AR, which
+                    # the GUI thread may be using
                     for panel in self.panels:
-                        old_ar = panel.AR
-                        old_di = panel.data_idx
-                        try:
-                            panel.AR = active_ar
-                            panel.data_idx = next_di
-                            panel.prefetch_plot_data(next_di)
-                        finally:
-                            panel.AR = old_ar
-                            panel.data_idx = old_di
+                        panel.prefetch_plot_data(
+                            next_di, AR=ARs[series_idx])
                 self._prefetched_idx = next_di
-                self._prefetch_status_changed.emit(f'\u2713 prefetch {next_di}')
+                self._prefetch_status_changed.emit(
+                    f'\u2713 prefetch {next_di}')
             except Exception as exc:
                 self._prefetch_status_changed.emit('')
                 print(f'[prefetch] data_idx={next_di} failed: {exc}')
@@ -1570,7 +1695,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._save_dirty_panels()
         self._save_state()
 
-        dialog = self._make_busy_dialog('Finishing background fit and saving…', 'Closing')
+        dialog = self._make_busy_dialog(
+            'Finishing background fit and saving…', 'Closing')
         dialog.show()
         QtWidgets.QApplication.processEvents()
         try:
@@ -1593,16 +1719,24 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     def _consolidate_storage(self):
         """
-        Merge buffered rows into the sharded zarr arrays for every series point.
+        Merge buffered rows into the sharded zarr arrays for every series
+        point.
         """
         for si, AR in enumerate(self._ARs):
             try:
                 AR.DS.consolidate_storage()
             except Exception as exc:
-                print(f'Warning: consolidating storage for series_idx={si} failed: {exc}. '
+                print(f'Warning: consolidating storage for series_idx={si} '
+                      f'failed: {exc}. '
                       'Call DS.consolidate_storage() to retry.')
 
     def _run_all_panels(self):
+        """
+        Run every panel in order for the selected series point, stopping at
+        the first failure, then refresh its scatter point.
+        """
+        if not self._require_series_point():
+            return
         for panel in self.panels:
             ok = panel.run_steps()
             if not ok:
@@ -1642,7 +1776,11 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
             def apply(AR=AR):
                 """
-                Run every panel's steps with the snapshot settings (no Qt calls).
+                Run every panel's steps with the snapshot settings (no Qt
+                calls).
+
+                Parameters:
+                AR (AnalysisRunner): Runner of the series point.
                 """
                 for step_params_list in panel_params:
                     for step, params in step_params_list:
@@ -1666,6 +1804,18 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._forget_values(di)
         self._update_series_scatter(rescale=True)
 
+        # The selected point's outputs were just recomputed and saved, so
+        # show them in its panels
+        for panel in self.panels:
+            panel._has_run = True
+            panel._needs_run = False
+            panel._dirty = False
+            try:
+                panel.refresh_plots()
+            except Exception as exc:
+                print(f'Apply to all: redrawing {panel.step_names} '
+                      f'failed: {exc}')
+
         if errors:
             self._apply_status_label.setText(
                 f'Done with {len(errors)} error(s)'
@@ -1674,12 +1824,26 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             self._apply_status_label.setText(f'Applied to all {total} ✓')
 
     def _run_panel_by_index(self, index: int):
-        if index >= len(self.panels):
+        """
+        Run only the panel at position ``index`` (0-based).
+
+        Parameters:
+        index (int): Panel position.
+        """
+        if index >= len(self.panels) or not self._require_series_point():
             return
         self._wait_for_marks(self._data_idx)
         self.panels[index].run_current()
 
     def _run_through_panel(self, index: int):
+        """
+        Run the panel at position ``index`` and every panel after it.
+
+        Parameters:
+        index (int): Position of the first panel to run (0-based).
+        """
+        if not self._require_series_point():
+            return
         self._wait_for_marks(self._data_idx)
         for panel in self.panels[index:]:
             panel.prepare_run()
@@ -1695,7 +1859,12 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._update_series_point(self._series_idx)
 
     def _on_panel_rerun(self, source_panel):
-        """Mark downstream panels stale, then refresh the current series point."""
+        """
+        Mark downstream panels stale, then refresh the current series point.
+
+        Parameters:
+        source_panel (StepPanel): Panel that was rerun.
+        """
         try:
             src_idx = self.panels.index(source_panel)
         except ValueError:
@@ -1706,7 +1875,10 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             self._update_series_point(self._series_idx)
 
     def _mark_all_bad(self):
-        """Mark every panel's outputs as NaN, clear their plots, and refresh scatter."""
+        """
+        Mark every panel's outputs as NaN, clear their plots, and refresh
+        the scatter.
+        """
         self._wait_for_marks(self._data_idx)
         for panel in self.panels:
             panel._write_nan_outputs(redraw=False)
@@ -1715,7 +1887,10 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             self._update_series_point(self._series_idx)
 
     def _mark_all_series_bad(self):
-        """Mark every panel's outputs as NaN for all series points at current data_idx."""
+        """
+        Mark every panel's outputs as NaN for all series points at the
+        current data_idx.
+        """
         self._mark_series_bad(range(self._n_series))
 
     def _mark_bad_above(self):
@@ -1739,7 +1914,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     def _mark_series_bad(self, series_idxs):
         """
-        Mark every panel's outputs as NaN for some series points at the current data_idx.
+        Mark every panel's outputs as NaN for some series points at the
+        current data_idx.
 
         The marks take effect in memory at once (plots and scatter update
         immediately), and are saved to zarr by a background writer, so the
@@ -1774,7 +1950,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         # nothing is selected).
         for panel, flags in zip(self.panels, old_flags):
             panel.AR = old_AR
-            if self._series_idx is not None and self._series_idx not in series_idxs:
+            if (self._series_idx is not None
+                    and self._series_idx not in series_idxs):
                 # The shown point wasn't marked: keep its unsaved/stale state.
                 panel._dirty, panel._has_run, panel._needs_run = flags
             if self._series_idx is None or self._series_idx in series_idxs:
@@ -1786,12 +1963,14 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         # Drop these points' cached values so the scatter refreshes
         self._forget_values(di, series_idxs)
         self._update_series_scatter(rescale=True)
-        self._apply_status_label.setText(f'Marked {total} series point(s) bad, saving…')
+        self._apply_status_label.setText(
+            f'Marked {total} series point(s) bad, saving…')
         # Last, so a save that finishes at once (its callback then runs here)
         # reports after the label above.
         future = self._mark_writer.submit(self._save_marks, jobs)
         self._pending_marks.setdefault(di, []).append(future)
-        future.add_done_callback(lambda _f, di=di: self._marks_saved.emit(f'{di}'))
+        future.add_done_callback(
+            lambda _f, di=di: self._marks_saved.emit(f'{di}'))
 
     @staticmethod
     def _save_marks(jobs):
@@ -1810,7 +1989,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                 job.run()
             except Exception as exc:
                 errors.append(f'series_idx={si}: {exc}')
-                print(f'Saving bad mark failed for series_idx={si}, data_idx={job.rows}: {exc}')
+                print(f'Saving bad mark failed for series_idx={si}, '
+                      f'data_idx={job.rows}: {exc}')
         return errors
 
     def _on_marks_saved(self, data_idx_text: str):
@@ -1830,7 +2010,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._pending_marks.pop(di, None)
         if errors:
             self._apply_status_label.setText(
-                f'Saving bad marks for data_idx {di} failed ({len(errors)}); see console')
+                f'Saving bad marks for data_idx {di} failed '
+                f'({len(errors)}); see console')
         elif not any(self._pending_marks.values()):
             self._apply_status_label.setText('Bad marks saved \u2713')
 
@@ -1844,10 +2025,13 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         show_dialog (bool): If True (default), show a busy dialog while
             waiting.
         """
-        rows = list(self._pending_marks) if data_idx is None else [int(data_idx)]
+        rows = (list(self._pending_marks) if data_idx is None
+                else [int(data_idx)])
         futures = [f for di in rows for f in self._pending_marks.get(di, [])]
         if not all(f.done() for f in futures):
-            dialog = self._make_busy_dialog('Saving bad marks\u2026', 'Saving') if show_dialog else None
+            dialog = (
+                self._make_busy_dialog('Saving bad marks\u2026', 'Saving')
+                if show_dialog else None)
             if dialog is not None:
                 dialog.show()
             try:
@@ -1863,7 +2047,15 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     def _runner_outputs_exist(self, AR, data_idx: int) -> bool:
         """
-        Return True when the final analysis-step outputs already exist for data_idx.
+        Return True when the final analysis-step outputs already exist for
+        data_idx.
+
+        Parameters:
+        AR (AnalysisRunner): Runner for one series index.
+        data_idx (int): Resonator index.
+
+        Returns:
+        exist (bool): True if every output of the last step is available.
         """
         if not getattr(AR, 'path', None):
             return False
@@ -1892,18 +2084,28 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         """
         try:
             final_step = AR.path[-1]['task']
-            masks = [AR.DS.saved_row_mask(name) for name in final_step.return_names]
+            masks = [AR.DS.saved_row_mask(name)
+                     for name in final_step.return_names]
         except Exception:
             return None
-        if not masks or not all(isinstance(mask, np.ndarray) for mask in masks):
+        if not masks or not all(isinstance(mask, np.ndarray)
+                                for mask in masks):
             return None
         return np.logical_and.reduce(masks)
 
     def _all_series_outputs_exist(self, data_idx: int) -> bool:
         """
-        Return True when every series runner already has final outputs for data_idx.
+        Return True when every series runner already has final outputs for
+        data_idx.
+
+        Parameters:
+        data_idx (int): Resonator index.
+
+        Returns:
+        exist (bool): True if every series point's outputs exist.
         """
-        return all(self._runner_outputs_exist(AR, data_idx) for AR in self._ARs)
+        return all(self._runner_outputs_exist(AR, data_idx)
+                   for AR in self._ARs)
 
     def _default_iq_mask(self, AR, data_idx):
         """
@@ -1920,10 +2122,15 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     def _initialize_runner_outputs(self, AR, data_idx: int):
         """
-        Ensure global-prefix analysis steps exist once, then run the per-row suffix.
+        Ensure global-prefix analysis steps exist once, then run the per-row
+        suffix.
 
         With ``mask_nearby_tones``, ``fit_iq`` runs with the row's default
         mask (``nearby_tone_iq_mask``) instead of the YAML ``iq_mask``.
+
+        Parameters:
+        AR (AnalysisRunner): Runner for one series index.
+        data_idx (int): Resonator index.
 
         Raises:
         RuntimeError: If a step fails for the row.
@@ -1974,10 +2181,12 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         """
         if not self._background_fitting:
             return
-        if self._init_all_thread is not None and self._init_all_thread.is_alive():
+        if (self._init_all_thread is not None
+                and self._init_all_thread.is_alive()):
             if self._restart_background:
                 # The worker may already be past its restart check; try again.
-                QtCore.QTimer.singleShot(500, self._start_background_initialize_remaining)
+                QtCore.QTimer.singleShot(
+                    500, self._start_background_initialize_remaining)
             return
 
         self._restart_background = False
@@ -1998,8 +2207,10 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                 rows = remaining
                 while True:
                     self._restart_background = False
-                    self._initialize_remaining_data_indices(self._worker_ars, rows)
-                    if self._init_all_stop.is_set() or not self._restart_background:
+                    self._initialize_remaining_data_indices(
+                        self._worker_ars, rows)
+                    if (self._init_all_stop.is_set()
+                            or not self._restart_background):
                         break
                     rows = self._remaining_rows()
             except Exception as exc:
@@ -2025,7 +2236,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         ordered = self._data_idxs[pos + 1:] + self._data_idxs[:pos]
         # Also revisit pre-fitted rows that still lack an xy fit (e.g. the
         # fit was added or overwritten after they were pre-fitted).
-        xy_fitted = self._xy_store.fitted_rows() if self._xy_store is not None else None
+        xy_fitted = (self._xy_store.fitted_rows()
+                     if self._xy_store is not None else None)
         return [
             di for di in ordered
             if di not in self._initialized_data_idxs
@@ -2055,10 +2267,12 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     def _compute_row_values(self, worker_ars, data_idx: int, store: bool):
         """
-        Compute the plotted x and y of every series point from the worker runners.
+        Compute the plotted x and y of every series point from the worker
+        runners.
 
         Parameters:
-        worker_ars (list of AnalysisRunner): One worker runner per series point.
+        worker_ars (list of AnalysisRunner): One worker runner per series
+            point.
         data_idx (int): Resonator index, pre-fitted for every series point.
         store (bool): If True, save the values to the value cache
             (overwriting older ones), unless the quantities changed meanwhile.
@@ -2068,8 +2282,10 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         """
         di = int(data_idx)
         keys = (self._x_key, self._y_key)
-        x = np.array([_nan_if_none(self._series_x(si, ar, di)) for si, ar in enumerate(worker_ars)])
-        y = np.array([self._series_y(si, ar, di) for si, ar in enumerate(worker_ars)])
+        x = np.array([_nan_if_none(self._series_x(si, ar, di))
+                      for si, ar in enumerate(worker_ars)])
+        y = np.array([self._series_y(si, ar, di)
+                      for si, ar in enumerate(worker_ars)])
         if store and keys == (self._x_key, self._y_key):
             for si in range(len(worker_ars)):
                 self._values[(keys[0], si, di)] = x[si]
@@ -2093,21 +2309,23 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         Synchronously initialize remaining resonators for all series runners.
 
         A failure for one (row, series) is printed and skipped rather than
-        stopping the loop. The stop flag is checked before each series point, so a
-        stop request waits for at most one fit. A row is marked attempted only
-        once every series point has been tried. Then its plotted values are computed
-        (with ``precompute_values``), its xy fit (if any) is computed and
-        saved, and its cached per-row data is released so memory doesn't grow
-        over the session. Rows attempted earlier only get the values and xy
-        fit they lack.
+        stopping the loop. The stop flag is checked before each series point,
+        so a stop request waits for at most one fit. A row is marked
+        attempted only once every series point has been tried. Then its
+        plotted values are computed (with ``precompute_values``), its xy fit
+        (if any) is computed and saved, and its cached per-row data is
+        released so memory doesn't grow over the session. Rows attempted
+        earlier only get the values and xy fit they lack.
 
         Parameters:
-        worker_ars (list of AnalysisRunner): One worker runner per series point.
+        worker_ars (list of AnalysisRunner): One worker runner per series
+            point.
         data_indices (list of int): Rows to initialize, in order.
         """
         # One zarr read per series point says which rows are already fitted.
         done_masks = [self._saved_output_rows(ar) for ar in worker_ars]
-        xy_fitted = self._xy_store.fitted_rows() if self._xy_store is not None else None
+        xy_fitted = (self._xy_store.fitted_rows()
+                     if self._xy_store is not None else None)
         for di in data_indices:
             di = int(di)
             if self._init_all_stop.is_set():
@@ -2128,15 +2346,18 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                     try:
                         self._initialize_runner_outputs(ar, di)
                     except Exception as exc:
-                        print(f'[init-all] data_idx={di}, series_idx={si} failed: '
+                        print(f'[init-all] data_idx={di}, series_idx={si} '
+                              'failed: '
                               f'{type(exc).__name__}: {exc}')
                 self._mark_attempted(di)
-            need_values = self._precompute_values and (fitted_now or self._row_values_missing(di))
+            need_values = self._precompute_values and (
+                fitted_now or self._row_values_missing(di))
             need_fit = self._xy_fit is not None and (
                 fitted_now or xy_fitted is None or not xy_fitted[di])
             if need_values or need_fit:
                 try:
-                    x, y = self._compute_row_values(worker_ars, di, store=need_values)
+                    x, y = self._compute_row_values(worker_ars, di,
+                                                    store=need_values)
                 except Exception as exc:
                     print(f'[init-all] values for data_idx={di} failed: '
                           f'{type(exc).__name__}: {exc}')
@@ -2153,7 +2374,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     def _ensure_data_idx_initialized(self, data_idx: int):
         """
-        Ensure that data_idx has been fully initialized before the user edits it.
+        Ensure that data_idx has been fully initialized before the user
+        edits it.
 
         Rows that were already attempted (including ones whose fits failed)
         are not fitted again, so revisiting a bad resonator doesn't block.
@@ -2173,7 +2395,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         dialog.show()
         QtWidgets.QApplication.processEvents()
         try:
-            if self._init_all_thread is not None and self._init_all_thread.is_alive():
+            if (self._init_all_thread is not None
+                    and self._init_all_thread.is_alive()):
                 while self._init_all_thread.is_alive():
                     self._init_all_thread.join(timeout=0.05)
                     QtWidgets.QApplication.processEvents()
@@ -2186,7 +2409,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     def _make_fitting_dialog(self, data_idx: int):
         """
-        Create a simple modal progress dialog for synchronous row initialization.
+        Create a simple modal progress dialog for synchronous row
+        initialization.
 
         Parameters:
         data_idx (int): Row being fitted.
@@ -2195,7 +2419,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         dialog (QProgressDialog): The dialog, not yet shown.
         """
         return self._make_busy_dialog(
-            f'Fitting data_idx {data_idx} across all series points…', 'Initializing Series'
+            f'Fitting data_idx {data_idx} across all series points…',
+            'Initializing Series'
         )
 
     def _make_busy_dialog(self, text: str, title: str):
@@ -2222,7 +2447,14 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     def _global_prefix_length(self, AR) -> int:
         """
-        Return the number of leading analysis steps with global/global-res func_type.
+        Return the number of leading analysis steps with global/global-res
+        func_type.
+
+        Parameters:
+        AR (AnalysisRunner): Runner whose path is checked.
+
+        Returns:
+        prefix_len (int): Number of leading global steps.
         """
         if not getattr(AR, 'path', None):
             return 0
@@ -2235,7 +2467,16 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     def _step_outputs_exist(self, AR, step, data_idx):
         """
-        Return True when every output for step already exists for the requested scope.
+        Return True when every output for step already exists for the
+        requested scope.
+
+        Parameters:
+        AR (AnalysisRunner): Runner whose DataSet is checked.
+        step (plStep): The step.
+        data_idx (int or None): Row to check; None for global steps.
+
+        Returns:
+        exist (bool): True if every output of the step is available.
         """
         for name in step.return_names:
             try:
@@ -2260,11 +2501,17 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                 start_index = self.panels.index(source_panel) + 1
             except ValueError:
                 start_index = 0
-        return [panel for panel in self.panels[start_index:] if getattr(panel, '_needs_run', False)]
+        return [panel for panel in self.panels[start_index:]
+                if getattr(panel, '_needs_run', False)]
 
     def _confirm_stale_downstream_before_leave(self):
         """
-        Ask before leaving the current state while downstream panels remain stale.
+        Ask before leaving the current state while downstream panels remain
+        stale.
+
+        Returns:
+        proceed (bool): True if no panel is stale or the user chose to
+            leave anyway.
         """
         stale = self._stale_panels_after()
         if not stale:
@@ -2273,9 +2520,11 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         reply = QtWidgets.QMessageBox.question(
             self,
             'Panels Need Run',
-            'Earlier panel changes invalidated later panel outputs for the current selection.\n\n'
+            'Earlier panel changes invalidated later panel outputs for the '
+            'current selection.\n\n'
             f'Panels needing a rerun: {names}\n\nLeave anyway?',
-            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
             QtWidgets.QMessageBox.StandardButton.No,
         )
         return reply == QtWidgets.QMessageBox.StandardButton.Yes
@@ -2291,14 +2540,19 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         reply = QtWidgets.QMessageBox.question(
             self,
             'Downstream Panels Need Run',
-            'Saving now will keep later panel outputs missing for the current series selection.\n\n'
+            'Saving now will keep later panel outputs missing for the '
+            'current series selection.\n\n'
             f'Panels needing a rerun: {names}\n\nContinue saving?',
-            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
             QtWidgets.QMessageBox.StandardButton.No,
         )
         return reply == QtWidgets.QMessageBox.StandardButton.Yes
 
     def _autoscale_all(self):
+        """
+        Auto-range every panel's plots and the series and waterfall plots.
+        """
         for panel in self.panels:
             panel.autoscale_plots()
         self._plot_series.autoRange()
@@ -2395,12 +2649,14 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
         Parameters:
         data_idx (int): Resonator index.
-        series_idxs (iterable of int or None): Series points to drop. None (default)
-            drops every series point.
+        series_idxs (iterable of int or None): Series points to drop. None
+            (default) drops every series point.
         """
         di = int(data_idx)
-        chosen = set(range(self._n_series) if series_idxs is None else (int(s) for s in series_idxs))
-        for cache_key in [k for k in list(self._values) if k[2] == di and k[1] in chosen]:
+        chosen = set(range(self._n_series) if series_idxs is None
+                     else (int(s) for s in series_idxs))
+        for cache_key in [k for k in list(self._values)
+                          if k[2] == di and k[1] in chosen]:
             self._values.pop(cache_key, None)
         for cache in (self._x_cache, self._y_cache):
             if di in cache:
@@ -2408,14 +2664,23 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                     cache[di][si] = np.nan
 
     def _get_x_array(self, data_idx: int) -> np.ndarray:
-        """Return x values for all series indices at *data_idx* (NaN if unavailable)."""
+        """
+        Return x values for all series indices at ``data_idx``.
+
+        Parameters:
+        data_idx (int): Resonator index.
+
+        Returns:
+        x (np.ndarray): One x per series index (NaN if unavailable).
+        """
         if data_idx not in self._x_cache:
             self._x_cache[data_idx] = np.full(self._n_series, np.nan)
         x = self._x_cache[data_idx]
         for i in range(self._n_series):
             if np.isnan(x[i]):
                 x[i] = self._cached_value(
-                    self._x_key, i, data_idx, lambda i=i: _nan_if_none(self._get_x_value(i, data_idx)))
+                    self._x_key, i, data_idx,
+                    lambda i=i: _nan_if_none(self._get_x_value(i, data_idx)))
         return x
 
     def _get_y_value(self, series_idx: int, data_idx: int) -> float:
@@ -2452,11 +2717,18 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         for i in range(self._n_series):
             if np.isnan(y[i]):
                 y[i] = self._cached_value(
-                    self._y_key, i, data_idx, lambda i=i: self._get_y_value(i, data_idx))
+                    self._y_key, i, data_idx,
+                    lambda i=i: self._get_y_value(i, data_idx))
         return y
 
     def _update_series_point(self, series_idx: int):
-        """Recompute x and y for *series_idx* at the current data_idx, and rescale."""
+        """
+        Recompute x and y for ``series_idx`` at the current data_idx, and
+        rescale.
+
+        Parameters:
+        series_idx (int): Series index.
+        """
         di = self._data_idx
         self._forget_values(di, [series_idx])
         for cache in (self._x_cache, self._y_cache):
@@ -2544,7 +2816,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             return None
         ctrl = self._plot_series.ctrl
         coords = []
-        for value, log in ((x, ctrl.logXCheck.isChecked()), (y, ctrl.logYCheck.isChecked())):
+        for value, log in ((x, ctrl.logXCheck.isChecked()),
+                           (y, ctrl.logYCheck.isChecked())):
             if not np.isfinite(value) or (log and value <= 0):
                 return None
             coords.append(float(np.log10(value)) if log else float(value))
@@ -2591,7 +2864,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         """
         xs, ys = self._xy_fit.curve(
             x, popt, log_x=self._plot_series.ctrl.logXCheck.isChecked())
-        self._xy_fit_curve.setData([] if xs is None else xs, [] if ys is None else ys)
+        self._xy_fit_curve.setData([] if xs is None else xs,
+                                   [] if ys is None else ys)
         if error is not None:
             detail = f'fit failed ({error})'
             self._apply_status_label.setText('xy fit failed')
@@ -2604,12 +2878,14 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             saved = self._xy_store.load(self._data_idx)
             user = saved is not None and saved.p0_user
             self._guess_status.setText(
-                'xy fit guess (yours; Reset for automatic)' if user else 'xy fit guess (automatic)')
+                'xy fit guess (yours; Reset for automatic)' if user
+                else 'xy fit guess (automatic)')
             for i, edit in enumerate(self._guess_edits):
                 edit.blockSignals(True)
                 edit.setText('' if p0 is None else f'{p0[i]:.6g}')
                 edit.blockSignals(False)
-            self._shown_guess = None if p0 is None else np.asarray(p0, dtype=float)
+            self._shown_guess = (None if p0 is None
+                                 else np.asarray(p0, dtype=float))
         self._update_chosen_x()
 
     def _on_xy_guess_edited(self):
@@ -2622,7 +2898,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         try:
             p0 = np.array([float(edit.text()) for edit in self._guess_edits])
         except ValueError:
-            self._apply_status_label.setText('xy fit guess: every input must be a number')
+            self._apply_status_label.setText(
+                'xy fit guess: every input must be a number')
             self._refresh_xy_fit()
             return
         shown = getattr(self, '_shown_guess', None)
@@ -2638,7 +2915,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     def _refit_xy(self, p0=None, reset_guess=False):
         """
-        Refit the open resonator with a given guess, or the fit's own, and show it.
+        Refit the open resonator with a given guess, or the fit's own, and
+        show it.
 
         Parameters:
         p0 (np.ndarray or None): the user's guess, or None.
@@ -2648,7 +2926,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         di = self._data_idx
         x = self._get_x_array(di).copy()
         y = self._get_y_array(di).copy()
-        popt, used, error = self._fit_and_save_xy(di, x, y, p0=p0, reset_guess=reset_guess)
+        popt, used, error = self._fit_and_save_xy(di, x, y, p0=p0,
+                                                  reset_guess=reset_guess)
         self._show_xy_fit(x, popt, used, error)
 
     def _fit_and_save_xy(self, data_idx: int, x, y, p0=None, reset_guess=False):
@@ -2693,7 +2972,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             used = p0  # keep the user's guess even if the fit couldn't run
         store.save(data_idx, x, y, popt, used, p0_user=user)
         if self._y_target is not None:
-            store.save_fit_chosen_x(self._fit_chosen_x(popt, x), data_idx=data_idx)
+            store.save_fit_chosen_x(self._fit_chosen_x(popt, x),
+                                    data_idx=data_idx)
         return popt, used, error
 
     def _fit_xy_in_background(self, worker_ars, data_idx: int, x=None, y=None):
@@ -2701,10 +2981,13 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         Fit and save one resonator's series data from the worker runners.
 
         Parameters:
-        worker_ars (list of AnalysisRunner): One worker runner per series point.
-        data_idx (int): Resonator index whose series points are all pre-fitted.
-        x, y (np.ndarray or None): Plotted values per series point, if already
-            computed. None (default) computes them from ``worker_ars``.
+        worker_ars (list of AnalysisRunner): One worker runner per series
+            point.
+        data_idx (int): Resonator index whose series points are all
+            pre-fitted.
+        x, y (np.ndarray or None): Plotted values per series point, if
+            already computed. None (default) computes them from
+            ``worker_ars``.
         """
         if self._xy_fit is None:
             return
@@ -2713,7 +2996,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         try:
             _, _, error = self._fit_and_save_xy(data_idx, x, y)
             if error is not None:
-                print(f'[init-all] xy fit for data_idx={data_idx} failed: {error}')
+                print(f'[init-all] xy fit for data_idx={data_idx} failed: '
+                      f'{error}')
         except Exception as exc:
             print(f'[init-all] saving xy fit for data_idx={data_idx} failed: '
                   f'{type(exc).__name__}: {exc}')
@@ -2765,7 +3049,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         Returns:
         x (float): the fit's x for the target, or NaN.
         """
-        return self._xy_fit.x_at_y(popt, self._y_target, x=x, log_x=self._xscale == 'log')
+        return self._xy_fit.x_at_y(popt, self._y_target, x=x,
+                                   log_x=self._xscale == 'log')
 
     def _recompute_fit_chosen_x(self):
         """
@@ -2795,11 +3080,12 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             line.setVisible(True)
             self._chosen_x_label.valueChanged()
         target = f'{self._y_name} = {self._y_target:.4g}'
-        how = ('Shift+click the series plot, or drag the vertical line, to choose '
-               f'the {self._x_name} yourself.')
+        how = ('Shift+click the series plot, or drag the vertical line, to '
+               f'choose the {self._x_name} yourself.')
         if user:
             text = f'{self._x_name} = {x:.4g}, chosen by you'
-            tip = f"Reset returns to the {self._x_name} at which the fit reaches {target}. {how}"
+            tip = (f"Reset returns to the {self._x_name} at which the fit "
+                   f"reaches {target}. {how}")
         elif np.isfinite(x):
             text = f'{self._x_name} = {x:.4g}, from the fit'
             tip = f'The {self._x_name} at which the fit reaches {target}. {how}'
@@ -2827,7 +3113,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         """
         di = self._data_idx
         saved = self._xy_store.load(di)
-        x = np.nan if saved is None else self._fit_chosen_x(saved.popt, saved.fit_x)
+        x = (np.nan if saved is None
+             else self._fit_chosen_x(saved.popt, saved.fit_x))
         self._xy_store.save_chosen_x(di, x, user=False)
         self._update_chosen_x()
 
@@ -2847,7 +3134,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         Parameters:
         ev (MouseClickEvent): the scene's click event.
         """
-        if ev.button() != _Qt.LeftButton or not (ev.modifiers() & _Qt.ShiftModifier):
+        if (ev.button() != _Qt.LeftButton
+                or not (ev.modifiers() & _Qt.ShiftModifier)):
             return
         vb = self._plot_series.vb
         pos = ev.scenePos()
@@ -2888,7 +3176,9 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             self._selected_marker.setData([coords[0]], [coords[1]])
 
     def _update_waterfall(self):
-        """Reload and redraw the ``|S21|`` waterfall for the current data_idx."""
+        """
+        Reload and redraw the ``|S21|`` waterfall for the current data_idx.
+        """
         for curve in self._waterfall_curves:
             self._plot_waterfall.removeItem(curve)
         self._waterfall_curves.clear()
@@ -2916,7 +3206,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 def run_iq_series(
     make_custom_steps=None, cal_yaml_path='iq', analysis_yaml_path='iq',
     root=None, n_series=None, x_param_name='ares', x_name=None,
-    y_param_name='a', start_series_idx=0, start_idx=None, data_idxs=None,
+    y_param_name='a', start_idx=None, data_idxs=None,
     title="IQ Series", ui_scale=1.0, plot_scale=1.0, xy_fit=None, datasets=None,
     x_values=None, xscale='linear', yscale='linear', hold_series_point=False,
     mask_nearby_tones=False, y_target=None,
@@ -2957,7 +3247,6 @@ def run_iq_series(
     y_param_name (str): Name of the fit parameter to plot on the series scatter.
         Must be one of ``['fr', 'Qr', 'amp', 'phi', 'a', 'Qc', 'Qi']``.
         ``Qc = Qr / amp`` and ``Qi = 1 / (1/Qr - 1/Qc)``. Default ``'a'``.
-    start_series_idx (int): Initial series index. Default 0.
     start_idx (int or None): Position in ``data_idxs`` to start at (not a
         ``data_idx``), regardless of the saved state. None (default)
         resumes the last session at the data index open when it closed, or
@@ -3043,6 +3332,17 @@ def run_iq_series(
     y_name = y_param_name
 
     def y_func(AR, data_idx):
+        """
+        Return ``y_param_name`` from one runner's IQ fit.
+
+        Parameters:
+        AR (AnalysisRunner): Runner for one series index.
+        data_idx (int): Resonator index.
+
+        Returns:
+        val (float or None): The parameter, or None if it is unavailable or
+            not finite.
+        """
         try:
             popt = np.asarray(AR.DS.iq_popt[data_idx], dtype=float)
             if y_param_name in _DIRECT:
@@ -3053,8 +3353,8 @@ def run_iq_series(
             return None if not np.isfinite(val) else float(val)
         except Exception:
             return None
-    ARs = series_runners(make_custom_steps, datasets, cal_yaml_path, analysis_yaml_path,
-                         root, n_series)
+    ARs = series_runners(make_custom_steps, datasets, cal_yaml_path,
+                         analysis_yaml_path, root, n_series)
     if x_name is None:
         x_name = 'x' if x_values is not None else x_param_name
 
@@ -3067,7 +3367,6 @@ def run_iq_series(
         x_values=x_values,
         y_func=y_func,
         y_name=y_name,
-        start_series_idx=start_series_idx,
         start_idx=start_idx,
         data_idxs=data_idxs,
         title=title,
@@ -3127,8 +3426,8 @@ def series_runners(
             raise ValueError('make_custom_steps requires root and n_series')
         if analysis_yaml_path is None:
             raise ValueError('make_custom_steps requires analysis_yaml_path')
-        return build_series_runners(make_custom_steps, cal_yaml_path, analysis_yaml_path,
-                                    root, n_series)
+        return build_series_runners(make_custom_steps, cal_yaml_path,
+                                    analysis_yaml_path, root, n_series)
     datasets = list(datasets)
     if not datasets:
         raise ValueError('datasets must contain at least one DataSet')
@@ -3136,7 +3435,8 @@ def series_runners(
     if bad:
         raise TypeError(f'datasets must be DataSet objects; got {bad}')
     if n_series is not None and int(n_series) != len(datasets):
-        raise ValueError(f'n_series ({n_series}) does not match len(datasets) ({len(datasets)})')
+        raise ValueError(f'n_series ({n_series}) does not match '
+                         f'len(datasets) ({len(datasets)})')
     # The window works from what is saved. Values cached in memory (e.g. from
     # an earlier session, or a store deleted and recreated since the
     # DataSets were opened) would otherwise count as done without being
@@ -3145,11 +3445,15 @@ def series_runners(
         ds.clear_cache()
     nrows = [int(ds.nrows) for ds in datasets]
     if len(set(nrows)) != 1:
-        raise ValueError(f'all datasets must have the same number of rows; got {nrows}')
-    return [AnalysisRunner(ds, analysis_yaml_path=analysis_yaml_path) for ds in datasets]
+        raise ValueError(
+            f'all datasets must have the same number of rows; got {nrows}')
+    return [AnalysisRunner(ds, analysis_yaml_path=analysis_yaml_path)
+            for ds in datasets]
 
 
-def build_series_runners(make_custom_steps, cal_yaml_path, analysis_yaml_path, root, n_series):
+def build_series_runners(
+    make_custom_steps, cal_yaml_path, analysis_yaml_path, root, n_series
+):
     """
     Build one buffered DataSet + AnalysisRunner per series index.
 

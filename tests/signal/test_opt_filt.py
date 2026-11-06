@@ -31,7 +31,8 @@ def test_create_opt_filt_valid_inputs(a, SJ, nfft):
     H = nfft * A.conj() / SJ / denom
     h_expected = __import__('pyfftw').interfaces.numpy_fft.irfft(H, n = nfft)
     h_expected = __import__('pyfftw').interfaces.numpy_fft.ifftshift(h_expected)
-    assert np.allclose(h_out, h_expected), "Output h does not match expected values"
+    assert np.allclose(h_out, h_expected), \
+        "Output h does not match expected values"
 
 @pytest.mark.parametrize("a, SJ, nfft", [
     (np.sin(np.linspace(0, np.pi / 2, 10)), np.ones(8), 8), # a longer than nfft

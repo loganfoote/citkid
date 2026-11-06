@@ -5,10 +5,8 @@ Tests set_nco, _set_nco macro, disable_modules, and _clear_channels methods.
 """
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch, Mock
+from unittest.mock import MagicMock, AsyncMock, patch
 import numpy as np
-
-from citkid.crs.instrument import CRS
 
 
 @pytest.fixture

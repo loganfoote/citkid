@@ -106,7 +106,8 @@ def run_steps(steps, data_idx = 0):
 
 def test_steps_load_set_and_sort(tmp_path):
     write_power_sweep(str(tmp_path / 's.zarr'), reverse_f = True)
-    out = run_steps(target_sweep_steps('s.zarr', 'set2', main_dir = str(tmp_path)))
+    out = run_steps(target_sweep_steps('s.zarr', 'set2',
+                                       main_dir = str(tmp_path)))
     assert out['nrows'] == 2
     np.testing.assert_array_equal(out['fres_all'], FRES)
     np.testing.assert_array_equal(out['ares'], [-42., -42.])
@@ -116,8 +117,8 @@ def test_steps_load_set_and_sort(tmp_path):
 
 def test_steps_f_avg_averages_fine_sweep(data_dir):
     raw = zarr.open_group(os.path.join(data_dir, 'sweep.zarr'), mode = 'r')
-    out = run_steps(target_sweep_steps('sweep.zarr', 'set0', main_dir = data_dir,
-                                       f_avg = 3))
+    out = run_steps(target_sweep_steps('sweep.zarr', 'set0',
+                                       main_dir = data_dir, f_avg = 3))
     n = NPTS // 3 * 3
     np.testing.assert_allclose(
         out['ff'], raw['set0/fine_sweep/f'][0, :n].reshape(-1, 3).mean(1))
@@ -136,7 +137,8 @@ def test_steps_fres_all_from_other_store_and_constant_qres(data_dir):
 
 
 def test_steps_default_fres_all_uses_set_tones(data_dir):
-    out = run_steps(target_sweep_steps('sweep.zarr', 'set0', main_dir = data_dir))
+    out = run_steps(target_sweep_steps('sweep.zarr', 'set0',
+                                       main_dir = data_dir))
     np.testing.assert_array_equal(out['fres_all'], FRES)
     np.testing.assert_array_equal(out['qres_all'], [QR / 12] * 2)
 
@@ -205,12 +207,13 @@ def test_steps_invalid_parameters(kwargs, match):
 ################################################################################
 
 def test_source_defines_steps_and_rejects_non_literals(data_dir):
-    source = target_sweep_source(data_dir, 'sweep.zarr', 'set0', f_avg = np.int64(2))
+    source = target_sweep_source(data_dir, 'sweep.zarr', 'set0',
+                                 f_avg = np.int64(2))
     namespace = {}
     exec(source, namespace)
     names = [s.name for s in namespace['custom_cal_steps']]
-    assert names == ['load_global_data', 'load_global_res_data', 'load_data_f',
-                     'load_data_g']
+    assert names == ['load_global_data', 'load_global_res_data', 'load_sweep_f',
+                     'load_sweep_g']
     assert 'f_avg = 2,' in source
     with pytest.raises(TypeError, match = 'fres_all'):
         target_sweep_source(data_dir, 'sweep.zarr', fres_all = np.ones(2))
@@ -473,14 +476,14 @@ def test_series_runners_rerun_after_the_store_was_deleted(data_dir, tmp_path):
 
 def test_ts_fixed_theta_analysis_end_to_end(data_dir, tmp_path):
     """
-    The 'ts-fixed_theta' analysis masks the x calibration at fixed theta
+    The 'ts_fixed_theta' analysis masks the x calibration at fixed theta
     offsets, and the noise calibration runs after it.
     """
     from citkid.xcal.xcal import get_xcal_mask_fixed_theta
     datasets = open_series_datasets(
         data_dir, 'sweep.zarr', str(tmp_path / 'out.zarr'), set_idxs = [0],
-        cal_yaml_path = 'ts-fixed_theta', ts = 'ts_00')
-    run_series_analysis(datasets, 'ts-fixed_theta', verbose = False)
+        cal_yaml_path = 'ts_fixed_theta', ts = 'ts_00')
+    run_series_analysis(datasets, 'ts_fixed_theta', verbose = False)
     DS = datasets[0]
     for di in range(2):
         thetaf = np.asarray(DS.thetaf[di])

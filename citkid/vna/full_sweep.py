@@ -343,6 +343,15 @@ def _final_unit(f, z, st, g, opts):
                     g = g[kept_g]
 
             def stage_b(a):
+                """
+                Run the Stage B joint fit starting from Stage A results.
+
+                Parameters:
+                a (dict): Stage A fit results.
+
+                Returns:
+                b (dict): Stage B fit results from ``fit_resonators``.
+                """
                 return fit_resonators(
                     fw, zw, a['fr'], a['Qr'], np.clip(a['amp'], 1e-3, 0.999),
                     a['phi'], gain_deg = deg, ext_fr = a['ext_fr'],
@@ -353,7 +362,17 @@ def _final_unit(f, z, st, g, opts):
                     downward = opts['downward'])
 
             def b_ok_of(a, b):
-                # Converged, not worse than Stage A, and no two poles merged
+                """
+                Check that Stage B converged, is not worse than Stage A, and
+                merged no two poles.
+
+                Parameters:
+                a (dict): Stage A fit results.
+                b (dict): Stage B fit results.
+
+                Returns:
+                ok (bool): True if the Stage B fit is acceptable.
+                """
                 o = np.argsort(b['fr'])
                 lw_s = (b['fr'] / b['Qr'])[o]
                 merged = np.any(np.diff(b['fr'][o]) < opts['dup_lw']
@@ -542,8 +561,18 @@ def _refine(
         n_workers = min(os.cpu_count() or 1, 4) if n >= 50 else 1
 
     def split(g, q, radius):
-        # Split a cluster by regrouping with smaller window radii until
-        # every subgroup has at most max_group members
+        """
+        Split a cluster by regrouping with smaller window radii until every
+        subgroup has at most ``max_group`` members.
+
+        Parameters:
+        g (np.array): indices of the cluster members.
+        q (np.array): Qr used for windows, per guess.
+        radius (float): window radius in linewidths.
+
+        Returns:
+        out (list): arrays of member indices, one per subgroup.
+        """
         if len(g) <= max_group:
             return [g]
         if radius < 0.25:
@@ -554,7 +583,16 @@ def _refine(
         return out
 
     def units(q):
-        # Fit units: groups of overlapping windows, large clusters split
+        """
+        Group active guesses into fit units: groups of overlapping windows,
+        with large clusters split.
+
+        Parameters:
+        q (np.array): Qr used for windows, per guess.
+
+        Returns:
+        out (list): arrays of member indices, one per unit.
+        """
         idx = np.flatnonzero(active)
         out = []
         for g in group_resonances(fr[idx], q[idx], n_lw):
@@ -562,7 +600,10 @@ def _refine(
         return out
 
     def mark_duplicates():
-        # Guesses that converged onto the same resonance: keep the first
+        """
+        Deactivate guesses that converged onto the same resonance, keeping
+        the first.
+        """
         idx = np.flatnonzero(active)
         idx = idx[np.argsort(fr[idx])]
         lw = fr[idx] / q_win[idx]
@@ -574,7 +615,16 @@ def _refine(
                 dup_of[drop] = keep
 
     def accept(members, res):
-        # Keep a fit only if it converged and no Qr ended at a bound
+        """
+        Keep a fit only if it converged and no Qr ended at a bound.
+
+        Parameters:
+        members (np.array): indices of the fit unit members.
+        res (dict): Stage A fit results.
+
+        Returns:
+        accepted (bool): True if the fit was kept.
+        """
         if res['success'] and not np.any(res['at_bound']):
             fr[members], Qr[members] = res['fr'], res['Qr']
             amp[members] = np.clip(res['amp'], 0, 1)
@@ -584,9 +634,14 @@ def _refine(
         return False
 
     def fit_unit(g):
-        # Joint Stage A fit of one unit; if it fails, fit the members one at
-        # a time (one bad pole otherwise drags every pole of the unit to a
-        # bound). A member still at a bound on its own is pinned.
+        """
+        Run the joint Stage A fit of one unit. If it fails, fit the members
+        one at a time (one bad pole otherwise drags every pole of the unit
+        to a bound). A member still at a bound on its own is pinned.
+
+        Parameters:
+        g (np.array): indices of the unit members.
+        """
         try:
             res = _stage_a(f, z, st, g, q_win[g], screen = True)[2]
         except Exception:
@@ -600,15 +655,26 @@ def _refine(
             pinned[g] = True
 
     def q_floor(q):
-        # Robust lower bound on Qr, below the distribution's low tail
+        """
+        Compute a robust lower bound on Qr, below the distribution's low
+        tail.
+
+        Parameters:
+        q (np.array): Qr values.
+
+        Returns:
+        floor (float): lower bound on Qr.
+        """
         q = q[np.isfinite(q)]
         med = np.median(q)
         core = q[q > 0.05 * med]
         return min(min_Qr_frac * med, 0.3 * np.quantile(core, 0.02))
 
     def update_q_win():
-        # Window/grouping Qr: the fitted Qr, or the sweep median if unknown,
-        # capped below at 0.5 x min_Qr_frac x median
+        """
+        Update the window/grouping Qr in place: the fitted Qr, or the sweep
+        median if unknown, capped below at 0.5 x min_Qr_frac x median.
+        """
         q_ref = np.nanmedian(Qr) if np.any(np.isfinite(Qr)) else 1e4
         q_min = max(bounds[0], 0.5 * min_Qr_frac * q_ref)
         q_win[:] = np.where(np.isfinite(Qr), np.maximum(Qr, q_min), q_ref)

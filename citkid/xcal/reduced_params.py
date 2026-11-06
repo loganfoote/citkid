@@ -119,6 +119,15 @@ def get_sxx_reduced_default_freqs(f, sxx):
         'sxx_0p3', 'sxx_1', etc.
     """
     def _compute(freq):
+        """
+        Compute the reduced Sxx at one frequency.
+
+        Parameters:
+        freq (float): frequency in Hz.
+
+        Returns:
+        sxx_freq (float): mean Sxx near freq, or NaN if there is no data.
+        """
         try:
             return get_sxx_reduced(f, sxx, freq)
         except ValueError:
@@ -141,6 +150,16 @@ def get_sfactor_reduced_default_freqs(f, spar, sper):
         'sfactor_0p1', 'sfactor_0p3', 'sfactor_1', etc.
     """
     def _compute(freq):
+        """
+        Compute the reduced spar - sper at one frequency.
+
+        Parameters:
+        freq (float): frequency in Hz.
+
+        Returns:
+        sfactor_freq (float): mean spar - sper near freq, or NaN if there is
+            no data.
+        """
         try:
             return get_sfactor(f, spar, sper, freq)
         except ValueError:

@@ -24,7 +24,7 @@ _PIPELINE_DIR = os.path.dirname(os.path.abspath(__file__))
 _INTERNAL_FILES = {os.path.normcase(os.path.join(_PIPELINE_DIR, name))
                    for name in ("framework.py", "check.py", "dataset.py")}
 
-# Template parameter names (see templates/custom_steps_template.py) and what
+# Template parameter names (see templates/custom_steps_ts.py) and what
 # the default calibration steps expect of them.
 _REAL_SWEEP_FREQS = ("ff", "fg")
 _COMPLEX_1D = ("zf", "zg", "zt")
@@ -45,7 +45,8 @@ def _user_traceback(exc):
     """
     tbe = traceback.TracebackException.from_exception(exc)
     frames = [f for f in tbe.stack
-              if os.path.normcase(os.path.abspath(f.filename)) not in _INTERNAL_FILES]
+              if os.path.normcase(os.path.abspath(f.filename))
+              not in _INTERNAL_FILES]
     if not frames:
         return None
     tbe.stack = traceback.StackSummary.from_list(frames)
@@ -69,15 +70,16 @@ def _structure_problems(step, out, nrows):
         value = out["nrows"]
         if not (np.ndim(value) == 0 and np.isreal(value)
                 and float(np.real(value)).is_integer() and value >= 0):
-            problems.append(f"nrows = {pf.describe_value(value)}, but nrows must be a whole "
-                            f"number (the number of rows).")
+            problems.append(f"nrows = {pf.describe_value(value)}, but nrows "
+                            f"must be a whole number (the number of rows).")
     if step.func_type == "global-res" and nrows is not None:
         for name, value in out.items():
             length = len(value) if np.ndim(value) > 0 else None
             if length != nrows:
                 problems.append(
-                    f"'{name}' is {pf.describe_value(value)}, but a global-res step must "
-                    f"return one entry per resonator: length nrows = {nrows} along axis 0.")
+                    f"'{name}' is {pf.describe_value(value)}, but a "
+                    f"global-res step must return one entry per resonator: "
+                    f"length nrows = {nrows} along axis 0.")
     return problems
 
 
@@ -96,11 +98,12 @@ def _template_warnings(row_values):
         if name in row_values:
             f = np.asarray(row_values[name])
             if f.ndim != 1 or np.iscomplexobj(f):
-                found.append(f"'{name}' should be a real 1-D frequency array; got "
-                             f"{pf.describe_value(f)}.")
+                found.append(f"'{name}' should be a real 1-D frequency "
+                             f"array; got {pf.describe_value(f)}.")
             elif len(f) > 1 and not np.all(np.diff(f) > 0):
-                found.append(f"'{name}' should be sorted in increasing order (the default "
-                             f"calibration steps assume sorted sweeps).")
+                found.append(f"'{name}' should be sorted in increasing "
+                             f"order (the default calibration steps assume "
+                             f"sorted sweeps).")
     for name in _COMPLEX_1D:
         if name in row_values:
             z = np.asarray(row_values[name])
@@ -112,8 +115,8 @@ def _template_warnings(row_values):
             f_shape = np.shape(row_values[f_name])
             z_shape = np.shape(row_values[z_name])
             if f_shape != z_shape:
-                found.append(f"'{f_name}' {f_shape} and '{z_name}' {z_shape} should have the "
-                             f"same shape.")
+                found.append(f"'{f_name}' {f_shape} and '{z_name}' "
+                             f"{z_shape} should have the same shape.")
     return found
 
 
@@ -162,7 +165,8 @@ def check_calibration(DS, data_idx=0, verbose=True):
     """
     data_idx = int(data_idx)
     steps = _flatten_pipeline_steps(DS.cal_pl)
-    produced_by = {name: step.name for step in steps for name in step.return_names}
+    produced_by = {name: step.name for step in steps
+                   for name in step.return_names}
     global_values, row_values = {}, {}
     unavailable = {}  # output name -> (root step, its status) that blocks it
     results = []
@@ -198,7 +202,8 @@ def check_calibration(DS, data_idx=0, verbose=True):
             if name in unavailable:
                 root, root_status = unavailable[name]
                 status = "skipped"
-                reason = (f"after failed step '{root}'" if root_status == "failed"
+                reason = (f"after failed step '{root}'"
+                          if root_status == "failed"
                           else f"after '{root}' (needs analysis)")
                 break
             if name not in produced_by:
@@ -206,29 +211,39 @@ def check_calibration(DS, data_idx=0, verbose=True):
                     value = _row_value(getattr(DS, name), data_idx)
                 except Exception:
                     root, status = step.name, "needs analysis"
-                    reason = (f"needs '{name}', an analysis output the dataset doesn't have "
-                              f"for data_idx {data_idx}; run the analysis for this row to "
-                              f"check this step")
+                    reason = (f"needs '{name}', an analysis output the "
+                              f"dataset doesn't have for data_idx {data_idx}; "
+                              f"run the analysis for this row to check this "
+                              f"step")
                     break
-                params.append([value])
-                is_global.append(False)
-                result["inputs"][name] = pf.describe_value(value) + " (from the dataset)"
+                if isinstance(getattr(DS, name), pf.LazyAttr):
+                    params.append([value])
+                    is_global.append(False)
+                else:  # a global value, e.g. fr_spans from the analysis
+                    params.append(value)
+                    is_global.append(True)
+                result["inputs"][name] = (pf.describe_value(value)
+                                          + " (from the dataset)")
                 continue
             root, status = step.name, "failed"
-            reason = f"needs '{name}', which step '{produced_by[name]}' produces later"
+            reason = (f"needs '{name}', which step '{produced_by[name]}' "
+                      f"produces later")
             break
         if reason is not None:
             result["status"] = status
             result["messages"].append(reason)
-            # Later steps needing these outputs are blocked by the same root step.
-            blocker = (root, root_status) if status == "skipped" else (step.name, status)
+            # Later steps needing these outputs are blocked by the same root
+            # step.
+            blocker = ((root, root_status) if status == "skipped"
+                       else (step.name, status))
             unavailable.update({name: blocker for name in step.return_names})
             continue
 
         start = time.perf_counter()
         try:
             out = step._run(params, is_global)
-            problems = _structure_problems(step, out, global_values.get("nrows"))
+            problems = _structure_problems(step, out,
+                                           global_values.get("nrows"))
             if problems:
                 raise ValueError(" ".join(problems))
         except Exception as exc:
@@ -236,7 +251,8 @@ def check_calibration(DS, data_idx=0, verbose=True):
             result["status"] = "failed"
             result["error"] = f"{type(exc).__name__}: {exc}"
             result["traceback"] = _user_traceback(exc)
-            unavailable.update({name: (step.name, "failed") for name in step.return_names})
+            unavailable.update({name: (step.name, "failed")
+                                for name in step.return_names})
             continue
         result["seconds"] = time.perf_counter() - start
 
@@ -248,8 +264,9 @@ def check_calibration(DS, data_idx=0, verbose=True):
             elif step.func_type == "global-res":
                 row_values[name] = value[data_idx]
                 produced[name] = value[data_idx]
-                result["outputs"][name] = (f"{pf.describe_value(value[data_idx])} "
-                                           f"(row {data_idx} of {pf.describe_value(value)})")
+                result["outputs"][name] = (
+                    f"{pf.describe_value(value[data_idx])} "
+                    f"(row {data_idx} of {pf.describe_value(value)})")
                 continue
             else:
                 row_values[name] = value[0]
@@ -279,28 +296,38 @@ def format_check_report(results, data_idx):
     labels = {"ok": "ok", "warning": "WARNING", "failed": "FAILED",
               "needs analysis": "analysis", "skipped": "skipped"}
     name_width = max((len(r["step"]) for r in results), default=10)
-    lines = [f"Calibration check for data_idx {data_idx} ({len(results)} steps)"]
+    lines = [f"Calibration check for data_idx {data_idx} "
+             f"({len(results)} steps)"]
     for r in results:
-        seconds = f"{r['seconds']:6.2f} s" if r["status"] in ("ok", "warning", "failed") else " " * 8
+        seconds = (f"{r['seconds']:6.2f} s"
+                   if r["status"] in ("ok", "warning", "failed") else " " * 8)
         if r["status"] == "skipped":
-            lines.append(f"  {labels[r['status']]:<8} {r['step']:<{name_width}}  "
-                         f"{r['func_type']:<10} {seconds}  ({r['messages'][0]})")
+            lines.append(f"  {labels[r['status']]:<8} "
+                         f"{r['step']:<{name_width}}  "
+                         f"{r['func_type']:<10} {seconds}  "
+                         f"({r['messages'][0]})")
             continue
         lines.append(f"  {labels[r['status']]:<8} {r['step']:<{name_width}}  "
                      f"{r['func_type']:<10} {seconds}  {r['function']}")
         indent = " " * 11
         if r["status"] in ("failed", "warning") and r["inputs"]:
-            lines.append(indent + "inputs:  " + ", ".join(f"{k} = {v}" for k, v in r["inputs"].items()))
+            lines.append(indent + "inputs:  " + ", ".join(
+                f"{k} = {v}" for k, v in r["inputs"].items()))
         if r["outputs"]:
-            lines.append(indent + "outputs: " + ", ".join(f"{k} = {v}" for k, v in r["outputs"].items()))
+            lines.append(indent + "outputs: " + ", ".join(
+                f"{k} = {v}" for k, v in r["outputs"].items()))
         for message in r["messages"]:
             lines.append(indent + message)
         if r["error"]:
             lines.append(indent + r["error"])
             if r["traceback"]:
-                lines.extend(indent + "  " + line for line in r["traceback"].rstrip().splitlines())
-    counts = {status: sum(r["status"] == status for r in results) for status in labels}
-    lines.append(f"Summary: {counts['ok']} ok, {counts['warning']} with warnings, "
-                 f"{counts['failed']} failed, {counts['needs analysis']} need analysis "
+                lines.extend(
+                    indent + "  " + line
+                    for line in r["traceback"].rstrip().splitlines())
+    counts = {status: sum(r["status"] == status for r in results)
+              for status in labels}
+    lines.append(f"Summary: {counts['ok']} ok, {counts['warning']} with "
+                 f"warnings, {counts['failed']} failed, "
+                 f"{counts['needs analysis']} need analysis "
                  f"outputs, {counts['skipped']} skipped")
     return "\n".join(lines)

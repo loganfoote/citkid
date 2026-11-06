@@ -35,38 +35,35 @@ dependencies = [
   "numpy>=1.26.4",
   "scipy>=1.16.3",
   "numba>=0.62.1",
+  # FFTs inside numba-compiled functions (citkid.res.generator)
+  "rocket-fft>=0.3.1",
   "pyfftw>=0.15.1",
 
-  # Plotting / widgets / UI
+  # Plotting / UI
   "matplotlib>=3.10.8",
-  "ipympl>=0.9.8",
-  "ipywidgets>=8.1.8",
+  "pillow>=12.3.0",
   "pyqtgraph>=0.13.7",
   "pyqt5>=5.15.11",
 
-  # Notebook environment
-  "jupyterlab>=4.5.0",
+  # Data handling
   "tqdm>=4.67.1",
   "pandas>=2.3.3",
-
-  # Domain-specific libraries
-  "emcee>=3.1.6",
-  "corner>=2.2.3",
-  "paramiko>=4.0.0",
   "zarr>=3.1.5",
+  "pyyaml>=6.0.3",
   "psutil>=7.2.2",
 
-  # Dev/test tools
-  "pytest>=9.0.1",
-
-  # Runtime dependencies installed via pip in conda env
-  "redis>=3.5.3",
+  # Instruments (paramiko is used by citkid.primecam)
+  "paramiko>=4.0.0",
   "rfmux>=1.4.1",
 ]
 
 [project.optional-dependencies]
 # CNN resonance finder for full VNA sweeps (citkid.vna.res_finder_cnn)
 cnn = ["torch>=2.13.0"]
+# Running the tests
+dev = ["pytest>=9.0.1", "pytest-asyncio>=1.4.0", "pytest-cov>=7.1.0"]
+# Running the example notebooks
+notebooks = ["jupyterlab>=4.5.0"]
 
 [project.urls]
 "Homepage" = "https://github.com/loganfoote/citkid"

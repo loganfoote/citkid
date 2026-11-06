@@ -26,8 +26,9 @@ m = "x,N_comp,N_iter,dt,lowpass_params,highpass_params"
 def test_calc_cm(
     x, N_comp, N_iter, dt, lowpass_params, highpass_params
 ):
-    a, A, sig_iter, a_full = corr.calc_cm(x, N_comp, N_iter, dt, lowpass_params, 
-                                          highpass_params)
+    a, A, sig_iter, a_full = corr.calc_cm(
+        x, N_comp, N_iter, dt, lowpass_params, highpass_params
+    )
     # check shapes
     assert a.shape == (x.shape[0], N_comp)
     assert A.shape == (N_comp, x.shape[1])
@@ -50,6 +51,23 @@ def test_calc_cm_sig_iter_is_sigma_of_highpassed_residual():
     sig = corr.calc_sig(corr.highpass_filter(xc - a @ A, dt, *hp))
     np.testing.assert_allclose(sig_iter[0], np.repeat(sig, 1, axis = 1))
     assert 1.0 < np.median(sig_iter) < 4.0  # sigma ~ 3, not 9
+
+def test_calc_cm_without_highpass():
+    """
+    Check that highpass_params = None runs (as documented) and skips the
+    highpass: with a single iteration, sig_iter is the RMS of the
+    unfiltered residual.
+    """
+    rng = np.random.default_rng(3)
+    xs = rng.normal(size = (4, 1000))
+    dt, lp = 0.01, (1.0, 4)
+    a, A0, sig_iter, a_full = corr.calc_cm(xs, 1, 1, dt, lp, None)
+
+    assert a.shape == (4, 1) and A0.shape == (1, 1000)
+    assert a_full.shape == (4, 4)
+    xc = xs - xs.mean(axis = 1)[:, np.newaxis]
+    A = corr.lowpass_filter(A0, dt, *lp)
+    np.testing.assert_allclose(sig_iter[0], corr.calc_sig(xc - a @ A))
 
 @pytest.mark.parametrize(m, [
     # invalid x (1D)    
@@ -75,8 +93,6 @@ def test_calc_cm_sig_iter_is_sigma_of_highpassed_residual():
     (x, 2, 3, 0.1, (1.0, 4), (0.5,)), 
     (x, 2, 3, 0.1, (1.0,2.0,3.0), (0.5, 2)),
     (x, 2, 3, 0.1, (1.0, 4), (0.5,2.0,4.0)), 
-    # None highpass_params unsupported
-    (x, 2, 3, 0.1, (1.0, 4), None),
     # negative N_comp   
     (x, -1, 3, 0.1, (1.0, 4), (0.5, 2)),
     # N_comp > N
@@ -168,24 +184,33 @@ def test_pca_invalid(x, N_comp, sig, highpass_params):
 #################################### calc_a ####################################
 ################################################################################
 @pytest.mark.parametrize("x,A,a_exp", [
-    ([[1, 1, 1], [2, 2, 2]], [[3, 3, 3], [4, 4, 4]], 
-     [[1 / 3, 1 / 4], [2 / 3, 24 / 48]]),
-    ([[1, 1, 1]], [[3, 3, 3], [4, 4, 4]], 
-     [[1 / 3, 1 / 4]]),
-    ([[1, 1, 1], [2, 2, 2]], [[3, 3, 3]], 
-    [[1 / 3], [2 / 3]]),
-    # Complex A with real denominator via real(A)**2
-    ([[1, 1], [2, 2]], [[1 + 1j, 1 - 1j]], 
-    [[1], [2]]),
+    # Orthogonal modes: least squares equals the per-mode projection
+    ([[2, 0, 1], [0, 3, 0]], [[1, 0, 0], [0, 1, 0]], [[2, 0], [0, 3]]),
+    # Single mode
+    ([[1, 1, 1], [2, 2, 2]], [[3, 3, 3]], [[1 / 3], [2 / 3]]),
+    # Non-orthogonal modes: x = 2 * A0 + 3 * A1 exactly
+    ([[5, 3, 2]], [[1, 0, 1], [1, 1, 0]], [[2, 3]]),
+    # Complex mode: least squares a = x A^H / (A A^H)
+    ([[1, 1], [2, 2]], [[1 + 1j, 1 - 1j]], [[0.5], [1.0]]),
 ])
 def test_calc_a(x, A, a_exp):
-    x = np.array(x, dtype = np.float64)
-    # Preserve complex values for complex test case
-    _A_arr = np.array(A)
-    A = np.array(A, dtype = np.complex128 if np.iscomplexobj(_A_arr) else np.float64)
-    a_exp = np.array(a_exp, dtype = np.float64)
+    """
+    Check least-squares scaling factors, including non-orthogonal modes.
+    """
     a = corr.calc_a(x, A)
-    np.testing.assert_allclose(a, a_exp, equal_nan = True)
+    np.testing.assert_allclose(a, a_exp, atol = 1e-12)
+
+
+def test_calc_a_recovers_scaling_of_correlated_modes():
+    """
+    Check that noiseless mixtures of strongly correlated modes are
+    recovered exactly (per-mode projection gets these wrong).
+    """
+    rng = np.random.default_rng(2)
+    A0 = rng.normal(size = 500)
+    A = np.array([A0, A0 + 0.3 * rng.normal(size = 500)])
+    a_true = np.array([[1.5, -0.5], [0.2, 2.0], [0.0, 1.0]])
+    np.testing.assert_allclose(corr.calc_a(a_true @ A, A), a_true, atol = 1e-12)
 
 @pytest.mark.parametrize("x,A", [
     (1, [[3, 3, 3], [4, 4, 4]]), # 0D x
@@ -196,7 +221,8 @@ def test_calc_a(x, A, a_exp):
     ([[1, 1, 1], [2, 2, 2]], []), # empty A
     ([[1, 1, 1], [2, 2, 2]], [[3, 3], [4, 4]]), # mismatched time length
     ([['A'], ['B']], [[3, 3, 3], [4, 4, 4]]), # non-numeric x
-    ([[1, 1, 1], [2, 2, 2]], [['A', 'B', 'C'], ['D', 'E', 'F']]), # non-numeric A
+    # non-numeric A
+    ([[1, 1, 1], [2, 2, 2]], [['A', 'B', 'C'], ['D', 'E', 'F']]),
     ([[1, 1, np.nan], [2, 2, 2]], [[3, 3, 3], [4, 4, 4]]), # NaN in x
     ([[1, 1, 1], [2, 2, 2]], [[3, 3, np.nan], [4, 4, 4]]), # NaN in A
 ])
@@ -278,8 +304,6 @@ m = "z,theta,N_comp,N_iter,dt,lowpass_params,highpass_params"
     # invalid theta shape  
     (x, [0, 1], 2, 3, 0.1, (1.0, 4), (0.5, 2)),
     (x, np.array([[0, 1]]), 2, 3, 0.1, (1.0, 4), (0.5, 2)),
-    # None highpass_params unsupported
-    (x, None, 2, 3, 0.1, (1.0, 4), None),
 ])
 def test_calc_cm_complex_invalid(
     z, theta, N_comp, N_iter, dt, lowpass_params, highpass_params

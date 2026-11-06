@@ -1,48 +1,32 @@
-"""citkid.pipeline.interactive — modular, stackable interactive analysis UI.
+"""
+citkid.pipeline.interactive: modular, stackable interactive analysis UI.
 
-Public API
-----------
-StepPanel
-    Base class for all interactive panels.  Override ``setup_ui``,
-    ``get_params_for_step``, and ``update_plots``.
+Public API:
+- ``StepPanel``: base class for all interactive panels. Override
+  ``setup_ui``, ``get_params_for_step``, and ``update_plots``.
+- ``register_panel(*step_names)``: class decorator that associates a
+  ``StepPanel`` subclass with one or more pipeline step names.
+- ``get_panel_class(step_names)``: look up the registered panel class for a
+  tuple of step names.
+- ``InteractiveAnalysisWindow``: main window that stacks panels and
+  orchestrates cascade re-runs.
+- ``run_interactive(AR, panels, start_idx, data_idxs, title, ...)``: build
+  and show a window, then start the Qt event loop.
 
-register_panel(*step_names)
-    Class decorator that associates a :class:`StepPanel` subclass with one
-    or more pipeline step names.
+Built-in panels:
+- ``gain.GainFitPanel``: handles *fit_gain*.
+- ``fit_iq.IQFitPanel``: handles *fit_iq* with interactive mask selection.
+- ``circ.CircleFitPanel``: handles *fit_iq_circle* + *get_idx_t* +
+  *get_theta_phase_offset*.
+- ``xcal.XCalPanel``: handles *get_xcal_mask* + *fit_x_theta*.
 
-get_panel_class(step_names)
-    Look up the registered panel class for a tuple of step names.
-
-InteractiveAnalysisWindow
-    Main window that stacks panels and orchestrates cascade re-runs.
-
-run_interactive(AR, panels, start_idx, data_idxs, title, ...)
-    Build and show a window, then start the Qt event loop.
-
-Built-in panels
----------------
-:class:`~.gain.GainFitPanel`
-    Handles *fit_gain*.
-
-:class:`~.fit_iq.IQFitPanel`
-    Handles *fit_iq* with interactive mask selection.
-
-:class:`~.circ.CircleFitPanel`
-    Handles *fit_iq_circle* + *get_idx_t* + *get_theta_phase_offset*.
-
-:class:`~.xcal.XCalPanel`
-    Handles *get_xcal_mask* + *fit_x_theta*.
-
-Pipeline-specific launchers
----------------------------
-:func:`~.iq_analysis.run_iq_analysis`
-    One-liner for the IQ analysis YAML pipeline.
-
-:func:`~.ts_analysis.run_ts_analysis`
-    One-liner for the ts_analysis YAML pipeline.
-
-:func:`~.iq_ts_analysis.run_iq_ts_analysis`
-    The ts_analysis panels followed by the IQ fit panel.
+Pipeline-specific launchers:
+- ``iq_analysis.run_iq_analysis``: one-liner for the IQ analysis YAML
+  pipeline.
+- ``ts_analysis.run_ts_analysis``: one-liner for the ts_analysis YAML
+  pipeline.
+- ``iq_ts_analysis.run_iq_ts_analysis``: the ts_analysis panels followed by
+  the IQ fit panel.
 """
 
 # Core framework — always imported

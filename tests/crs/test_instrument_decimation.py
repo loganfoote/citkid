@@ -8,8 +8,6 @@ import pytest
 from unittest.mock import AsyncMock, patch
 import numpy as np
 
-from citkid.crs.instrument import CRS
-
 
 @pytest.fixture
 def mock_crs_for_set_decimation(base_crs):
@@ -172,7 +170,8 @@ async def test_set_decimation_sleep_on_change(mock_crs_for_set_decimation):
     crs.dec_short = True
     crs.dec_module_idxs = [1]
     
-    with patch('citkid.crs.instrument.time.sleep') as mock_sleep:
+    with patch('citkid.crs.instrument.asyncio.sleep',
+               new_callable = AsyncMock) as mock_sleep:
         # Change dec_stage
         await crs.set_decimation(dec_stage = 6, short = True,
                                 module_idxs = [1], verbose = False)
@@ -194,7 +193,8 @@ async def test_set_decimation_no_sleep_when_unchanged(
     crs.dec_short = True
     crs.dec_module_idxs = [1]
     
-    with patch('citkid.crs.instrument.time.sleep') as mock_sleep:
+    with patch('citkid.crs.instrument.asyncio.sleep',
+               new_callable = AsyncMock) as mock_sleep:
         # Call with same values
         await crs.set_decimation(dec_stage = 6, short = True,
                                 module_idxs = [1], verbose = False)

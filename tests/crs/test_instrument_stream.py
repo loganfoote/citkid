@@ -9,7 +9,6 @@ test_stream_capture.py.
 import pytest
 import numpy as np
 from unittest.mock import AsyncMock, MagicMock, patch, call
-import time
 import os
 import zarr
 
@@ -30,13 +29,17 @@ def create_mock_zarr_group():
 
 @pytest.fixture(autouse = True)
 def mock_write_system_cfg_to_zarr():
-    with patch('citkid.crs.instrument.util.write_system_cfg_to_zarr') as mock_write:
+    with patch(
+        'citkid.crs.instrument.util.write_system_cfg_to_zarr'
+    ) as mock_write:
         yield mock_write
 
 
 @pytest.fixture(autouse = True)
 def mock_write_acq_cfg_to_zarr():
-    with patch('citkid.crs.instrument.util.write_acq_cfg_to_zarr') as mock_write:
+    with patch(
+        'citkid.crs.instrument.util.write_acq_cfg_to_zarr'
+    ) as mock_write:
         yield mock_write
 
 
@@ -61,7 +64,8 @@ async def test_capture_ts_basic(base_crs, mock_write_system_cfg_to_zarr):
     crs.write_tones = AsyncMock()
     crs.stream = AsyncMock()
     
-    with patch('time.sleep') as mock_sleep:
+    with patch('citkid.crs.instrument.asyncio.sleep',
+               new_callable = AsyncMock) as mock_sleep:
         await crs.capture_ts(
             fres, ares, ts_duration_s, dec_stage, grp, verbose = False
         )
@@ -113,7 +117,8 @@ async def test_capture_ts_with_ch_map(base_crs):
     crs.write_tones = AsyncMock()
     crs.stream = AsyncMock()
     
-    with patch('time.sleep'):
+    with patch('citkid.crs.instrument.asyncio.sleep',
+               new_callable = AsyncMock):
         await crs.capture_ts(
             fres, ares, 10.0, 6, create_mock_zarr_group(),
             ch_map = ch_map, verbose = False
@@ -137,7 +142,8 @@ async def test_capture_ts_with_allow_missing(base_crs):
     crs.write_tones = AsyncMock()
     crs.stream = AsyncMock()
     
-    with patch('time.sleep'):
+    with patch('citkid.crs.instrument.asyncio.sleep',
+               new_callable = AsyncMock):
         await crs.capture_ts(
             fres, ares, 10.0, 6, create_mock_zarr_group(),
             allow_missing = True, verbose = False
@@ -165,7 +171,8 @@ async def test_capture_ts_stream_parameters(base_crs, tmp_path):
     crs.write_tones = AsyncMock()
     crs.stream = AsyncMock()
     
-    with patch('time.sleep'):
+    with patch('citkid.crs.instrument.asyncio.sleep',
+               new_callable = AsyncMock):
         await crs.capture_ts(
             fres, ares, ts_duration_s, dec_stage, grp,
             tmp_directory = tmp_directory,
@@ -192,7 +199,8 @@ async def test_capture_ts_analog_bank_low(base_crs):
     crs.write_tones = AsyncMock()
     crs.stream = AsyncMock()
     
-    with patch('time.sleep'):
+    with patch('citkid.crs.instrument.asyncio.sleep',
+               new_callable = AsyncMock):
         await crs.capture_ts(
             np.array([4.0e9]), np.array([-50.0]),
             10.0, 6, create_mock_zarr_group(), verbose = False
@@ -214,7 +222,8 @@ async def test_capture_ts_analog_bank_high(base_crs):
     crs.write_tones = AsyncMock()
     crs.stream = AsyncMock()
     
-    with patch('time.sleep'):
+    with patch('citkid.crs.instrument.asyncio.sleep',
+               new_callable = AsyncMock):
         await crs.capture_ts(
             np.array([4.0e9]), np.array([-50.0]),
             10.0, 6, create_mock_zarr_group(), verbose = False
@@ -247,7 +256,8 @@ async def test_capture_ts_clears_before_write(base_crs):
     crs.write_tones = mock_write
     crs.stream = mock_stream
     
-    with patch('time.sleep'):
+    with patch('citkid.crs.instrument.asyncio.sleep',
+               new_callable = AsyncMock):
         await crs.capture_ts(
             np.array([4.0e9]), np.array([-50.0]),
             10.0, 6, create_mock_zarr_group(), verbose = False
@@ -281,7 +291,8 @@ async def test_capture_ts_sleeps_after_write(base_crs):
     crs.write_tones = mock_write
     crs.stream = mock_stream
     
-    with patch('time.sleep', side_effect = mock_sleep):
+    with patch('citkid.crs.instrument.asyncio.sleep',
+               new_callable = AsyncMock, side_effect = mock_sleep):
         await crs.capture_ts(
             np.array([4.0e9]), np.array([-50.0]),
             10.0, 6, create_mock_zarr_group(), verbose = False
@@ -306,7 +317,8 @@ async def test_capture_ts_clears_on_stream_failure(base_crs):
     # Make stream raise an exception
     crs.stream = AsyncMock(side_effect = RuntimeError("Stream failed"))
     
-    with patch('time.sleep'):
+    with patch('citkid.crs.instrument.asyncio.sleep',
+               new_callable = AsyncMock):
         with pytest.raises(RuntimeError, match = "Stream failed"):
             await crs.capture_ts(
                 np.array([4.0e9]), np.array([-50.0]),
@@ -331,7 +343,8 @@ async def test_capture_ts_clears_on_write_failure(base_crs):
     crs.write_tones = AsyncMock(side_effect = ValueError("Invalid tones"))
     crs.stream = AsyncMock()
     
-    with patch('time.sleep'):
+    with patch('citkid.crs.instrument.asyncio.sleep',
+               new_callable = AsyncMock):
         with pytest.raises(ValueError, match = "Invalid tones"):
             await crs.capture_ts(
                 np.array([4.0e9]), np.array([-50.0]),
@@ -356,7 +369,8 @@ async def test_capture_ts_validates_early(base_crs):
     crs.write_tones = AsyncMock()
     crs.stream = AsyncMock()
     
-    with patch('time.sleep'):
+    with patch('citkid.crs.instrument.asyncio.sleep',
+               new_callable = AsyncMock):
         # Pass invalid ts_duration_s - should fail validation
         with pytest.raises(ValueError, match = 'ts_duration_s must be'):
             await crs.capture_ts(

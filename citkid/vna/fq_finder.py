@@ -111,7 +111,8 @@ def _db(z: np.ndarray) -> np.ndarray:
     return 20.0 * np.log10(np.abs(z))
 
 
-# Saved data index of the resonator on screen at the last save (-1 = never saved)
+# Saved data index of the resonator on screen at the last save
+# (-1 = never saved)
 _DATA_IDX_KEY = "fq_finder_data_idx"
 _OUTPUT_KEYS = ("fres_opt", "qres_opt", "reject_reason", _DATA_IDX_KEY)
 
@@ -334,10 +335,13 @@ def _ask_start_idx(saved_idx: int, res_idx) -> int:
 
 class _InteractiveViewBox(pg.ViewBox):
     """
-    ViewBox that emits:
+    ViewBox that emits signals for Shift+click and Shift/Ctrl+scroll.
 
-    ``sig_shift_click(x, y)``  — Shift + left-click inside the view.
-    ``sig_scroll_qres(delta)`` — Shift/Ctrl + scroll wheel (delta = ±1, coarse ±10).
+    Attributes:
+    sig_shift_click (Signal): ``(x, y)``, on Shift + left-click inside the
+        view.
+    sig_scroll_qres (Signal): ``(delta)``, on Shift/Ctrl + scroll wheel
+        (delta = ±1, coarse ±10).
     """
 
     sig_shift_click = QtCore.pyqtSignal(float, float)
@@ -415,7 +419,8 @@ class _SpanRegionItem(pg.LinearRegionItem):
         Parameters:
         ev (HoverEvent): pyqtgraph hover event. Not used.
         """
-        # Suppress body hover highlight; edge InfiniteLines handle their own hover
+        # Suppress body hover highlight; edge InfiniteLines handle their own
+        # hover
         pass
 
 
@@ -435,7 +440,8 @@ class FqFinderWindow(QtWidgets.QMainWindow):
     # Fractional qres step size: each scroll notch changes qres by this
     # fraction of its current value (×step magnitude).
     _QRES_FRAC = 0.04
-    _REJECT_REASONS = ["tone off resonance", "overlapping resonance", "bifurcated", "other"]
+    _REJECT_REASONS = ["tone off resonance", "overlapping resonance",
+                       "bifurcated", "other"]
 
     def __init__(
         self, f: np.ndarray, z: np.ndarray, fres, qres, res_idxs, zarr_grp,
@@ -523,7 +529,8 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         # one write per array rather than one per tone.
         cal = np.asarray(self._res_idxs) < 0
         if np.any(cal):
-            for key, work in (("fres_opt", self._fres_work), ("qres_opt", self._qres_work)):
+            for key, work in (("fres_opt", self._fres_work),
+                              ("qres_opt", self._qres_work)):
                 saved = np.asarray(self._zg[key][:], dtype=np.float64)
                 saved[cal] = np.asarray(work, dtype=np.float64)[cal]
                 self._zg[key][:] = saved
@@ -540,7 +547,8 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         # Find the cursor position: first interactive index >= start_idx
         start_idx = max(0, int(start_idx))
         self._cursor = next(
-            (pos for pos, i in enumerate(self._interactive_indices) if i >= start_idx),
+            (pos for pos, i in enumerate(self._interactive_indices)
+             if i >= start_idx),
             0,
         )
 
@@ -663,12 +671,14 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         self._reason_combo.addItem("not rejected")
         for _r in self._REJECT_REASONS:
             self._reason_combo.addItem(_r)
-        self._reason_combo.currentTextChanged.connect(self._on_reason_combo_changed)
+        self._reason_combo.currentTextChanged.connect(
+            self._on_reason_combo_changed)
         reject_row.addWidget(self._reason_combo)
 
         self._reason_edit = QtWidgets.QLineEdit()
         self._reason_edit.setPlaceholderText("custom reason…")
-        self._reason_edit.setMinimumWidth(_text_width("custom reason…" + "x" * 6))
+        self._reason_edit.setMinimumWidth(
+            _text_width("custom reason…" + "x" * 6))
         self._reason_edit.editingFinished.connect(self._on_reason_edit_finished)
         reject_row.addWidget(self._reason_edit)
 
@@ -1005,7 +1015,8 @@ class FqFinderWindow(QtWidgets.QMainWindow):
                 self._reason_edit.text().strip() or "other"
             )
             if not np.isnan(self._fres_work[ri]):
-                self._pre_reject[ri] = (self._fres_work[ri], self._qres_work[ri])
+                self._pre_reject[ri] = (self._fres_work[ri],
+                                        self._qres_work[ri])
             self._reject_reasons[ri] = reason
             self._fres_work[ri] = np.nan
             self._qres_work[ri] = np.nan
@@ -1024,7 +1035,8 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         Update the stored rejection reason when the custom text field changes.
         """
         ri = self._ri
-        if self._reason_combo.currentText() == "other" and ri in self._reject_reasons:
+        if (self._reason_combo.currentText() == "other"
+                and ri in self._reject_reasons):
             custom = self._reason_edit.text().strip() or "other"
             self._reject_reasons[ri] = custom
             self._update_reject_label()
@@ -1109,8 +1121,10 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             "<li><b>Shift+Click:</b> Move fres to clicked frequency</li>"
             "<li><b>Drag fres line:</b> Adjust fres directly</li>"
             "<li><b>Drag span edge:</b> Adjust qres symmetrically</li>"
-            "<li><b>Shift+Scroll:</b> Fine qres adjust (\u00b14% per notch)</li>"
-            "<li><b>Ctrl+Scroll:</b> Coarse qres adjust (\u00b140% per notch)</li>"
+            "<li><b>Shift+Scroll:</b> Fine qres adjust "
+            "(\u00b14% per notch)</li>"
+            "<li><b>Ctrl+Scroll:</b> Coarse qres adjust "
+            "(\u00b140% per notch)</li>"
             "</ul>"
             "<p><b>IQ plot</b></p>"
             "<ul>"
@@ -1122,13 +1136,16 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             "<li><b>\u2192 / D:</b> Save current resonator and go to next</li>"
             "<li><b>\u2190 / A:</b> Go back to previous resonator</li>"
             "<li><b>R:</b> Auto-scale both plots</li>"
-            "<li><b>Z:</b> Reset fres/qres to initial values for this resonator</li>"
+            "<li><b>Z:</b> Reset fres/qres to initial values for this "
+            "resonator</li>"
             "<li><b>H:</b> Toggle this help panel</li>"
             "</ul>"
             "<p><b>Rejection</b></p>"
             "<ul>"
-            "<li>Select a rejection reason from the dropdown to reject a resonator.</li>"
-            "<li>Selecting <i>not rejected</i> restores the last fres/qres values.</li>"
+            "<li>Select a rejection reason from the dropdown to reject a "
+            "resonator.</li>"
+            "<li>Selecting <i>not rejected</i> restores the last fres/qres "
+            "values.</li>"
             "</ul>"
         )
         lbl.setTextFormat(_Qt.RichText)
@@ -1154,7 +1171,8 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             self._write_resonator, ri, float(self._fres_work[ri]),
             float(self._qres_work[ri]), str(self._reject_reasons.get(ri, "")))
         future.add_done_callback(_report_save_error)
-        self._save_futures = [f for f in self._save_futures if not f.done()] + [future]
+        self._save_futures = ([f for f in self._save_futures if not f.done()]
+                              + [future])
 
     def _write_resonator(self, ri, fres, qres, reason):
         """
@@ -1169,10 +1187,9 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         self._zg["fres_opt"][ri] = fres
         self._zg["qres_opt"][ri] = qres
         self._zg[_DATA_IDX_KEY][0] = ri
-        # Handle reject_reason: read entire array, modify, and write back
-        reasons_array = np.array(self._zg["reject_reason"][:], dtype=object)
-        reasons_array[ri] = reason
-        self._zg["reject_reason"][:] = reasons_array
+        # zarr 3.1 can't write a scalar into a string array; a length-1
+        # slice works
+        self._zg["reject_reason"][ri:ri + 1] = np.array([reason], dtype=object)
 
     def _flush_saves(self):
         """
@@ -1204,7 +1221,8 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             self._cursor += 1
             self._load_resonator()
         else:
-            self._status_label.setText("All resonators complete — close to exit.")
+            self._status_label.setText(
+                "All resonators complete — close to exit.")
             self._next_btn.setEnabled(False)
 
     def _go_back(self):
@@ -1270,7 +1288,8 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         self._fres_spin.blockSignals(True)
         self._fres_spin.setValue(fres * 1e-6)
         self._fres_spin.blockSignals(False)
-        self._update_overlay(self._f[ri], self._z[ri], fres, self._qres_work[ri])
+        self._update_overlay(self._f[ri], self._z[ri], fres,
+                             self._qres_work[ri])
 
     def _set_qres(self, qres: float):
         """
@@ -1289,7 +1308,8 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         self._qres_spin.blockSignals(True)
         self._qres_spin.setValue(round(qres))
         self._qres_spin.blockSignals(False)
-        self._update_overlay(self._f[ri], self._z[ri], self._fres_work[ri], qres)
+        self._update_overlay(self._f[ri], self._z[ri], self._fres_work[ri],
+                             qres)
 
     # ------------------------------------------------------------------
     # Spinbox callbacks

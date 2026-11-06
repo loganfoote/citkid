@@ -13,13 +13,14 @@ from zarr.core.sync import collect_aiterator
 
 from . import default_steps
 from . import framework as pf
+from .migrate import RENAMED_STEPS, RENAMED_TEMPLATE_STEPS
 
 
 _CAL_YAML_ALIASES = {
-    "ts": "cal-ts.yaml",
-    "iq": "cal-iqonly.yaml",
-    "ts_offres": "cal-offres.yaml",
-    "ts-fixed_theta": "cal-ts.yaml",
+    "ts": "cal_ts.yaml",
+    "iq": "cal_iq.yaml",
+    "ts_offres": "cal_ts_offres.yaml",
+    "ts_fixed_theta": "cal_ts.yaml",
 }
 
 _PER_ROW_CHUNK_ROWS = 1
@@ -51,7 +52,8 @@ def _io_lock_for(group):
     """
     store = group.store
     store_root = getattr(store, "root", None)
-    key = os.path.normcase(os.path.abspath(str(store_root))) if store_root is not None else id(store)
+    key = (os.path.normcase(os.path.abspath(str(store_root)))
+           if store_root is not None else id(store))
     with _IO_LOCKS_GUARD:
         if key not in _IO_LOCKS:
             _IO_LOCKS[key] = threading.RLock()
@@ -224,12 +226,16 @@ class DataSet:
             raise TypeError("custom_path must be a string or None")
         if custom_source is not None and not isinstance(custom_source, str):
             raise TypeError("custom_source must be a string or None")
-        if custom_source is not None and (custom_path is not None or custom_cal_steps is not None):
-            raise ValueError("custom_source can't be combined with custom_path or custom_cal_steps")
+        if custom_source is not None and (custom_path is not None
+                                          or custom_cal_steps is not None):
+            raise ValueError("custom_source can't be combined with "
+                             "custom_path or custom_cal_steps")
         if cal_yaml_path is not None and not isinstance(cal_yaml_path, str):
             raise TypeError("cal_yaml_path must be a string or None")
-        if custom_main_dir_overwrite is not None and not isinstance(custom_main_dir_overwrite, str):
-            raise TypeError("custom_main_dir_overwrite must be a string or None")
+        if (custom_main_dir_overwrite is not None
+                and not isinstance(custom_main_dir_overwrite, str)):
+            raise TypeError(
+                "custom_main_dir_overwrite must be a string or None")
 
         if isinstance(zarr_path, zarr.Group):
             self.root = zarr_path
@@ -255,11 +261,12 @@ class DataSet:
         self._global_cache = {}
         self._per_row_cache = {}
         self._param_meta = {}
-        self._analysis_step_names = {}
         self._invalidated_globals = set()
         self._invalidated_rows = {}
         # Latest per-row step failure messages: {step name: {row: message}}
         self._step_failures = {}
+        # Steps with saved failure records (listed on first use)
+        self._recorded_failure_steps = None
 
         self._metadata = self._read_metadata()
         cal_def = self._resolve_cal_definition(
@@ -276,7 +283,8 @@ class DataSet:
         self.custom_main_dir_overwrite = custom_main_dir_overwrite
         # How to reopen this dataset in copy(). Steps passed directly aren't
         # embedded in the zarr store, so a copy needs them (and the YAML).
-        self._custom_cal_steps = None if custom_cal_steps is None else list(custom_cal_steps)
+        self._custom_cal_steps = (None if custom_cal_steps is None
+                                  else list(custom_cal_steps))
 
         self.cal_steps = list(cal_def["custom_steps"])
         for step in default_steps.default_cal_steps:
@@ -294,10 +302,12 @@ class DataSet:
         nrows_path = pf.find_pl_path(self.cal_pl, "nrows")
         if nrows_path is None:
             raise ValueError(
-                "Calibration pipeline must be able to produce 'nrows' as a global parameter"
+                "Calibration pipeline must be able to produce 'nrows' as a "
+                "global parameter"
             )
         if nrows_path[-1].func_type != "global":
-            raise ValueError("Parameter 'nrows' must be produced by a global step")
+            raise ValueError(
+                "Parameter 'nrows' must be produced by a global step")
 
     def copy(self):
         """
@@ -326,7 +336,9 @@ class DataSet:
             write_buffer=self.write_buffer,
         )
 
-    def register_analysis_definition(self, analysis_yaml_text, analysis_custom_source):
+    def register_analysis_definition(
+        self, analysis_yaml_text, analysis_custom_source
+    ):
         """
         Persist the analysis definition inside the zarr metadata.
 
@@ -349,11 +361,14 @@ class DataSet:
 
         if stored_yaml is not None and analysis_yaml_text != stored_yaml:
             raise ValueError(
-                "The dataset already contains a different analysis YAML definition"
+                "The dataset already contains a different analysis YAML "
+                "definition"
             )
-        if stored_custom is not None and not _custom_sources_match(analysis_custom_source, stored_custom):
+        if stored_custom is not None and not _custom_sources_match(
+                analysis_custom_source, stored_custom):
             raise ValueError(
-                "The dataset already contains different analysis custom step code"
+                "The dataset already contains different analysis custom "
+                "step code"
             )
 
         update = {}
@@ -364,11 +379,6 @@ class DataSet:
         if update:
             self._write_metadata(update)
 
-    def set_analysis_step_names(self, step_names_by_index):
-        """
-        Cache analysis step names by execution index.
-        """
-        self._analysis_step_names = dict(step_names_by_index)
 
     def get_downstream_calibration_params(self, source_names):
         """
@@ -399,11 +409,13 @@ class DataSet:
             place of the dataset-backed values.
 
         Returns:
-        dict: Mapping of requested output name to the computed value.
+        outputs (dict): Mapping of requested output name to the computed value.
         """
-        requested_outputs = [outputs] if isinstance(outputs, str) else list(outputs)
+        requested_outputs = ([outputs] if isinstance(outputs, str)
+                             else list(outputs))
         if not requested_outputs:
-            raise ValueError("outputs must contain at least one calibration output")
+            raise ValueError(
+                "outputs must contain at least one calibration output")
         replacements = {} if replacements is None else dict(replacements)
 
         rows = self._normalize_rows(data_indices)
@@ -411,17 +423,21 @@ class DataSet:
         for output_name in requested_outputs:
             path = pf.find_pl_path(self.cal_pl, output_name)
             if path is None:
-                raise ValueError(f"Calibration pipeline cannot produce output '{output_name}'")
+                raise ValueError(f"Calibration pipeline cannot produce "
+                                 f"output '{output_name}'")
             step_paths.append(path)
 
         steps = _merge_step_paths(step_paths)
         local_values = {}
-        replacement_values, replacement_is_global = self._normalize_apply_cal_replacements(replacements, rows)
+        replacement_values, replacement_is_global = (
+            self._normalize_apply_cal_replacements(replacements, rows))
 
         for step in steps:
-            if all(name in replacement_values or name in local_values for name in step.return_names):
+            if all(name in replacement_values or name in local_values
+                   for name in step.return_names):
                 continue
-            step_rows = None if step.func_type in ("global", "global-res") else rows
+            step_rows = (None if step.func_type in ("global", "global-res")
+                         else rows)
             params, param_is_global = self._collect_apply_cal_params(
                 step,
                 step_rows,
@@ -436,7 +452,9 @@ class DataSet:
         return {
             output_name: self._finalize_apply_cal_output(
                 output_name,
-                replacement_values[output_name] if output_name in replacement_values else local_values[output_name],
+                (replacement_values[output_name]
+                 if output_name in replacement_values
+                 else local_values[output_name]),
                 rows,
             )
             for output_name in requested_outputs
@@ -466,7 +484,8 @@ class DataSet:
             if lazy_attr is not None:
                 for di in rows:
                     lazy_attr._cache.pop(int(di), None)
-            if name in self._invalidated_rows and self._invalidated_rows[name] is None:
+            if (name in self._invalidated_rows
+                    and self._invalidated_rows[name] is None):
                 continue
             invalid_rows = self._invalidated_rows.setdefault(name, set())
             invalid_rows.update(int(di) for di in rows)
@@ -497,7 +516,8 @@ class DataSet:
         """
         try:
             with self._io_lock:
-                return set(collect_aiterator(self.root.store.list_dir(self.root.path)))
+                return set(collect_aiterator(
+                    self.root.store.list_dir(self.root.path)))
         except Exception:
             return None
 
@@ -534,14 +554,16 @@ class DataSet:
                 raise ValueError(f"Parameter '{name}' is not available to save")
             if meta["global"]:
                 if name not in self._global_cache:
-                    self._get_global(name)  # loads from zarr or runs the cal path
+                    # loads from zarr or runs the cal path
+                    self._get_global(name)
                 self._write_global_param(name)
                 continue
             write_rows = rows
             if write_rows is None and calibratable:
                 write_rows = np.arange(int(self.nrows), dtype=np.int32)
             if write_rows is not None:
-                self._fetch_rows(name, write_rows)  # load or produce missing rows
+                # load or produce missing rows
+                self._fetch_rows(name, write_rows)
             self._write_per_row_param(name, data_idx=write_rows)
 
     def __getattr__(self, name):
@@ -554,13 +576,15 @@ class DataSet:
                 return self._get_global(name)
             if not self._parameter_has_any_available_row(name):
                 if pf.find_pl_path(self.cal_pl, name) is None:
-                    raise AttributeError(f"Per-row parameter '{name}' is not available")
+                    raise AttributeError(
+                        f"Per-row parameter '{name}' is not available")
             return self._get_lazy_attr(name)
 
         path = pf.find_pl_path(self.cal_pl, name)
         if path is None:
             if name.startswith("_") or self._refresh_param_meta(name) is None:
-                raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+                raise AttributeError(f"'{type(self).__name__}' object has "
+                                     f"no attribute '{name}'")
             return getattr(self, name)
 
         if path[-1].func_type == "global":
@@ -584,7 +608,8 @@ class DataSet:
         if name in self._invalidated_globals:
             self._ensure_loaded(name, data_idx=None)
             if name in self._invalidated_globals:
-                raise AttributeError(f"Global parameter '{name}' is not available")
+                raise AttributeError(
+                    f"Global parameter '{name}' is not available")
         with self._io_lock:
             stored = name in self.root
         if not stored:
@@ -614,7 +639,8 @@ class DataSet:
         Load per-row data into the lazy cache and return the requested rows.
         """
         if data_idx is None:
-            raise ValueError(f"data_idx required for per-row parameter '{name}'")
+            raise ValueError(
+                f"data_idx required for per-row parameter '{name}'")
 
         rows = self._normalize_rows(data_idx)
         lazy_attr = self._get_lazy_attr(name)
@@ -629,21 +655,26 @@ class DataSet:
 
         if missing:
             with self._io_lock:
-                found_rows, data = _retry_io(self._read_saved_rows, name, missing)
+                found_rows, data = _retry_io(self._read_saved_rows, name,
+                                             missing)
             for di, value in zip(found_rows, data):
                 lazy_attr._cache[int(di)] = value
             if lazy_attr._shape == () and len(data):
                 first = np.asarray(data[0])
-                lazy_attr._shape = (int(self.nrows), *first.shape) if first.shape else (int(self.nrows),)
+                lazy_attr._shape = ((int(self.nrows), *first.shape)
+                                    if first.shape else (int(self.nrows),))
 
-        still_missing = [int(di) for di in rows if int(di) not in lazy_attr._cache]
+        still_missing = [int(di) for di in rows
+                         if int(di) not in lazy_attr._cache]
         if still_missing:
-            self._ensure_loaded(name, data_idx=np.asarray(still_missing, dtype=np.int32))
+            self._ensure_loaded(
+                name, data_idx=np.asarray(still_missing, dtype=np.int32))
 
         unresolved = [int(di) for di in rows if int(di) not in lazy_attr._cache]
         if unresolved:
             raise ValueError(
-                f"Parameter '{name}' is missing rows {unresolved} and cannot be produced"
+                f"Parameter '{name}' is missing rows {unresolved} and "
+                f"cannot be produced"
                 + self._failure_cause(name, unresolved)
             )
 
@@ -667,8 +698,9 @@ class DataSet:
             failed = self._step_failures.get(step.name, {})
             for di in rows:
                 if int(di) in failed:
-                    return (f", because calibration step '{step.name}' failed for "
-                            f"data_idx {int(di)}:\n{failed[int(di)]}")
+                    return (f", because calibration step '{step.name}' "
+                            f"failed for data_idx {int(di)}:\n"
+                            f"{failed[int(di)]}")
         return ""
 
     def _read_saved_rows(self, name, rows):
@@ -690,7 +722,8 @@ class DataSet:
             return [], []
         group = self.root[name]
         main, pending = _row_masks(group)
-        pending_rows = [row for row in rows if pending is not None and pending[row]]
+        pending_rows = [row for row in rows
+                        if pending is not None and pending[row]]
         pending_set = set(pending_rows)
         main_rows = [
             row for row in rows
@@ -919,7 +952,8 @@ class DataSet:
             return None
         rows = np.atleast_1d(np.asarray(data_idx, dtype=np.int32))
         if rows.ndim != 1:
-            raise ValueError("data_idx must resolve to a 1-D array of row indices")
+            raise ValueError(
+                "data_idx must resolve to a 1-D array of row indices")
         return rows
 
     def _infer_param_meta(self, name):
@@ -998,7 +1032,8 @@ class DataSet:
 
             if data_idx is None:
                 raise ValueError(
-                    f"data_idx is required to produce per-row parameter '{name}'"
+                    f"data_idx is required to produce per-row parameter "
+                    f"'{name}'"
                 )
             rows = self._normalize_rows(data_idx)
             missing_rows = self._step_missing_rows(step, rows)
@@ -1110,7 +1145,8 @@ class DataSet:
                 continue
             if data_idx is None:
                 raise ValueError(
-                    f"Global step '{step.name}' cannot consume per-row parameter '{param_name}'"
+                    f"Global step '{step.name}' cannot consume per-row "
+                    f"parameter '{param_name}'"
                 )
             params.append(value[data_idx])
             param_is_global.append(False)
@@ -1128,7 +1164,10 @@ class DataSet:
             return path[-1].func_type == "global"
         return False
 
-    def _execute_step(self, step, data_idx=None, save=False, pipeline_scope=None, step_index=None, vectorize=True):
+    def _execute_step(
+        self, step, data_idx=None, save=False, pipeline_scope=None,
+        step_index=None, vectorize=True
+    ):
         """
         Execute a single calibration or analysis step.
 
@@ -1151,7 +1190,8 @@ class DataSet:
 
         if step.func_type == "global":
             params, param_is_global = self._collect_params(step, None)
-            out = self._run_step(step, params, param_is_global, None, pipeline_scope)
+            out = self._run_step(step, params, param_is_global, None,
+                                 pipeline_scope)
             for name, value in out.items():
                 self._store_param(
                     name,
@@ -1166,7 +1206,8 @@ class DataSet:
 
         if step.func_type == "global-res":
             params, param_is_global = self._collect_params(step, None)
-            out = self._run_step(step, params, param_is_global, None, pipeline_scope)
+            out = self._run_step(step, params, param_is_global, None,
+                                 pipeline_scope)
             all_rows = np.arange(int(self.nrows), dtype=np.int32)
             for name, value in out.items():
                 self._store_param(
@@ -1187,7 +1228,8 @@ class DataSet:
 
         if step.func_type == "vectorized" and vectorize:
             params, param_is_global = self._collect_params(step, rows)
-            out = self._run_step(step, params, param_is_global, rows, pipeline_scope)
+            out = self._run_step(step, params, param_is_global, rows,
+                                 pipeline_scope)
             for name, value in out.items():
                 self._store_param(
                     name,
@@ -1199,15 +1241,19 @@ class DataSet:
                     step_index=step_index,
                     save=save,
                 )
+            self._step_failures.get(step.name, {}).clear()
+            self._clear_recorded_failures(step.name, rows)
             return None
 
         failures = {}
+        succeeded = []
         step_failures = self._step_failures.setdefault(step.name, {})
         for di in rows:
             try:
                 step_rows = np.asarray([int(di)], dtype=np.int32)
                 params, param_is_global = self._collect_params(step, step_rows)
-                out = self._run_step(step, params, param_is_global, step_rows, pipeline_scope)
+                out = self._run_step(step, params, param_is_global, step_rows,
+                                     pipeline_scope)
                 for name, value in out.items():
                     self._store_param(
                         name,
@@ -1220,6 +1266,7 @@ class DataSet:
                         save=save,
                     )
                 step_failures.pop(int(di), None)
+                succeeded.append(int(di))
             except Exception as exc:
                 # Keep the whole traceback (with the step context note), so
                 # the cause can be shown later, e.g. in "missing rows" errors.
@@ -1228,6 +1275,7 @@ class DataSet:
 
         if failures:
             self._record_failures(step.name, failures)
+        self._clear_recorded_failures(step.name, succeeded)
         return failures
 
     def _run_step(self, step, params, param_is_global, rows, pipeline_scope):
@@ -1282,8 +1330,10 @@ class DataSet:
                      and float(np.real(value)).is_integer() and value >= 0)
             if not whole:
                 raise ValueError(
-                    f"Step '{step.name}' returned nrows = {pf.describe_value(value)}; "
-                    f"nrows must be a whole number (the number of resonators/rows).")
+                    f"Step '{step.name}' returned nrows = "
+                    f"{pf.describe_value(value)}; "
+                    f"nrows must be a whole number (the number of "
+                    f"resonators/rows).")
         if step.func_type == "global-res":
             nrows = int(out["nrows"]) if "nrows" in out else int(self.nrows)
             for name, value in out.items():
@@ -1291,8 +1341,9 @@ class DataSet:
                 if length != nrows:
                     raise ValueError(
                         f"Global-res step '{step.name}' output '{name}' is "
-                        f"{pf.describe_value(value)}, but a global-res step must return "
-                        f"one entry per resonator: length nrows = {nrows} along axis 0.")
+                        f"{pf.describe_value(value)}, but a global-res step "
+                        f"must return one entry per resonator: length nrows = "
+                        f"{nrows} along axis 0.")
 
     def _collect_params(self, step, data_idx):
         """
@@ -1318,7 +1369,8 @@ class DataSet:
             else:
                 if data_idx is None:
                     raise ValueError(
-                        f"Global step '{step.name}' cannot consume per-row parameter '{param_name}'"
+                        f"Global step '{step.name}' cannot consume per-row "
+                        f"parameter '{param_name}'"
                     )
                 params.append(value[data_idx])
         return params, param_is_global
@@ -1331,7 +1383,8 @@ class DataSet:
         Store a parameter in memory and optionally write it to zarr.
         """
         if name in self._get_reserved_attrs():
-            raise ValueError(f"Cannot create parameter '{name}' because the name is reserved")
+            raise ValueError(f"Cannot create parameter '{name}' because the "
+                             f"name is reserved")
 
         self._param_meta[name] = {
             "global": bool(is_global),
@@ -1343,7 +1396,8 @@ class DataSet:
         if is_global:
             self._invalidated_globals.discard(name)
             scalar_array = np.asarray(value)
-            self._global_cache[name] = _unwrap_scalar(scalar_array) if scalar_array.shape == () else value
+            self._global_cache[name] = (_unwrap_scalar(scalar_array)
+                                        if scalar_array.shape == () else value)
             if save:
                 self._write_global_param(name)
             return
@@ -1365,7 +1419,8 @@ class DataSet:
             lazy_attr._cache[int(di)] = row_value
         if lazy_attr._shape == () and row_values:
             first = np.asarray(row_values[0])
-            lazy_attr._shape = (int(self.nrows), *first.shape) if first.shape else (int(self.nrows),)
+            lazy_attr._shape = ((int(self.nrows), *first.shape)
+                                if first.shape else (int(self.nrows),))
         if save:
             self._write_per_row_param(name, data_idx=rows)
 
@@ -1412,7 +1467,8 @@ class DataSet:
         lazy_attr = self._get_lazy_attr(name)
         if data_idx is None:
             if not lazy_attr._cache:
-                raise ValueError(f"Parameter '{name}' has no cached rows to save")
+                raise ValueError(
+                    f"Parameter '{name}' has no cached rows to save")
             rows = np.array(sorted(lazy_attr._cache.keys()), dtype=np.int32)
         else:
             rows = np.unique(self._normalize_rows(data_idx))
@@ -1421,8 +1477,10 @@ class DataSet:
 
         for di in rows:
             if int(di) not in lazy_attr._cache:
-                raise ValueError(f"Parameter '{name}' row {int(di)} is not cached in memory")
-        values = np.stack([np.asarray(lazy_attr._cache[int(di)]) for di in rows])
+                raise ValueError(f"Parameter '{name}' row {int(di)} is not "
+                                 f"cached in memory")
+        values = np.stack([np.asarray(lazy_attr._cache[int(di)])
+                           for di in rows])
 
         def write():
             """
@@ -1449,7 +1507,8 @@ class DataSet:
                     exists_array = group["row_exists"]
                 else:
                     exists_array = group.create_array(
-                        "row_exists", data=np.zeros((int(self.nrows),), dtype=np.bool_)
+                        "row_exists",
+                        data=np.zeros((int(self.nrows),), dtype=np.bool_)
                     )
             if self.write_buffer:
                 pending_data = _open_optional(group, _PENDING_DATA)
@@ -1463,7 +1522,8 @@ class DataSet:
                 pending_exists = _open_optional(group, _PENDING_EXISTS)
                 if pending_exists is None:
                     pending_exists = group.create_array(
-                        _PENDING_EXISTS, data=np.zeros((int(self.nrows),), dtype=np.bool_)
+                        _PENDING_EXISTS,
+                        data=np.zeros((int(self.nrows),), dtype=np.bool_)
                     )
                 _write_rows(pending_data, rows, values)
                 pending_exists.oindex[rows] = True
@@ -1487,7 +1547,8 @@ class DataSet:
         Load parameter metadata from the existing zarr store.
         """
         with self._io_lock:
-            groups = [(name, dict(group.attrs)) for name, group in self.root.groups()]
+            groups = [(name, dict(group.attrs))
+                      for name, group in self.root.groups()]
         for name, attrs in groups:
             if name.startswith("_"):
                 continue
@@ -1538,7 +1599,8 @@ class DataSet:
                     changed.append((mask, key))
             if not changed:
                 return
-            if not any(np.any(mask) for mask in (main, pending) if mask is not None):
+            if not any(np.any(mask) for mask in (main, pending)
+                       if mask is not None):
                 del self.root[name]
                 return
             for mask, key in changed:
@@ -1570,18 +1632,6 @@ class DataSet:
                 merged += _retry_io(_consolidate_group, self.root[name])
         return merged
 
-    def _delete_param(self, name):
-        """
-        Remove a parameter from memory and from the zarr store.
-        """
-        self._global_cache.pop(name, None)
-        self._per_row_cache.pop(name, None)
-        self._param_meta.pop(name, None)
-        self._invalidated_globals.discard(name)
-        self._invalidated_rows.pop(name, None)
-        with self._io_lock:
-            if name in self.root:
-                _retry_io(self.root.__delitem__, name)
 
     def _step_outputs_exist(self, step, data_idx):
         """
@@ -1603,7 +1653,8 @@ class DataSet:
         missing = []
         for di in rows:
             one_row = np.asarray([int(di)], dtype=np.int32)
-            if not all(self._has_rows(name, one_row) for name in step.return_names):
+            if not all(self._has_rows(name, one_row)
+                       for name in step.return_names):
                 missing.append(int(di))
         return np.asarray(missing, dtype=np.int32)
 
@@ -1623,7 +1674,8 @@ class DataSet:
         Check whether specific rows exist for a per-row parameter.
         """
         rows = self._normalize_rows(rows)
-        if name in self._invalidated_rows and self._invalidated_rows[name] is None:
+        if (name in self._invalidated_rows
+                and self._invalidated_rows[name] is None):
             return False
         invalid_rows = self._invalidated_rows.get(name)
         if invalid_rows and any(int(di) in invalid_rows for di in rows):
@@ -1637,8 +1689,10 @@ class DataSet:
             return False
         return bool(np.all(exists[rows]))
 
-    def _resolve_cal_definition(self, cal_yaml_path, custom_path, custom_cal_steps, custom_main_dir_overwrite,
-                                custom_source=None):
+    def _resolve_cal_definition(
+        self, cal_yaml_path, custom_path, custom_cal_steps,
+        custom_main_dir_overwrite, custom_source=None
+    ):
         """
         Resolve the calibration definition from inputs and embedded metadata.
 
@@ -1661,10 +1715,10 @@ class DataSet:
             reading ``custom_path``.
 
         Returns:
-        dict: Definition with keys ``yaml_path`` (path read this session, or
-            None if embedded), ``custom_path`` (same), ``yaml_text``,
-            ``custom_source`` (source that is executed, after the ``main_dir``
-            overwrite) and ``custom_steps``.
+        definition (dict): Definition with keys ``yaml_path`` (path read
+            this session, or None if embedded), ``custom_path`` (same),
+            ``yaml_text``, ``custom_source`` (source that is executed, after
+            the ``main_dir`` overwrite) and ``custom_steps``.
 
         Raises:
         ValueError: If no YAML is available, a path has the wrong extension,
@@ -1679,7 +1733,8 @@ class DataSet:
 
         if custom_cal_steps is not None:
             if cal_yaml_path is None:
-                raise ValueError("cal_yaml_path is required when custom_cal_steps is provided")
+                raise ValueError("cal_yaml_path is required when "
+                                 "custom_cal_steps is provided")
             yaml_path = _resolve_cal_yaml_path(cal_yaml_path)
             yaml_text = _read_text_file(yaml_path)
             return {
@@ -1703,7 +1758,8 @@ class DataSet:
 
         if yaml_text is None:
             raise ValueError(
-                "No calibration YAML was provided and no embedded definition exists in the dataset"
+                "No calibration YAML was provided and no embedded definition "
+                "exists in the dataset"
             )
 
         if custom_path is not None:
@@ -1713,13 +1769,27 @@ class DataSet:
             custom_source = stored_custom
 
         if stored_yaml is not None and yaml_text != stored_yaml:
-            raise ValueError("Provided calibration YAML does not match the dataset definition")
+            raise ValueError(
+                "Provided calibration YAML does not match the dataset "
+                "definition. To reopen an existing dataset, omit "
+                "cal_yaml_path and custom_path (the definition "
+                "stored in the dataset is used). The citkid "
+                "templates may have changed since the dataset was "
+                "created."
+            )
         if (
             stored_custom is not None
             and source_given
             and not _custom_sources_match(custom_source, stored_custom)
         ):
-            raise ValueError("Provided calibration custom steps do not match the dataset definition")
+            raise ValueError(
+                "Provided calibration custom steps do not match the dataset "
+                "definition. To reopen an existing dataset, omit "
+                "cal_yaml_path and custom_path (the definition "
+                "stored in the dataset is used). The citkid "
+                "templates may have changed since the dataset was "
+                "created."
+            )
 
         if stored_yaml is None:
             self._write_metadata(
@@ -1735,11 +1805,13 @@ class DataSet:
             and not _has_main_dir_assignment(custom_source)
         ):
             warnings.warn(
-                "custom_main_dir_overwrite was given, but the calibration custom "
-                "step source has no top-level 'main_dir = ...' assignment",
+                "custom_main_dir_overwrite was given, but the calibration "
+                "custom step source has no top-level 'main_dir = ...' "
+                "assignment",
                 stacklevel=3,
             )
-        custom_source = _overwrite_main_dir_in_source(custom_source, custom_main_dir_overwrite)
+        custom_source = _overwrite_main_dir_in_source(
+            custom_source, custom_main_dir_overwrite)
 
         return {
             "yaml_path": os.path.abspath(yaml_path) if yaml_path else None,
@@ -1767,10 +1839,55 @@ class DataSet:
             _retry_io(self.root.attrs.__setitem__, self._METADATA_ATTR, current)
         self._metadata = current
 
+    def _failure_step_names(self):
+        """
+        Return the names of steps with saved failure records.
+
+        The ``_failures`` group is listed once per DataSet and then kept up
+        to date in memory, so checking for records doesn't read the store on
+        every step.
+
+        Returns:
+        names (set of str): Step names under ``_failures``.
+        """
+        if self._recorded_failure_steps is None:
+            try:
+                with self._io_lock:
+                    group = self.root["_failures"]
+                    self._recorded_failure_steps = set(group.group_keys())
+            except Exception:
+                self._recorded_failure_steps = set()
+        return self._recorded_failure_steps
+
+    def _clear_recorded_failures(self, step_name, rows):
+        """
+        Remove saved failure records of rows that a step has now run for
+        without error.
+
+        Parameters:
+        step_name (str): Step that succeeded.
+        rows (iterable of int): Rows it succeeded for.
+        """
+        if step_name not in self._failure_step_names():
+            return
+        try:
+            with self._io_lock:
+                group = self.root[f"_failures/{step_name}"]
+                payload = dict(group.attrs.get("failures", {}))
+                keys = [f"idx{int(di)}" for di in rows]
+                if not any(key in payload for key in keys):
+                    return
+                for key in keys:
+                    payload.pop(key, None)
+                _retry_io(group.attrs.__setitem__, "failures", payload)
+        except Exception:
+            pass
+
     def _record_failures(self, step_name, failures):
         """
         Persist per-row execution failures to the ``_failures`` zarr group.
         """
+        self._failure_step_names().add(step_name)
         try:
             with self._io_lock:
                 group = self.root.require_group(f"_failures/{step_name}")
@@ -1794,7 +1911,8 @@ class DataSet:
         Return the set of reserved public DataSet attribute names.
         """
         if DataSet._RESERVED_ATTRS is None:
-            DataSet._RESERVED_ATTRS = {name for name in dir(type(self)) if not name.startswith("_")}
+            DataSet._RESERVED_ATTRS = {name for name in dir(type(self))
+                                       if not name.startswith("_")}
         return DataSet._RESERVED_ATTRS
 
 
@@ -1886,7 +2004,8 @@ def _custom_sources_match(source_a, source_b):
     match (bool): True if the sources are identical apart from the value
         assigned to ``main_dir``.
     """
-    return _overwrite_main_dir_in_source(source_a, "") == _overwrite_main_dir_in_source(source_b, "")
+    return (_overwrite_main_dir_in_source(source_a, "")
+            == _overwrite_main_dir_in_source(source_b, ""))
 
 
 def _consolidate_group(group):
@@ -1917,7 +2036,8 @@ def _consolidate_group(group):
     if len(rows):
         data_array = group["data"]
         pending_data = group[_PENDING_DATA]
-        shard_rows = data_array.shards[0] if data_array.shards else _PER_ROW_SHARD_ROWS
+        shard_rows = (data_array.shards[0] if data_array.shards
+                      else _PER_ROW_SHARD_ROWS)
         for shard_idx in np.unique(rows // shard_rows):
             batch = rows[rows // shard_rows == shard_idx]
             start = int(batch[0])
@@ -1949,7 +2069,8 @@ def _write_rows(array, rows, values):
     rows = np.asarray(rows)
     values = np.asarray(values)
     breaks = np.flatnonzero(np.diff(rows) != 1) + 1
-    for run_rows, run_values in zip(np.split(rows, breaks), np.split(values, breaks)):
+    for run_rows, run_values in zip(np.split(rows, breaks),
+                                    np.split(values, breaks)):
         array[int(run_rows[0]):int(run_rows[-1]) + 1] = run_values
 
 
@@ -1958,7 +2079,8 @@ def _normalize_row_values(value, rows):
     Normalize per-row outputs into one value per requested row.
     """
     if len(rows) == 1:
-        if isinstance(value, np.ndarray) and value.ndim > 0 and value.shape[0] == 1:
+        if (isinstance(value, np.ndarray) and value.ndim > 0
+                and value.shape[0] == 1):
             return [value[0]]
         if isinstance(value, (list, tuple)) and len(value) == 1:
             return [value[0]]
@@ -1967,7 +2089,8 @@ def _normalize_row_values(value, rows):
     value_array = np.asarray(value)
     if len(value_array) != len(rows):
         raise ValueError(
-            f"Length mismatch: value has {len(value_array)} elements but rows has {len(rows)}"
+            f"Length mismatch: value has {len(value_array)} elements but "
+            f"rows has {len(rows)}"
         )
     return list(value_array)
 
@@ -2020,16 +2143,35 @@ def _flatten_pipeline_steps(tree):
     steps = []
 
     def is_seq(node):
-        return isinstance(node, dict) and all(str(key).isdigit() for key in node.keys())
+        """
+        Check whether a node is a sequence of numbered steps.
+
+        Parameters:
+        node: pipeline tree node.
+
+        Returns:
+        seq (bool): True if ``node`` is a dict whose keys are all digits.
+        """
+        return isinstance(node, dict) and all(str(key).isdigit()
+                                              for key in node.keys())
 
     def walk(node):
+        """
+        Append the steps under a node to ``steps`` in execution order.
+
+        Parameters:
+        node: pipeline tree node.
+        """
         if is_seq(node):
             for _, child in sorted(node.items(), key=lambda item: int(item[0])):
                 walk(child)
             return
         if isinstance(node, dict) and "task" in node:
             steps.append(node["task"])
-            for key, child in sorted(node.items(), key=lambda item: 0 if item[0] == "task" else 1):
+            for key, child in sorted(
+                node.items(),
+                key=lambda item: 0 if item[0] == "task" else 1
+            ):
                 if key == "task":
                     continue
                 if is_seq(child):
@@ -2072,14 +2214,73 @@ def _merge_step_paths(paths):
 
 def _convert_yaml_to_steps(pl_dict, cal_steps, key=None):
     """
-    Replace YAML ``task`` strings with matching :class:`plStep` objects.
+    Replace YAML ``task`` strings with matching ``plStep`` objects.
+
+    Parameters:
+    pl_dict (dict, str, or other): YAML tree node (converted in place).
+    cal_steps (list of plStep): Available steps. If several have the same
+        name, the first is used.
+    key (str or None): Key under which ``pl_dict`` was found in its parent.
+
+    Returns:
+    pl_dict (dict, plStep, or other): The converted node.
+
+    Raises:
+    ValueError: If a task name is not an available step, saying what to do
+        when it is a renamed step.
     """
     if isinstance(pl_dict, dict):
         for inner_key, value in pl_dict.items():
-            pl_dict[inner_key] = _convert_yaml_to_steps(value, cal_steps, inner_key)
+            pl_dict[inner_key] = _convert_yaml_to_steps(
+                value, cal_steps, inner_key)
     if isinstance(pl_dict, str) and key == "task":
-        matches = [step for step in cal_steps if step.name == pl_dict]
-        if not matches:
-            raise ValueError(f"Step '{pl_dict}' not found in available steps.")
-        return matches[0]
+        return _find_step(pl_dict, cal_steps)
     return pl_dict
+
+
+def _find_step(name, steps):
+    """
+    Find the step called ``name``, explaining steps citkid has renamed.
+
+    Parameters:
+    name (str): Task name from a YAML file.
+    steps (list of plStep): Available steps; the first match is used.
+
+    Returns:
+    step (plStep): The matching step.
+
+    Raises:
+    ValueError: If no step matches. For an old built-in step name, the
+        message says to migrate the dataset; for an old template loader
+        name, which name to use instead.
+    """
+    by_name = {}
+    for step in steps:
+        by_name.setdefault(step.name, step)
+    if name in by_name:
+        return by_name[name]
+    if name in RENAMED_STEPS:
+        raise ValueError(
+            f"Step '{name}' has been renamed to '{RENAMED_STEPS[name]}'. "
+            f"If this is a dataset created before the rename, update it "
+            f"once with citkid.pipeline.migrate_step_names(zarr_path) "
+            f"(while nothing else has it open), then reopen it. If the name "
+            f"comes from your own YAML file, rename the task there."
+        )
+    new_name = RENAMED_TEMPLATE_STEPS.get(name)
+    if new_name is not None and new_name in by_name:
+        raise ValueError(
+            f"Step '{name}' has been renamed to '{new_name}' in the "
+            f"templates. Use the new name in the YAML."
+        )
+    renames = {**RENAMED_STEPS, **RENAMED_TEMPLATE_STEPS}
+    old_names = [old for old, new in renames.items() if new == name]
+    for old_name in old_names:
+        if old_name in by_name:
+            raise ValueError(
+                f"Step '{name}' not found, but the custom steps define "
+                f"'{old_name}', its old name. Rename '{old_name}' to "
+                f"'{name}' in the custom steps file to use the current "
+                f"templates."
+            )
+    raise ValueError(f"Step '{name}' not found in available steps.")

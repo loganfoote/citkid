@@ -2,7 +2,6 @@ import os
 import asyncio
 import shutil
 import warnings
-import time
 import zarr
 import numpy as np
 from tqdm.auto import tqdm
@@ -20,6 +19,9 @@ ALL_MODULE_IDXS = tuple(range(1, 9))
 ADC_CALIBRATION_MODES = ('AUTO', 'MODE1', 'MODE2')
 
 class CRS:
+    """
+    Control a CRS (control and readout system) board.
+    """
     def __init__(
         self, serial_number, interface, module_idxs = None,
         global_control = True
@@ -56,8 +58,9 @@ class CRS:
         # Input validation
         if rfmux.__version__ != '1.4.1':
             raise RuntimeError('rfmux version 1.4.1 is required')
-        if not isinstance(serial_number, int):
+        if not isinstance(serial_number, (int, np.integer)):
             raise TypeError('serial_number must be an integer')
+        serial_number = int(serial_number)
         if not util.interface_exists(interface):
             raise ValueError(f'interface {interface} does not exist')
         if not isinstance(global_control, bool):
@@ -403,8 +406,9 @@ class CRS:
         if isinstance(nyquist_zone, bool) or nyquist_zone not in (1, 2):
             raise ValueError('nyquist_zone must be 1 or 2')
         if isinstance(cable_length_m, bool) or \
-           not isinstance(cable_length_m, (int, float, np.integer, np.floating))\
-           or cable_length_m < 0:
+           not isinstance(
+               cable_length_m, (int, float, np.integer, np.floating)
+           ) or cable_length_m < 0:
             raise ValueError('cable_length_m must be a non-negative number')
         if not isinstance(adc_autocal, bool):
             raise TypeError('adc_autocal must be a boolean value')
@@ -629,7 +633,7 @@ class CRS:
                   (self.dec_short != short) or \
                   (self.dec_module_idxs != module_idxs)
         if changed:
-            time.sleep(0.1)
+            await asyncio.sleep(0.1)
         self.dec_stage = dec_stage
         self.dec_short = short
         self.dec_module_idxs = module_idxs
@@ -857,7 +861,9 @@ class CRS:
         dict: keys (int) are module indices and values (float) are DAC full
             scale powers in dBm.
         """
-        return {mi: cfg['full_scale_dbm'] for mi, cfg in self.module_cfg.items()}
+        return {
+            mi: cfg['full_scale_dbm'] for mi, cfg in self.module_cfg.items()
+        }
 
     async def write_tones(
         self, fres, ares, ch_map = None, allow_missing = False
@@ -950,7 +956,7 @@ class CRS:
 
     async def sweep(
         self, frequencies, ares, nsamps, ch_map = None, allow_missing = False,
-        dec_grp = None, verbose = True, pbar_description = 'Sweeping'
+        acq_cfg_grp = None, verbose = True, pbar_description = 'Sweeping'
     ):
         """
         Perform a frequency sweep and return complex S21 at each frequency.
@@ -968,8 +974,9 @@ class CRS:
             allowed frequency range and inserts NaNs in the output. If False,
             raises an error if any tones are outside the allowed frequency
             range.
-        dec_grp (zarr.Group or None): if provided, writes decimation settings
-            to this zarr group.
+        acq_cfg_grp (zarr.Group or None): if provided, writes the acquisition
+            configuration (decimation, sample frequency, and channel map) to
+            this zarr group.
         verbose (bool): If True, displays a progress bar while sweeping.
         pbar_description (str): description for the progress bar.
 
@@ -987,17 +994,18 @@ class CRS:
                              'along axis 0')
         if frequencies.ndim != 2:
             raise ValueError('frequencies must be a 2D array-like object')
-        if not isinstance(nsamps, int) or nsamps <= 0:
+        if not isinstance(nsamps, (int, np.integer)) or nsamps <= 0:
             raise ValueError('nsamps must be a positive integer')
+        nsamps = int(nsamps)
         if not len(self.nco_freqs):
             raise RuntimeError("NCO frequencies are not set")
         ch_map = util._validate_ch_map(ch_map)
         if not isinstance(pbar_description, str):
             raise TypeError('pbar_description must be a string')
-        if dec_grp is not None and not isinstance(
-            dec_grp, zarr.core.group.Group
+        if acq_cfg_grp is not None and not isinstance(
+            acq_cfg_grp, zarr.core.group.Group
             ):
-            raise TypeError('dec_grp must be a zarr.Group or None')
+            raise TypeError('acq_cfg_grp must be a zarr.Group or None')
 
         ### Map frequencies to modules/channels
         # Get ch_map
@@ -1049,10 +1057,10 @@ class CRS:
                     )
                 self.fres_map[key][:, idx] = freq_dithered
 
-        ### Set dec_stage to 6 for sweeping, save if dec_grp is provided
+        ### Set dec_stage to 6 for sweeping, save if acq_cfg_grp is provided
         await self.set_decimation(6, verbose = verbose)
-        if dec_grp is not None:
-            util.write_acq_cfg_to_zarr(self, dec_grp)
+        if acq_cfg_grp is not None:
+            util.write_acq_cfg_to_zarr(self, acq_cfg_grp)
 
         ### Sweep
         # Without global control, check that the decimation stage stays at 6
@@ -1091,7 +1099,7 @@ class CRS:
     async def sweep_span(
         self, fres, ares, span, npoints, nsamps, ch_map = None,
         allow_missing = False, center_fres = True, downward = True, log = False,
-        dec_grp = None, verbose = True, pbar_description = 'Sweeping'
+        acq_cfg_grp = None, verbose = True, pbar_description = 'Sweeping'
     ):
         """
         Perform a frequency sweep where each channel is swept over the same
@@ -1115,8 +1123,9 @@ class CRS:
             sweeps from low to high frequency.
         log (bool): If True, uses logarithmic spacing between points. Else,
             uses linear spacing.
-        dec_grp (zarr.Group or None): if provided, writes decimation settings
-            to this zarr group.
+        acq_cfg_grp (zarr.Group or None): if provided, writes the acquisition
+            configuration (decimation, sample frequency, and channel map) to
+            this zarr group.
         verbose (bool): If True, displays a progress bar while sweeping.
         pbar_description (str): description for the progress bar.
 
@@ -1131,12 +1140,13 @@ class CRS:
         ares = np.asarray(ares, dtype = np.float64)
         if not isinstance(span, (float, np.floating)) or span <= 0:
             raise ValueError('span must be a positive float')
-        if not isinstance(npoints, int) or npoints <= 0:
+        if not isinstance(npoints, (int, np.integer)) or npoints <= 0:
             raise ValueError('npoints must be a positive integer')
-        if dec_grp is not None and not isinstance(
-            dec_grp, zarr.core.group.Group
+        npoints = int(npoints)
+        if acq_cfg_grp is not None and not isinstance(
+            acq_cfg_grp, zarr.core.group.Group
             ):
-            raise TypeError('dec_grp must be a zarr.Group or None')
+            raise TypeError('acq_cfg_grp must be a zarr.Group or None')
         # other validation is performed in self.sweep
 
         # Create freqs array
@@ -1155,14 +1165,14 @@ class CRS:
         # Sweep and return
         f, z = await self.sweep(
             freqs, ares, nsamps, ch_map = ch_map, allow_missing = allow_missing,
-            dec_grp = dec_grp, verbose = verbose,
+            acq_cfg_grp = acq_cfg_grp, verbose = verbose,
             pbar_description = pbar_description
             )
         return f, z
 
     async def sweep_qres(
         self, fres, ares, qres, npoints, nsamps, ch_map = None,
-        allow_missing = False, dec_grp = None, verbose = True,
+        allow_missing = False, acq_cfg_grp = None, verbose = True,
         pbar_description = 'Sweeping'
     ):
         """
@@ -1182,8 +1192,9 @@ class CRS:
         allow_missing (bool): If True, ignores tones that are outside the
             frequency range. If False, raises an error if any tones are
             outside the frequency range.
-        dec_grp (zarr.Group or None): if provided, writes decimation settings
-            to this zarr group.
+        acq_cfg_grp (zarr.Group or None): if provided, writes the acquisition
+            configuration (decimation, sample frequency, and channel map) to
+            this zarr group.
         verbose (bool): If True, displays a progress bar while sweeping.
         pbar_description (str): description for the progress bar.
 
@@ -1196,12 +1207,13 @@ class CRS:
         fres = np.asarray(fres, dtype = np.float64)
         ares = np.asarray(ares, dtype = np.float64)
         qres = np.asarray(qres, dtype = np.float64)
-        if not isinstance(npoints, int) or npoints <= 0:
+        if not isinstance(npoints, (int, np.integer)) or npoints <= 0:
             raise ValueError('npoints must be a positive integer')
-        if dec_grp is not None and not isinstance(
-            dec_grp, zarr.core.group.Group
+        npoints = int(npoints)
+        if acq_cfg_grp is not None and not isinstance(
+            acq_cfg_grp, zarr.core.group.Group
             ):
-            raise TypeError('dec_grp must be a zarr.Group or None')
+            raise TypeError('acq_cfg_grp must be a zarr.Group or None')
         # other validation is performed in self.sweep
 
         # Create freqs array
@@ -1211,28 +1223,29 @@ class CRS:
         # Sweep and return
         f, z = await self.sweep(
             freqs, ares, nsamps, ch_map = ch_map, allow_missing = allow_missing,
-            dec_grp = dec_grp, verbose = verbose,
+            acq_cfg_grp = acq_cfg_grp, verbose = verbose,
             pbar_description = pbar_description
             )
         return f, z
 
     async def sweep_full(
-        self, amplitude, npoints_per_tone, nsamps, log = False, downward = True,
-        dec_grp = None, verbose = True, pbar_description = 'Sweeping'
+        self, amplitude, npoints_per_ch, nsamps, log = False, downward = True,
+        acq_cfg_grp = None, verbose = True, pbar_description = 'Sweeping'
     ):
         """
         Perform a frequency sweep over the full bandwidth around the NCO
         frequency.
 
         Parameters:
-        amplitude (float): amplitude in dBm.
-        npoints_per_tone (int): number of sweep points per tone.
+        amplitude (float): amplitude in dBm, the same for every channel.
+        npoints_per_ch (int): number of sweep points per channel.
         nsamps (int): number of samples to average per point.
         log (bool): If True, uses logarithmic spacing between points. Else,
             uses linear spacing.
         downward (bool): If True, sweeps frequencies in descending order.
-        dec_grp (zarr.Group or None): if provided, writes decimation settings
-            to this zarr group.
+        acq_cfg_grp (zarr.Group or None): if provided, writes the acquisition
+            configuration (decimation, sample frequency, and channel map) to
+            this zarr group.
         verbose (bool): If True, displays a progress bar while sweeping.
         pbar_description (str): description for the progress bar.
 
@@ -1242,12 +1255,14 @@ class CRS:
         """
         # Input validation
         amplitude = float(amplitude)
-        if not isinstance(npoints_per_tone, int) or npoints_per_tone <= 0:
-            raise ValueError('npoints must be a positive integer')
-        if dec_grp is not None and not isinstance(
-            dec_grp, zarr.core.group.Group
+        if not isinstance(npoints_per_ch, (int, np.integer)) or \
+                npoints_per_ch <= 0:
+            raise ValueError('npoints_per_ch must be a positive integer')
+        npoints_per_ch = int(npoints_per_ch)
+        if acq_cfg_grp is not None and not isinstance(
+            acq_cfg_grp, zarr.core.group.Group
             ):
-            raise TypeError('dec_grp must be a zarr.Group or None')
+            raise TypeError('acq_cfg_grp must be a zarr.Group or None')
         # other validation is performed in self.sweep_linear
 
         # Create fres and ares arrays
@@ -1260,7 +1275,7 @@ class CRS:
             func(
                 nco - self.bw / 2 + margin,
                 nco + self.bw / 2 - margin,
-                1024 * npoints_per_tone
+                1024 * npoints_per_ch
             )
             for nco in ncos])
         frequencies = np.array(np.split(frequencies, 1024 * len(ncos)))
@@ -1273,7 +1288,7 @@ class CRS:
         # Sweep and return
         f, z = await self.sweep(
             frequencies=frequencies, ares=ares, nsamps=nsamps, ch_map=ch_map,
-            allow_missing = False, dec_grp = dec_grp, verbose = verbose,
+            allow_missing = False, acq_cfg_grp = acq_cfg_grp, verbose = verbose,
             pbar_description = pbar_description
         )
 
@@ -1343,7 +1358,7 @@ class CRS:
                                  data = np.asarray(ares, dtype = np.float64))
 
             # Sleep briefly to ensure tones are settled
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
         except BaseException:
             await self._clear_channels(idx_to_clear)
             raise
@@ -1904,7 +1919,7 @@ def _validate_configure_system_params(
     """
     if clock_source not in ['VCXO', 'SMA']:
         raise ValueError("clock_source must be 'VCXO' or 'SMA'")
-    if not isinstance(full_scale_dbm, (int, float)):
+    if not isinstance(full_scale_dbm, (int, float, np.integer, np.floating)):
         raise TypeError('full_scale_dbm must be a number')
     if full_scale_dbm < 0. or full_scale_dbm > 7:
         raise ValueError('full_scale_dbm must be in [0, 7]')
@@ -2082,7 +2097,9 @@ def _validate_sweep_input(
     if not isinstance(nco_freqs, dict):
         raise TypeError('nco_freqs must be a dictionary')
     if module_idx not in nco_freqs:
-        raise ValueError(f'nco_freqs does not contain module index {module_idx}')
+        raise ValueError(
+            f'nco_freqs does not contain module index {module_idx}'
+        )
     if not isinstance(nco_freqs[module_idx], (float, np.floating)):
         raise TypeError(
             f'nco_freqs[{module_idx}] must be a float NCO frequency in Hz'
@@ -2092,19 +2109,23 @@ def _validate_sweep_input(
     if not isinstance(frequencies_map, dict):
         raise TypeError('frequencies_map must be a dictionary')
     if module_idx not in frequencies_map:
-        raise ValueError(f'frequencies_map does not contain module index {module_idx}')
-    # Check that value is 2D array-like (list of lists or 2D array)
+        raise ValueError(
+            f'frequencies_map does not contain module index {module_idx}'
+        )
+    # Check that value is 2D array-like (list of lists or 2D array): a value
+    # that can't be converted to floats is a TypeError, a wrong shape is a
+    # ValueError
     try:
         arr = np.asarray(frequencies_map[module_idx], dtype=np.float64)
-        if arr.ndim != 2:
-            raise ValueError(
-                f'frequencies_map[{module_idx}] must be a 2D array '
-                f'(M channels X N frequencies), got shape {arr.shape}'
-            )
     except (ValueError, TypeError) as e:
         raise TypeError(
             f'frequencies_map[{module_idx}] must be 2D array-like of floats'
         ) from e
+    if arr.ndim != 2:
+        raise ValueError(
+            f'frequencies_map[{module_idx}] must be a 2D array '
+            f'(M channels X N frequencies), got shape {arr.shape}'
+        )
 
     # Validate ares_map
     if not isinstance(ares_map, dict):
@@ -2113,14 +2134,14 @@ def _validate_sweep_input(
         raise ValueError(f'ares_map does not contain module index {module_idx}')
     try:
         arr = np.asarray(ares_map[module_idx], dtype=np.float64)
-        if arr.ndim != 1:
-            raise ValueError(
-                f'ares_map[{module_idx}] must be a 1D array, got shape {arr.shape}'
-            )
     except (ValueError, TypeError) as e:
         raise TypeError(
             f'ares_map[{module_idx}] must be 1D array-like of floats'
         ) from e
+    if arr.ndim != 1:
+        raise ValueError(
+            f'ares_map[{module_idx}] must be a 1D array, got shape {arr.shape}'
+        )
 
     # Validate sweep_f and sweep_z (output dicts should not contain module_idx)
     if not isinstance(sweep_f, dict):

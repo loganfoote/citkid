@@ -71,8 +71,9 @@ class NEPFitStore:
         if stored is None:
             return 'The NEP fit group contains data from an unknown source.'
         stored = dict(stored)
-        return (f"The NEP fit group already contains fits of {stored.get('n_sets')} "
-                f"sets at nu = {stored.get('nu'):.4g} Hz.")
+        return (f"The NEP fit group already contains fits of "
+                f"{stored.get('n_sets')} sets at nu = "
+                f"{stored.get('nu'):.4g} Hz.")
 
     def clear(self):
         """

@@ -8,7 +8,7 @@ the macro on ReadoutModule objects.
 
 import pytest
 import numpy as np
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 import warnings
 
 
@@ -689,7 +689,7 @@ async def test_sweep_passes_verbose_and_description(base_crs):
 
 @pytest.mark.asyncio
 async def test_sweep_validation_dec_grp_invalid_type(base_crs):
-    """Test sweep raises error when dec_grp is not a zarr.Group or None."""
+    """Test sweep raises error when acq_cfg_grp is not a zarr.Group or None."""
     crs = base_crs
     crs.nco_freqs = {1: 4.0e9}
     
@@ -697,13 +697,17 @@ async def test_sweep_validation_dec_grp_invalid_type(base_crs):
     ares = np.array([-50.0])
     
     with pytest.raises(TypeError, match = "must be a zarr.Group or None"):
-        await crs.sweep(frequencies, ares, 10, dec_grp = "not a group", 
+        await crs.sweep(frequencies, ares, 10, acq_cfg_grp = "not a group", 
                        verbose = False)
 
 
 @pytest.mark.asyncio
-async def test_sweep_calls_write_acq_cfg_to_zarr_when_dec_grp_provided(base_crs):
-    """Test sweep calls util.write_acq_cfg_to_zarr when dec_grp is provided."""
+async def test_sweep_calls_write_acq_cfg_to_zarr_when_dec_grp_provided(
+    base_crs
+):
+    """
+    Test sweep calls util.write_acq_cfg_to_zarr when acq_cfg_grp is provided.
+    """
     import zarr
     crs = base_crs
     crs.nco_freqs = {1: 4.0e9}
@@ -744,7 +748,7 @@ async def test_sweep_calls_write_acq_cfg_to_zarr_when_dec_grp_provided(base_crs)
                 'citkid.crs.instrument.util.write_acq_cfg_to_zarr'
             ) as mock_write_acq:
                 await crs.sweep(
-                    frequencies, ares, nsamps, dec_grp = mock_grp, 
+                    frequencies, ares, nsamps, acq_cfg_grp = mock_grp, 
                     verbose = False
                 )
                 
@@ -753,8 +757,13 @@ async def test_sweep_calls_write_acq_cfg_to_zarr_when_dec_grp_provided(base_crs)
 
 
 @pytest.mark.asyncio
-async def test_sweep_does_not_call_write_acq_cfg_to_zarr_when_dec_grp_none(base_crs):
-    """Test sweep does not call util.write_acq_cfg_to_zarr when dec_grp is None."""
+async def test_sweep_does_not_call_write_acq_cfg_to_zarr_when_dec_grp_none(
+    base_crs
+):
+    """
+    Test sweep does not call util.write_acq_cfg_to_zarr when acq_cfg_grp is
+    None.
+    """
     crs = base_crs
     crs.nco_freqs = {1: 4.0e9}
     
@@ -790,7 +799,7 @@ async def test_sweep_does_not_call_write_acq_cfg_to_zarr_when_dec_grp_none(base_
                 'citkid.crs.instrument.util.write_acq_cfg_to_zarr'
             ) as mock_write_acq:
                 await crs.sweep(
-                    frequencies, ares, nsamps, dec_grp = None, 
+                    frequencies, ares, nsamps, acq_cfg_grp = None, 
                     verbose = False
                 )
                 
@@ -800,7 +809,10 @@ async def test_sweep_does_not_call_write_acq_cfg_to_zarr_when_dec_grp_none(base_
 
 @pytest.mark.asyncio
 async def test_sweep_preserves_ch_map_when_provided(base_crs):
-    """Test that crs.ch_map equals the input ch_map after sweep when ch_map is provided."""
+    """
+    Test that crs.ch_map equals the input ch_map after sweep when ch_map is
+    provided.
+    """
     crs = base_crs
     crs.nco_freqs = {1: 4.0e9}
     
@@ -1304,7 +1316,9 @@ async def test_sweep_span_returns_sweep_output(base_crs):
 
 @pytest.mark.asyncio
 async def test_sweep_span_validation_dec_grp_invalid_type(base_crs):
-    """Test sweep_span raises error when dec_grp is not a zarr.Group or None."""
+    """
+    Test sweep_span raises error when acq_cfg_grp is not a zarr.Group or None.
+    """
     crs = base_crs
     
     fres = np.array([4.0e9])
@@ -1316,13 +1330,13 @@ async def test_sweep_span_validation_dec_grp_invalid_type(base_crs):
     with pytest.raises(TypeError, match = "must be a zarr.Group or None"):
         await crs.sweep_span(
             fres, ares, span, npoints, nsamps, 
-            dec_grp = "not a group", verbose = False
+            acq_cfg_grp = "not a group", verbose = False
         )
 
 
 @pytest.mark.asyncio
 async def test_sweep_span_passes_dec_grp_to_sweep(base_crs):
-    """Test sweep_span passes dec_grp parameter to sweep."""
+    """Test sweep_span passes acq_cfg_grp parameter to sweep."""
     import zarr
     crs = base_crs
     crs.nco_freqs = {1: 4.0e9}
@@ -1340,17 +1354,17 @@ async def test_sweep_span_passes_dec_grp_to_sweep(base_crs):
     captured_dec_grp = None
     async def mock_sweep(frequencies, ares_in, nsamps_in, **kwargs):
         nonlocal captured_dec_grp
-        captured_dec_grp = kwargs.get('dec_grp')
+        captured_dec_grp = kwargs.get('acq_cfg_grp')
         return frequencies, np.ones_like(frequencies, dtype = complex)
     
     crs.sweep = mock_sweep
     
     await crs.sweep_span(
         fres, ares, span, npoints, nsamps, 
-        dec_grp = mock_grp, verbose = False
+        acq_cfg_grp = mock_grp, verbose = False
     )
     
-    # Verify dec_grp was passed through
+    # Verify acq_cfg_grp was passed through
     assert captured_dec_grp is mock_grp
 
 
@@ -1743,7 +1757,9 @@ async def test_sweep_qres_returns_sweep_output(base_crs):
 
 @pytest.mark.asyncio
 async def test_sweep_qres_validation_dec_grp_invalid_type(base_crs):
-    """Test sweep_qres raises error when dec_grp is not a zarr.Group or None."""
+    """
+    Test sweep_qres raises error when acq_cfg_grp is not a zarr.Group or None.
+    """
     crs = base_crs
     
     fres = np.array([4.0e9])
@@ -1755,13 +1771,13 @@ async def test_sweep_qres_validation_dec_grp_invalid_type(base_crs):
     with pytest.raises(TypeError, match = "must be a zarr.Group or None"):
         await crs.sweep_qres(
             fres, ares, qres, npoints, nsamps, 
-            dec_grp = 123, verbose = False
+            acq_cfg_grp = 123, verbose = False
         )
 
 
 @pytest.mark.asyncio
 async def test_sweep_qres_passes_dec_grp_to_sweep(base_crs):
-    """Test sweep_qres passes dec_grp parameter to sweep."""
+    """Test sweep_qres passes acq_cfg_grp parameter to sweep."""
     import zarr
     crs = base_crs
     crs.nco_freqs = {1: 4.0e9}
@@ -1779,17 +1795,17 @@ async def test_sweep_qres_passes_dec_grp_to_sweep(base_crs):
     captured_dec_grp = None
     async def mock_sweep(frequencies, ares_in, nsamps_in, **kwargs):
         nonlocal captured_dec_grp
-        captured_dec_grp = kwargs.get('dec_grp')
+        captured_dec_grp = kwargs.get('acq_cfg_grp')
         return frequencies, np.ones_like(frequencies, dtype = complex)
     
     crs.sweep = mock_sweep
     
     await crs.sweep_qres(
         fres, ares, qres, npoints, nsamps, 
-        dec_grp = mock_grp, verbose = False
+        acq_cfg_grp = mock_grp, verbose = False
     )
     
-    # Verify dec_grp was passed through
+    # Verify acq_cfg_grp was passed through
     assert captured_dec_grp is mock_grp
 
 
@@ -1984,15 +2000,18 @@ async def test_sweep_full_validation_npoints(base_crs):
     amplitude = -50.0
     
     # Negative npoints
-    with pytest.raises(ValueError, match = "npoints must be a positive integer"):
+    with pytest.raises(
+            ValueError, match = "npoints_per_ch must be a positive integer"):
         await crs.sweep_full(amplitude, -5, 10)
     
     # Zero npoints
-    with pytest.raises(ValueError, match = "npoints must be a positive integer"):
+    with pytest.raises(
+            ValueError, match = "npoints_per_ch must be a positive integer"):
         await crs.sweep_full(amplitude, 0, 10)
     
     # Non-integer npoints
-    with pytest.raises(ValueError, match = "npoints must be a positive integer"):
+    with pytest.raises(
+            ValueError, match = "npoints_per_ch must be a positive integer"):
         await crs.sweep_full(amplitude, 5.5, 10)
 
 
@@ -2054,16 +2073,19 @@ async def test_sweep_full_tone_bandwidth_calculation(base_crs):
     f, z = await crs.sweep_full(amplitude, npoints, nsamps, verbose = False)
     
     # Verify tone spacing (spacing between consecutive tones)
-    # After downward flip, last column has tones in order (first element of each chunk)
+    # After downward flip, last column has tones in order (first element of
+    # each chunk)
     tone_spacing = np.diff(captured_frequencies[:, -1])
-    # Frequencies created as linspace(min, max, 1024*npoints), then split into (1024, npoints)
+    # Frequencies created as linspace(min, max, 1024*npoints), then split into
+    # (1024, npoints)
     # Tone spacing = npoints * step where step = (max-min)/(1024*npoints - 1)
     margin = crs.bw * 1e-9
     freq_min = 4.0e9 - crs.bw / 2 + margin
     freq_max = 4.0e9 + crs.bw / 2 - margin
     total_points = 1024 * npoints
     expected_spacing = npoints * (freq_max - freq_min) / (total_points - 1)
-    # Use looser tolerance since we're computing expected value from implementation logic
+    # Use looser tolerance since we're computing expected value from
+    # implementation logic
     assert np.allclose(tone_spacing, expected_spacing, rtol = 1e-4)
 
 
@@ -2275,7 +2297,9 @@ async def test_sweep_full_tone_spacing_logarithmic(base_crs):
 
 @pytest.mark.asyncio
 async def test_sweep_full_validation_dec_grp_invalid_type(base_crs):
-    """Test sweep_full raises error when dec_grp is not a zarr.Group or None."""
+    """
+    Test sweep_full raises error when acq_cfg_grp is not a zarr.Group or None.
+    """
     crs = base_crs
     crs.nco_freqs = {1: 4.0e9}
     crs.bw = 512e6
@@ -2287,13 +2311,13 @@ async def test_sweep_full_validation_dec_grp_invalid_type(base_crs):
     with pytest.raises(TypeError, match = "must be a zarr.Group or None"):
         await crs.sweep_full(
             amplitude, npoints, nsamps, 
-            dec_grp = ["not", "a", "group"], verbose = False
+            acq_cfg_grp = ["not", "a", "group"], verbose = False
         )
 
 
 @pytest.mark.asyncio
 async def test_sweep_full_passes_dec_grp_to_sweep(base_crs):
-    """Test sweep_full passes dec_grp parameter to sweep."""
+    """Test sweep_full passes acq_cfg_grp parameter to sweep."""
     import zarr
     crs = base_crs
     crs.nco_freqs = {1: 4.0e9}
@@ -2310,17 +2334,47 @@ async def test_sweep_full_passes_dec_grp_to_sweep(base_crs):
     captured_dec_grp = None
     async def mock_sweep(frequencies, ares, nsamps, **kwargs):
         nonlocal captured_dec_grp
-        captured_dec_grp = kwargs.get('dec_grp')
+        captured_dec_grp = kwargs.get('acq_cfg_grp')
         return frequencies, np.ones_like(frequencies, dtype = complex)
     
     crs.sweep = mock_sweep
     
     await crs.sweep_full(
         amplitude, npoints, nsamps, 
-        dec_grp = mock_grp, verbose = False
+        acq_cfg_grp = mock_grp, verbose = False
     )
     
-    # Verify dec_grp was passed through to sweep
+    # Verify acq_cfg_grp was passed through to sweep
     assert captured_dec_grp is mock_grp
 
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["sweep_span", "sweep_qres", "sweep_full"])
+async def test_sweep_wrappers_accept_numpy_integer_npoints(base_crs, method):
+    """
+    Check that np.int64 point counts (e.g. from target_sweep or an array)
+    are accepted and passed on as Python ints.
+    """
+    crs = base_crs
+    crs.nco_freqs = {1: 4.0e9}
+    crs.bw = 512e6
+    captured = {}
+
+    async def mock_sweep(frequencies, ares, nsamps, **kwargs):
+        captured['shape'] = frequencies.shape
+        return frequencies, np.ones_like(frequencies, dtype = complex)
+
+    crs.sweep = mock_sweep
+    fres, ares = np.array([4.0e9]), np.array([-50.0])
+    npoints = np.int64(5)
+    if method == "sweep_span":
+        await crs.sweep_span(fres, ares, 1e6, npoints, np.int64(10),
+                             verbose = False)
+    elif method == "sweep_qres":
+        await crs.sweep_qres(fres, ares, np.array([1e3]), npoints,
+                             np.int64(10), verbose = False)
+    else:
+        await crs.sweep_full(-50.0, npoints, np.int64(10), verbose = False)
+    assert captured['shape'][1] == 5

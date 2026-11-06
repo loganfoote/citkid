@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from unittest.mock import patch, MagicMock, Mock
+from unittest.mock import patch, Mock
 import os
 
 # Prevent Qt windows from opening during tests
@@ -12,7 +12,8 @@ os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 @pytest.fixture(autouse=True)
 def mock_qt_ui():
     """
-    Automatically mock Qt UI setup for all VNA tests to prevent windows from opening.
+    Automatically mock Qt UI setup for all VNA tests to prevent windows from
+    opening.
     This fixture is autouse=True so it applies to all tests in this directory.
     
     Mocks the UI creation and provides a default mock for update_peaks.
@@ -21,11 +22,14 @@ def mock_qt_ui():
     # Create a mock that does nothing for update_peaks by default
     mock_update = Mock(return_value=None)
     
-    with patch('citkid.vna.res_finder_auto.AutoResFinder.setup_ui'), \
-         patch('citkid.vna.res_finder_auto.AutoResFinder.setup_plot'), \
-         patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks', mock_update), \
-         patch('citkid.vna.res_finder_manual.ManualResFinder.setup_ui'), \
-         patch('citkid.vna.res_finder_manual.ManualResFinder.run'):
+    with (
+        patch('citkid.vna.res_finder_auto.AutoResFinder.setup_ui'),
+        patch('citkid.vna.res_finder_auto.AutoResFinder.setup_plot'),
+        patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks',
+              mock_update),
+        patch('citkid.vna.res_finder_manual.ManualResFinder.setup_ui'),
+        patch('citkid.vna.res_finder_manual.ManualResFinder.run'),
+    ):
         yield
 
 

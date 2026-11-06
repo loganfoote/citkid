@@ -12,6 +12,9 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend for tests
 
+# Every test here needs a CRS board; deselect them with -m "not crs"
+pytestmark = pytest.mark.crs
+
 # Loopback |S21| level checks. With short SMA loopback cables, the median
 # |S21| between S21_LEVEL_FMIN and S21_LEVEL_FMAX should be near 0 dB. The mean
 # over modules is checked tightly to catch unit changes (e.g. a missed factor
@@ -832,13 +835,15 @@ async def test_loopback(pytestconfig, tmp_path):
             if timing_globals:
                 lines.append(
                     "ts_duration_s = {ts_duration_s} dec_stage = {dec_stage} "
-                    "sweep_npoints = {sweep_npoints} sweep_nsamps = {sweep_nsamps} "
+                    "sweep_npoints = {sweep_npoints} "
+                    "sweep_nsamps = {sweep_nsamps} "
                     "nsamples_ts = {nsamples_ts}"
                     .format(**timing_globals)
                 )
             for row in timing_rows:
                 lines.append(
-                    "Timing (bank_high = {analog_bank_high}, nco_MHz = {nco_MHz}): "
+                    "Timing (bank_high = {analog_bank_high}, "
+                    "nco_MHz = {nco_MHz}): "
                     "sweep_span_s = {sweep_span_s:.3f} "
                     "capture_ts_s = {capture_ts_s:.3f}".format(**row)
                 )
@@ -849,10 +854,14 @@ async def test_loopback(pytestconfig, tmp_path):
             if max_abs_module is not None:
                 for result in results:
                     if result["module_idx"] == max_abs_module:
-                        sweep_at_max_overall = result["sweep_vals"][max_abs_idx]
+                        sweep_at_max_overall = (
+                            result["sweep_vals"][max_abs_idx]
+                        )
                         sweep_abs_overall = np.abs(sweep_at_max_overall)
                         if sweep_abs_overall > 0:
-                            max_rel_overall = max_abs_overall / sweep_abs_overall
+                            max_rel_overall = (
+                                max_abs_overall / sweep_abs_overall
+                            )
                         break
             max_abs_line = (
                 f"max_abs_overall = {max_abs_overall:.6f} "
@@ -869,7 +878,8 @@ async def test_loopback(pytestconfig, tmp_path):
                 )
                 lines.append(
                     "Module {module_idx}: max_abs = {max_abs:.6f}, "
-                    "mean_abs = {mean_abs:.6f}, sweep_at_max = {sweep_at_max}".
+                    "mean_abs = {mean_abs:.6f}, "
+                    "sweep_at_max = {sweep_at_max}".
                     format(**result, sweep_at_max = sweep_at_max_str)
                 )
             status_text = "\n".join(lines) + "\n"
@@ -883,14 +893,17 @@ async def test_loopback(pytestconfig, tmp_path):
                 )
                 if timing_globals:
                     lines.append(
-                        "ts_duration_s = {ts_duration_s} dec_stage = {dec_stage} "
-                        "sweep_npoints = {sweep_npoints} sweep_nsamps = {sweep_nsamps} "
+                        "ts_duration_s = {ts_duration_s} "
+                        "dec_stage = {dec_stage} "
+                        "sweep_npoints = {sweep_npoints} "
+                        "sweep_nsamps = {sweep_nsamps} "
                         "nsamples_ts = {nsamples_ts}"
                         .format(**timing_globals)
                     )
                 for row in timing_rows:
                     lines.append(
-                        "Timing (bank_high = {analog_bank_high}, nco_MHz = {nco_MHz}): "
+                        "Timing (bank_high = {analog_bank_high}, "
+                        "nco_MHz = {nco_MHz}): "
                         "sweep_span_s = {sweep_span_s:.3f} "
                         "capture_ts_s = {capture_ts_s:.3f}".format(**row)
                     )
@@ -901,10 +914,14 @@ async def test_loopback(pytestconfig, tmp_path):
                 if max_abs_module is not None:
                     for result in results:
                         if result["module_idx"] == max_abs_module:
-                            sweep_at_max_overall = result["sweep_vals"][max_abs_idx]
+                            sweep_at_max_overall = (
+                                result["sweep_vals"][max_abs_idx]
+                            )
                             sweep_abs_overall = np.abs(sweep_at_max_overall)
                             if sweep_abs_overall > 0:
-                                max_rel_overall = max_abs_overall / sweep_abs_overall
+                                max_rel_overall = (
+                                    max_abs_overall / sweep_abs_overall
+                                )
                             break
                 max_abs_line = (
                     f"max_abs_overall = {max_abs_overall:.6f} "
@@ -921,7 +938,8 @@ async def test_loopback(pytestconfig, tmp_path):
                     )
                     lines.append(
                         "Module {module_idx}: max_abs = {max_abs:.6f}, "
-                        "mean_abs = {mean_abs:.6f}, sweep_at_max = {sweep_at_max}".
+                        "mean_abs = {mean_abs:.6f}, "
+                        "sweep_at_max = {sweep_at_max}".
                         format(**result, sweep_at_max = sweep_at_max_str)
                     )
             status_text = "\n".join(lines) + "\n"

@@ -16,7 +16,7 @@ import numpy as np
 import rfmux
 import zarr
 from contextlib import contextmanager
-from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 from citkid.crs import util
 
@@ -513,7 +513,9 @@ def test_check_stream_write_rate(dec_stage, ntones, ok):
     """Test the write rate limit, which allows the verified rates."""
     if ok:
         rate = util.check_stream_write_rate(dec_stage, ntones)
-        assert rate == pytest.approx(util.get_sample_freq(dec_stage) * ntones * 8)
+        assert rate == pytest.approx(
+            util.get_sample_freq(dec_stage) * ntones * 8
+        )
     else:
         with pytest.raises(ValueError, match = 'MAX_STREAM_WRITE_RATE'):
             util.check_stream_write_rate(dec_stage, ntones)
@@ -932,7 +934,8 @@ def tones_crs(base_crs):
     crs.write_tones = AsyncMock(return_value = np.array([4.0e9 + 3, np.nan]))
     with patch('citkid.crs.instrument.util.write_system_cfg_to_zarr') \
             as mock_cfg, \
-         patch('citkid.crs.instrument.time.sleep') as mock_sleep:
+         patch('citkid.crs.instrument.asyncio.sleep',
+               new_callable = AsyncMock) as mock_sleep:
         yield crs, mock_cfg, mock_sleep
 
 

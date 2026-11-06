@@ -236,7 +236,7 @@ def test_combine_figs_vert_accepts_mixed_inputs_and_preserves_buffers():
 
 
 ################################################################################
-####################### combine_figures_horizontally (new) ######################
+####################### combine_figures_horizontally (new) #####################
 ################################################################################
 def test_combine_figs_horz_returns_bytesio_and_png():
     fig1, ax1 = plt.subplots()
@@ -547,3 +547,21 @@ def test_run_with_time_bar_invalid_desc_type():
     
     with pytest.raises(TypeError):
         util.run_with_time_bar(dummy, 0.1, 123)
+
+
+def test_importing_util_and_crs_does_not_load_matplotlib():
+    """
+    citkid.util (and citkid.crs.instrument, which uses it) load matplotlib
+    and PIL only when a plotting function is called, so data-acquisition
+    code doesn't pay for them.
+    """
+    import os
+    import subprocess
+    import sys
+
+    code = ("import sys; import citkid.util, citkid.crs.instrument; "
+            "print('matplotlib' in sys.modules, 'PIL.Image' in sys.modules)")
+    env = dict(os.environ, CRS_EMBEDDED='1')
+    out = subprocess.run([sys.executable, '-c', code], capture_output=True,
+                         text=True, env=env, check=True)
+    assert out.stdout.split() == ['False', 'False']

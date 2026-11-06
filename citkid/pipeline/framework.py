@@ -39,9 +39,10 @@ def function_location(func):
     func (callable): the function.
 
     Returns:
-    text (str): e.g. ``'load_data_f (custom_steps.py:42)'``.
+    text (str): e.g. ``'load_sweep_f (custom_steps.py:42)'``.
     """
-    name = getattr(func, "__qualname__", None) or getattr(func, "__name__", repr(func))
+    name = (getattr(func, "__qualname__", None)
+            or getattr(func, "__name__", repr(func)))
     try:
         path = inspect.getsourcefile(func)
         line = inspect.getsourcelines(func)[1]
@@ -65,7 +66,8 @@ def step_context(step, params, rows=None, scope=None):
     Returns:
     text (str): multi-line description.
     """
-    kind = {"cal": "calibration step", "analysis": "analysis step"}.get(scope, "step")
+    kind = {"cal": "calibration step",
+            "analysis": "analysis step"}.get(scope, "step")
     where = "" if rows is None else f", data_idx {list(np.atleast_1d(rows))}"
     lines = [f"In {kind} '{step.name}' ({step.func_type}; function "
              f"{function_location(step.func)}){where}."]
@@ -74,7 +76,8 @@ def step_context(step, params, rows=None, scope=None):
         width = max((len(n) for n in step.param_names), default=0)
         for name, value in zip(step.param_names, params):
             lines.append(f"  {name:<{width}} = {describe_value(value)}")
-    lines.append(f"Expected outputs (in order): {', '.join(step.return_names) or 'none'}")
+    lines.append(f"Expected outputs (in order): "
+                 f"{', '.join(step.return_names) or 'none'}")
     return "\n".join(lines)
 
 
@@ -82,6 +85,9 @@ def step_context(step, params, rows=None, scope=None):
 ############################### Lazy Attribute #################################
 ################################################################################
 class LazyAttr:
+    """
+    Represent a lazily-loaded attribute of a DataSet.
+    """
     def __init__(self, DS, name):
         """
         Class to represent a lazily-loaded attribute of a DataSet.
@@ -111,8 +117,9 @@ class LazyAttr:
             normalize.
         
         Returns:
-        tuple: (rows, return_array, inner_key) where rows is list of ints,
-               return_array is bool, inner_key is None or the sub-indexing key.
+        result (tuple): (rows, return_array, inner_key) where rows is list of
+            ints, return_array is bool, inner_key is None or the sub-indexing
+            key.
         """
         inner_key = None
         return_array = True
@@ -258,7 +265,7 @@ class LazyAttr:
         row data. Returns () if no data has been loaded yet.
         
         Returns:
-            tuple: Shape of the data array.
+            shape (tuple): Shape of the data array.
         """
         return self._shape
     
@@ -285,11 +292,13 @@ class LazyAttr:
         return s
 
 
-
 ################################################################################
 #################################### Steps #####################################
 ################################################################################
 class plStep:
+    """
+    Represent one step of the analysis or calibration pipeline.
+    """
     def __init__(
         self, name, func, param_names, return_names, func_type = "per-row"
     ):
@@ -350,8 +359,8 @@ class plStep:
             parameter is global (True) or per-row (False). 
 
         Returns:
-        dict: Dictionary mapping return_names to their corresponding output 
-            values.
+        outputs (dict): Dictionary mapping return_names to their
+            corresponding output values.
         """ 
         ### Input validation 
         if not isinstance(params, list):
@@ -441,10 +450,10 @@ class plStep:
                 # as one output) leaves the other outputs silently empty.
                 if len(results_i) != len(self.return_names):
                     raise ValueError(
-                        f"Step '{self.name}' returned {len(results_i)} output(s) "
-                        f"but has {len(self.return_names)} return names "
-                        f"{self.return_names}. Return a tuple in return_names "
-                        f"order."
+                        f"Step '{self.name}' returned {len(results_i)} "
+                        f"output(s) but has {len(self.return_names)} return "
+                        f"names {self.return_names}. Return a tuple in "
+                        f"return_names order."
                     )
                 for r, v in enumerate(results_i):
                     results[r].append(v) 
@@ -469,7 +478,8 @@ class plStep:
         Return a concise string representation of the pipeline step.
         
         Returns:
-        str: A single-line string containing the step name and function info.
+        text (str): A single-line string containing the step name and
+            function info.
         """
         s = f"Pipeline Step: {self.name}"
         s += f", Function: {self.func.__module__}.{self.func.__name__}"
@@ -480,7 +490,8 @@ class plStep:
         Return a detailed string representation of the pipeline step.
         
         Returns:
-        str: A multi-line string with step name, function, parameters, and type.
+        text (str): A multi-line string with step name, function,
+            parameters, and type.
         """
         s = f"Pipeline Step: {self.name}"
         s += f"\n\tFunction: {self.func.__module__}.{self.func.__name__}"
@@ -515,35 +526,11 @@ def find_pl_path(tree, return_name):
         d (dict): Dictionary to check.
 
         Returns:
-        bool: True if d is a sequence, False otherwise.
+        is_seq (bool): True if d is a sequence, False otherwise.
         """
         isd = isinstance(d, dict)
         return isd and all(k is not None and str(k).isdigit() for k in d.keys())
 
-    def execute_full_stepnode(node):
-        """
-        Return full execution expansion of this stepnode: step + all descendant 
-        work.
-
-        Parameters:
-        node (dict): stepnode dictionary with "task" key and possibly child 
-            sequences.
-
-        Returns:
-        path (list[plStep]): Full execution path of this stepnode and 
-            descendants.
-        """
-        step = node["task"]
-        path = [step]
-        sort_key = lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0
-        for k, child in sorted(node.items(), key = sort_key):
-            if k == "task":
-                continue
-            if is_seq(child):
-                sort_key = lambda kv: int(kv[0])
-                for _, child_stepnode in sorted(child.items(), key = sort_key):
-                    path.extend(execute_full_stepnode(child_stepnode))
-        return path
 
     def contains_path_stepnode(node):
         """
@@ -558,6 +545,15 @@ def find_pl_path(tree, return_name):
         # search each child sequence in natural order; if found, prepend 
         # this step
         def sort_key(kv):
+            """
+            Sort child items: 'task' first, then numbered children.
+
+            Parameters:
+            kv (tuple): (key, value) item of the step node.
+
+            Returns:
+            key (int): 0 for 'task', the integer for digit keys, else 9999.
+            """
             if kv[0] == "task":
                 return 0
             elif str(kv[0]).isdigit():
@@ -684,7 +680,8 @@ def check_pl_tree_structure(tree, cal = False):
                 allowed_types = (str, bool, float, int, type(None))
                 if not isinstance(param_val, allowed_types):
                     m = f'Pipeline tree "params" value for "{param_name}" '
-                    m += f'must be a simple type (str, bool, float, int, None), '
+                    m += (f'must be a simple type '
+                          f'(str, bool, float, int, None), ')
                     m += f'got {type(param_val).__name__}.'
                     raise ValueError(m)
             
@@ -705,7 +702,7 @@ def check_pl_tree_structure(tree, cal = False):
                 raise ValueError(m)
             check_pl_tree_structure(tree[key], cal=cal)
 
-################################################################################ 
+################################################################################
 ###### Helper functions for printing paths and cal_pl in readable formats ######
 ################################################################################
 def print_cal_pl(cal_pl, indent = 0):

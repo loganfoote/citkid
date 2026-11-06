@@ -3,7 +3,7 @@ import pytest
 import numpy as np
 
 ################################################################################
-################################# get_xcal_mask #################################
+################################# get_xcal_mask ################################
 ################################################################################
 # Need to add empty list
 ffine = np.arange(0, 100, 1, dtype = np.float64)
@@ -52,7 +52,8 @@ def test_get_xcal_mask(
     assert mask.dtype in (bool, np.bool_)
     assert np.allclose(np.where(mask)[0], ix_exp)
     
-@pytest.mark.parametrize("ffine,tfine,tnoise,ix0_offset,ix1_offset,std_cutoff", [
+@pytest.mark.parametrize(
+    "ffine,tfine,tnoise,ix0_offset,ix1_offset,std_cutoff", [
     (['a', 1, 2], [1, 2, 3], [2], 1, 1, None),  # non-numeric ffine
     ([1, 2, 3], ['a', 2, 3], [2], 1, 1, None),  # non-numeric tfine
     ([1, 2, 3], [1, 2, 3], ['a', 2], 1, 1, None),  # non-numeric tnoise

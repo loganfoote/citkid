@@ -9,31 +9,38 @@ import os as _os
 _os.environ['PYQTGRAPH_QT_LIB'] = 'PyQt5'
 
 try:
-	from importlib.metadata import PackageNotFoundError, version
+    from importlib.metadata import PackageNotFoundError, version
 except ImportError:  # pragma: no cover - fallback for older Python
-	from importlib_metadata import PackageNotFoundError, version
+    from importlib_metadata import PackageNotFoundError, version
 
 def _read_pyproject_version():
-	try:
-		import tomllib
-	except ImportError:  # pragma: no cover
-		import tomli as tomllib
+    """
+    Read the package version from pyproject.toml.
 
-	from pathlib import Path
+    Returns:
+    version (str): the version in pyproject.toml, or '0.0' if the file or
+        version is missing.
+    """
+    try:
+        import tomllib
+    except ImportError:  # pragma: no cover
+        import tomli as tomllib
 
-	pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
-	if not pyproject_path.exists():
-		return "0.0"
-	with pyproject_path.open("rb") as handle:
-		data = tomllib.load(handle)
-	return data.get("project", {}).get("version", "0.0")
+    from pathlib import Path
+
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    if not pyproject_path.exists():
+        return "0.0"
+    with pyproject_path.open("rb") as handle:
+        data = tomllib.load(handle)
+    return data.get("project", {}).get("version", "0.0")
 
 
 _pyproject_version = _read_pyproject_version()
 if _pyproject_version != "0.0":
-	__version__ = _pyproject_version
+    __version__ = _pyproject_version
 else:
-	try:
-		__version__ = version("citkid")
-	except PackageNotFoundError:  # pragma: no cover
-		__version__ = "0.0"
+    try:
+        __version__ = version("citkid")
+    except PackageNotFoundError:  # pragma: no cover
+        __version__ = "0.0"

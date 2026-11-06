@@ -555,6 +555,16 @@ def describe_range(
                if not big[k]]
 
     def straggle(x, word):
+        """
+        Describe resonances outside the main bands.
+
+        Parameters:
+        x (np.array): frequencies of the stragglers.
+        word (str): word describing their location ('low' or 'high').
+
+        Returns:
+        text (str or None): description, or None if ``x`` is empty.
+        """
         if len(x) == 0:
             return None
         c = np.median(x)
@@ -643,6 +653,15 @@ def find_banks(
     w = np.log(np.minimum(dx[big] / med, 50.))
 
     def comb(periods):
+        """
+        Compute the weighted comb (periodicity) amplitude of the gaps.
+
+        Parameters:
+        periods (np.array): trial periods in log10 f.
+
+        Returns:
+        c (np.array, complex): normalized comb sum per period.
+        """
         return (w[None, :] * np.exp(2j * np.pi * mids[big][None, :]
                                     / periods[:, None])).sum(axis = 1) \
             / w.sum()
@@ -679,6 +698,16 @@ def find_banks(
             widths.append(2 * search_frac * P)
 
     def slots_of(bounds):
+        """
+        Count resonances per slot and flag the real (occupied) banks.
+
+        Parameters:
+        bounds (list): slot boundaries in log10 f.
+
+        Returns:
+        typical (float): median count of the occupied slots.
+        real (np.array, bool): True for slots that count as banks.
+        """
         counts = np.diff(np.searchsorted(xs, bounds))
         occ = counts[counts > 0]
         typical = np.median(occ) if len(occ) else 0
@@ -884,6 +913,15 @@ def q_vs_bank_position(
     b = np.clip((np.nan_to_num(u) * n_bins).astype(int), 0, n_bins - 1)
 
     def profile(sel):
+        """
+        Compute the median Q residual per bank-position bin.
+
+        Parameters:
+        sel (np.array, bool): mask of resonances to use.
+
+        Returns:
+        p (np.array): median residual per bin (NaN for empty bins).
+        """
         return np.array([np.median(r[sel & (b == i)])
                          if (sel & (b == i)).any() else np.nan
                          for i in range(n_bins)])
@@ -1076,6 +1114,17 @@ def describe_full_sweep(f, res, metrics, notes, n_banks = 16):
     q_info = {}
 
     def q_part(name, q):
+        """
+        Describe the Q trends of one quality factor and store them in
+        ``q_info``.
+
+        Parameters:
+        name (str): name of the quality factor (e.g. 'Qi').
+        q (np.array): quality factor per resonance (NaN if unreliable).
+
+        Returns:
+        text (str): description of the trends.
+        """
         if not np.isfinite(q).any():
             return f'{name}: none reliable'
         vf = q_vs_frequency(fr, q, label, banks)

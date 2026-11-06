@@ -20,8 +20,10 @@ def ts_dataset(tmp_path_factory):
     DS (DataSet): the dataset.
     """
     path = tmp_path_factory.mktemp('ts') / 'ts.zarr'
-    DS = DataSet(zarr_path=str(path), cal_yaml_path='ts', custom_cal_steps=ts_steps(synthetic_data()))
-    AnalysisRunner(DS, analysis_yaml_path='ts').execute_path(data_idx=0, save=True, verbose=False)
+    DS = DataSet(zarr_path=str(path), cal_yaml_path='ts',
+                 custom_cal_steps=ts_steps(synthetic_data()))
+    AnalysisRunner(DS, analysis_yaml_path='ts').execute_path(
+        data_idx=0, save=True, verbose=False)
     return DS
 
 
@@ -34,8 +36,10 @@ def iq_dataset(tmp_path_factory):
     DS (DataSet): the dataset.
     """
     path = tmp_path_factory.mktemp('iq') / 'iq.zarr'
-    DS = DataSet(zarr_path=str(path), cal_yaml_path='iq', custom_cal_steps=iq_steps(synthetic_data()))
-    AnalysisRunner(DS, analysis_yaml_path='iq').execute_path(data_idx=0, save=True, verbose=False)
+    DS = DataSet(zarr_path=str(path), cal_yaml_path='iq',
+                 custom_cal_steps=iq_steps(synthetic_data()))
+    AnalysisRunner(DS, analysis_yaml_path='iq').execute_path(
+        data_idx=0, save=True, verbose=False)
     return DS
 
 
@@ -56,7 +60,8 @@ def _titles(fig):
 
 
 @pytest.mark.parametrize('plot_type, n_axes', [
-    ('raw_data', 2), ('gain_fit', 2), ('s21_rmv', 2), ('circfit', 1), ('sparper', 1), ('xcal', 2),
+    ('raw_data', 2), ('gain_fit', 2), ('s21_rmv', 2), ('circfit', 1),
+    ('sparper', 1), ('xcal', 2),
 ])
 def test_plot_each_ts_type(ts_dataset, plot_type, n_axes):
     fig, axs = ts_dataset.plot(0, plot_type)
@@ -72,20 +77,23 @@ def test_plot_title_and_errors(ts_dataset):
     with pytest.raises(ValueError, match="not recognized"):
         ts_dataset.plot(0, 'nope')
     with pytest.raises(ValueError, match="needs 'iq_popt'"):
-        ts_dataset.plot(0, 'iq_fit')                 # not in the 'ts' analysis
+        ts_dataset.plot(0, 'iq_fit')  # not in the 'ts' analysis
     with pytest.raises(ValueError, match="not available for data_idx 1"):
-        ts_dataset.plot(1, 'circfit')                # analysis not run for row 1
+        ts_dataset.plot(1, 'circfit')  # analysis not run for row 1
 
 
 def test_plot_thins_the_timestream(ts_dataset):
     def noise_points(axs):
-        return [len(line.get_xdata()) for line in axs[1].lines if line.get_label() == 'Noise']
+        return [len(line.get_xdata()) for line in axs[1].lines
+                if line.get_label() == 'Noise']
 
     _, axs = ts_dataset.plot(0, 'raw_data')
-    assert noise_points(axs) == [quick_plot.DEFAULT_MAX_POINTS if NT > 5000 else NT]
+    assert noise_points(axs) == [
+        quick_plot.DEFAULT_MAX_POINTS if NT > 5000 else NT]
     _, axs = ts_dataset.plot(0, 'raw_data', max_points=500)
     assert noise_points(axs) == [500]
-    _, axs = ts_dataset.plot(0, 'raw_data', max_points=None, nbins=7)   # nbins: ignored here
+    # nbins: ignored here
+    _, axs = ts_dataset.plot(0, 'raw_data', max_points=None, nbins=7)
     assert noise_points(axs) == [NT]
 
 
@@ -101,7 +109,8 @@ def test_full_cal_ts_returns_png_and_skips_missing_types(ts_dataset):
 
     fig = ts_dataset.plot_full_cal(0, as_figure=True)
     titles = _titles(fig)
-    for plot_type in ('raw_data', 'gain_fit', 's21_rmv', 'circfit', 'sparper', 'xcal'):
+    for plot_type in ('raw_data', 'gain_fit', 's21_rmv', 'circfit',
+                      'sparper', 'xcal'):
         assert quick_plot.PLOT_TYPES[plot_type].title in titles
     assert 'data_idx 0  (no data for: iq_fit)' in titles
     assert len(fig.axes) == 2 + 2 + 2 + 1 + 1 + 2
@@ -117,12 +126,15 @@ def test_full_cal_iq_dataset(iq_dataset):
         iq_dataset.plot_full_cal(0, plot_types=['xcal', 'sparper'])
 
 
-def test_full_cal_shows_a_failing_panel_instead_of_raising(ts_dataset, monkeypatch):
+def test_full_cal_shows_a_failing_panel_instead_of_raising(
+    ts_dataset, monkeypatch
+):
     def broken(*args, **kwargs):
         raise RuntimeError('bad row')
 
     spec = quick_plot.PLOT_TYPES['xcal']
-    monkeypatch.setitem(quick_plot.PLOT_TYPES, 'xcal', spec._replace(func=broken))
+    monkeypatch.setitem(quick_plot.PLOT_TYPES, 'xcal',
+                        spec._replace(func=broken))
 
     fig = ts_dataset.plot_full_cal(0, as_figure=True)
 

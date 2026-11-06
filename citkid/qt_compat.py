@@ -12,7 +12,7 @@ citkid itself always uses PyQt5: importing citkid sets
 pyqtgraph is on another binding (imported before citkid).
 
 This module exposes every constant used by citkid under a single ``Qt``
-namespace that works regardless of binding, so call sites can write::
+namespace that works regardless of binding, so call sites can write:
 
     from citkid.qt_compat import Qt
     if ev.modifiers() & Qt.ShiftModifier: ...
@@ -35,6 +35,7 @@ It also provides window helpers shared by all citkid GUIs:
 
 import threading as _threading
 import warnings as _warnings
+from html import escape as _escape
 
 import pyqtgraph as _pg
 
@@ -46,7 +47,9 @@ if _pg.Qt.QT_LIB != 'PyQt5':
         '(e.g. by rfmux): restart Python and import citkid first.'
     )
 
-from pyqtgraph.Qt import QtCore as _QtCore, QtGui as _QtGui, QtWidgets as _QtWidgets
+from pyqtgraph.Qt import (
+    QtCore as _QtCore, QtGui as _QtGui, QtWidgets as _QtWidgets
+)
 
 # Enum groups to probe for members.  Order matters: the first group that
 # contains the name wins.
@@ -70,6 +73,18 @@ class _QtCompat:
     """
 
     def __getattr__(self, name: str):
+        """
+        Look up a Qt constant by name.
+
+        Parameters:
+        name (str): name of the constant, e.g. 'ShiftModifier'.
+
+        Returns:
+        val: the Qt constant.
+
+        Raises:
+        AttributeError: if no Qt constant has this name.
+        """
         Qt = _QtCore.Qt
         # Fast path: flat namespace (native PyQt5 without pyqtgraph wrapping)
         val = getattr(Qt, name, None)
@@ -88,6 +103,12 @@ class _QtCompat:
         )
 
     def __repr__(self):
+        """
+        Return the representation of the ``Qt`` proxy.
+
+        Returns:
+        text (str): '<citkid.qt_compat.Qt>'.
+        """
         return "<citkid.qt_compat.Qt>"
 
 
@@ -144,26 +165,42 @@ def _windows_message_font():
         from ctypes import wintypes
 
         class LOGFONTW(ctypes.Structure):
+            """
+            Windows LOGFONTW structure (font attributes).
+            """
             _fields_ = [
                 ('lfHeight', wintypes.LONG), ('lfWidth', wintypes.LONG),
-                ('lfEscapement', wintypes.LONG), ('lfOrientation', wintypes.LONG),
+                ('lfEscapement', wintypes.LONG),
+                ('lfOrientation', wintypes.LONG),
                 ('lfWeight', wintypes.LONG), ('lfItalic', wintypes.BYTE),
-                ('lfUnderline', wintypes.BYTE), ('lfStrikeOut', wintypes.BYTE),
-                ('lfCharSet', wintypes.BYTE), ('lfOutPrecision', wintypes.BYTE),
-                ('lfClipPrecision', wintypes.BYTE), ('lfQuality', wintypes.BYTE),
-                ('lfPitchAndFamily', wintypes.BYTE), ('lfFaceName', wintypes.WCHAR * 32),
+                ('lfUnderline', wintypes.BYTE),
+                ('lfStrikeOut', wintypes.BYTE),
+                ('lfCharSet', wintypes.BYTE),
+                ('lfOutPrecision', wintypes.BYTE),
+                ('lfClipPrecision', wintypes.BYTE),
+                ('lfQuality', wintypes.BYTE),
+                ('lfPitchAndFamily', wintypes.BYTE),
+                ('lfFaceName', wintypes.WCHAR * 32),
             ]
 
         class NONCLIENTMETRICSW(ctypes.Structure):
+            """
+            Windows NONCLIENTMETRICSW structure (non-client area metrics).
+            """
             _fields_ = [
                 ('cbSize', wintypes.UINT), ('iBorderWidth', ctypes.c_int),
-                ('iScrollWidth', ctypes.c_int), ('iScrollHeight', ctypes.c_int),
-                ('iCaptionWidth', ctypes.c_int), ('iCaptionHeight', ctypes.c_int),
-                ('lfCaptionFont', LOGFONTW), ('iSmCaptionWidth', ctypes.c_int),
-                ('iSmCaptionHeight', ctypes.c_int), ('lfSmCaptionFont', LOGFONTW),
+                ('iScrollWidth', ctypes.c_int),
+                ('iScrollHeight', ctypes.c_int),
+                ('iCaptionWidth', ctypes.c_int),
+                ('iCaptionHeight', ctypes.c_int),
+                ('lfCaptionFont', LOGFONTW),
+                ('iSmCaptionWidth', ctypes.c_int),
+                ('iSmCaptionHeight', ctypes.c_int),
+                ('lfSmCaptionFont', LOGFONTW),
                 ('iMenuWidth', ctypes.c_int), ('iMenuHeight', ctypes.c_int),
                 ('lfMenuFont', LOGFONTW), ('lfStatusFont', LOGFONTW),
-                ('lfMessageFont', LOGFONTW), ('iPaddedBorderWidth', ctypes.c_int),
+                ('lfMessageFont', LOGFONTW),
+                ('iPaddedBorderWidth', ctypes.c_int),
             ]
 
         user32 = ctypes.windll.user32
@@ -171,9 +208,11 @@ def _windows_message_font():
         metrics.cbSize = ctypes.sizeof(metrics)
         SPI_GETNONCLIENTMETRICS = 0x29
         if not user32.SystemParametersInfoW(
-                SPI_GETNONCLIENTMETRICS, metrics.cbSize, ctypes.byref(metrics), 0):
+                SPI_GETNONCLIENTMETRICS, metrics.cbSize,
+                ctypes.byref(metrics), 0):
             return None, None
-        dpi = user32.GetDpiForSystem() if hasattr(user32, 'GetDpiForSystem') else 96
+        dpi = (user32.GetDpiForSystem() if hasattr(user32, 'GetDpiForSystem')
+               else 96)
         font = metrics.lfMessageFont
         if not font.lfHeight or not dpi:
             return None, None
@@ -246,7 +285,8 @@ def available_screen_geometry():
         pixels.
     """
     app = _QtWidgets.QApplication.instance() or get_qapp()
-    screen = app.screenAt(_QtGui.QCursor.pos()) if hasattr(app, 'screenAt') else None
+    screen = (app.screenAt(_QtGui.QCursor.pos()) if hasattr(app, 'screenAt')
+              else None)
     if screen is None:
         screen = app.primaryScreen()
     return screen.availableGeometry()
@@ -448,12 +488,14 @@ def scroll_area_min_width(scroll):
     if widget is None:
         return 0
     return (widget.minimumSizeHint().width()
-            + scroll.verticalScrollBar().sizeHint().width() + 2 * scroll.frameWidth())
+            + scroll.verticalScrollBar().sizeHint().width()
+            + 2 * scroll.frameWidth())
 
 
 def scroll_area_content_height(scroll, width=None):
     """
-    Return the height a scroll area needs to show its widget without scrolling.
+    Return the height a scroll area needs to show its widget without
+    scrolling.
 
     Use it to size a window to its content: replace the scroll area's own
     size hint with this height in the window's size hint, then pass the
@@ -466,9 +508,9 @@ def scroll_area_content_height(scroll, width=None):
 
     Parameters:
     scroll (QScrollArea): Scroll area whose widget holds the content.
-    width (int or None): Width the scroll area will have. If it is too narrow
-        for the content, a horizontal scrollbar appears, and its height is
-        added. None (default) assumes it is wide enough.
+    width (int or None): Width the scroll area will have. If it is too
+        narrow for the content, a horizontal scrollbar appears, and its
+        height is added. None (default) assumes it is wide enough.
 
     Returns:
     height (int): The widget's minimum size-hint height plus the scroll
@@ -497,8 +539,9 @@ def vbox_height_for_width(layout, width, overrides=None):
     layout (QVBoxLayout): Layout to measure.
     width (int): Width of the layout's widget, in logical pixels.
     overrides (dict or None): Heights to use for specific widgets instead
-        of measuring them, e.g. ``{scroll: scroll_area_content_height(scroll)}``.
-        None (default) measures every item.
+        of measuring them, e.g.
+        ``{scroll: scroll_area_content_height(scroll)}``. None (default)
+        measures every item.
 
     Returns:
     height (int): Total height including margins and spacing, in logical
@@ -514,7 +557,8 @@ def vbox_height_for_width(layout, width, overrides=None):
         # Before a window is shown every child reports isHidden(); skip only
         # widgets that were hidden explicitly.
         if (widget is not None and widget.isHidden()
-                and widget.testAttribute(_QtCore.Qt.WidgetAttribute.WA_WState_ExplicitShowHide)):
+                and widget.testAttribute(
+                    _QtCore.Qt.WidgetAttribute.WA_WState_ExplicitShowHide)):
             continue
         if widget is not None and widget in overrides:
             height = overrides[widget]
@@ -578,7 +622,8 @@ def run_responsive(func, *args, poll_s=0.03, **kwargs):
     """
     global _responsive_depth
     app = _QtWidgets.QApplication.instance()
-    if app is None or _threading.current_thread() is not _threading.main_thread():
+    if app is None or \
+            _threading.current_thread() is not _threading.main_thread():
         return func(*args, **kwargs)
     outcome = {}
 
@@ -591,7 +636,8 @@ def run_responsive(func, *args, poll_s=0.03, **kwargs):
         except BaseException as exc:  # re-raised on the GUI thread
             outcome['error'] = exc
 
-    worker = _threading.Thread(target=target, name='citkid-responsive', daemon=True)
+    worker = _threading.Thread(target=target, name='citkid-responsive',
+                               daemon=True)
     flag = _exclude_user_input_flag()
     _responsive_depth += 1
     try:
@@ -611,7 +657,8 @@ def responsive_busy():
     Check whether ``run_responsive`` work is in progress on the GUI thread.
 
     Returns:
-    busy (bool): True while a ``run_responsive`` call is waiting for its work.
+    busy (bool): True while a ``run_responsive`` call is waiting for its
+        work.
     """
     return _responsive_depth > 0
 
@@ -675,3 +722,174 @@ def describe_display(print_report=True):
     if print_report:
         print(report)
     return report
+
+
+################################################################################
+# Fonts and help dialogs
+################################################################################
+
+# Base font sizes in points at ui_scale = 1. Fonts are always set explicitly,
+# so text size depends only on ui_scale, not on the system default font.
+WIDGET_FONT_PT = 10
+TICK_FONT_PT = 9
+LABEL_FONT_PT = 11
+
+
+def font_px(point_size, ui_scale=1.0, minimum=8):
+    """
+    Convert a font size in points to logical pixels.
+
+    Fonts are set in logical pixels, like every window and widget size, so
+    text keeps the same size relative to the window on every system. In
+    points, text grows with the system's text scaling (e.g. a larger
+    Xft.dpi on Linux) while the windows don't. On Windows (96 logical DPI)
+    the result is the same size as the point size.
+
+    Parameters:
+    point_size (float): size in points at ui_scale = 1.
+    ui_scale (float): font size multiplier. Default 1.0.
+    minimum (int): smallest size returned, in pixels. Default 8.
+
+    Returns:
+    px (int): size in logical pixels (point_size * ui_scale * 96 / 72).
+    """
+    return max(int(minimum), round(point_size * ui_scale * 96 / 72))
+
+
+def widget_font_stylesheet(ui_scale):
+    """
+    Return a stylesheet that sets the font size of every widget.
+
+    Parameters:
+    ui_scale (float): Font size multiplier.
+
+    Returns:
+    stylesheet (str): ``'* { font-size: Npx; }'`` with
+        N = ``font_px(WIDGET_FONT_PT, ui_scale)``.
+    """
+    return f"* {{ font-size: {font_px(WIDGET_FONT_PT, ui_scale)}px; }}"
+
+
+def hint_label(text):
+    """
+    Return a label for keyboard-shortcut hints.
+
+    The text word-wraps, so put the label on a row of its own (full width);
+    beside other widgets it can be squeezed to nothing. Its color is a mix
+    of the theme's text and background colors, so it is muted but readable
+    with any theme (``palette(mid)`` can match the background on some Linux
+    themes).
+
+    Parameters:
+    text (str): the hints.
+
+    Returns:
+    label (QLabel): the label.
+    """
+    label = _QtWidgets.QLabel(text)
+    label.setWordWrap(True)
+    palette = label.palette()
+    fg = palette.color(_QtGui.QPalette.ColorRole.WindowText)
+    bg = palette.color(_QtGui.QPalette.ColorRole.Window)
+    pairs = ((fg.red(), bg.red()), (fg.green(), bg.green()),
+             (fg.blue(), bg.blue()))
+    r, g, b = [round(0.65 * f + 0.35 * b) for f, b in pairs]
+    label.setStyleSheet(f"color: rgb({r}, {g}, {b}); font-style: italic;")
+    return label
+
+
+def help_html(title, sections):
+    """
+    Format a help dialog's text as HTML.
+
+    Parameters:
+    title (str): heading.
+    sections (list): ``(heading, items)`` pairs, where items is a list of
+        ``(keys, description)`` string pairs; an empty ``keys`` shows the
+        description alone. Plain text: ``<``, ``>`` and ``&`` are escaped.
+
+    Returns:
+    html (str): the help text.
+    """
+    parts = [f'<h3>{_escape(title)}</h3>']
+    for heading, items in sections:
+        parts.append(f'<p><b>{_escape(heading)}</b></p><ul>')
+        parts.extend(f'<li><b>{_escape(keys)}:</b> {_escape(text)}</li>'
+                     if keys else f'<li>{_escape(text)}</li>'
+                     for keys, text in items)
+        parts.append('</ul>')
+    return ''.join(parts)
+
+
+def toggle_help_dialog(window, title, sections):
+    """
+    Show or hide a window's help dialog (the H key), building it on first
+    use.
+
+    The dialog lists the window's keyboard shortcuts, buttons and mouse
+    controls. It scrolls if it is taller than the screen, and H (or Esc)
+    closes it again.
+
+    Parameters:
+    window (QWidget): window the dialog belongs to; the dialog is kept in
+        ``window._help_dialog`` and centered on the window.
+    title (str): window name, e.g. 'IQ Series'.
+    sections (list): ``(heading, items)`` pairs (see ``help_html``).
+
+    Returns:
+    dlg (QDialog): the dialog.
+    """
+    dlg = getattr(window, '_help_dialog', None)
+    if dlg is None:
+        dlg = _QtWidgets.QDialog(window)
+        dlg.setWindowTitle(f'{title} Help  (H to close)')
+        label = _QtWidgets.QLabel(help_html(f'{title} Controls', sections))
+        label.setTextFormat(_QtCore.Qt.TextFormat.RichText)
+        label.setWordWrap(True)
+        label.setMargin(8)
+        scroll = _QtWidgets.QScrollArea()
+        scroll.setWidget(label)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(_QtWidgets.QFrame.Shape.NoFrame)
+        layout = _QtWidgets.QVBoxLayout(dlg)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(scroll)
+        _QtGui.QShortcut(_QtGui.QKeySequence('H'), dlg, activated=dlg.hide)
+        geom = available_screen_geometry()
+        width = min(620, geom.width() - 40)
+        label.setFixedWidth(width - 30)
+        height = min(label.heightForWidth(width - 30) + 20,
+                     geom.height() - TITLE_BAR_MARGIN - 40)
+        dlg.resize(width, height)
+        window._help_dialog = dlg
+    if dlg.isVisible():
+        dlg.hide()
+        return dlg
+    dlg.show()
+    frame = dlg.frameGeometry()
+    frame.moveCenter(window.frameGeometry().center())
+    dlg.move(frame.topLeft())
+    dlg.raise_()
+    return dlg
+
+
+def scale_plot_fonts(ui_scale, *plot_items):
+    """
+    Set tick, axis-label and title fonts of pyqtgraph plots from ui_scale.
+
+    Plot text isn't affected by widget stylesheets, so it is set here.
+
+    Parameters:
+    ui_scale (float): Font size multiplier.
+    *plot_items (pg.PlotItem): Plots to style.
+    """
+    tick_font = _QtGui.QFont()
+    tick_font.setPixelSize(font_px(TICK_FONT_PT, ui_scale))
+    label_font = _QtGui.QFont()
+    label_font.setPixelSize(font_px(LABEL_FONT_PT, ui_scale, minimum=9))
+    for plot in plot_items:
+        for ax_name in ('bottom', 'left', 'top', 'right'):
+            ax = plot.getAxis(ax_name)
+            ax.setStyle(tickFont=tick_font)
+            ax.label.setFont(label_font)
+        plot.titleLabel.item.setFont(label_font)

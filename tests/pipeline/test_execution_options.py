@@ -64,9 +64,12 @@ def options_fixture(tmp_path):
         "    return result + data_idx\n"
         "\n"
         "custom_analysis_steps = [\n"
-        "    plStep('load_vector', load_vector, [], ['vector'], 'global-res'),\n"
-        "    plStep('vec_mult', vectorized_multiply, ['vector', 'data_idx'], ['result'], 'vectorized'),\n"
-        "    plStep('row_add', per_row_add, ['result', 'data_idx'], ['final'], 'per-row'),\n"
+        "    plStep('load_vector', load_vector, [], ['vector'], "
+        "'global-res'),\n"
+        "    plStep('vec_mult', vectorized_multiply, ['vector', 'data_idx'], "
+        "['result'], 'vectorized'),\n"
+        "    plStep('row_add', per_row_add, ['result', 'data_idx'], ['final'], "
+        "'per-row'),\n"
         "]\n",
         encoding="utf-8",
     )
@@ -124,7 +127,8 @@ def _make_runner(files, zarr_name="analysis.zarr"):
         analysis_yaml_path=str(files["analysis_yaml"]),
         custom_path=str(files["analysis_custom"]),
     )
-    vec_mult = next(step for step in ar.analysis_steps if step.name == "vec_mult")
+    vec_mult = next(step for step in ar.analysis_steps
+                    if step.name == "vec_mult")
     return ds, ar, vec_mult.func.__globals__
 
 
@@ -142,227 +146,283 @@ def _step(ar, name):
     return next(step for step in ar.analysis_steps if step.name == name)
 
 
-class TestVectorize:
-    """Tests for the ``vectorize`` option."""
+# Tests for the ``vectorize`` option.
 
-    def test_vectorized_step_runs_once_by_default(self, options_fixture):
-        ds, ar, module = _make_runner(options_fixture)
+def test_vectorized_step_runs_once_by_default(options_fixture):
+    ds, ar, module = _make_runner(options_fixture)
 
-        ar.execute_path(data_idx=np.arange(10), verbose=False, save=True)
+    ar.execute_path(data_idx=np.arange(10), verbose=False, save=True)
 
-        assert module["call_log"] == [list(range(10))]
-        np.testing.assert_array_equal(ds.final[np.arange(10)], np.arange(10) * 7)
+    assert module["call_log"] == [list(range(10))]
+    np.testing.assert_array_equal(ds.final[np.arange(10)], np.arange(10) * 7)
 
-    def test_vectorize_false_runs_one_row_at_a_time(self, options_fixture):
-        ds, ar, module = _make_runner(options_fixture)
+def test_vectorize_false_runs_one_row_at_a_time(options_fixture):
+    ds, ar, module = _make_runner(options_fixture)
 
-        ar.execute_path(data_idx=np.arange(10), vectorize=False, verbose=False, save=True)
+    ar.execute_path(data_idx=np.arange(10), vectorize=False, verbose=False,
+                    save=True)
 
-        assert module["call_log"] == [[row] for row in range(10)]
-        np.testing.assert_array_equal(ds.final[np.arange(10)], np.arange(10) * 7)
+    assert module["call_log"] == [[row] for row in range(10)]
+    np.testing.assert_array_equal(ds.final[np.arange(10)], np.arange(10) * 7)
 
-    def test_execute_step_vectorize_false(self, options_fixture):
-        ds, ar, module = _make_runner(options_fixture)
+def test_execute_step_vectorize_false(options_fixture):
+    ds, ar, module = _make_runner(options_fixture)
+    ar.execute_step(_step(ar, "load_vector"), save=True)
+
+    ar.execute_step(_step(ar, "vec_mult"), data_idx=[0, 1], vectorize=False,
+                    save=True)
+
+    assert module["call_log"] == [[0], [1]]
+    np.testing.assert_array_equal(ds.result[[0, 1]], np.array([0, 6]))
+
+def test_vectorize_false_records_failing_rows(options_fixture):
+    ds, ar, module = _make_runner(options_fixture)
+    ar.execute_step(_step(ar, "load_vector"), save=True)
+    module["fail_rows"].add(1)
+
+    with pytest.raises(ValueError, match="bad row"):
+        ar.execute_step(_step(ar, "vec_mult"), data_idx=[0, 1, 2], save=True)
+
+    with pytest.warns(RuntimeWarning, match=r"failed for 1 row\(s\): \[1\]"):
+        ar.execute_step(_step(ar, "vec_mult"), data_idx=[0, 1, 2],
+                        vectorize=False, save=True)
+    assert ds._has_rows("result", [0, 2])
+    assert not ds._has_rows("result", [1])
+
+def test_failure_warning_shows_the_first_error(options_fixture):
+    ds, ar, module = _make_runner(options_fixture)
+    ar.execute_step(_step(ar, "load_vector"), save=True)
+    module["fail_rows"].add(1)
+
+    with pytest.warns(RuntimeWarning,
+                      match=r"(?s)First failure \(data_idx 1\):.*bad row"):
+        ar.execute_step(_step(ar, "vec_mult"), data_idx=[0, 1, 2],
+                        vectorize=False, save=True)
+    assert "In analysis step 'vec_mult'" in ar._last_failures[1]
+
+@pytest.mark.parametrize("path_per_row", [False, True])
+def test_execute_path_drops_failed_rows_from_later_steps(
+    options_fixture, path_per_row
+):
+    ds, ar, module = _make_runner(options_fixture)
+    module["fail_rows"].add(1)
+
+    with pytest.warns(RuntimeWarning, match="bad row"):
+        ar.execute_path(data_idx=[0, 1, 2], vectorize=False,
+                        path_per_row=path_per_row, save=True, verbose=False)
+
+    # 7 * data_idx
+    np.testing.assert_array_equal(ds.final[[0, 2]], np.array([0, 14]))
+    assert not ds._has_rows("final", [1])
+
+@pytest.mark.parametrize("path_per_row", [False, True])
+def test_execute_path_raises_when_every_row_fails(
+    options_fixture, path_per_row
+):
+    _, ar, module = _make_runner(options_fixture)
+    module["fail_rows"].update({0, 1})
+
+    with pytest.warns(RuntimeWarning):
+        with pytest.raises(RuntimeError,
+                           match=r"(?s)Every requested row failed\. First "
+                                 r"failure: step 'vec_mult' for data_idx 0:"
+                                 r".*bad row"):
+            ar.execute_path(data_idx=[0, 1], vectorize=False,
+                            path_per_row=path_per_row, verbose=False)
+
+@pytest.mark.parametrize("start, end, expected", [
+    (0, None, ["load_vector", "vec_mult", "row_add"]),
+    (1, None, ["vec_mult", "row_add"]),
+    (0, 2, ["load_vector", "vec_mult"]),
+    (1, 2, ["vec_mult"]),
+])
+def test_execute_path_step_range(options_fixture, start, end, expected):
+    _, ar, _ = _make_runner(options_fixture)
+    if start > 0:
         ar.execute_step(_step(ar, "load_vector"), save=True)
+    ran = []
+    original = ar.execute_step
+    ar.execute_step = lambda step, **kw: (ran.append(step.name),
+                                          original(step, **kw))[1]
 
-        ar.execute_step(_step(ar, "vec_mult"), data_idx=[0, 1], vectorize=False, save=True)
+    ar.execute_path(step_start_idx=start, step_end_idx=end, verbose=False)
 
-        assert module["call_log"] == [[0], [1]]
-        np.testing.assert_array_equal(ds.result[[0, 1]], np.array([0, 6]))
+    assert ran == expected
 
-    def test_vectorize_false_records_failing_rows(self, options_fixture):
-        ds, ar, module = _make_runner(options_fixture)
-        ar.execute_step(_step(ar, "load_vector"), save=True)
-        module["fail_rows"].add(1)
-
-        with pytest.raises(ValueError, match="bad row"):
-            ar.execute_step(_step(ar, "vec_mult"), data_idx=[0, 1, 2], save=True)
-
-        with pytest.warns(RuntimeWarning, match=r"failed for 1 row\(s\): \[1\]"):
-            ar.execute_step(_step(ar, "vec_mult"), data_idx=[0, 1, 2], vectorize=False, save=True)
-        assert ds._has_rows("result", [0, 2])
-        assert not ds._has_rows("result", [1])
-
-    def test_failure_warning_shows_the_first_error(self, options_fixture):
-        ds, ar, module = _make_runner(options_fixture)
-        ar.execute_step(_step(ar, "load_vector"), save=True)
-        module["fail_rows"].add(1)
-
-        with pytest.warns(RuntimeWarning, match=r"(?s)First failure \(data_idx 1\):.*bad row"):
-            ar.execute_step(_step(ar, "vec_mult"), data_idx=[0, 1, 2], vectorize=False, save=True)
-        assert "In analysis step 'vec_mult'" in ar._last_failures[1]
-
-    @pytest.mark.parametrize("path_per_row", [False, True])
-    def test_execute_path_drops_failed_rows_from_later_steps(self, options_fixture, path_per_row):
-        ds, ar, module = _make_runner(options_fixture)
-        module["fail_rows"].add(1)
-
-        with pytest.warns(RuntimeWarning, match="bad row"):
-            ar.execute_path(data_idx=[0, 1, 2], vectorize=False, path_per_row=path_per_row,
-                            save=True, verbose=False)
-
-        np.testing.assert_array_equal(ds.final[[0, 2]], np.array([0, 14]))  # 7 * data_idx
-        assert not ds._has_rows("final", [1])
-
-    @pytest.mark.parametrize("path_per_row", [False, True])
-    def test_execute_path_raises_when_every_row_fails(self, options_fixture, path_per_row):
-        _, ar, module = _make_runner(options_fixture)
-        module["fail_rows"].update({0, 1})
-
-        with pytest.warns(RuntimeWarning):
-            with pytest.raises(RuntimeError, match=r"(?s)Every requested row failed\. First "
-                                                   r"failure: step 'vec_mult' for data_idx 0:"
-                                                   r".*bad row"):
-                ar.execute_path(data_idx=[0, 1], vectorize=False, path_per_row=path_per_row,
-                                verbose=False)
-
-    @pytest.mark.parametrize("start, end, expected", [
-        (0, None, ["load_vector", "vec_mult", "row_add"]),
-        (1, None, ["vec_mult", "row_add"]),
-        (0, 2, ["load_vector", "vec_mult"]),
-        (1, 2, ["vec_mult"]),
-    ])
-    def test_execute_path_step_range(self, options_fixture, start, end, expected):
-        _, ar, _ = _make_runner(options_fixture)
-        if start > 0:
-            ar.execute_step(_step(ar, "load_vector"), save=True)
-        ran = []
-        original = ar.execute_step
-        ar.execute_step = lambda step, **kw: (ran.append(step.name), original(step, **kw))[1]
-
+@pytest.mark.parametrize("start, end", [(3, None), (2, 2), (5, 7)])
+def test_execute_path_empty_step_range_raises(options_fixture, start, end):
+    _, ar, _ = _make_runner(options_fixture)
+    with pytest.raises(ValueError, match="select no steps.*not data indices"):
         ar.execute_path(step_start_idx=start, step_end_idx=end, verbose=False)
 
-        assert ran == expected
+@pytest.mark.parametrize("old_kwarg", [{"execution_mode": "per-row"},
+                                       {"execute_per_row": True},
+                                       {"start_from_idx": 1}])
+def test_old_keyword_names_are_rejected(options_fixture, old_kwarg):
+    _, ar, _ = _make_runner(options_fixture)
 
-    @pytest.mark.parametrize("start, end", [(3, None), (2, 2), (5, 7)])
-    def test_execute_path_empty_step_range_raises(self, options_fixture, start, end):
-        _, ar, _ = _make_runner(options_fixture)
-        with pytest.raises(ValueError, match="select no steps.*not data indices"):
-            ar.execute_path(step_start_idx=start, step_end_idx=end, verbose=False)
-
-    @pytest.mark.parametrize("old_kwarg", [{"execution_mode": "per-row"}, {"execute_per_row": True},
-                                           {"start_from_idx": 1}])
-    def test_old_keyword_names_are_rejected(self, options_fixture, old_kwarg):
-        _, ar, _ = _make_runner(options_fixture)
-
-        with pytest.raises(TypeError):
-            ar.execute_path(data_idx=np.arange(10), verbose=False, **old_kwarg)
+    with pytest.raises(TypeError):
+        ar.execute_path(data_idx=np.arange(10), verbose=False, **old_kwarg)
 
 
-class TestPathPerRow:
-    """Tests for the ``path_per_row`` option."""
+# Tests for the ``path_per_row`` option.
 
-    def test_path_per_row_runs_complete_row_before_next(self, tmp_path):
-        cal_custom = tmp_path / "custom_cal_steps.py"
-        cal_custom.write_text(
-            "from citkid.pipeline.framework import plStep\n"
-            "\n"
-            "def load_data():\n"
-            "    return 2\n"
-            "\n"
-            "custom_cal_steps = [\n"
-            "    plStep('load_data', load_data, [], ['nrows'], 'global'),\n"
-            "]\n",
-            encoding="utf-8",
-        )
-        analysis_custom = tmp_path / "custom_analysis_steps.py"
-        analysis_custom.write_text(
-            "import numpy as np\n"
-            "from citkid.pipeline.framework import plStep\n"
-            "\n"
-            "call_log = []\n"
-            "\n"
-            "def vec_step(data_idx):\n"
-            "    call_log.append(('vec', int(np.atleast_1d(data_idx)[0])))\n"
-            "    return np.atleast_1d(data_idx) * 10\n"
-            "\n"
-            "def row_step(vec_out, data_idx):\n"
-            "    call_log.append(('row', int(data_idx)))\n"
-            "    return vec_out + data_idx\n"
-            "\n"
-            "custom_analysis_steps = [\n"
-            "    plStep('vec_step', vec_step, ['data_idx'], ['vec_out'], 'vectorized'),\n"
-            "    plStep('row_step', row_step, ['vec_out', 'data_idx'], ['final'], 'per-row'),\n"
-            "]\n",
-            encoding="utf-8",
-        )
-        cal_yaml = tmp_path / "cal.yaml"
-        cal_yaml.write_text(
-            "CAL_STEPS:\n"
-            "  1:\n"
-            "    task: load_data\n",
-            encoding="utf-8",
-        )
-        analysis_yaml = tmp_path / "analysis.yaml"
-        analysis_yaml.write_text(
-            "ANALYSIS_STEPS:\n"
-            "  1:\n"
-            "    task: vec_step\n"
-            "  2:\n"
-            "    task: row_step\n",
-            encoding="utf-8",
-        )
+def test_path_per_row_runs_complete_row_before_next(tmp_path):
+    cal_custom = tmp_path / "custom_cal_steps.py"
+    cal_custom.write_text(
+        "from citkid.pipeline.framework import plStep\n"
+        "\n"
+        "def load_data():\n"
+        "    return 2\n"
+        "\n"
+        "custom_cal_steps = [\n"
+        "    plStep('load_data', load_data, [], ['nrows'], 'global'),\n"
+        "]\n",
+        encoding="utf-8",
+    )
+    analysis_custom = tmp_path / "custom_analysis_steps.py"
+    analysis_custom.write_text(
+        "import numpy as np\n"
+        "from citkid.pipeline.framework import plStep\n"
+        "\n"
+        "call_log = []\n"
+        "\n"
+        "def vec_step(data_idx):\n"
+        "    call_log.append(('vec', int(np.atleast_1d(data_idx)[0])))\n"
+        "    return np.atleast_1d(data_idx) * 10\n"
+        "\n"
+        "def row_step(vec_out, data_idx):\n"
+        "    call_log.append(('row', int(data_idx)))\n"
+        "    return vec_out + data_idx\n"
+        "\n"
+        "custom_analysis_steps = [\n"
+        "    plStep('vec_step', vec_step, ['data_idx'], ['vec_out'], "
+        "'vectorized'),\n"
+        "    plStep('row_step', row_step, ['vec_out', 'data_idx'], ['final'], "
+        "'per-row'),\n"
+        "]\n",
+        encoding="utf-8",
+    )
+    cal_yaml = tmp_path / "cal.yaml"
+    cal_yaml.write_text(
+        "CAL_STEPS:\n"
+        "  1:\n"
+        "    task: load_data\n",
+        encoding="utf-8",
+    )
+    analysis_yaml = tmp_path / "analysis.yaml"
+    analysis_yaml.write_text(
+        "ANALYSIS_STEPS:\n"
+        "  1:\n"
+        "    task: vec_step\n"
+        "  2:\n"
+        "    task: row_step\n",
+        encoding="utf-8",
+    )
 
-        ds = DataSet(
-            zarr_path=str(tmp_path / "path_per_row.zarr"),
-            cal_yaml_path=str(cal_yaml),
-            custom_path=str(cal_custom),
-        )
-        ar = AnalysisRunner(
-            ds,
-            analysis_yaml_path=str(analysis_yaml),
-            custom_path=str(analysis_custom),
-        )
+    ds = DataSet(
+        zarr_path=str(tmp_path / "path_per_row.zarr"),
+        cal_yaml_path=str(cal_yaml),
+        custom_path=str(cal_custom),
+    )
+    ar = AnalysisRunner(
+        ds,
+        analysis_yaml_path=str(analysis_yaml),
+        custom_path=str(analysis_custom),
+    )
 
-        ar.execute_path(data_idx=[0, 1], path_per_row=True, verbose=False, save=True)
+    ar.execute_path(data_idx=[0, 1], path_per_row=True, verbose=False,
+                    save=True)
 
-        log = ar.analysis_steps[0].func.__globals__['call_log']
-        assert log == [('vec', 0), ('row', 0), ('vec', 1), ('row', 1)]
-        np.testing.assert_array_equal(ds.final[[0, 1]], [0, 11])
+    log = ar.analysis_steps[0].func.__globals__['call_log']
+    assert log == [('vec', 0), ('row', 0), ('vec', 1), ('row', 1)]
+    np.testing.assert_array_equal(ds.final[[0, 1]], [0, 11])
 
-    def test_path_per_row_runs_global_res_once(self, options_fixture):
-        ds, ar, module = _make_runner(options_fixture)
+def test_path_per_row_runs_global_res_once(options_fixture):
+    ds, ar, module = _make_runner(options_fixture)
 
-        ar.execute_path(data_idx=np.arange(10), path_per_row=True, verbose=False, save=True)
+    ar.execute_path(data_idx=np.arange(10), path_per_row=True, verbose=False,
+                    save=True)
 
-        assert module["call_log"] == [[row] for row in range(10)]
-        np.testing.assert_array_equal(ds.final[np.arange(10)], np.arange(10) * 7)
+    assert module["call_log"] == [[row] for row in range(10)]
+    np.testing.assert_array_equal(ds.final[np.arange(10)], np.arange(10) * 7)
 
 
-class TestPartialRowGlobalSteps:
-    """Tests for partial-row runs that involve global-res steps."""
+# Tests for partial-row runs that involve global-res steps.
 
-    def test_execute_path_partial_rows_allow_first_global_res_run(self, options_fixture):
-        """A first partial execute_path may run a global-res step if nothing exists yet."""
-        ds, ar, _ = _make_runner(options_fixture)
+def test_execute_path_partial_rows_allow_first_global_res_run(
+    options_fixture
+):
+    """
+    A first partial execute_path may run a global-res step if nothing exists
+    yet.
+    """
+    ds, ar, _ = _make_runner(options_fixture)
 
-        ar.execute_path(data_idx=0, verbose=False, save=True)
+    ar.execute_path(data_idx=0, verbose=False, save=True)
 
-        assert ds.final[0] == 0
+    assert ds.final[0] == 0
 
-    def test_execute_path_partial_rows_raises_for_global_res_rerun(self, options_fixture):
-        """Partial execute_path should raise before rerunning an existing global-res step."""
-        _, ar, _ = _make_runner(options_fixture)
+def test_execute_path_partial_rows_raises_for_global_res_rerun(
+    options_fixture
+):
+    """
+    Partial execute_path should raise before rerunning an existing global-res
+    step.
+    """
+    _, ar, _ = _make_runner(options_fixture)
 
-        ar.execute_path(data_idx=0, verbose=False, save=True)
+    ar.execute_path(data_idx=0, verbose=False, save=True)
 
-        with pytest.raises(ValueError, match="load_vector"):
-            ar.execute_path(data_idx=1, verbose=False, save=True)
+    with pytest.raises(ValueError, match="load_vector"):
+        ar.execute_path(data_idx=1, verbose=False, save=True)
 
-    def test_execute_step_raises_when_partial_rows_need_global_res_prerequisite(self, options_fixture):
-        """A later step should not silently rerun a missing global-res prerequisite for one row."""
-        _, ar, _ = _make_runner(options_fixture)
+def test_execute_step_raises_when_partial_rows_need_global_res_prerequisite(
+    options_fixture
+):
+    """
+    A later step should not silently rerun a missing global-res prerequisite
+    for one row.
+    """
+    _, ar, _ = _make_runner(options_fixture)
 
-        with pytest.raises(ValueError, match="load_vector"):
-            ar.execute_step(_step(ar, "vec_mult"), data_idx=0, save=True)
+    with pytest.raises(ValueError, match="load_vector"):
+        ar.execute_step(_step(ar, "vec_mult"), data_idx=0, save=True)
 
-    def test_execute_step_global_res_rerun_requires_overwrite_flag(self, options_fixture):
-        """Re-running a global-res step should require explicit overwrite permission."""
-        _, ar, _ = _make_runner(options_fixture)
-        load_vec_step = _step(ar, "load_vector")
-        ar.execute_step(load_vec_step, save=True)
+def test_execute_step_global_res_rerun_requires_overwrite_flag(
+    options_fixture
+):
+    """
+    Re-running a global-res step should require explicit overwrite permission.
+    """
+    _, ar, _ = _make_runner(options_fixture)
+    load_vec_step = _step(ar, "load_vector")
+    ar.execute_step(load_vec_step, save=True)
 
-        with pytest.raises(ValueError, match="allow_global_step_overwrite"):
-            ar.execute_step(load_vec_step, save=False)
+    with pytest.raises(ValueError, match="allow_global_step_overwrite"):
+        ar.execute_step(load_vec_step, save=False)
 
-        ar.execute_step(load_vec_step, save=False, allow_global_step_overwrite=True)
+    ar.execute_step(load_vec_step, save=False, allow_global_step_overwrite=True)
+
+
+@pytest.mark.parametrize("vectorize", [False, True])
+def test_saved_failures_clear_when_a_row_succeeds(options_fixture, vectorize):
+    """
+    A row's saved failure record is removed once the step runs for it
+    without error (row by row or vectorized).
+    """
+    ds, ar, module = _make_runner(options_fixture)
+    ar.execute_step(_step(ar, "load_vector"), save=True)
+    module["fail_rows"].add(1)
+    with pytest.warns(RuntimeWarning):
+        ar.execute_step(_step(ar, "vec_mult"), data_idx=[0, 1, 2],
+                        vectorize=False, save=True)
+    saved = ds.root["_failures/vec_mult"].attrs["failures"]
+    assert "idx1" in saved
+
+    module["fail_rows"].clear()
+    ar.execute_step(_step(ar, "vec_mult"), data_idx=[1], vectorize=vectorize,
+                    save=True)
+
+    assert "idx1" not in ds.root["_failures/vec_mult"].attrs["failures"]
+    assert ds._step_failures.get("vec_mult", {}) == {}

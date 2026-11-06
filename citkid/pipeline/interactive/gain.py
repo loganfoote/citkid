@@ -1,21 +1,18 @@
 """
 Interactive panel for the gain fitting step (fit_gain).
 
-Plots
------
-Left : Gain amplitude ``20*log10(|zg|)`` vs ``fg``, with the polynomial
-       amplitude fit overlaid in red.
-Right: Unwrapped gain phase ``unwrap(angle(zg))`` vs ``fg``, with the
-       polynomial phase fit overlaid in red.
+Plots:
+- Left: gain amplitude ``20*log10(|zg|)`` vs ``fg``, with the polynomial
+  amplitude fit overlaid in red.
+- Right: unwrapped gain phase ``unwrap(angle(zg))`` vs ``fg``, with the
+  polynomial phase fit overlaid in red.
 
-Controlled parameter
---------------------
-``span_mult`` (float, default 2.0) — multiplier applied to each resonance
-    span before masking out resonances from the gain data.  Increasing
-    this widens the exclusion zone around each resonance.
+Controlled parameter:
+span_mult (float): multiplier applied to each resonance span before masking
+    out resonances from the gain data. Default 2.0. Increasing this widens
+    the exclusion zone around each resonance.
 
-Cascade behaviour
------------------
+Cascade behaviour:
 After a successful run the panel emits ``downstream_rerun`` so that
 subsequent panels (e.g. IQFitPanel) are automatically updated.
 """
@@ -40,7 +37,11 @@ class GainFitPanel(StepPanel):
     """
 
     def setup_ui(self):
-        root = QtWidgets.QVBoxLayout(self)
+        """
+        Build the span_mult control, buttons, status label, and the gain
+        amplitude and phase plots.
+        """
+        root =QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(6, 4, 6, 6)
         root.setSpacing(4)
 
@@ -67,8 +68,10 @@ class GainFitPanel(StepPanel):
 
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setFixedWidth(55)
-        self._run_through_btn.setToolTip("Run this panel and all following panels")
-        self._run_through_btn.clicked.connect(lambda: self.run_from_here.emit())
+        self._run_through_btn.setToolTip(
+            "Run this panel and all following panels")
+        self._run_through_btn.clicked.connect(
+            lambda: self.run_from_here.emit())
         ctrl.addWidget(self._run_through_btn)
 
         self._save_btn = QtWidgets.QPushButton("Save")
@@ -78,7 +81,8 @@ class GainFitPanel(StepPanel):
 
         self._bad_btn = QtWidgets.QPushButton("Bad Data")
         self._bad_btn.setFixedWidth(75)
-        self._bad_btn.setToolTip("Mark this index as bad: fill all outputs with NaN")
+        self._bad_btn.setToolTip(
+            "Mark this index as bad: fill all outputs with NaN")
         self._bad_btn.clicked.connect(self._on_bad_data_clicked)
         ctrl.addWidget(self._bad_btn)
 
@@ -114,10 +118,14 @@ class GainFitPanel(StepPanel):
 
         # Included data points (bright blue scatter)
         _inc_brush = pg.mkBrush(100, 180, 255, 210)
-        self._amp_data   = self._plot_amp.plot(pen=None, symbolBrush=_inc_brush,
-                                               symbolPen=None, symbolSize=4, name='data')
-        self._phase_data = self._plot_phase.plot(pen=None, symbolBrush=_inc_brush,
-                                                 symbolPen=None, symbolSize=4, name='data')
+        self._amp_data   = self._plot_amp.plot(pen=None,
+                                               symbolBrush=_inc_brush,
+                                               symbolPen=None, symbolSize=4,
+                                               name='data')
+        self._phase_data = self._plot_phase.plot(pen=None,
+                                                 symbolBrush=_inc_brush,
+                                                 symbolPen=None, symbolSize=4,
+                                                 name='data')
 
         # Fit overlay curves (red lines)
         _fit_pen = pg.mkPen(color=(255, 80, 80), width=2)
@@ -142,12 +150,23 @@ class GainFitPanel(StepPanel):
     # ------------------------------------------------------------------
 
     def run_steps(self, save: bool = False) -> bool:
-        """Cache the current span_mult for this data_idx before running."""
+        """
+        Cache the current span_mult for this data_idx before running.
+
+        Parameters:
+        save (bool): Passed to ``StepPanel.run_steps``. Default False.
+
+        Returns:
+        ok (bool): True if all steps succeeded.
+        """
         self._span_mult_cache[self.data_idx] = self._span_spin.value()
         return super().run_steps(save=save)
 
     def on_data_idx_changing(self):
-        """Restore span_mult for the new index: session cache → DS/zarr → keep current."""
+        """
+        Restore span_mult for the new index: session cache → DS/zarr → keep
+        current.
+        """
         self._autorange_next = True
         new_di = self.data_idx
         if new_di in self._span_mult_cache:
@@ -162,11 +181,23 @@ class GainFitPanel(StepPanel):
             self._span_spin.blockSignals(False)
 
     def get_params_for_step(self, step):
+        """
+        Return the span_mult spinbox value for fit_gain.
+
+        Parameters:
+        step (plStep): The step about to be executed.
+
+        Returns:
+        params (dict): ``{'span_mult': value}`` for fit_gain, else {}.
+        """
         if step.name == 'fit_gain':
             return {'span_mult': self._span_spin.value()}
         return {}
 
     def update_plots(self):
+        """
+        Plot the gain data, split into fit and masked points, with the fits.
+        """
         di  = self.data_idx
         DS  = self.AR.DS
 
@@ -218,10 +249,16 @@ class GainFitPanel(StepPanel):
     # ------------------------------------------------------------------
 
     def autoscale_plots(self):
+        """
+        Auto-range the amplitude and phase plots.
+        """
         self._plot_amp.autoRange()
         self._plot_phase.autoRange()
 
     def clear_plots(self):
+        """
+        Empty every curve and reset the status label.
+        """
         for curve in (self._amp_data, self._phase_data,
                       self._amp_masked, self._phase_masked,
                       self._amp_fit, self._phase_fit):
@@ -229,14 +266,31 @@ class GainFitPanel(StepPanel):
         self._status_label.setText("—")
 
     def _on_step_error(self, step, exc):
+        """
+        Show and print a step error.
+
+        Parameters:
+        step (plStep): The step that failed.
+        exc (Exception): The exception it raised.
+        """
         msg = f"'{step.name}' failed: {exc}"
         self._status_label.setText(msg)
         print(msg)
 
     def _on_bad_data_clicked(self):
+        """
+        Mark the current row bad (same as the base class).
+        """
         super()._on_bad_data_clicked()
 
     def _nan_outputs(self) -> dict:
+        """
+        Return bad-data placeholders for the fit_gain outputs.
+
+        Returns:
+        outputs (dict): NaN ``p_amp`` (3) and ``p_phase`` (2), and an
+            all-False ``gain_mask`` the length of ``fg``.
+        """
         DS = self.AR.DS
         di = self.data_idx
         try:

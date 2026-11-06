@@ -546,10 +546,14 @@ def test_write_system_cfg_to_zarr_writes_expected_arrays(tmp_path):
     crs = make_dummy_crs()
 
     with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category = Warning, message = ".*Zarr V3 specification.*")
+        warnings.filterwarnings(
+            "ignore", category = Warning,
+            message = ".*Zarr V3 specification.*"
+        )
         util.write_system_cfg_to_zarr(crs, grp)
 
-    # Check that all config is stored as attributes (ch_map and sample_freq are in write_acq_cfg_to_zarr now)
+    # Check that all config is stored as attributes (ch_map and sample_freq
+    # are in write_acq_cfg_to_zarr now)
     expected_attrs = {
         "nco_module1",
         "firmware_version",
@@ -591,7 +595,9 @@ def test_write_system_cfg_to_zarr_invalid_crs_type(tmp_path):
     not_crs = NotCRS()
     not_crs.CRS = DummyCRS
 
-    with pytest.raises(TypeError, match = "crs must be an instance of CRS class"):
+    with pytest.raises(
+        TypeError, match = "crs must be an instance of CRS class"
+    ):
         util.write_system_cfg_to_zarr(not_crs, grp)
 
 
@@ -618,7 +624,9 @@ def test_write_system_cfg_to_zarr_missing_crs_attribute(tmp_path, missing_name):
     crs = make_dummy_crs()
     delattr(crs, missing_name)
 
-    with pytest.raises(ValueError, match = f"crs is missing attribute '{missing_name}'"):
+    with pytest.raises(
+        ValueError, match = f"crs is missing attribute '{missing_name}'"
+    ):
         util.write_system_cfg_to_zarr(crs, grp)
 
 
@@ -653,7 +661,10 @@ def test_write_system_cfg_to_zarr_conflicting_dataset(tmp_path, conflict_name):
     
     crs = make_dummy_crs()
 
-    with pytest.raises(ValueError, match = error_msg.replace('[', r'\[').replace(']', r'\]')):
+    with pytest.raises(
+        ValueError,
+        match = error_msg.replace('[', r'\[').replace(']', r'\]')
+    ):
         util.write_system_cfg_to_zarr(crs, grp)
 
 
@@ -661,7 +672,9 @@ def test_write_system_cfg_to_zarr_invalid_firmware_version(tmp_path):
     grp = zarr.open_group(tmp_path / "config.zarr", mode = "w")
     crs = make_dummy_crs(firmware_release = DummyFirmwareRelease(version = 123))
 
-    with pytest.raises(ValueError, match = "crs.firmware_release.version must be a string"):
+    with pytest.raises(
+        ValueError, match = "crs.firmware_release.version must be a string"
+    ):
         util.write_system_cfg_to_zarr(crs, grp)
 
 
@@ -672,7 +685,9 @@ def test_write_acq_cfg_to_zarr_writes_expected_arrays(tmp_path):
     util.write_acq_cfg_to_zarr(crs, grp)
 
     # Check decimation parameters as attributes
-    expected_attrs = {"dec_module_idxs", "dec_short", "dec_stage", "sample_freq"}
+    expected_attrs = {
+        "dec_module_idxs", "dec_short", "dec_stage", "sample_freq"
+    }
     assert expected_attrs.issubset(set(grp.attrs.keys()))
     assert grp.attrs["dec_module_idxs"] == [1]
     assert grp.attrs["dec_short"] is False
@@ -682,7 +697,9 @@ def test_write_acq_cfg_to_zarr_writes_expected_arrays(tmp_path):
     # Check ch_map is stored as array
     expected_arrays = {"chs_module1"}
     assert expected_arrays.issubset(set(grp.keys()))
-    np.testing.assert_array_equal(grp["chs_module1"][:], np.array([0, 1], dtype = np.int32))
+    np.testing.assert_array_equal(
+        grp["chs_module1"][:], np.array([0, 1], dtype = np.int32)
+    )
 
 
 @pytest.mark.parametrize("missing_name", [
@@ -697,7 +714,9 @@ def test_write_acq_cfg_to_zarr_missing_crs_attribute(tmp_path, missing_name):
     crs = make_dummy_crs()
     delattr(crs, missing_name)
 
-    with pytest.raises(ValueError, match = f"crs is missing attribute '{missing_name}'"):
+    with pytest.raises(
+        ValueError, match = f"crs is missing attribute '{missing_name}'"
+    ):
         util.write_acq_cfg_to_zarr(crs, grp)
 
 
@@ -720,7 +739,10 @@ def test_write_acq_cfg_to_zarr_conflicting_dataset(tmp_path, conflict_name):
         error_msg = f"Zarr group already contains attribute '{conflict_name}'"
     crs = make_dummy_crs()
 
-    with pytest.raises(ValueError, match = error_msg.replace('[', r'\[').replace(']', r'\]')):
+    with pytest.raises(
+        ValueError,
+        match = error_msg.replace('[', r'\[').replace(']', r'\]')
+    ):
         util.write_acq_cfg_to_zarr(crs, grp)
 
 

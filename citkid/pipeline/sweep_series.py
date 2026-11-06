@@ -58,7 +58,7 @@ def target_sweep_steps(
 
     The steps are load_global_data (fres_all, qres_all, nrows, and dt if
     ``ts`` is given), load_global_res_data (fres, qres, ares, res_idxs),
-    load_data_f (ff, zf) and load_data_g (fg, zg), sorted by frequency, and
+    load_sweep_f (ff, zf) and load_sweep_g (fg, zg), sorted by frequency, and
     load_ft and load_zt if ``ts`` is given. The data is opened on first use.
 
     Parameters:
@@ -133,6 +133,16 @@ def target_sweep_steps(
         return np.asarray(store[match.group(2)][...])
 
     def load_global_data():
+        """
+        Load the band's resonances, nrows, and dt if ``ts`` is given.
+
+        Returns:
+        fres_all (np.ndarray): every resonance frequency in the band.
+        qres_all (np.ndarray): span factor of each resonance in ``fres_all``.
+        dt (float): timestream sample period. Only returned if ``ts`` is
+            given.
+        nrows (int): number of tones.
+        """
         g = grp()
         nrows = g['fres'].shape[0]
         if fres_all is None:
@@ -150,6 +160,13 @@ def target_sweep_steps(
         return fres_all_, qres_all_, dt, nrows
 
     def load_global_res_data():
+        """
+        Load the per-tone resonance data of every tone at once.
+
+        Returns:
+        fres, qres, ares, res_idxs (np.ndarray): tone frequencies, span
+            factors, powers and resonator indices.
+        """
         g = grp()
         fres = g['fres'][...]
         qres = g['qres'][...]
@@ -157,7 +174,17 @@ def target_sweep_steps(
         res_idxs = g['res_idxs'][...]
         return fres, qres, ares, res_idxs
 
-    def load_data_f(data_idx):
+    def load_sweep_f(data_idx):
+        """
+        Load one tone's fine sweep, averaged by ``f_avg`` and sorted.
+
+        Parameters:
+        data_idx (int): tone index.
+
+        Returns:
+        ff (np.ndarray): fine sweep frequencies, ascending.
+        zf (np.ndarray): complex fine sweep S21.
+        """
         g = grp()
         ff = np.asarray(g['fine_sweep/f'][data_idx])
         zf = np.asarray(g['fine_sweep/z'][data_idx])
@@ -168,7 +195,17 @@ def target_sweep_steps(
         idx = np.argsort(ff)
         return ff[idx], zf[idx]
 
-    def load_data_g(data_idx):
+    def load_sweep_g(data_idx):
+        """
+        Load one tone's gain sweep, sorted by frequency.
+
+        Parameters:
+        data_idx (int): tone index.
+
+        Returns:
+        fg (np.ndarray): gain sweep frequencies, ascending.
+        zg (np.ndarray): complex gain sweep S21.
+        """
         g = grp()
         fg = np.asarray(g['gain_sweep/f'][data_idx])
         zg = np.asarray(g['gain_sweep/z'][data_idx])
@@ -176,9 +213,28 @@ def target_sweep_steps(
         return fg[idx], zg[idx]
 
     def load_ft(data_idx):
+        """
+        Load the timestream tone frequencies.
+
+        Parameters:
+        data_idx (np.ndarray): tone indices.
+
+        Returns:
+        ft (np.ndarray): tone frequencies.
+        """
         return grp()[f'{ts}/fres'][data_idx]
 
     def load_zt(data_idx):
+        """
+        Load the timestreams, converted from counts to S21.
+
+        Parameters:
+        data_idx (np.ndarray): tone indices.
+
+        Returns:
+        zt (np.ndarray): complex S21 timestreams, shape
+            (len(data_idx), nsamps).
+        """
         g = grp()
         zt = g[f'{stream}/z'][:, data_idx, ts_slice]
         zt = zt[0] + 1j * zt[1]
@@ -194,9 +250,9 @@ def target_sweep_steps(
                'global'),
         plStep('load_global_res_data', load_global_res_data, [],
                ['fres', 'qres', 'ares', 'res_idxs'], 'global-res'),
-        plStep('load_data_f', load_data_f, ['data_idx'], ['ff', 'zf'],
+        plStep('load_sweep_f', load_sweep_f, ['data_idx'], ['ff', 'zf'],
                'per-row'),
-        plStep('load_data_g', load_data_g, ['data_idx'], ['fg', 'zg'],
+        plStep('load_sweep_g', load_sweep_g, ['data_idx'], ['fg', 'zg'],
                'per-row'),
     ]
     if ts is not None:
@@ -388,6 +444,17 @@ def a_vs_power_fit(
         raise ValueError(f'a_min ({a_min}) must be below a_max ({a_max})')
 
     def fit(x, y):
+        """
+        Fit a line to a vs tone amplitude over the range a_min to a_max.
+
+        Parameters:
+        x (np.ndarray): tone powers in dBm, ascending.
+        y (np.ndarray): nonlinearity parameter a at each power.
+
+        Returns:
+        popt (np.ndarray or list): [a_slope, a_offset], NaN if fewer than 2
+            points are in range.
+        """
         above = np.where(y > a_max)[0]
         end = above[0] if len(above) else len(y)
         past_min = np.where(y >= a_min)[0]
@@ -398,6 +465,16 @@ def a_vs_power_fit(
         return np.polyfit(10 ** (x / 20), y, 1)
 
     def model(x, a_slope, a_offset):
+        """
+        Evaluate the linear a vs tone amplitude model.
+
+        Parameters:
+        x (np.ndarray): tone powers in dBm.
+        a_slope, a_offset (float): fit parameters.
+
+        Returns:
+        a (np.ndarray): model nonlinearity parameter.
+        """
         return a_slope * 10 ** (x / 20) + a_offset
 
     return SeriesXYFit(fit = fit, param_names = ['a_slope', 'a_offset'],
@@ -447,6 +524,19 @@ def responsivity_fit(name = 'x_vs_power', group = None):
     from ..responsivity.funcs import responsivity_int_x0
 
     def fit(x, y, p0):
+        """
+        Fit the integrated responsivity to fr vs optical power.
+
+        Parameters:
+        x (np.ndarray): optical powers in W, ascending.
+        y (np.ndarray): resonance frequencies.
+        p0 (np.ndarray or None): guess [R0, P0, x0, f1] (f1 is ignored), or
+            None to make one.
+
+        Returns:
+        popt (list): fitted [R0, P0, x0, f1].
+        p0 (list): guess used [R0, P0, x0, f1].
+        """
         y0 = y[0]
         guess = None if p0 is None else p0[:3]
         p0_used, popt, perr, f0, f0err = fit_responsivity_int_x0(
@@ -455,6 +545,16 @@ def responsivity_fit(name = 'x_vs_power', group = None):
         return [*popt, y0], [*p0_used, y0]
 
     def model(P, R0, P0, x0, f1):
+        """
+        Evaluate fr at optical power P from the integrated responsivity.
+
+        Parameters:
+        P (np.ndarray): optical powers in W.
+        R0, P0, x0, f1 (float): fit parameters.
+
+        Returns:
+        fr (np.ndarray): model resonance frequencies.
+        """
         return f1 * (1 + responsivity_int_x0(P, R0, P0, x0))
 
     return SeriesXYFit(

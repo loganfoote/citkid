@@ -154,7 +154,8 @@ def get_sample_freq(dec_stage):
     float: sample frequency in Hz.
     """
     # Input validation
-    if not isinstance(dec_stage, (int, np.integer)) or dec_stage < 0 or dec_stage > 6:
+    if not isinstance(dec_stage, (int, np.integer)) or dec_stage < 0 or \
+            dec_stage > 6:
         raise ValueError("dec_stage must be an int in range [0, 6]")
     
     # Calculate sample frequency
@@ -783,6 +784,15 @@ def capture_to_zarr(
     local_free = [list(range(nslots)) for _ in module_idxs]
 
     def free_slot(m):
+        """
+        Get a free block buffer slot for a module.
+
+        Parameters:
+        m (int): position of the module in ``module_idxs``.
+
+        Returns:
+        slot (int or None): index of a free slot, or None if no slot is free.
+        """
         if local_free[m]:
             return local_free[m].pop()
         try:
@@ -791,9 +801,30 @@ def capture_to_zarr(
             return None
 
     def on_block(m, slot, k, rows):
+        """
+        Send a filled block buffer slot to the Zarr writer.
+
+        Parameters:
+        m (int): position of the module in ``module_idxs``.
+        slot (int): index of the filled slot.
+        k (int): index of the block in the timestream.
+        rows (int): number of valid rows in the block.
+
+        Returns:
+        None
+        """
         work_q.put((m, slot, k, rows))
 
     def check_writer():
+        """
+        Raise an error if the Zarr writer has reported a failure.
+
+        Returns:
+        None
+
+        Raises:
+        RuntimeError: if the Zarr writer failed.
+        """
         if not status_q.empty():
             raise RuntimeError(f'The Zarr writer failed:\n{status_q.get()}')
 
@@ -905,6 +936,15 @@ def _spawn_without_main():
     original = mp_spawn.get_preparation_data
 
     def get_preparation_data(name):
+        """
+        Get the spawn preparation data without the __main__ module entries.
+
+        Parameters:
+        name (str): name of the process being spawned.
+
+        Returns:
+        data (dict): spawn preparation data.
+        """
         data = original(name)
         data.pop('init_main_from_name', None)
         data.pop('init_main_from_path', None)
@@ -933,15 +973,18 @@ def estimate_ts_data_size(dec_stage, total_time, nmodules, max_ntones, ntones):
     None
     """
     # Type and range checks
-    if not isinstance(dec_stage, int) or dec_stage < 0 or dec_stage > 6:
+    if not isinstance(dec_stage, (int, np.integer)) or dec_stage < 0 or \
+            dec_stage > 6:
         raise ValueError('dec_stage must be an int in range [0, 6]')
     if total_time < 0:
         raise ValueError('total_time must be positive')
     if nmodules not in [1, 2, 3, 4]:
         raise ValueError('nmodules must be in [1, 2, 3, 4]')
-    if not isinstance(max_ntones, int) or max_ntones < 0 or max_ntones > 1024:
+    if not isinstance(max_ntones, (int, np.integer)) or max_ntones < 0 or \
+            max_ntones > 1024:
         raise ValueError('max_ntones must be an int in range [0, 1024]')
-    if not isinstance(ntones, int) or ntones < 0 or ntones > 1024 * 4:
+    if not isinstance(ntones, (int, np.integer)) or ntones < 0 or \
+            ntones > 1024 * 4:
         raise ValueError('ntones must be an int in range [0, 4 * 1024]')
         
     # Calculate file sizes
@@ -1015,7 +1058,8 @@ def write_acq_cfg_to_zarr(crs, grp):
     if not isinstance(grp, zarr.core.group.Group):
         raise TypeError("grp must be a zarr Group instance.") 
     
-    for name in ['dec_module_idxs', 'dec_short', 'dec_stage', 'ch_map', 'sample_freq']:
+    for name in ['dec_module_idxs', 'dec_short', 'dec_stage', 'ch_map',
+                 'sample_freq']:
         if not hasattr(crs, name):
             raise ValueError(f"crs is missing attribute '{name}'.")
     
@@ -1066,8 +1110,9 @@ def write_system_cfg_to_zarr(crs, grp):
     """
     Write CRS system configuration to a Zarr group as attributes.
     
-    This includes static system parameters that don't change during a measurement
-    procedure: NCO frequencies, firmware version, analog bank settings, etc.
+    This includes static system parameters that don't change during a
+    measurement procedure: NCO frequencies, firmware version, analog bank
+    settings, etc.
     Per-module settings in ``crs.module_cfg`` are saved as
     ``<setting>_module<idx>`` attributes, e.g. ``adc_attenuation_db_module1``.
 
@@ -1146,39 +1191,11 @@ def write_system_cfg_to_zarr(crs, grp):
 
 ################################################################################
 ############################# Sweep Helpers ####################################
-################################################################################ 
-def piecewise_geomspace(x0, x1, bw, npoints_per_ch, nchs = 1024):
-    """
-    Space values approximately geometrically between x0 and
-    x1, while ensuring that every chunk of bw space has 
-    exactly nchs * npoints_per_ch tones. 
-
-    Parameters:
-    x0 (float): start frequency in Hz.
-    x1 (float): end frequency in Hz.
-    bw (float): bandwidth in Hz.
-    npoints_per_ch (int): number of points per channel.
-    nchs (int): number of channels per bandwidth. 
-
-    Returns:
-    np.ndarray: concatenated array of geometrically spaced values.
-    """
-    n = npoints_per_ch * nchs
-
-    # Linear bin edges
-    edges = np.arange(x0, x1 + bw, bw)
-    edges[-1] = x1   # ensure exact endpoint
-
-    xs = []
-
-    for a, b in zip(edges[:-1], edges[1:]):
-        xs.append(np.geomspace(a, b, n, endpoint=False))
-
-    return np.concatenate(xs)
+################################################################################
 
 ################################################################################
 ########################### input validation ###################################
-################################################################################ 
+################################################################################
 def _validate_ch_map(ch_map):
     """
     Validate the ch_map dictionary format. Converts values to int32 arrays.

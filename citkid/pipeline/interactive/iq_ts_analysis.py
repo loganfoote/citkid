@@ -9,10 +9,10 @@ followed by ``fit_iq`` -> ``IQFitPanel``:
     ``fit_iq_circle``, ``get_idx_t``, ``get_theta_phase_offset``
         -> ``CircleFitPanel``
     ``get_xcal_mask``, ``fit_x_theta`` -> ``XCalPanel``
-        (``XCalFixedThetaPanel`` with the 'ts-fixed_theta' analysis)
+        (``XCalFixedThetaPanel`` with the 'ts_fixed_theta' analysis)
     ``fit_iq`` -> ``IQFitPanel``
 
-``fit_iq`` is not a step of ``ts_analysis.yaml``. Every runner has it in
+``fit_iq`` is not a step of ``analysis_ts.yaml``. Every runner has it in
 ``analysis_steps``, so the panel works, but ``execute_path`` does not run it
 and the DataSet's invalidation does not tie it to ``fit_gain``. Inside this
 window, re-running a panel marks the panels below it stale (the window asks
@@ -42,7 +42,7 @@ def iq_ts_panels(AR):
     the IQ fit panel.
 
     Parameters:
-    AR (AnalysisRunner): runner with the 'ts' or 'ts-fixed_theta' analysis.
+    AR (AnalysisRunner): runner with the 'ts' or 'ts_fixed_theta' analysis.
 
     Returns:
     panels (list of tuple of str): ``ts_panels(AR)`` plus ``('fit_iq',)``.

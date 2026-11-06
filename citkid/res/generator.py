@@ -15,7 +15,7 @@ f_knee is the knee frequency for 1/f noise, alpha is the exponent of 1/f noise,
 sxx_white is the white level of fractional frequency noise in 1 / Hz, and 
 sAA_white is the white level of amplitude noise in 1 / Hz.
 """
-# Add to environment.yml: rocket_fft=0.3.1
+# The rocket-fft package (a dependency) lets numba compile the np.fft calls
 
 @njit(
     UniTuple(float64[:], 2)(

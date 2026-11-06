@@ -254,7 +254,8 @@ def test_get_spar_sper_invalid_input(theta, A, radius, dt, return_freqs):
 @pytest.mark.parametrize("A,B,R,x,y", [
     (0.0, 0.0, 1.0, np.array([1, 0, -1, 0], dtype = np.float64),
      np.array([0, 1, 0, -1], dtype = np.float64)),
-    (1.0, -2.0, 3.0, np.array([1.0 + 3.0, 1.0, 1.0 - 3.0, 1.0], dtype = np.float64),
+    (1.0, -2.0, 3.0,
+     np.array([1.0 + 3.0, 1.0, 1.0 - 3.0, 1.0], dtype = np.float64),
      np.array([-2.0, -2.0 + 3.0, -2.0, -2.0 - 3.0], dtype = np.float64)),
 ])
 def test_circle_objective_zero_on_true_circle(A, B, R, x, y):

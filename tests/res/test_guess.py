@@ -39,7 +39,8 @@ def test_guess_p0_nonlinear_iq_values(f, z, monkeypatch):
     assert p0[0] == 1.05e9  # fr
 
 @pytest.mark.parametrize("f,z", [
-    (np.array([[1e9, 1.1e9]]), np.ones((1,2), dtype = np.complex128)), # f not 1D
+    # f not 1D
+    (np.array([[1e9, 1.1e9]]), np.ones((1,2), dtype = np.complex128)),
     (np.array([1e9, 1.1e9]), np.array([[1.+0.j, 1.+0.j]])), # z not 1D
     (np.array([1e9, 1.1e9]), np.array([1.+0.j])), # f and z different shapes
     ("not an array", np.ones(2, dtype = np.complex128)), # f not array-like

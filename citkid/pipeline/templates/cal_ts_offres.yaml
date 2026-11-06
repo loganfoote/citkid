@@ -15,25 +15,21 @@ CAL_STEPS:
       3:
         task: rmv_gain_t 
       4:
-        task: rotate_offres_t 
+        task: rotate_t_offres 
       5:
         task: get_thetat
-        A_STEPS: 
+        A_STEPS:
           1:
             task: get_At
-          2:
-            task: get_sparper 
-          3:
-            task: get_sfactor_reduced
     F_STEPS:
       1:
-        task: load_data_f # must be sorted on axis 1
+        task: load_sweep_f # must be sorted on axis 1
       2:
         task: rmv_gain_f 
       3:
-        task: rotate_offres_f
+        task: rotate_f_offres
       4:
         task: get_thetaf
     G_STEPS:
       1: 
-        task: load_data_g
+        task: load_sweep_g

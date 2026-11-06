@@ -8,7 +8,9 @@ import numpy as np
 import pytest
 import zarr
 
-from citkid.pipeline.series_xy_fit import SeriesXYFit, SeriesXYFitStore, usable_points
+from citkid.pipeline.series_xy_fit import (
+    SeriesXYFit, SeriesXYFitStore, usable_points
+)
 
 
 def _linear_fit(uses_guess=False, **kwargs):
@@ -28,7 +30,8 @@ def _linear_fit(uses_guess=False, **kwargs):
 
     if uses_guess:
         def fit(x, y, p0):
-            calls.append((x.copy(), y.copy(), None if p0 is None else p0.copy()))
+            calls.append(
+                (x.copy(), y.copy(), None if p0 is None else p0.copy()))
             guess = np.array([1.0, 0.0]) if p0 is None else p0
             return np.polyfit(x, y, 1), guess
     else:
@@ -75,7 +78,8 @@ def test_usable_points_drops_nan_and_sorts():
 def test_run_passes_usable_sorted_points_and_returns_an_array():
     xy_fit, calls = _linear_fit()
 
-    popt, p0 = xy_fit.run(np.array([3.0, np.nan, 1.0, 2.0]), np.array([7.0, 1.0, 3.0, 5.0]))
+    popt, p0 = xy_fit.run(np.array([3.0, np.nan, 1.0, 2.0]),
+                          np.array([7.0, 1.0, 3.0, 5.0]))
 
     np.testing.assert_array_equal(calls[0][0], [1.0, 2.0, 3.0])
     np.testing.assert_array_equal(calls[0][1], [3.0, 5.0, 7.0])
@@ -87,7 +91,8 @@ def test_run_passes_usable_sorted_points_and_returns_an_array():
 def test_run_with_too_few_points_returns_none():
     xy_fit, calls = _linear_fit()
 
-    assert xy_fit.run(np.array([1.0, np.nan]), np.array([1.0, 2.0])) == (None, None)
+    result = xy_fit.run(np.array([1.0, np.nan]), np.array([1.0, 2.0]))
+    assert result == (None, None)
     assert calls == []
 
 
@@ -97,8 +102,8 @@ def test_run_accepts_a_single_value_and_checks_the_count():
     popt, _ = single.run(np.array([1.0, 2.0]), np.array([4.0, 6.0]))
     np.testing.assert_array_equal(popt, [5.0])
 
-    wrong = SeriesXYFit(fit=lambda x, y: (1.0, 2.0, 3.0), param_names=['a', 'b'],
-                       model=lambda xs, a, b: xs)
+    wrong = SeriesXYFit(fit=lambda x, y: (1.0, 2.0, 3.0),
+                        param_names=['a', 'b'], model=lambda xs, a, b: xs)
     with pytest.raises(ValueError, match='returned 3 parameter values'):
         wrong.run(np.array([1.0, 2.0]), np.array([1.0, 2.0]))
 
@@ -122,13 +127,15 @@ def test_guess_errors():
     with pytest.raises(ValueError, match="doesn't use guesses"):
         no_guess.run(np.array([1.0, 2.0]), np.array([1.0, 2.0]), p0=[1, 0])
 
-    forgot = SeriesXYFit(fit=lambda x, y, p0: (1.0, 2.0), param_names=['a', 'b'],
-                         model=lambda xs, a, b: xs, uses_guess=True)
+    forgot = SeriesXYFit(fit=lambda x, y, p0: (1.0, 2.0),
+                         param_names=['a', 'b'], model=lambda xs, a, b: xs,
+                         uses_guess=True)
     with pytest.raises(ValueError, match=r'must return \(popt, p0\)'):
         forgot.run(np.array([1.0, 2.0]), np.array([1.0, 2.0]))
 
-    short = SeriesXYFit(fit=lambda x, y, p0: ([1.0, 2.0], [1.0]), param_names=['a', 'b'],
-                        model=lambda xs, a, b: xs, uses_guess=True)
+    short = SeriesXYFit(fit=lambda x, y, p0: ([1.0, 2.0], [1.0]),
+                        param_names=['a', 'b'], model=lambda xs, a, b: xs,
+                        uses_guess=True)
     with pytest.raises(ValueError, match='returned 1 guess values'):
         short.run(np.array([1.0, 2.0]), np.array([1.0, 2.0]))
 
@@ -136,7 +143,8 @@ def test_guess_errors():
 @pytest.mark.parametrize('names', [[], ['a', 'a']])
 def test_invalid_param_names_raise(names):
     with pytest.raises(ValueError, match='param_names'):
-        SeriesXYFit(fit=lambda x, y: x, param_names=names, model=lambda xs, *p: xs)
+        SeriesXYFit(fit=lambda x, y: x, param_names=names,
+                    model=lambda xs, *p: xs)
 
 
 def test_curve_spans_usable_x_range():
@@ -149,30 +157,36 @@ def test_curve_spans_usable_x_range():
     np.testing.assert_allclose(ys, 2.0 * xs + 1.0)
     assert xy_fit.curve(np.array([1.0, 3.0]), None) == (None, None)
     assert xy_fit.curve(np.array([1.0, np.nan]), popt) == (None, None)
-    assert xy_fit.curve(np.array([1.0, 3.0]), np.array([np.nan, 1.0])) == (None, None)
+    curve = xy_fit.curve(np.array([1.0, 3.0]), np.array([np.nan, 1.0]))
+    assert curve == (None, None)
 
 
 def test_curve_log_x_spaces_samples_geometrically():
     xy_fit, _ = _linear_fit(n_samples=4)
     popt = np.array([2.0, 1.0])
 
-    xs, ys = xy_fit.curve(np.array([-1.0, 1.0, np.nan, 1000.0]), popt, log_x=True)
+    xs, ys = xy_fit.curve(np.array([-1.0, 1.0, np.nan, 1000.0]), popt,
+                          log_x=True)
 
-    np.testing.assert_allclose(xs, [1.0, 10.0, 100.0, 1000.0])  # x <= 0 is ignored
+    # x <= 0 is ignored
+    np.testing.assert_allclose(xs, [1.0, 10.0, 100.0, 1000.0])
     np.testing.assert_allclose(ys, 2.0 * xs + 1.0)
     assert xy_fit.curve(np.array([-1.0, 5.0]), popt, log_x=True) == (None, None)
 
 
 def test_curve_works_with_numba_float64_model():
-    """Parameters reach the model as floats, as numba float64 signatures need."""
+    """
+    Parameters reach the model as floats, as numba float64 signatures need.
+    """
     from numba import float64, njit
 
     @njit(float64[:](float64[:], float64, float64))
     def line(x, slope, intercept):
         return slope * x + intercept
 
-    xy_fit = SeriesXYFit(fit=lambda x, y: (2.0, 1.0), param_names=['slope', 'intercept'],
-                         model=line, n_samples=3)
+    xy_fit = SeriesXYFit(fit=lambda x, y: (2.0, 1.0),
+                         param_names=['slope', 'intercept'], model=line,
+                         n_samples=3)
 
     xs, ys = xy_fit.curve(np.array([1.0, 3.0]), np.array([2.0, 1.0]))
 
@@ -182,7 +196,8 @@ def test_curve_works_with_numba_float64_model():
 def test_describe_formats_parameters():
     xy_fit, _ = _linear_fit()
 
-    assert xy_fit.describe(np.array([0.0312, 12.0])) == 'slope = 0.0312, intercept = 12'
+    assert (xy_fit.describe(np.array([0.0312, 12.0]))
+            == 'slope = 0.0312, intercept = 12')
     assert xy_fit.describe(None) == ''
 
 
@@ -255,7 +270,8 @@ def test_store_definition_mismatch_and_clear():
     assert not other_store.matches_definition()
     assert "'line'" in other_store.describe_existing()
     assert not _store(xy_fit, nrows=5, group=group).matches_definition()
-    assert not _store(_linear_fit(uses_guess=True)[0], group=group).matches_definition()
+    guess_fit = _linear_fit(uses_guess=True)[0]
+    assert not _store(guess_fit, group=group).matches_definition()
 
     other_store.clear()
     assert other_store.matches_definition()
@@ -278,7 +294,8 @@ def test_store_concurrent_saves(tmp_path):
         except Exception as exc:
             errors.append(exc)
 
-    threads = [threading.Thread(target=writer, args=(range(k, nrows, 2),)) for k in (0, 1)]
+    threads = [threading.Thread(target=writer, args=(range(k, nrows, 2),))
+               for k in (0, 1)]
     for thread in threads:
         thread.start()
     for thread in threads:
@@ -303,10 +320,14 @@ def test_x_at_y_numerical_inverse_stays_in_the_data_range():
     xy_fit, _ = _linear_fit()              # y = 2 x + 1 for popt (2, 1)
     x = np.array([1.0, np.nan, 3.0])
 
-    assert xy_fit.x_at_y([2.0, 1.0], 5.0, x=x) == pytest.approx(2.0, abs=1e-9)   # crossing
-    assert xy_fit.x_at_y([2.0, 1.0], 3.0, x=x) == pytest.approx(1.0)             # exact sample
-    assert xy_fit.x_at_y([2.0, 1.0], 5.0, x=x, log_x=True) == pytest.approx(2.0, abs=1e-9)
-    assert np.isnan(xy_fit.x_at_y([2.0, 1.0], 100.0, x=x))   # not reached: no extrapolation
+    # crossing
+    assert xy_fit.x_at_y([2.0, 1.0], 5.0, x=x) == pytest.approx(2.0, abs=1e-9)
+    # exact sample
+    assert xy_fit.x_at_y([2.0, 1.0], 3.0, x=x) == pytest.approx(1.0)
+    assert (xy_fit.x_at_y([2.0, 1.0], 5.0, x=x, log_x=True)
+            == pytest.approx(2.0, abs=1e-9))
+    # not reached: no extrapolation
+    assert np.isnan(xy_fit.x_at_y([2.0, 1.0], 100.0, x=x))
     assert np.isnan(xy_fit.x_at_y([2.0, 1.0], 5.0))          # no x range
     assert np.isnan(xy_fit.x_at_y([2.0, 1.0], 5.0, x=np.array([1.0, 1.0])))
 
@@ -317,24 +338,27 @@ def test_store_chosen_x():
 
     x, user = store.chosen_x()
     assert np.all(np.isnan(x)) and not user.any()
-    assert np.isnan(store.load_chosen_x(1)[0]) and store.load_chosen_x(1)[1] is False
+    assert (np.isnan(store.load_chosen_x(1)[0])
+            and store.load_chosen_x(1)[1] is False)
     assert store.y_target is None
     store.y_target = 0.5
     assert store.y_target == 0.5
 
     store.save_chosen_x(1, -40.0, user=True)
     assert store.load_chosen_x(1) == (-40.0, True)
-    assert store.save_fit_chosen_x(-30.0, data_idx=1) is False    # the user's is kept
+    # the user's is kept
+    assert store.save_fit_chosen_x(-30.0, data_idx=1) is False
     assert store.save_fit_chosen_x(-30.0, data_idx=0) is True
     assert store.load_chosen_x(0) == (-30.0, False)
 
-    store.save_fit_chosen_x(np.array([-1.0, -2.0, -3.0]))         # every row but the user's
+    # every row but the user's
+    store.save_fit_chosen_x(np.array([-1.0, -2.0, -3.0]))
     x, user = store.chosen_x()
     np.testing.assert_array_equal(x, [-1.0, -40.0, -3.0])
     np.testing.assert_array_equal(user, [False, True, False])
     assert store.group['x_chosen'].shape == (3,)
 
-    store.save_chosen_x(1, -5.0, user=False)                      # reset to the fit's
+    store.save_chosen_x(1, -5.0, user=False)  # reset to the fit's
     assert store.load_chosen_x(1) == (-5.0, False)
 
 

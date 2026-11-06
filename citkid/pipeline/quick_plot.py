@@ -29,8 +29,9 @@ from ..xcal.plot import (
 # Timestream points drawn per plot by default.
 DEFAULT_MAX_POINTS = 5000
 
-PlotType = namedtuple('PlotType', ['title', 'func', 'param_names', 'optional', 'defaults',
-                                   'n_axes', 'axes_arg'])
+PlotType = namedtuple('PlotType', ['title', 'func', 'param_names',
+                                   'optional', 'defaults', 'n_axes',
+                                   'axes_arg'])
 PlotType.__doc__ = """
 One quick-plot type.
 
@@ -49,9 +50,11 @@ axes_arg (str): name of ``func``'s axes argument.
 PLOT_TYPES = {
     'raw_data': PlotType(
         'Raw Data', plot_s21, ['ff', 'zf', 'zt', 'fg', 'zg'],
-        frozenset({'zt', 'fg', 'zg'}), {'max_points': DEFAULT_MAX_POINTS}, 2, 'axs'),
+        frozenset({'zt', 'fg', 'zg'}), {'max_points': DEFAULT_MAX_POINTS},
+        2, 'axs'),
     'gain_fit': PlotType(
-        'Gain Fit', plot_gain_fit, ['fg', 'zg', 'gain_mask', 'p_amp', 'p_phase'],
+        'Gain Fit', plot_gain_fit,
+        ['fg', 'zg', 'gain_mask', 'p_amp', 'p_phase'],
         frozenset(), {}, 2, 'axs'),
     's21_rmv': PlotType(
         'Gain Removed Fine Sweep', plot_s21, ['ff', 'zf_rmv', 'zt_rmv'],
@@ -59,7 +62,8 @@ PLOT_TYPES = {
     'circfit': PlotType(
         'Circle Fit', plot_circfit,
         ['zf_rmv', 'circ_origin', 'circ_radius', 'zt_rmv', 'circ_mask'],
-        frozenset({'zt_rmv', 'circ_mask'}), {'max_points': DEFAULT_MAX_POINTS}, 1, 'ax'),
+        frozenset({'zt_rmv', 'circ_mask'}),
+        {'max_points': DEFAULT_MAX_POINTS}, 1, 'ax'),
     'sparper': PlotType(
         'Par/Per Noise PSDs', plot_sparper, ['f_sparper', 'spar', 'sper'],
         frozenset(), {'nbins': 100, 'fmin': 0.1}, 1, 'ax'),
@@ -70,12 +74,14 @@ PLOT_TYPES = {
         frozenset({'thetat', 'zt_cent', 'xcal_std_cutoff'}),
         {'max_points': DEFAULT_MAX_POINTS}, 2, 'axs'),
     'iq_fit': PlotType(
-        'Nonlinear IQ Fit', plot_nonlinear_iq_fit, ['ff', 'zf_rmv', 'iq_popt', 'iq_mask'],
+        'Nonlinear IQ Fit', plot_nonlinear_iq_fit,
+        ['ff', 'zf_rmv', 'iq_popt', 'iq_mask'],
         frozenset({'iq_mask'}), {}, 2, 'axs'),
 }
 
 # Order of the panels in plot_full_cal.
-FULL_CAL_TYPES = ['raw_data', 'gain_fit', 's21_rmv', 'circfit', 'sparper', 'xcal', 'iq_fit']
+FULL_CAL_TYPES = ['raw_data', 'gain_fit', 's21_rmv', 'circfit', 'sparper',
+                  'xcal', 'iq_fit']
 
 # Fixed panel geometry (inches). Axes are placed directly, without a layout
 # engine, which is most of matplotlib's time for these small plots.
@@ -137,8 +143,8 @@ def _plot_args(DS, data_idx, plot_type):
                 args.append(None)
                 continue
             raise MissingPlotData(
-                f"plot type '{plot_type}' needs '{name}', which is not available for "
-                f"data_idx {data_idx}: {exc}") from exc
+                f"plot type '{plot_type}' needs '{name}', which is not "
+                f"available for data_idx {data_idx}: {exc}") from exc
     return args
 
 
@@ -164,7 +170,8 @@ def _panel_axes(fig, n_axes, row, col, nrows, title):
     width = (PANEL_W - _LEFT - _RIGHT - _GAP * (n_axes - 1)) / n_axes
     height = PANEL_H - _BOTTOM - _TOP
     axs = [
-        fig.add_axes([(x0 + _LEFT + i * (width + _GAP)) / fig_w, (y0 + _BOTTOM) / fig_h,
+        fig.add_axes([(x0 + _LEFT + i * (width + _GAP)) / fig_w,
+                      (y0 + _BOTTOM) / fig_h,
                       width / fig_w, height / fig_h])
         for i in range(n_axes)
     ]
@@ -186,7 +193,8 @@ def _panels_figure(n_panels, ncols):
     nrows (int): number of panel rows.
     """
     nrows = -(-n_panels // ncols)
-    fig = plt.figure(figsize=(PANEL_W * ncols, PANEL_H * nrows + 0.3 * (n_panels > 1)),
+    fig = plt.figure(figsize=(PANEL_W * ncols,
+                              PANEL_H * nrows + 0.3 * (n_panels > 1)),
                      dpi=DPI)
     return fig, nrows
 
@@ -203,7 +211,8 @@ def _check_plot_type(plot_type):
     """
     if plot_type not in PLOT_TYPES:
         raise ValueError(
-            f"plot_type '{plot_type}' not recognized. Available types: {list(PLOT_TYPES)}")
+            f"plot_type '{plot_type}' not recognized. Available types: "
+            f"{list(PLOT_TYPES)}")
 
 
 def _draw(spec, args, kwargs, axes):
@@ -221,7 +230,8 @@ def _draw(spec, args, kwargs, axes):
     Returns:
     fig, axs: what the plot function returns.
     """
-    options = {key: kwargs.get(key, value) for key, value in spec.defaults.items()}
+    options = {key: kwargs.get(key, value)
+               for key, value in spec.defaults.items()}
     with plt.rc_context(_STYLE):
         return spec.func(*args, **options, **{spec.axes_arg: axes})
 
@@ -253,7 +263,8 @@ def plot(DS, data_idx, plot_type, title=None, **kwargs):
     spec = PLOT_TYPES[plot_type]
     args = _plot_args(DS, data_idx, plot_type)
     fig, _ = _panels_figure(1, 1)
-    axs = _panel_axes(fig, spec.n_axes, 0, 0, 1, spec.title if title is None else title)
+    axs = _panel_axes(fig, spec.n_axes, 0, 0, 1,
+                      spec.title if title is None else title)
     _draw(spec, args, kwargs, axs)
     return fig, axs
 
@@ -299,14 +310,15 @@ def plot_full_cal(DS, data_idx, plot_types=None, as_figure=False, **kwargs):
         except MissingPlotData:
             skipped.append(plot_type)
     if not panels:
-        raise ValueError(f'None of the plot types {plot_types} has data for data_idx '
-                         f'{data_idx}')
+        raise ValueError(f'None of the plot types {plot_types} has data for '
+                         f'data_idx {data_idx}')
 
     ncols = min(3, len(panels))
     fig, nrows = _panels_figure(len(panels), ncols)
     for i, (plot_type, args) in enumerate(panels):
         spec = PLOT_TYPES[plot_type]
-        axs = _panel_axes(fig, spec.n_axes, i // ncols, i % ncols, nrows, spec.title)
+        axs = _panel_axes(fig, spec.n_axes, i // ncols, i % ncols, nrows,
+                          spec.title)
         try:
             _draw(spec, args, kwargs, axs)
         except Exception as exc:
@@ -314,8 +326,10 @@ def plot_full_cal(DS, data_idx, plot_types=None, as_figure=False, **kwargs):
                 ax.clear()
                 ax.set_axis_off()
             first = np.atleast_1d(axs)[0]
-            first.text(0.02, 0.5, f'{plot_type} failed:\n{type(exc).__name__}: {exc}',
-                       transform=first.transAxes, va='center', wrap=True, color='C3')
+            first.text(0.02, 0.5,
+                       f'{plot_type} failed:\n{type(exc).__name__}: {exc}',
+                       transform=first.transAxes, va='center', wrap=True,
+                       color='C3')
     title = f'data_idx {data_idx}'
     if skipped:
         title += f'  (no data for: {", ".join(skipped)})'
@@ -323,7 +337,8 @@ def plot_full_cal(DS, data_idx, plot_types=None, as_figure=False, **kwargs):
     if as_figure:
         return fig
     png = BytesIO()
-    fig.savefig(png, format='png')  # fixed layout: no tight bbox (a second draw)
+    # fixed layout: no tight bbox (a second draw)
+    fig.savefig(png, format='png')
     plt.close(fig)
     png.seek(0)
     return png

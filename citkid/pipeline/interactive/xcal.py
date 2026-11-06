@@ -6,21 +6,20 @@ Covers two linked analysis steps:
     6. get_xcal_mask — computes the calibration mask from theta_f / theta_t
     7. fit_x_theta   — fits a polynomial x vs theta calibration curve
 
-Plots
------
-Left   : ``20*log10(|zf_rmv|)`` vs ``ff``, with ``xcal_mask`` coloring
-         (blue = included, orange = excluded) after running.
-Middle : IQ loop — ``zf_cent.imag`` vs ``zf_cent.real`` — with ``xcal_mask``
-         coloring, and ``zt_cent`` overlaid (light green).
-Right  : x vs theta calibration — ``xf`` vs ``thetaf`` scatter (with
-         ``xcal_mask`` coloring), ``xt`` vs ``thetat`` scatter (grey), and
-         the polynomial fit curve (red) after a successful run.
+Plots:
+- Left: ``20*log10(|zf_rmv|)`` vs ``ff``, with ``xcal_mask`` coloring
+  (blue = included, orange = excluded) after running.
+- Middle: IQ loop (``zf_cent.imag`` vs ``zf_cent.real``) with ``xcal_mask``
+  coloring, and ``zt_cent`` overlaid (light green).
+- Right: x vs theta calibration: ``xf`` vs ``thetaf`` scatter (with
+  ``xcal_mask`` coloring), ``xt`` vs ``thetat`` scatter (grey), and the
+  polynomial fit curve (red) after a successful run.
 
-User parameters
----------------
-``xcal_idx0_offset``  int   — extra indices to extend the mask below (default 3)
-``xcal_idx1_offset``  int   — extra indices to extend the mask above (default 9)
-``xcal_std_cutoff``   float — sigma cutoff on theta_t before range detection (default 12.0)
+User parameters:
+xcal_idx0_offset (int): extra indices to extend the mask below. Default 3.
+xcal_idx1_offset (int): extra indices to extend the mask above. Default 9.
+xcal_std_cutoff (float): sigma cutoff on theta_t before range detection.
+    Default 12.0.
 """
 
 import numpy as np
@@ -48,7 +47,11 @@ class XCalPanel(StepPanel):
     """
 
     def setup_ui(self):
-        root = QtWidgets.QVBoxLayout(self)
+        """
+        Build the offset and cutoff spinboxes, buttons, status label, and the
+        amplitude (with draggable mask region), IQ loop, and x vs theta plots.
+        """
+        root =QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(6, 4, 6, 6)
         root.setSpacing(4)
 
@@ -92,6 +95,9 @@ class XCalPanel(StepPanel):
                 'get_xcal_mask', 'xcal_std_cutoff', self.data_idx, fallback=12.0
             ))
         )
+        # The prefetch thread reads this copy, not the widget
+        self._std_cutoff_value = float(self._std_spin.value())
+        self._std_spin.valueChanged.connect(self._remember_std_cutoff)
         ctrl.addWidget(self._std_spin)
 
         self._run_btn = QtWidgets.QPushButton("Run")
@@ -101,8 +107,10 @@ class XCalPanel(StepPanel):
 
         self._run_through_btn = QtWidgets.QPushButton("Run+")
         self._run_through_btn.setFixedWidth(55)
-        self._run_through_btn.setToolTip("Run this panel and all following panels")
-        self._run_through_btn.clicked.connect(lambda: self.run_from_here.emit())
+        self._run_through_btn.setToolTip(
+            "Run this panel and all following panels")
+        self._run_through_btn.clicked.connect(
+            lambda: self.run_from_here.emit())
         ctrl.addWidget(self._run_through_btn)
 
         self._save_btn = QtWidgets.QPushButton("Save")
@@ -112,7 +120,8 @@ class XCalPanel(StepPanel):
 
         self._bad_btn = QtWidgets.QPushButton("Bad Data")
         self._bad_btn.setFixedWidth(75)
-        self._bad_btn.setToolTip("Mark this index as bad: fill all outputs with NaN")
+        self._bad_btn.setToolTip(
+            "Mark this index as bad: fill all outputs with NaN")
         self._bad_btn.clicked.connect(self._on_bad_data_clicked)
         ctrl.addWidget(self._bad_btn)
 
@@ -143,7 +152,8 @@ class XCalPanel(StepPanel):
         self._plot_iq.showGrid(x=True, y=True, alpha=0.3)
         self._plot_iq.setAspectLocked(True)
 
-        self._plot_xcal = self._gw.addPlot(row=0, col=2, title="x vs \u03b8 Calibration")
+        self._plot_xcal = self._gw.addPlot(row=0, col=2,
+                                           title="x vs \u03b8 Calibration")
         self._plot_xcal.setLabel('left', 'x (frac. freq. det.)')
         self._plot_xcal.setLabel('bottom', '\u03b8 (rad)')
         self._plot_xcal.showGrid(x=True, y=True, alpha=0.3)
@@ -153,38 +163,55 @@ class XCalPanel(StepPanel):
         # Colour brushes
         _inc_brush    = pg.mkBrush(100, 180, 255, 210)   # included (blue)
         _exc_brush    = pg.mkBrush(255, 140,  50, 180)   # excluded (orange)
-        _ts_brush     = pg.mkBrush(160, 220, 160, 120)   # timestream bulk (light green)
-        _ts_cut_brush = pg.mkBrush(220,  80, 180, 200)   # timestream tail (magenta)
+        # timestream bulk (light green)
+        _ts_brush     = pg.mkBrush(160, 220, 160, 120)
+        # timestream tail (magenta)
+        _ts_cut_brush = pg.mkBrush(220,  80, 180, 200)
 
         # Amplitude plot scatter items
         self._amp_data = self._plot_amp.plot(pen=None, symbolBrush=_inc_brush,
-                                              symbolPen=None, symbolSize=4, name='data')
+                                             symbolPen=None, symbolSize=4,
+                                             name='data')
         self._amp_excl = self._plot_amp.plot(pen=None, symbolBrush=_exc_brush,
-                                              symbolPen=None, symbolSize=4, name='excluded')
+                                             symbolPen=None, symbolSize=4,
+                                             name='excluded')
 
         # IQ loop scatter items
         self._iq_data    = self._plot_iq.plot(pen=None, symbolBrush=_inc_brush,
-                                               symbolPen=None, symbolSize=4, name='data')
+                                              symbolPen=None, symbolSize=4,
+                                              name='data')
         self._iq_excl    = self._plot_iq.plot(pen=None, symbolBrush=_exc_brush,
-                                               symbolPen=None, symbolSize=4, name='excluded')
+                                              symbolPen=None, symbolSize=4,
+                                              name='excluded')
         self._zt_iq      = self._plot_iq.plot(pen=None, symbolBrush=_ts_brush,
-                                               symbolPen=None, symbolSize=2, name='zt bulk')
-        self._zt_iq_cut  = self._plot_iq.plot(pen=None, symbolBrush=_ts_cut_brush,
-                                               symbolPen=None, symbolSize=3, name='zt tail')
+                                              symbolPen=None, symbolSize=2,
+                                              name='zt bulk')
+        self._zt_iq_cut  = self._plot_iq.plot(pen=None,
+                                              symbolBrush=_ts_cut_brush,
+                                              symbolPen=None, symbolSize=3,
+                                              name='zt tail')
 
         # x vs theta scatter + fit items
         self._xcal_fit  = self._plot_xcal.plot(
             pen=pg.mkPen(color=(255, 80, 80), width=2), name='poly fit'
         )
         self._xcal_fit.setZValue(-10)
-        self._xcal_inc    = self._plot_xcal.plot(pen=None, symbolBrush=_inc_brush,
-                                                  symbolPen=None, symbolSize=4, name='xf incl.')
-        self._xcal_exc    = self._plot_xcal.plot(pen=None, symbolBrush=_exc_brush,
-                                                  symbolPen=None, symbolSize=4, name='xf excl.')
-        self._xcal_ts     = self._plot_xcal.plot(pen=None, symbolBrush=_ts_brush,
-                                                  symbolPen=None, symbolSize=4, name='xt bulk')
-        self._xcal_ts_cut = self._plot_xcal.plot(pen=None, symbolBrush=_ts_cut_brush,
-                                                  symbolPen=None, symbolSize=4, name='xt tail')
+        self._xcal_inc    = self._plot_xcal.plot(pen=None,
+                                                 symbolBrush=_inc_brush,
+                                                 symbolPen=None, symbolSize=4,
+                                                 name='xf incl.')
+        self._xcal_exc    = self._plot_xcal.plot(pen=None,
+                                                 symbolBrush=_exc_brush,
+                                                 symbolPen=None, symbolSize=4,
+                                                 name='xf excl.')
+        self._xcal_ts     = self._plot_xcal.plot(pen=None,
+                                                 symbolBrush=_ts_brush,
+                                                 symbolPen=None, symbolSize=4,
+                                                 name='xt bulk')
+        self._xcal_ts_cut = self._plot_xcal.plot(pen=None,
+                                                 symbolBrush=_ts_cut_brush,
+                                                 symbolPen=None, symbolSize=4,
+                                                 name='xt tail')
 
         # Draggable mask region on amplitude plot
         self._mask_region = pg.LinearRegionItem(
@@ -194,7 +221,8 @@ class XCalPanel(StepPanel):
         )
         self._mask_region.setZValue(-5)
         self._plot_amp.addItem(self._mask_region)
-        self._mask_region.sigRegionChangeFinished.connect(self._on_mask_region_changed)
+        self._mask_region.sigRegionChangeFinished.connect(
+            self._on_mask_region_changed)
 
         # State for spinbox ↔ region sync
         self._idx0_base: int = 0
@@ -211,7 +239,10 @@ class XCalPanel(StepPanel):
     # ------------------------------------------------------------------
 
     def on_data_idx_changing(self):
-        """Restore user params for the new index: session cache → DS/YAML → keep current."""
+        """
+        Restore user params for the new index: session cache → DS/YAML →
+        keep current.
+        """
         self._autorange_next = True
         new_di = self.data_idx
         if new_di in self._param_cache:
@@ -225,6 +256,14 @@ class XCalPanel(StepPanel):
                 'get_xcal_mask', 'xcal_std_cutoff',  new_di, fallback=None)
 
         def _set(spin, val):
+            """
+            Set a spinbox without emitting signals.
+
+            Parameters:
+            spin (QSpinBox or QDoubleSpinBox): The spinbox.
+            val (int, float, or None): New value, cast to the spinbox's
+                type. None leaves it unchanged.
+            """
             if val is not None:
                 spin.blockSignals(True)
                 spin.setValue(type(spin.value())(val))
@@ -233,9 +272,29 @@ class XCalPanel(StepPanel):
         _set(self._idx0_spin, idx0)
         _set(self._idx1_spin, idx1)
         _set(self._std_spin,  std)
+        self._std_cutoff_value = float(self._std_spin.value())
+
+    def _remember_std_cutoff(self, value):
+        """
+        Keep a plain copy of the std cutoff for the prefetch thread, which
+        must not read Qt widgets.
+
+        Parameters:
+        value (float): New spinbox value.
+        """
+        self._std_cutoff_value = float(value)
 
     def run_steps(self, save: bool = False) -> bool:
-        """Cache the current param values for this data_idx before running."""
+        """
+        Cache the current param values for this data_idx before running, and
+        range the x vs theta plot after a successful run.
+
+        Parameters:
+        save (bool): Passed to ``StepPanel.run_steps``. Default False.
+
+        Returns:
+        ok (bool): True if all steps succeeded.
+        """
         self._param_cache[self.data_idx] = (
             self._idx0_spin.value(),
             self._idx1_spin.value(),
@@ -247,6 +306,16 @@ class XCalPanel(StepPanel):
         return ok
 
     def get_params_for_step(self, step) -> dict:
+        """
+        Return the offset and cutoff spinbox values for get_xcal_mask.
+
+        Parameters:
+        step (plStep): The step about to be executed.
+
+        Returns:
+        params (dict): ``xcal_idx0_offset``, ``xcal_idx1_offset``, and
+            ``xcal_std_cutoff`` for get_xcal_mask, else {}.
+        """
         if step.name == 'get_xcal_mask':
             return {
                 'xcal_idx0_offset': int(self._idx0_spin.value()),
@@ -256,13 +325,27 @@ class XCalPanel(StepPanel):
         return {}
 
     def update_plots(self):
+        """
+        Plot the amplitude and IQ loop data with ``xcal_mask`` coloring, the
+        timestream bulk and tail, and the x vs theta data and fit.
+        """
         di = self.data_idx
         DS = self.AR.DS
 
         # Use pre-computed numpy arrays from the prefetch cache when available.
-        cache = self._plot_cache.pop(di, None)
+        cache = self._pop_plot_cache()
 
         def cached(key, load):
+            """
+            Return a prefetched value, or load it.
+
+            Parameters:
+            key (str): Prefetch cache key.
+            load (callable): ``load()`` returns the value if not cached.
+
+            Returns:
+            value: The cached or loaded value.
+            """
             # The prefetch stores None for outputs that didn't exist yet
             if cache and cache.get(key) is not None:
                 return cache[key]
@@ -270,16 +353,20 @@ class XCalPanel(StepPanel):
 
         # Raw sweep data
         try:
-            ff      = cache['ff']      if cache else np.asarray(DS.ff[di],      dtype=np.float64)
-            zf_rmv  = cache['zf_rmv']  if cache else np.asarray(DS.zf_rmv[di],  dtype=np.complex128)
-            zf_cent = cache['zf_cent'] if cache else np.asarray(DS.zf_cent[di], dtype=np.complex128)
+            ff      = (cache['ff'] if cache
+                       else np.asarray(DS.ff[di], dtype=np.float64))
+            zf_rmv  = (cache['zf_rmv'] if cache
+                       else np.asarray(DS.zf_rmv[di], dtype=np.complex128))
+            zf_cent = (cache['zf_cent'] if cache
+                       else np.asarray(DS.zf_cent[di], dtype=np.complex128))
         except Exception as exc:
             self._status_label.setText(f"Data load error: {exc}")
             return
 
         f_center   = cache['f_center'] if cache else float(ff.mean())
         ff_plot    = cache['ff_plot']  if cache else (ff - f_center) * 1e-3
-        amp_db     = cache['amp_db']   if cache else 20.0 * np.log10(np.abs(zf_rmv))
+        amp_db     = (cache['amp_db'] if cache
+                      else 20.0 * np.log10(np.abs(zf_rmv)))
         center_MHz = round(f_center * 1e-6, 2)
         xlabel     = f"(f \u2212 {center_MHz} MHz) (kHz)"
         self._plot_amp.setLabel('bottom', xlabel)
@@ -293,9 +380,9 @@ class XCalPanel(StepPanel):
             try:
                 _thetaf_b = np.asarray(DS.thetaf[di], dtype=np.float64)
                 _thetat_b = np.asarray(DS.thetat[di], dtype=np.float64)
-                _bm = _compute_xcal_mask(ff, _thetaf_b, _thetat_b,
-                                         idx0_offset=0, idx1_offset=0,
-                                         std_cutoff=float(self._std_spin.value()))
+                _bm = _compute_xcal_mask(
+                    ff, _thetaf_b, _thetat_b, idx0_offset=0, idx1_offset=0,
+                    std_cutoff=float(self._std_spin.value()))
                 _wb = np.where(_bm)[0]
                 if len(_wb):
                     self._idx0_base = int(_wb[0])
@@ -318,8 +405,10 @@ class XCalPanel(StepPanel):
         else:
             self._amp_data.setData(ff_plot[xcal_mask],  amp_db[xcal_mask])
             self._amp_excl.setData(ff_plot[~xcal_mask], amp_db[~xcal_mask])
-            self._iq_data.setData(zf_cent[xcal_mask].real,  zf_cent[xcal_mask].imag)
-            self._iq_excl.setData(zf_cent[~xcal_mask].real, zf_cent[~xcal_mask].imag)
+            self._iq_data.setData(zf_cent[xcal_mask].real,
+                                  zf_cent[xcal_mask].imag)
+            self._iq_excl.setData(zf_cent[~xcal_mask].real,
+                                  zf_cent[~xcal_mask].imag)
 
         # zt_cent on IQ: split by bulk_mask so tail points show in magenta.
         # bulk_mask needs thetat + std_cut; load thetat here for reuse below.
@@ -327,8 +416,10 @@ class XCalPanel(StepPanel):
         _bulk_mask_early = None
         try:
             if cache and cache.get('zt_cent_bulk') is not None:
-                self._zt_iq.setData(cache['zt_cent_bulk'].real, cache['zt_cent_bulk'].imag)
-                self._zt_iq_cut.setData(cache['zt_cent_tail'].real, cache['zt_cent_tail'].imag)
+                self._zt_iq.setData(cache['zt_cent_bulk'].real,
+                                    cache['zt_cent_bulk'].imag)
+                self._zt_iq_cut.setData(cache['zt_cent_tail'].real,
+                                        cache['zt_cent_tail'].imag)
             else:
                 _thetat_early = np.asarray(DS.thetat[di], dtype=np.float64)
                 std_cut = float(self._std_spin.value())
@@ -359,7 +450,8 @@ class XCalPanel(StepPanel):
             self._xcal_inc.setData(thetaf[xcal_mask],  xf[xcal_mask])
             self._xcal_exc.setData(thetaf[~xcal_mask], xf[~xcal_mask])
 
-            # Polynomial fit line + timestream overlay (needs poly_x from step 7)
+            # Polynomial fit line + timestream overlay (needs poly_x from
+            # step 7)
             try:
                 poly_x = cached(
                     'poly_x',
@@ -371,7 +463,8 @@ class XCalPanel(StepPanel):
                     'fit_y', lambda: np.polyval(poly_x, theta_grid))
                 self._xcal_fit.setData(theta_grid, fit_y)
 
-                # Timestream xt split into bulk/tail — reuse _bulk_mask_early when available
+                # Timestream xt split into bulk/tail — reuse _bulk_mask_early
+                # when available
                 try:
                     if cache and cache.get('t_bulk') is not None:
                         t_bulk    = cache['t_bulk']
@@ -383,7 +476,8 @@ class XCalPanel(StepPanel):
                             thetat    = _thetat_early
                             bulk_mask = _bulk_mask_early
                         else:
-                            thetat    = np.asarray(DS.thetat[di], dtype=np.float64)
+                            thetat    = np.asarray(DS.thetat[di],
+                                                   dtype=np.float64)
                             std_cut   = float(self._std_spin.value())
                             bulk_mask = get_theta_t_bulk_mask(
                                 thetat, std_cut)
@@ -392,17 +486,20 @@ class XCalPanel(StepPanel):
                         x_bulk = xt[bulk_mask]
                         t_tail = thetat[~bulk_mask]
                         x_tail = xt[~bulk_mask]
-                        # Density-subsample bulk (4000) and tail (2000) independently
-                        # so neither dominates the visual density.
+                        # Density-subsample bulk (4000) and tail (2000)
+                        # independently so neither dominates the visual
+                        # density.
                         if len(t_bulk) > 4000:
                             sub_b  = _density_subsample(
-                                (t_bulk + 1j * x_bulk).astype(np.complex128), n_keep=4000
+                                (t_bulk + 1j * x_bulk).astype(np.complex128),
+                                n_keep=4000
                             )
                             t_bulk = sub_b.real
                             x_bulk = sub_b.imag
                         if len(t_tail) > 2000:
                             sub_t  = _density_subsample(
-                                (t_tail + 1j * x_tail).astype(np.complex128), n_keep=2000
+                                (t_tail + 1j * x_tail).astype(np.complex128),
+                                n_keep=2000
                             )
                             t_tail = sub_t.real
                             x_tail = sub_t.imag
@@ -423,7 +520,10 @@ class XCalPanel(StepPanel):
             self._range_xcal()
 
     def _range_xcal(self):
-        """Set x vs theta plot range to the masked theta/x extent plus 5% padding."""
+        """
+        Set x vs theta plot range to the masked theta/x extent plus 5%
+        padding.
+        """
         di = self.data_idx
         DS = self.AR.DS
         try:
@@ -446,12 +546,19 @@ class XCalPanel(StepPanel):
         self._plot_xcal.setYRange(x_lo - x_pad, x_hi + x_pad, padding=0)
 
     def autoscale_plots(self):
+        """
+        Auto-range the amplitude and IQ plots, and range the x vs theta plot
+        to the masked data.
+        """
         self._plot_amp.autoRange()
         self._plot_iq.autoRange()
         self._range_xcal()
 
     def _update_region_from_spinboxes(self):
-        """Reposition the draggable mask region to reflect the current spinbox offsets."""
+        """
+        Reposition the draggable mask region to reflect the current spinbox
+        offsets.
+        """
         if self._ff_plot_arr is None or len(self._ff_plot_arr) == 0:
             return
         n = len(self._ff_plot_arr)
@@ -467,7 +574,10 @@ class XCalPanel(StepPanel):
         self._region_updating = False
 
     def _on_mask_region_changed(self):
-        """Update idx0_off / idx1_off spinboxes from the dragged region boundaries."""
+        """
+        Update idx0_off / idx1_off spinboxes from the dragged region
+        boundaries.
+        """
         if self._region_updating or self._ff_plot_arr is None:
             return
         lo, hi = self._mask_region.getRegion()
@@ -487,9 +597,10 @@ class XCalPanel(StepPanel):
         """
         Blank every data curve and reset the status label.
         """
-        for curve in (self._amp_data, self._amp_excl, self._iq_data, self._iq_excl,
-                      self._zt_iq, self._zt_iq_cut, self._xcal_fit, self._xcal_inc,
-                      self._xcal_exc, self._xcal_ts, self._xcal_ts_cut):
+        for curve in (self._amp_data, self._amp_excl, self._iq_data,
+                      self._iq_excl, self._zt_iq, self._zt_iq_cut,
+                      self._xcal_fit, self._xcal_inc, self._xcal_exc,
+                      self._xcal_ts, self._xcal_ts_cut):
             curve.setData([], [])
         self._status_label.setText("—")
 
@@ -497,16 +608,33 @@ class XCalPanel(StepPanel):
     # Execution helpers
     # ------------------------------------------------------------------
     def _on_step_error(self, step, exc):
+        """
+        Show and print a step error.
+
+        Parameters:
+        step (plStep): The step that failed.
+        exc (Exception): The exception it raised.
+        """
         msg = f"'{step.name}' failed: {exc}"
         self._status_label.setText(msg)
         print(msg)
 
     def _on_bad_data_clicked(self):
+        """
+        Mark the current row bad (same as the base class).
+        """
         super()._on_bad_data_clicked()
 
-    def prefetch_plot_data(self, di: int):
-        """Pre-compute numpy arrays for *di* in the background prefetch thread."""
-        DS = self.AR.DS
+    def prefetch_plot_data(self, di: int, AR=None):
+        """
+        Pre-compute numpy arrays for *di* in the background prefetch thread.
+
+        Parameters:
+        di (int): Data index to prefetch.
+        AR (AnalysisRunner or None): Runner to read from (None: ``self.AR``).
+        """
+        DS = (self.AR if AR is None else AR).DS
+        std_cut = self._std_cutoff_value
         try:
             ff      = np.asarray(DS.ff[di],      dtype=np.float64)
             zf_rmv  = np.asarray(DS.zf_rmv[di],  dtype=np.complex128)
@@ -528,9 +656,9 @@ class XCalPanel(StepPanel):
         try:
             zt_full = np.asarray(DS.zt_cent[di], dtype=np.complex128)
             thetat  = np.asarray(DS.thetat[di],  dtype=np.float64)
-            std_cut = float(self._std_spin.value())
             bulk_mask_zt = get_theta_t_bulk_mask(thetat, std_cut)
-            zt_cent_bulk = _density_subsample(zt_full[bulk_mask_zt], n_keep=4000)
+            zt_cent_bulk = _density_subsample(zt_full[bulk_mask_zt],
+                                              n_keep=4000)
             zt_tail_raw  = zt_full[~bulk_mask_zt]
             zt_cent_tail = (_density_subsample(zt_tail_raw, n_keep=2000)
                             if len(zt_tail_raw) > 2000 else zt_tail_raw)
@@ -548,7 +676,6 @@ class XCalPanel(StepPanel):
             fit_y      = np.polyval(poly_x, theta_grid)
             thetat_pf   = np.asarray(DS.thetat[di], dtype=np.float64)
             xt          = np.polyval(poly_x, thetat_pf)
-            std_cut     = float(self._std_spin.value())
             bulk_mask_pf = get_theta_t_bulk_mask(thetat_pf, std_cut)
             t_bulk = thetat_pf[bulk_mask_pf]
             x_bulk = xt[bulk_mask_pf]
@@ -576,7 +703,7 @@ class XCalPanel(StepPanel):
             _thetat_b = np.asarray(DS.thetat[di], dtype=np.float64)
             _bm = _compute_xcal_mask(ff, _thetaf_b, _thetat_b,
                                      idx0_offset=0, idx1_offset=0,
-                                     std_cutoff=float(self._std_spin.value()))
+                                     std_cutoff=std_cut)
             _wb = np.where(_bm)[0]
             if len(_wb):
                 idx0_base = int(_wb[0])
@@ -584,10 +711,11 @@ class XCalPanel(StepPanel):
         except Exception:
             pass
 
-        self._plot_cache[di] = dict(
+        self._plot_cache[self._cache_key(AR, di)] = dict(
             ff=ff, ff_plot=ff_plot, f_center=f_center,
             zf_rmv=zf_rmv, zf_cent=zf_cent, amp_db=amp_db,
-            xcal_mask=xcal_mask, zt_cent_bulk=zt_cent_bulk, zt_cent_tail=zt_cent_tail,
+            xcal_mask=xcal_mask, zt_cent_bulk=zt_cent_bulk,
+            zt_cent_tail=zt_cent_tail,
             thetaf=thetaf, xf=xf, poly_x=poly_x,
             theta_grid=theta_grid, fit_y=fit_y,
             t_bulk=t_bulk, x_bulk=x_bulk, t_tail=t_tail, x_tail=x_tail,
@@ -595,6 +723,13 @@ class XCalPanel(StepPanel):
         )
 
     def _nan_outputs(self) -> dict:
+        """
+        Return bad-data placeholders for the x calibration outputs.
+
+        Returns:
+        outputs (dict): An all-False ``xcal_mask`` the length of ``ff`` and
+            a NaN ``poly_x`` (4).
+        """
         DS = self.AR.DS
         di = self.data_idx
         try:

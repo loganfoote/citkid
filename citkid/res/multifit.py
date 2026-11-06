@@ -323,6 +323,16 @@ def poles_to_params(fr, Qr, p_coeffs, e, fc, fs, n_iter = 50):
     lij = np.where(off, kappa[None, :] / dq, 0)
 
     def eqs(v):
+        """
+        Evaluate the residue equations B_i + A_i prod_j (1 - A_j L_j(q_i)).
+
+        Parameters:
+        v (np.array): real parts of A followed by imaginary parts of A.
+
+        Returns:
+        r (np.array): real parts of the residuals followed by imaginary
+            parts.
+        """
         a = v[:n] + 1j * v[n:]
         fac = np.where(off, 1 - a[None, :] * lij, 1).prod(axis = 1)
         r = b + a * fac
@@ -412,6 +422,17 @@ def fit_poles(
     cache = {}
 
     def solve(p):
+        """
+        Solve the linear part of the fit for scaled pole parameters.
+
+        Parameters:
+        p (np.array): scaled resonance frequencies followed by log10(Qr).
+
+        Returns:
+        fr, Qr, lor, q_l, e, r (tuple): resonance frequencies, quality
+            factors, Lorentzian columns, their projected QR factor Q,
+            residues, and complex residual. Cached for the last ``p``.
+        """
         # Lorentzian columns projected off the polynomial, their QR, the
         # residues and the residual (shared by resid and jac at the same p)
         key = p.tobytes()
@@ -426,10 +447,30 @@ def fit_poles(
         return cache[key]
 
     def resid(p):
+        """
+        Compute the fit residual.
+
+        Parameters:
+        p (np.array): scaled resonance frequencies followed by log10(Qr).
+
+        Returns:
+        r (np.array): real parts of the residual followed by imaginary
+            parts.
+        """
         r = solve(p)[5]
         return np.concatenate((r.real, r.imag))
 
     def jac(p):
+        """
+        Compute the Jacobian of ``resid``.
+
+        Parameters:
+        p (np.array): scaled resonance frequencies followed by log10(Qr).
+
+        Returns:
+        j (np.array): real parts of the Jacobian stacked over imaginary
+            parts.
+        """
         # Variable-projection Jacobian (Kaufman approximation):
         # J = -P_perp (dB/dp) c, where only the L_i columns depend on p
         fr, Qr, lor, q_l, e, _ = solve(p)
@@ -801,11 +842,32 @@ def fit_resonators(
     n_a = n if fit_nonlinear else 0
 
     def unpack(p):
+        """
+        Unpack the scaled fit parameters.
+
+        Parameters:
+        p (np.array): scaled fit parameters.
+
+        Returns:
+        fr, Qr, amp, phi (np.array): resonator parameters.
+        a (np.array or None): nonlinearity parameters, or None if
+            ``fit_nonlinear`` is False.
+        """
         a = p[4 * n:] if fit_nonlinear else None
         return (fc + fs * p[:n], 10 ** p[n:2 * n], p[2 * n:3 * n],
                 p[3 * n:4 * n], a)
 
     def linear(p):
+        """
+        Fit the linear background coefficients for given parameters.
+
+        Parameters:
+        p (np.array): scaled fit parameters.
+
+        Returns:
+        coeffs (np.array): background polynomial coefficients.
+        r (np.array): complex residual.
+        """
         fr, Qr, amp, phi, a = unpack(p)
         s21 = product_s21(f, fr, Qr, amp, phi, a, downward)
         basis = bg_basis * s21[:, None]
@@ -813,6 +875,16 @@ def fit_resonators(
         return coeffs, z - basis @ coeffs
 
     def resid(p):
+        """
+        Compute the fit residual.
+
+        Parameters:
+        p (np.array): scaled fit parameters.
+
+        Returns:
+        r (np.array): real parts of the residual followed by imaginary
+            parts.
+        """
         r = linear(p)[1]
         return np.concatenate((r.real, r.imag))
 

@@ -435,7 +435,8 @@ def plot_nonlinear_iq_fit(ff, zf_rmv, popt, mask, axs = None):
 
     Parameters:
     ff (np.array, float64): Fine sweep frequency data in Hz.
-    zf_rmv (np.array, complex128): Fine sweep complex S21 data with gain removed.
+    zf_rmv (np.array, complex128): Fine sweep complex S21 data with gain
+        removed.
     popt (list): Fit parameters.
     mask (np.array, bool or None): Mask of fine sweep data used for fitting.
         None uses every point.

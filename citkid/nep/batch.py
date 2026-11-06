@@ -81,7 +81,9 @@ def check_sets(powers, neps, nep_errs=None):
                              f'same shape; got {sorted(shapes)}')
 
 
-def fit_nep_photon_sets(powers, neps, nu, p_min=None, nep_errs=None, progress=True):
+def fit_nep_photon_sets(
+    powers, neps, nu, p_min=None, nep_errs=None, progress=True
+):
     """
     Fit the photon-noise NEP of each of several sets.
 
@@ -114,7 +116,9 @@ def fit_nep_photon_sets(powers, neps, nu, p_min=None, nep_errs=None, progress=Tr
     eta = np.full(n_sets, np.nan)
     eta_err = np.full(n_sets, np.nan)
     n_fit = np.zeros(n_sets, dtype=int)
-    for i in tqdm(range(n_sets), total=n_sets, leave=False, disable=not progress):
+    for i in tqdm(range(n_sets), total=n_sets, leave=False,
+                  disable=not progress):
         err = None if nep_errs is None else nep_errs[i]
-        eta[i], eta_err[i], _, n_fit[i] = fit_nep_photon(powers[i], neps[i], nu, p_mins[i], err)
+        eta[i], eta_err[i], _, n_fit[i] = fit_nep_photon(
+            powers[i], neps[i], nu, p_mins[i], err)
     return eta, eta_err, n_fit

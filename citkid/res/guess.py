@@ -20,8 +20,9 @@ def guess_p0_pole(f, z, center_frac = 0.5, neighbor_ratio = 0.5):
     0. Unlike ``guess_p0_nonlinear_iq``, the gain and cable delay need not
     be removed first.
 
-    On 3,000 simulated target sweeps this start gave a median fr error of 0.2 linewidths and Qr within 2%
-    (``guess_p0_nonlinear_iq``: 0.5 linewidths and a factor 2), and
+    On 3,000 simulated target sweeps this start gave a median fr error of
+    0.2 linewidths and Qr within 2% (``guess_p0_nonlinear_iq``: 0.5
+    linewidths and a factor 2), and
     ``fit_nonlinear_iq`` from it succeeded in 99.5% of cases without a
     neighboring resonance (``guess_p0_nonlinear_iq``: 90%).
 

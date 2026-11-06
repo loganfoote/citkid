@@ -14,17 +14,19 @@ def get_binned_baseline(ts, dt, dtbin):
     baseline.
     
     Parameters:
-    ts (float, array-like): Timestream data. Glitches should have positive amplitude.
+    ts (float, array-like): Timestream data. Glitches should have positive
+        amplitude.
     dt (float): Sample time of timestream.
     dtbin (float): Sample time to bin the data to for subtraction.
-    
+
     Returns:
     ts_baseline (array): Baseline array
     """
     tarr = np.arange(len(ts))*dt
     nbins = int(len(ts) * dt/dtbin)
-    
-    result = binned_statistic(tarr, [tarr, ts], statistic=np.nanmean, bins=nbins)
+
+    result = binned_statistic(tarr, [tarr, ts], statistic=np.nanmean,
+                              bins=nbins)
     tbin, ts_bin = result.statistic
     ts_baseline = np.interp(tarr, tbin, ts_bin)
     return ts_baseline
@@ -33,18 +35,22 @@ def get_binned_baseline(ts, dt, dtbin):
 def find_glitch_idxs(ts, dt, dtbin, nstd, distance, width, nrounds, i0, i1):
     """
     Find glitch peaks in a timestream.
+
     The steps are as follows:
-        1) Create a copy of the timestream which is binned to lower sample rate,
-           then linearly interpolate the binned data back to the sample rate of
-           the original data and subtract it from the original data.
-        2) Go through at least one, and possibly multiple rounds of peak finding.
-           At each round, the peaks which were found are removed from the timestream.
-    
+        1) Create a copy of the timestream which is binned to lower sample
+           rate, then linearly interpolate the binned data back to the sample
+           rate of the original data and subtract it from the original data.
+        2) Go through at least one, and possibly multiple rounds of peak
+           finding. At each round, the peaks which were found are removed
+           from the timestream.
+
     Parameters:
-    ts (float, array-like): Timestream data. Glitches should have positive amplitude.
+    ts (float, array-like): Timestream data. Glitches should have positive
+        amplitude.
     dt (float): Sample time of timestream.
     dtbin (float): Sample time to bin the data to for subtraction.
-    nstd (float): Minimum peak amplitude in units of number of timestream standard deviations.
+    nstd (float): Minimum peak amplitude in units of number of timestream
+        standard deviations.
     distance (int): Minimum number of sample points between peaks.
     width (int, array-like, or None): Required peak width in samples, passed
         to ``scipy.signal.find_peaks``. None places no requirement.
@@ -65,7 +71,8 @@ def find_glitch_idxs(ts, dt, dtbin, nstd, distance, width, nrounds, i0, i1):
     idxs = np.array([], dtype=int)
     
     for _ in range(nrounds):
-        this_idxs, _ = find_peaks(ts_clean, height=nstd*np.nanstd(ts_clean), distance=distance, width=width)
+        this_idxs, _ = find_peaks(ts_clean, height=nstd*np.nanstd(ts_clean),
+                                  distance=distance, width=width)
         idxs = np.append(idxs, this_idxs)
         for idx in this_idxs:
             thisi0 = max(0, idx-i0)

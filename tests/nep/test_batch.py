@@ -18,19 +18,23 @@ def _sets():
     """
     power = np.geomspace(1e-13, 1e-10, 8)
     return ([power, power, np.full(8, np.nan)],
-            [nep_photon(power, 0.4, NU), nep_photon(power, 0.6, NU), np.full(8, np.nan)])
+            [nep_photon(power, 0.4, NU), nep_photon(power, 0.6, NU),
+             np.full(8, np.nan)])
 
 
 def test_fit_sets_returns_arrays_with_nan_for_empty_sets():
     powers, neps = _sets()
 
-    eta, eta_err, n_fit = fit_nep_photon_sets(powers, neps, NU, p_min=[0, 1e-12, 0],
-                                              progress=False)
+    eta, eta_err, n_fit = fit_nep_photon_sets(
+        powers, neps, NU, p_min=[0, 1e-12, 0], progress=False
+    )
 
     assert all(isinstance(a, np.ndarray) for a in (eta, eta_err, n_fit))
     np.testing.assert_allclose(eta[:2], [0.4, 0.6])
     assert np.isnan(eta[2]) and np.isnan(eta_err[2])
-    np.testing.assert_array_equal(n_fit, [8, int(np.sum(powers[1] >= 1e-12)), 0])
+    np.testing.assert_array_equal(
+        n_fit, [8, int(np.sum(powers[1] >= 1e-12)), 0]
+    )
 
 
 @pytest.mark.parametrize('kwargs, match', [
@@ -60,8 +64,9 @@ def test_store_round_trip_and_definition_check():
     group = zarr.open_group(zarr.storage.MemoryStore(), mode='w')
     store = NEPFitStore(group, 2, NU, ['a', 'b'])
     assert store.matches_definition() and store.load() is None
-    fields = {'p_min': [1e-12, 0.0], 'eta': [0.5, np.nan], 'eta_err': [0.01, np.nan],
-              'n_fit': [4, 0], 'bad': [False, True], 'viewed': [True, False],
+    fields = {'p_min': [1e-12, 0.0], 'eta': [0.5, np.nan],
+              'eta_err': [0.01, np.nan], 'n_fit': [4, 0],
+              'bad': [False, True], 'viewed': [True, False],
               'row_exists': [True, True]}
 
     store.save(fields)
@@ -92,7 +97,8 @@ def test_shared_powers_apply_to_every_set():
 def test_per_set_powers():
     power = np.arange(3.0)
     assert len(per_set_powers(power, np.zeros((4, 3)))) == 4
-    assert per_set_powers([power, power[:2]], [0, 0])[1].shape == (2,)   # ragged: per set
+    # ragged: per set
+    assert per_set_powers([power, power[:2]], [0, 0])[1].shape == (2,)
     two_d = per_set_powers(np.zeros((2, 3)), np.zeros((2, 3)))
     assert len(two_d) == 2 and np.shape(two_d[0]) == (3,)
 

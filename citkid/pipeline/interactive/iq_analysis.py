@@ -1,7 +1,7 @@
 """
 Launch an interactive session for the IQ analysis pipeline.
 
-The panels match the steps in ``pipeline/templates/iq_analysis.yaml``:
+The panels match the steps in ``pipeline/templates/analysis_iq.yaml``:
 
     1. ``fit_gain`` -> ``GainFitPanel``
     2. ``fit_iq`` -> ``IQFitPanel``
@@ -18,7 +18,7 @@ from .core import run_interactive
 from . import gain      # noqa: F401 — registers GainFitPanel
 from . import fit_iq    # noqa: F401 — registers IQFitPanel
 
-# Step grouping that matches iq_analysis.yaml
+# Step grouping that matches analysis_iq.yaml
 _IQ_PANELS = [
     ('fit_gain',),
     ('fit_iq',),
@@ -33,7 +33,7 @@ def run_iq_analysis(
     Launch the interactive IQ analysis window.
 
     This wraps ``run_interactive`` with the panel grouping that matches
-    ``pipeline/templates/iq_analysis.yaml``.
+    ``pipeline/templates/analysis_iq.yaml``.
 
     Parameters:
     AR (AnalysisRunner): runner whose ``DS`` has the calibration pipeline

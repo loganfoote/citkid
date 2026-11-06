@@ -84,9 +84,10 @@ def _make_window(
             'b': counted('b', lambda si, di: -float(si)),
         }
     monkeypatch.setattr(iseries, 'get_panel_class', lambda _names: _Panel)
-    monkeypatch.setattr(iseries.QtCore.QTimer, 'singleShot', lambda *_a, **_k: None)
-    win = its.TSSeriesWindow(ars, x=x, y=y, quantities=quantities, start_idx=0, title='t',
-                             **kwargs)
+    monkeypatch.setattr(iseries.QtCore.QTimer, 'singleShot',
+                        lambda *_a, **_k: None)
+    win = its.TSSeriesWindow(ars, x=x, y=y, quantities=quantities,
+                             start_idx=0, title='t', **kwargs)
     return win, calls
 
 
@@ -97,7 +98,8 @@ def _close(win):
     Parameters:
     win (QMainWindow): Window to close.
     """
-    with patch.object(QtWidgets.QMessageBox, 'question', return_value=QtWidgets.QMessageBox.Yes):
+    with patch.object(QtWidgets.QMessageBox, 'question',
+                      return_value=QtWidgets.QMessageBox.Yes):
         win.close()
 
 
@@ -111,13 +113,17 @@ def test_default_quantities_include_reduced_psds():
 
 
 def test_normalize_quantities_accepts_names_and_callables():
-    getters = its.normalize_quantities({'P': 'ares', 'double': lambda AR, di: 2 * di,
-                                        'broken': lambda AR, di: 1 / 0})
+    getters = its.normalize_quantities({
+        'P': 'ares', 'double': lambda AR, di: 2 * di,
+        'broken': lambda AR, di: 1 / 0,
+    })
     assert list(getters) == ['P', 'double', 'broken']
     assert getters['double'](None, 3) == 6.0
     assert getters['broken'](None, 3) is None
 
-    with pytest.raises(TypeError, match='parameter name, a callable, or SeriesValues'):
+    with pytest.raises(
+        TypeError, match='parameter name, a callable, or SeriesValues'
+    ):
         its.normalize_quantities({'bad': 3})
     with pytest.raises(ValueError, match='at least one'):
         its.normalize_quantities([])
@@ -126,10 +132,13 @@ def test_normalize_quantities_accepts_names_and_callables():
 def test_window_uses_ts_panels_and_initial_quantities(qt_app, monkeypatch):
     win, _ = _make_window(qt_app, monkeypatch)
 
-    assert [p.step_names for p in win.panels] == [tuple(names) for names in its._TS_PANELS]
+    assert ([p.step_names for p in win.panels]
+            == [tuple(names) for names in its._TS_PANELS])
     assert win._precompute_values is True
-    assert (win._x_combo.currentText(), win._y_combo.currentText()) == ('p', 'a')
-    assert [win._y_combo.itemText(i) for i in range(win._y_combo.count())] == ['p', 'a', 'b']
+    assert ((win._x_combo.currentText(), win._y_combo.currentText())
+            == ('p', 'a'))
+    assert ([win._y_combo.itemText(i) for i in range(win._y_combo.count())]
+            == ['p', 'a', 'b'])
 
     np.testing.assert_array_equal(win._get_x_array(0), [1.0, 2.0, 3.0])
     np.testing.assert_array_equal(win._get_y_array(2), [2.0, 12.0, 22.0])
@@ -142,7 +151,9 @@ def test_unknown_initial_quantity_raises(qt_app, monkeypatch, x, y):
         _make_window(qt_app, monkeypatch, x=x, y=y)
 
 
-def test_changing_dropdown_replots_and_reuses_cached_values(qt_app, monkeypatch):
+def test_changing_dropdown_replots_and_reuses_cached_values(
+    qt_app, monkeypatch
+):
     win, calls = _make_window(qt_app, monkeypatch)
     win._update_series_scatter()
     assert calls['a'] == 3
@@ -179,7 +190,7 @@ def test_worker_precomputes_values_for_current_quantities(qt_app, monkeypatch):
     assert win._values[('p', 0, 1)] == 1.0
     calls.clear()
     np.testing.assert_array_equal(win._get_y_array(3), [3.0, 13.0, 23.0])
-    assert calls == {}                                   # served from the worker's values
+    assert calls == {}  # served from the worker's values
 
     win.select_quantities(y='b')
     assert win._remaining_rows() == [1, 2, 3]            # b still to compute
@@ -223,7 +234,8 @@ def test_dataset_quantity_reads_per_row_and_global_values():
     assert iseries.dataset_quantity('glob')(ar, 4) == 3.5
     assert iseries.dataset_quantity('vector')(ar, 4) is None
     assert iseries.dataset_quantity('cplx')(ar, 4) is None
-    assert iseries.dataset_quantity('missing')(MagicMock(DS=object()), 0) is None
+    missing = iseries.dataset_quantity('missing')
+    assert missing(MagicMock(DS=object()), 0) is None
 
 
 def _real_datasets(tmp_path, nrows_list):
@@ -241,12 +253,14 @@ def _real_datasets(tmp_path, nrows_list):
     import zarr
 
     cal_yaml = tmp_path / "cal.yaml"
-    cal_yaml.write_text("CAL_STEPS:\n  1:\n    task: load_n\n", encoding="utf-8")
+    cal_yaml.write_text("CAL_STEPS:\n  1:\n    task: load_n\n",
+                        encoding="utf-8")
     root = zarr.open_group(str(tmp_path / "series.zarr"), mode="w")
     datasets = []
     for i, nrows in enumerate(nrows_list):
         steps = [plStep("load_n", lambda n=nrows: n, [], ["nrows"], "global")]
-        datasets.append(DataSet(zarr_path=root.require_group(f"s{i}"), cal_yaml_path=str(cal_yaml),
+        datasets.append(DataSet(zarr_path=root.require_group(f"s{i}"),
+                                cal_yaml_path=str(cal_yaml),
                                 custom_cal_steps=steps))
     return datasets
 
@@ -261,8 +275,10 @@ def test_series_runners_from_datasets(tmp_path):
 
 @pytest.mark.parametrize("kwargs, error, match", [
     ({}, ValueError, "exactly one of"),
-    ({"make_custom_steps": lambda i: [], "datasets": []}, ValueError, "exactly one of"),
-    ({"make_custom_steps": lambda i: []}, ValueError, "requires root and n_series"),
+    ({"make_custom_steps": lambda i: [], "datasets": []}, ValueError,
+     "exactly one of"),
+    ({"make_custom_steps": lambda i: []}, ValueError,
+     "requires root and n_series"),
     ({"datasets": []}, ValueError, "at least one"),
     ({"datasets": ["not a dataset"]}, TypeError, "must be DataSet"),
 ])
@@ -274,7 +290,8 @@ def test_series_runners_rejects_bad_inputs(kwargs, error, match):
 def test_series_runners_checks_counts_and_rows(tmp_path):
     datasets = _real_datasets(tmp_path, [3, 4])
     with pytest.raises(ValueError, match="does not match len"):
-        iseries.series_runners(datasets=datasets[:1], n_series=2, analysis_yaml_path=None)
+        iseries.series_runners(datasets=datasets[:1], n_series=2,
+                               analysis_yaml_path=None)
     with pytest.raises(ValueError, match="same number of rows"):
         iseries.series_runners(datasets=datasets, analysis_yaml_path=None)
 
@@ -290,14 +307,17 @@ def test_window_buffers_writes_and_restores_setting(qt_app, monkeypatch):
     assert [ar.DS.write_buffer for ar in win._ARs] == [False] * len(win._ARs)
 
 
-def test_worker_runners_are_copies_of_the_datasets(qt_app, monkeypatch, tmp_path):
+def test_worker_runners_are_copies_of_the_datasets(
+    qt_app, monkeypatch, tmp_path
+):
     datasets = _real_datasets(tmp_path, [3, 3])
     ARs = iseries.series_runners(datasets=datasets, analysis_yaml_path=None)
     monkeypatch.setattr(iseries, "get_panel_class", lambda _names: _Panel)
-    monkeypatch.setattr(iseries.QtCore.QTimer, "singleShot", lambda *_a, **_k: None)
+    monkeypatch.setattr(iseries.QtCore.QTimer, "singleShot",
+                        lambda *_a, **_k: None)
     win = iseries.IQSeriesWindow(
-        ARs, x_param_name="nrows", x_name="n", y_func=lambda ar, di: None, y_name="y",
-        panels=[], start_idx=0,
+        ARs, x_param_name="nrows", x_name="n", y_func=lambda ar, di: None,
+        y_name="y", panels=[], start_idx=0,
     )
 
     worker_ars = win._make_worker_ars()
@@ -305,7 +325,8 @@ def test_worker_runners_are_copies_of_the_datasets(qt_app, monkeypatch, tmp_path
     for worker, ar in zip(worker_ars, ARs):
         assert worker.DS is not ar.DS
         assert worker.DS.root.path == ar.DS.root.path
-        assert worker.DS.write_buffer is True        # window buffers during the session
+        # window buffers during the session
+        assert worker.DS.write_buffer is True
     _close(win)
 
 
@@ -324,15 +345,16 @@ def test_series_values_lookup_and_validation():
 
 
 def test_ts_x_values_become_the_default_x_quantity(qt_app, monkeypatch):
-    win, _ = _make_window(qt_app, monkeypatch, x=None, x_values=[-30.0, -25.0, -20.0],
-                          x_name='Power (dBm)')
+    win, _ = _make_window(qt_app, monkeypatch, x=None,
+                          x_values=[-30.0, -25.0, -20.0], x_name='Power (dBm)')
 
     assert win._x_combo.currentText() == 'Power (dBm)'
-    assert 'Power (dBm)' in [win._y_combo.itemText(i) for i in range(win._y_combo.count())]
+    assert 'Power (dBm)' in [win._y_combo.itemText(i)
+                             for i in range(win._y_combo.count())]
     np.testing.assert_array_equal(win._get_x_array(2), [-30.0, -25.0, -20.0])
     np.testing.assert_array_equal(win._get_y_array(2), [2.0, 12.0, 22.0])
 
-    win.select_quantities(x='p')                       # another quantity, then back
+    win.select_quantities(x='p')  # another quantity, then back
     np.testing.assert_array_equal(win._get_x_array(2), [1.0, 2.0, 3.0])
     win.select_quantities(x='Power (dBm)', y='Power (dBm)')
     np.testing.assert_array_equal(win._get_y_array(1), [-30.0, -25.0, -20.0])
@@ -351,7 +373,9 @@ def test_ts_explicit_x_wins_over_x_values(qt_app, monkeypatch):
     {"x_values": [1.0, 2.0]},
     {"quantities": {"p": iseries.SeriesValues([1.0, 2.0]), "a": "a"}, "x": "p"},
 ])
-def test_series_values_must_match_number_of_series_points(qt_app, monkeypatch, kwargs):
+def test_series_values_must_match_number_of_series_points(
+    qt_app, monkeypatch, kwargs
+):
     kwargs.setdefault("x", None)
     with pytest.raises(ValueError, match="3 series points"):
         _make_window(qt_app, monkeypatch, **kwargs)
@@ -359,7 +383,8 @@ def test_series_values_must_match_number_of_series_points(qt_app, monkeypatch, k
 
 def test_worker_uses_series_index_for_series_values(qt_app, monkeypatch):
     win, _ = _make_window(qt_app, monkeypatch, x=None, x_values=[5.0, 6.0, 7.0])
-    worker_ars = [MagicMock(), MagicMock(), MagicMock()]      # copies: not the UI runners
+    # copies: not the UI runners
+    worker_ars = [MagicMock(), MagicMock(), MagicMock()]
 
     x, _ = win._compute_row_values(worker_ars, 1, store=True)
 
@@ -370,15 +395,16 @@ def test_worker_uses_series_index_for_series_values(qt_app, monkeypatch):
 
 def test_iq_window_x_values(qt_app, monkeypatch):
     monkeypatch.setattr(iseries, "get_panel_class", lambda _names: _Panel)
-    monkeypatch.setattr(iseries.QtCore.QTimer, "singleShot", lambda *_a, **_k: None)
+    monkeypatch.setattr(iseries.QtCore.QTimer, "singleShot",
+                        lambda *_a, **_k: None)
     ars = []
     for _ in range(3):
         ar = MagicMock()
         ar.DS.nrows = 4
         ars.append(ar)
     win = iseries.IQSeriesWindow(
-        ars, x_param_name='ares', x_name='T (mK)', y_func=lambda ar, di: 1.0, y_name='y',
-        panels=[], start_idx=0, x_values=[10.0, 20.0, 30.0],
+        ars, x_param_name='ares', x_name='T (mK)', y_func=lambda ar, di: 1.0,
+        y_name='y', panels=[], start_idx=0, x_values=[10.0, 20.0, 30.0],
     )
 
     np.testing.assert_array_equal(win._get_x_array(0), [10.0, 20.0, 30.0])
@@ -388,8 +414,8 @@ def test_iq_window_x_values(qt_app, monkeypatch):
 
     with pytest.raises(ValueError, match="3 series points"):
         iseries.IQSeriesWindow(
-            ars, x_param_name='ares', x_name='x', y_func=lambda ar, di: 1.0, y_name='y',
-            panels=[], start_idx=0, x_values=[10.0],
+            ars, x_param_name='ares', x_name='x', y_func=lambda ar, di: 1.0,
+            y_name='y', panels=[], start_idx=0, x_values=[10.0],
         )
 
 
@@ -406,9 +432,11 @@ def test_ts_window_has_no_mark_bad_above(qt_app, monkeypatch):
     win._mark_bad_above = MagicMock()
 
     texts = [b.text() for b in win.findChildren(QtWidgets.QPushButton)]
-    hints = [l.text() for l in win.findChildren(QtWidgets.QLabel) if 'mark all bad' in l.text()]
+    hints = [l.text() for l in win.findChildren(QtWidgets.QLabel)
+             if 'mark all bad' in l.text()]
     handled = win._handle_modified_letter_shortcut(
-        iseries.QtCore.Qt.Key.Key_B, iseries._Qt.ShiftModifier | iseries._Qt.ControlModifier)
+        iseries.QtCore.Qt.Key.Key_B,
+        iseries._Qt.ShiftModifier | iseries._Qt.ControlModifier)
 
     assert 'Mark Bad Above' not in texts
     assert hints and 'mark bad above' not in hints[0]
@@ -444,7 +472,8 @@ def _drawn_points(win):
 
 
 def test_log_scales_place_points_in_log_coordinates(qt_app, monkeypatch):
-    # data_idx 0: x = p = 1, 2, 3 and y = a = 0, 10, 20 (y = 0 can't be drawn on log)
+    # data_idx 0: x = p = 1, 2, 3 and y = a = 0, 10, 20 (y = 0 can't be drawn
+    # on log)
     win, _ = _make_window(qt_app, monkeypatch, xscale='log', yscale='log')
     win._series_idx = 2
     win._update_series_scatter()
@@ -467,7 +496,8 @@ def test_linear_scale_is_default_and_menu_toggle_redraws(qt_app, monkeypatch):
     assert not win._plot_series.ctrl.logXCheck.isChecked()
     assert _drawn_points(win)[2] == (3.0, 20.0)
 
-    win._plot_series.ctrl.logXCheck.setChecked(True)   # as from the right-click menu
+    # as from the right-click menu
+    win._plot_series.ctrl.logXCheck.setChecked(True)
 
     np.testing.assert_allclose(_drawn_points(win)[2], (np.log10(3.0), 20.0))
     _close(win)
@@ -475,7 +505,7 @@ def test_linear_scale_is_default_and_menu_toggle_redraws(qt_app, monkeypatch):
 
 def test_log_scale_survives_quantity_change(qt_app, monkeypatch):
     win, _ = _make_window(qt_app, monkeypatch, yscale='log')
-    win._y_combo.setCurrentText('b')                   # b = 0, -1, -2: nothing drawable
+    win._y_combo.setCurrentText('b')  # b = 0, -1, -2: nothing drawable
 
     assert win._plot_series.ctrl.logYCheck.isChecked()
     assert _drawn_points(win) == {}
@@ -489,9 +519,11 @@ def test_log_scale_survives_quantity_change(qt_app, monkeypatch):
 def test_xy_fit_curve_follows_x_scale(qt_app, monkeypatch, xscale, expected):
     from citkid.pipeline.series_xy_fit import SeriesXYFit
 
-    xy_fit = SeriesXYFit(fit=lambda x, y: (1.0, 0.0), param_names=['slope', 'intercept'],
+    xy_fit = SeriesXYFit(fit=lambda x, y: (1.0, 0.0),
+                         param_names=['slope', 'intercept'],
                          model=lambda xs, m, c: m * xs + c, n_samples=3)
-    win, _ = _make_window(qt_app, monkeypatch, xy_fit=xy_fit, xscale=xscale)  # x = p = 1, 2, 3
+    # x = p = 1, 2, 3
+    win, _ = _make_window(qt_app, monkeypatch, xy_fit=xy_fit, xscale=xscale)
     win._update_series_scatter()
 
     xs, _ = win._xy_fit_curve.getOriginalDataset()
@@ -512,7 +544,8 @@ def test_bad_scale_raises(qt_app, monkeypatch, kwargs):
 def test_run_functions_pass_scales(monkeypatch, module, run, window):
     created = MagicMock()
     monkeypatch.setattr(module, window, created)
-    monkeypatch.setattr(module, 'series_runners', lambda *_a, **_k: [MagicMock()])
+    monkeypatch.setattr(module, 'series_runners',
+                        lambda *_a, **_k: [MagicMock()])
     monkeypatch.setattr(module, 'get_qapp', lambda _title: MagicMock())
 
     getattr(module, run)(datasets=[MagicMock()], xscale='log', yscale='linear')
@@ -530,7 +563,7 @@ def test_refits_rescale_the_series_plot(qt_app, monkeypatch, refit):
     data_range = view.viewRange()
     view.setRange(xRange=(100, 200), yRange=(100, 200), padding=0)   # user zoom
 
-    win._update_series_scatter()                     # plain redraw keeps the zoom
+    win._update_series_scatter()  # plain redraw keeps the zoom
     assert view.viewRange()[0] == pytest.approx([100, 200])
 
     for panel in win.panels:
