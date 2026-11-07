@@ -56,7 +56,7 @@ from ..qt_compat import (
     responsive_busy,
     run_responsive,
 )
-from ..multitone.fres import update_fres as _update_fres
+from ..res.fres import update_fres as _update_fres
 from .gain import normalize_edges
 
 # QEvent.KeyPress moved to QEvent.Type.KeyPress in PyQt6 / some PySide6 builds.
@@ -1534,7 +1534,7 @@ def run_fqfinder(
         the screen regardless.
     fres_update_method (str): algorithm used to automatically update
         ``fres`` before the interactive session begins, passed to
-        ``citkid.multitone.fres.update_fres``. Can be 'none' (default,
+        ``citkid.res.fres.update_fres``. Can be 'none' (default,
         uses the input ``fres`` as the starting point), 'minS21' (minimum
         of |S21| after subtracting a linear baseline), 'spacing' (point of
         maximum adjacent IQ spacing), or 'distance' (point furthest from the

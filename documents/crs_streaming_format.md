@@ -330,7 +330,7 @@ default None), `gain_sweep` (`npoints_gain`, default 50), `fine_sweep`
 
 `rough_sweep` also has `fres` (the tone frequencies before the update) and
 the `fres_update_method` attribute (`'spacing'`, `'distance'`, or
-`'minS21'`; see `citkid.multitone.fres.update_fres`).
+`'minS21'`; see `citkid.res.fres.update_fres`).
 
 Sweep geometry (`CRS.sweep_qres`):
 

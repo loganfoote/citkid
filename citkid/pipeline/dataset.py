@@ -879,8 +879,8 @@ class DataSet:
         if as_figure:
             fig (matplotlib.figure.Figure): the combined figure.
         else:
-            png (io.BytesIO): the figure as a PNG image (as in the legacy
-                pipeline), e.g. ``IPython.display.Image(png.getvalue())``.
+            png (io.BytesIO): the figure as a PNG image, e.g.
+                ``IPython.display.Image(png.getvalue())``.
 
         Raises:
         ValueError: if none of the plot types has data for ``data_idx``.

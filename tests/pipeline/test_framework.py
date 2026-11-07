@@ -551,3 +551,340 @@ def test_print_cal_pl_prints_keys_and_steps(capsys):
     assert '  X_STEPS:' in out
     for name in steps:
         assert name in out
+
+
+################################################################################
+############################ Coverage: describe_value ##########################
+################################################################################
+
+@pytest.mark.parametrize('value, expected', [
+    ('x' * 50, "str " + repr('x' * 40)),
+    ({'a': 1}, 'dict'),
+    (None, 'None'),
+    ((1, 2), 'tuple of 2'),
+])
+def test_describe_value_summarizes_without_data(value, expected):
+    """
+    Check that strings are truncated to 40 characters and other objects are
+    described by their type name.
+    """
+    assert pf.describe_value(value) == expected
+
+
+################################################################################
+######################### Coverage: LazyAttr indexing ##########################
+################################################################################
+
+class _GridDS:
+    """
+    Mock DataSet whose rows are 2-D arrays ``row * 100 + arange(12)``.
+
+    Attributes:
+    nrows (int): number of rows (5).
+    data (np.ndarray): row data, shape (5, 3, 4).
+    fetch_calls (list): rows requested by each ``_fetch_rows`` call.
+    """
+    def __init__(self):
+        """
+        Initialize the row data and the fetch log.
+        """
+        self.nrows = 5
+        self.data = (np.arange(5)[:, None, None] * 100
+                     + np.arange(12).reshape(3, 4))
+        self.fetch_calls = []
+
+    def _fetch_rows(self, name, rows):
+        """
+        Return copies of the requested rows and log the call.
+
+        Parameters:
+        name (str): attribute name (ignored).
+        rows (list of int): rows to fetch.
+
+        Returns:
+        data (list of np.ndarray): one array per row.
+        """
+        self.fetch_calls.append(list(rows))
+        return [self.data[r].copy() for r in rows]
+
+
+def test_lazy_attr_rejects_non_string_name():
+    """
+    Check that a non-string attribute name raises.
+    """
+    with pytest.raises(ValueError, match='name must be a string'):
+        pf.LazyAttr(_GridDS(), 3)
+
+
+def test_lazy_attr_tuple_key_sub_indexes_one_row():
+    """
+    Check that ``attr[row, ...]`` loads one row and sub-indexes it.
+    """
+    ds = _GridDS()
+    attr = pf.LazyAttr(ds, 'g')
+    np.testing.assert_array_equal(attr[2, 1], ds.data[2, 1])
+    np.testing.assert_array_equal(attr[-1, 1:3], ds.data[4, 1:3])
+    assert attr[1, 2, 3] == ds.data[1, 2, 3]
+    assert attr.shape == (5, 3, 4)
+
+
+@pytest.mark.parametrize('key, expected', [
+    (([0, 3], 1), lambda d: d[[0, 3], 1]),
+    ((slice(1, 4), 0, 2), lambda d: d[1:4, 0, 2]),
+    ((np.array([4, 0]), slice(None), 3), lambda d: d[[4, 0], :, 3]),
+])
+def test_lazy_attr_tuple_key_sub_indexes_many_rows(key, expected):
+    """
+    Check that a tuple key with several rows applies the inner key to the
+    inner dimensions of every row.
+    """
+    ds = _GridDS()
+    attr = pf.LazyAttr(ds, 'g')
+    np.testing.assert_array_equal(attr[key], expected(ds.data))
+
+
+@pytest.mark.parametrize('key', ['a', 1.5, None, {0: 1}])
+def test_lazy_attr_getitem_rejects_invalid_key_types(key):
+    """
+    Check that keys that aren't ints, slices, lists, arrays or tuples raise.
+    """
+    attr = pf.LazyAttr(_GridDS(), 'g')
+    with pytest.raises(TypeError, match='Invalid index type'):
+        attr[key]
+
+
+@pytest.mark.parametrize('key', [5, -6, [0, 7], np.array([-9])])
+def test_lazy_attr_getitem_out_of_bounds_message(key):
+    """
+    Check that out-of-bounds rows raise IndexError naming the bounds.
+    """
+    attr = pf.LazyAttr(_GridDS(), 'g')
+    with pytest.raises(IndexError, match=r'out of bounds \[0, 5\)'):
+        attr[key]
+
+
+def test_lazy_attr_setitem_list_array_and_negative_rows():
+    """
+    Check assignment with list and array keys, negative rows, and broadcast
+    of a scalar to every row.
+    """
+    ds = _GridDS()
+    attr = pf.LazyAttr(ds, 'g')
+    attr[[0, -1]] = [np.zeros(2), np.ones(2)]
+    assert sorted(attr._cache) == [0, 4]
+    np.testing.assert_array_equal(attr[4], np.ones(2))
+    assert attr.shape == (5, 2)
+    attr[np.array([1, 2])] = 7.0
+    assert attr._cache[1] == 7.0 and attr._cache[2] == 7.0
+    attr[1:4] = 3
+    assert [attr._cache[r] for r in (1, 2, 3)] == [3, 3, 3]
+    assert ds.fetch_calls == []
+
+
+def test_lazy_attr_setitem_scalar_sets_shape_to_nrows():
+    """
+    Check that assigning a scalar first gives shape ``(nrows,)``.
+    """
+    attr = pf.LazyAttr(_GridDS(), 'g')
+    attr[2] = 1.5
+    assert attr.shape == (5,)
+    assert attr[2] == 1.5
+
+
+@pytest.mark.parametrize('key, value, match', [
+    ([0.5, 1], [1, 2], 'all rows must be integers'),
+    (['a'], [1], 'all rows must be integers'),
+    ([0, 5], [1, 2], 'out of bounds'),
+    (-6, 1, 'out of bounds'),
+    ([0, 1], [1, 2, 3], 'does not match number of rows'),
+])
+def test_lazy_attr_setitem_rejects_bad_keys_and_values(key, value, match):
+    """
+    Check that non-integer rows, out-of-bounds rows and a value of the wrong
+    length raise ValueError, and nothing is cached.
+    """
+    attr = pf.LazyAttr(_GridDS(), 'g')
+    with pytest.raises(ValueError, match=match):
+        attr[key] = value
+    assert attr._cache == {}
+
+
+def test_lazy_attr_setitem_tuple_sets_inside_a_row():
+    """
+    Check that ``attr[row, i, j] = v`` loads the row once and changes only
+    that element in the cache, not in the DataSet.
+    """
+    ds = _GridDS()
+    attr = pf.LazyAttr(ds, 'g')
+    attr[2, 1, 3] = -1
+    attr[2, 0] = np.full(4, -2)
+    expected = ds.data[2].copy()
+    expected[1, 3] = -1
+    expected[0] = -2
+    np.testing.assert_array_equal(attr[2], expected)
+    assert ds.data[2, 1, 3] == 207
+    assert ds.fetch_calls == [[2]]
+
+
+def test_lazy_attr_setitem_tuple_with_negative_row_normalizes_cache_key():
+    """
+    Check that ``attr[-1, i] = v`` caches only the normalized row.
+    """
+    attr = pf.LazyAttr(_GridDS(), 'g')
+    attr[-1, 0] = np.zeros(4)
+    assert sorted(attr._cache) == [4]
+    np.testing.assert_array_equal(attr[4][0], np.zeros(4))
+
+
+@pytest.mark.parametrize('row_key', [[1, 2], slice(0, 2), np.array([3])])
+def test_lazy_attr_setitem_tuple_needs_a_single_row(row_key):
+    """
+    Check that assigning inside rows with a multi-row key raises a clear
+    TypeError.
+    """
+    attr = pf.LazyAttr(_GridDS(), 'g')
+    with pytest.raises(TypeError, match='single integer row'):
+        attr[row_key, 0] = 0
+
+
+def test_lazy_attr_boolean_mask_selects_rows():
+    """
+    Check that a boolean array selects the rows where it is True, as in
+    numpy, for reading and assigning, and that a wrong-length mask raises.
+    """
+    ds = _GridDS()
+    attr = pf.LazyAttr(ds, 'g')
+    mask = np.array([True, False, True, False, False])
+    np.testing.assert_array_equal(attr[mask], ds.data[[0, 2]])
+
+    attr[np.array([False, True, False, False, True])] = [
+        np.full((3, 4), 7), np.full((3, 4), 9)]
+    np.testing.assert_array_equal(attr[1], np.full((3, 4), 7))
+    np.testing.assert_array_equal(attr[4], np.full((3, 4), 9))
+
+    with pytest.raises(IndexError, match='Boolean row mask'):
+        attr[np.array([True, False])]
+
+
+def test_lazy_attr_str_and_repr_list_cached_rows():
+    """
+    Check that ``str`` lists the sorted cached rows and ``repr`` counts
+    them.
+    """
+    attr = pf.LazyAttr(_GridDS(), 'g')
+    attr[[3, 0]]
+    assert str(attr) == 'Lazy Attribute: g\n\tCached Rows: [0, 3]'
+    assert repr(attr) == 'LazyAttr(g, 2 cached rows)'
+
+
+################################################################################
+############################ Coverage: plStep errors ###########################
+################################################################################
+
+@pytest.mark.parametrize('param_names, return_names, match', [
+    (['x', 1], ['y'], 'param_names must be strings'),
+    (['x'], ['y', None], 'return_names must be strings'),
+])
+def test_plstep_init_rejects_non_string_names(
+    param_names, return_names, match
+):
+    """
+    Check that non-string entries in param_names or return_names raise.
+    """
+    with pytest.raises(ValueError, match=match):
+        pf.plStep('s', lambda x: x, param_names, return_names, 'per-row')
+
+
+@pytest.mark.parametrize('func_type, params, is_global, match', [
+    ('per-row', (np.arange(2), 1), [False, True], 'params must be a list'),
+    ('per-row', [np.arange(2), 1], (False, True),
+     'param_is_global must be a list'),
+    ('per-row', [np.arange(2)], [False, True],
+     'Length of params does not match'),
+    ('per-row', [np.arange(2), 1], [False],
+     'Length of param_is_global does not match'),
+    ('per-row', [np.arange(2), 1], [0, 1], 'must be booleans'),
+    ('per-row', [1, 2], [True, True],
+     "At least one parameter must be non-global for func_type 'per-row'"),
+    ('vectorized', [np.arange(2), np.arange(3)], [False, False],
+     'same number of rows'),
+    ('global', [np.arange(2), 1], [False, True],
+     "All parameters must be global for func_type 'global'"),
+    ('global-res', [np.arange(2), 1], [False, True],
+     "must be global for func_type 'global-res'"),
+])
+def test_plstep_run_rejects_invalid_arguments(
+    func_type, params, is_global, match
+):
+    """
+    Check each argument check of ``plStep._run`` and that the function is
+    not called.
+    """
+    calls = []
+
+    def func(a, b):
+        """
+        Record the call and return the first argument.
+        """
+        calls.append((a, b))
+        return a
+
+    step = pf.plStep('s', func, ['a', 'b'], ['y'], func_type)
+    with pytest.raises(ValueError, match=match):
+        step._run(params, is_global)
+    assert calls == []
+
+
+def test_vectorized_step_with_wrong_output_count_raises():
+    """
+    Check that a vectorized step returning the wrong number of outputs
+    raises.
+    """
+    step = pf.plStep('vec', lambda x: (x, x, x), ['x'], ['a', 'b'],
+                     'vectorized')
+    with pytest.raises(ValueError, match=r"'vec' returned 3 output\(s\) but "
+                       r"has 2 return names"):
+        step._run([np.arange(3)], [False])
+
+
+def test_global_step_with_wrong_output_count_raises():
+    """
+    Check that a global step returning too few outputs raises.
+    """
+    step = pf.plStep('glob', lambda: 1.0, [], ['a', 'b'], 'global')
+    with pytest.raises(ValueError, match=r"'glob' returned 1 output\(s\) "
+                       r"but has 2"):
+        step._run([], [])
+
+
+################################################################################
+################## Coverage: check_pl_tree_structure errors ####################
+################################################################################
+
+def _more_bad_trees():
+    """
+    Build invalid trees for the string-key and ``params`` checks.
+
+    Returns:
+    cases (list): tuples (tree, match).
+    """
+    _, s = _tree_steps()
+    return [
+        ({'CAL_STEPS': {1: {'task': s['child'], 2.5: {}}}},
+         'string keys cannot have other key types'),
+        ({'A_STEPS': {'params': {'k': 1}}}, 'requires a corresponding'),
+        ({'A_STEPS': {1: {'task': s['child'], 'params': [('k', 1)]}}},
+         '"params" value must be a dict'),
+        ({'A_STEPS': {1: {'task': s['child'], 'params': {3: 1}}}},
+         '"params" keys must be strings'),
+    ]
+
+
+@pytest.mark.parametrize('case', range(len(_more_bad_trees())))
+def test_check_pl_tree_structure_rejects_bad_string_keys_and_params(case):
+    """
+    Check the remaining structural errors of analysis trees.
+    """
+    tree, match = _more_bad_trees()[case]
+    with pytest.raises(ValueError, match=match):
+        pf.check_pl_tree_structure(tree, cal=False)

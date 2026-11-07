@@ -134,7 +134,7 @@ class LazyAttr:
         if isinstance(key, slice):
             rows = list(range(*key.indices(self.DS.nrows)))
         elif isinstance(key, (list, np.ndarray)):
-            rows = [int(r) for r in key]
+            rows = [int(r) for r in self._rows_from_sequence(key)]
         elif isinstance(key, (int, np.integer)):
             rows = [int(key)]
             return_array = False
@@ -153,6 +153,32 @@ class LazyAttr:
             normalized_rows.append(r)
         
         return normalized_rows, return_array, inner_key
+
+    def _rows_from_sequence(self, key):
+        """
+        Convert a list or array row key to row numbers, treating a boolean
+        key as a mask over the rows (as numpy does).
+
+        Parameters:
+        key (list or np.ndarray): Row numbers, or a boolean mask of length
+            ``nrows``.
+
+        Returns:
+        rows (list): Row numbers as given, or the rows where a boolean mask
+            is True (not yet type- or bounds-checked).
+
+        Raises:
+        IndexError: If a boolean mask doesn't have length ``nrows``.
+        """
+        arr = np.asarray(key)
+        if arr.dtype == bool:
+            if arr.shape != (self.DS.nrows,):
+                raise IndexError(
+                    f"Boolean row mask has shape {arr.shape}, expected "
+                    f"({self.DS.nrows},)"
+                )
+            return [int(r) for r in np.flatnonzero(arr)]
+        return list(key)
 
     def __getitem__(self, key):
         """
@@ -213,14 +239,20 @@ class LazyAttr:
         if isinstance(key, slice):
             rows = list(range(*key.indices(self.DS.nrows)))
         elif isinstance(key, (list, np.ndarray)):
-            rows = list(key)
+            rows = self._rows_from_sequence(key)
         elif isinstance(key, tuple):
             row_key, inner_key = key[0], key[1:]
             if len(inner_key) == 1:
                 inner_key = inner_key[0]
-            row = self[row_key]          # load row normally
+            if not isinstance(row_key, (int, np.integer)):
+                raise TypeError(
+                    "Assigning inside rows needs a single integer row, "
+                    "e.g. attr[3, 0:5] = value"
+                )
+            (row_idx,), _, _ = self._normalize_key(int(row_key))
+            row = self[row_idx]          # load row normally
             row[inner_key] = value       # then set inside the row
-            self._cache[int(row_key)] = row  # update cache
+            self._cache[row_idx] = row   # cache under the non-negative row
             return
         else:
             rows = [key]

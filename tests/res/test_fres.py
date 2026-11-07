@@ -1,5 +1,5 @@
 """
-Tests for citkid.multitone.fres.
+Tests for citkid.res.fres.
 
 Synthetic resonator sweeps are constructed so that the correct resonance
 frequency is known exactly, allowing strict equality checks on the index
@@ -20,7 +20,7 @@ is placed at a known index ``k`` in an N-point array:
 
 import numpy as np
 import pytest
-from citkid.multitone.fres import (
+from citkid.res.fres import (
     update_fres,
     update_fr_min_s21,
     update_fr_spacing,

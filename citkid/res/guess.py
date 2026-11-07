@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 from ..xcal import circle
 from .util import get_peak_fwhm
@@ -74,6 +76,11 @@ def guess_p0_nonlinear_iq(f, z):
     Get initial guess parameters for nonlinear_iq.
     Assumes gain and cable delay have been removed
 
+    Legacy: kept for existing scripts and may be removed in a future
+    version. Use ``guess_p0_pole`` (the default of ``fit_nonlinear_iq``)
+    instead. Its Qr and nonlinearity guesses depend on the sweep's point
+    density.
+
     Parameters:
     f (np.array): array of frequency data in Hz
     z (np.array): array of complex S21 data
@@ -82,7 +89,12 @@ def guess_p0_nonlinear_iq(f, z):
     p0 (list): initial guess fit parameters
         [fr, Qr, amp, phi, a, i0, q0, tau]
     """
-    # Input validation 
+    warnings.warn(
+        "citkid.res.guess.guess_p0_nonlinear_iq is legacy code and may be "
+        "removed in a future version. Use guess_p0_pole instead.",
+        DeprecationWarning, stacklevel = 2,
+    )
+    # Input validation
     f = np.asarray(f, dtype = np.float64)
     z = np.asarray(z, dtype = np.complex128)
     if f.ndim != 1:

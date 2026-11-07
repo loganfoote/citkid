@@ -1,6 +1,6 @@
 import numpy as np
 from ..res.fitter import fit_nonlinear_iq
-from ..util import combine_figures_vertically_legacy as combine_figures_vertically
+from .figures import combine_figures_vertically
 from .gain import fit_and_remove_gain_phase
 from .data_io import make_fit_row
 

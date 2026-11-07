@@ -252,3 +252,129 @@ def test_fit_nonlinear_iq_bifurcated():
     f, z, _ = make_synthetic_data(params = params, noise_sigma = 1e-3)
     _, popt, _, _, _ = fit_nonlinear_iq(f, z)
     assert popt[4] > 4 * np.sqrt(3) / 9
+
+
+################################################################################
+###################### fit_nonlinear_iq retry paths ############################
+################################################################################
+
+def _fake_fit_util(monkeypatch, nrmses):
+    """
+    Replace ``fit_util`` in ``citkid.res.fitter`` with a fake that returns
+    the given nrmse values in order and records each call.
+
+    Parameters:
+    monkeypatch (pytest.MonkeyPatch): pytest monkeypatch fixture.
+    nrmses (list of float): nrmse value returned by each successive call.
+
+    Returns:
+    calls (list of dict): filled with copies of ``p0`` and ``bounds`` for
+        each call, and the returned ``popt``.
+    """
+    import citkid.res.fitter as fitter_mod
+    calls = []
+
+    def fake(p0, bounds, fit_tau, f, z_stacked, z, downward = True):
+        """
+        Record the inputs and return a distinct popt per call.
+
+        Parameters:
+        p0, bounds, fit_tau, f, z_stacked, z, downward: as ``fit_util``.
+
+        Returns:
+        popt (list), perr (list), nrmse (float): fake fit results.
+        """
+        i = len(calls)
+        popt = [float(p) for p in p0]
+        popt[0] += 1. + i  # distinct, recognizable fr per call
+        calls.append(dict(p0 = np.array(p0, dtype = float),
+                          bounds = np.array(bounds, dtype = float),
+                          popt = popt))
+        return popt, [0.1 * (i + 1)] * 8, nrmses[i]
+    monkeypatch.setattr(fitter_mod, 'fit_util', fake)
+    return calls
+
+
+def test_fit_nonlinear_iq_no_retry_when_nrmse_small(monkeypatch):
+    calls = _fake_fit_util(monkeypatch, [1e-3])
+    f, z, params = make_synthetic_data()
+    p0, popt, perr, nrmse, _ = fit_nonlinear_iq(f, z, p0 = params)
+    assert len(calls) == 1
+    assert nrmse == 1e-3
+    assert popt == calls[0]['popt']
+
+
+def test_fit_nonlinear_iq_retry_from_previous_popt(monkeypatch):
+    # 1e-2 < nrmse < 1e-1: refit starting from the previous popt
+    calls = _fake_fit_util(monkeypatch, [5e-2, 1e-3])
+    f, z, params = make_synthetic_data()
+    p0, popt, perr, nrmse, _ = fit_nonlinear_iq(f, z, p0 = params)
+    assert len(calls) == 2
+    np.testing.assert_array_equal(calls[1]['p0'], calls[0]['popt'])
+    # bounds are unchanged on this path
+    np.testing.assert_array_equal(calls[1]['bounds'], calls[0]['bounds'])
+    assert popt == calls[1]['popt'] and nrmse == 1e-3
+    assert perr == [0.2] * 8
+    # the returned p0 is the start of the last fit
+    np.testing.assert_array_equal(p0, calls[0]['popt'])
+
+
+def test_fit_nonlinear_iq_retry_divides_amp(monkeypatch):
+    # nrmse > 1e-1: amp guess and its bounds are divided by 10
+    calls = _fake_fit_util(monkeypatch, [0.5, 1e-3])
+    f, z, params = make_synthetic_data()
+    p0, popt, perr, nrmse, _ = fit_nonlinear_iq(f, z, p0 = params)
+    assert len(calls) == 2
+    p0_0, p0_1 = calls[0]['p0'], calls[1]['p0']
+    b0, b1 = calls[0]['bounds'], calls[1]['bounds']
+    assert p0_1[2] == pytest.approx(p0_0[2] / 10)
+    np.testing.assert_allclose(b1[:, 2], b0[:, 2] / 10)
+    # everything else is unchanged
+    keep = [0, 1, 3, 4, 5, 6, 7]
+    np.testing.assert_array_equal(p0_1[keep], p0_0[keep])
+    np.testing.assert_array_equal(b1[:, keep], b0[:, keep])
+    assert popt == calls[1]['popt'] and nrmse == 1e-3
+    assert p0[2] == pytest.approx(params[2] / 10)
+
+
+def test_fit_nonlinear_iq_retry_stops_after_three_fits(monkeypatch):
+    # Bad fits are retried at most twice; the last result is returned
+    calls = _fake_fit_util(monkeypatch, [0.5, 0.5, 0.5, 0.5])
+    f, z, params = make_synthetic_data()
+    p0, popt, perr, nrmse, _ = fit_nonlinear_iq(f, z, p0 = params)
+    assert len(calls) == 3
+    assert calls[2]['p0'][2] == pytest.approx(params[2] / 100)
+    assert popt == calls[2]['popt'] and nrmse == 0.5
+
+
+def test_fit_nonlinear_iq_retry_mixed_paths(monkeypatch):
+    # Amp division, then a refit from the previous popt
+    calls = _fake_fit_util(monkeypatch, [0.5, 5e-2, 1e-3])
+    f, z, params = make_synthetic_data()
+    _, popt, _, nrmse, _ = fit_nonlinear_iq(f, z, p0 = params)
+    assert len(calls) == 3
+    np.testing.assert_array_equal(calls[2]['p0'], calls[1]['popt'])
+    assert calls[1]['p0'][2] == pytest.approx(params[2] / 10)
+    assert popt == calls[2]['popt'] and nrmse == 1e-3
+
+
+def test_fit_nonlinear_iq_retry_real_fit_with_bad_amp_guess():
+    # A too-high amp guess should still converge to the true resonance
+    f, z, params = make_synthetic_data(params = [500e6, 20000, 0.05, 0.1,
+                                                 0.05, 1.0, 0.0, 0.0])
+    p0 = list(params)
+    p0[2] = 0.9
+    _, popt, _, nrmse, _ = fit_nonlinear_iq(f, z, p0 = p0)
+    assert nrmse < 1e-2
+    assert popt[0] == pytest.approx(500e6, rel = 1e-7)
+    assert popt[2] == pytest.approx(0.05, rel = 1e-2)
+
+
+def test_fit_nonlinear_iq_plotq_returns_figure():
+    import matplotlib.pyplot as plt
+    f, z, params = make_synthetic_data()
+    _, popt, _, _, (fig, ax) = fit_nonlinear_iq(f, z, p0 = params,
+                                                plotq = True)
+    assert isinstance(fig, plt.Figure)
+    assert ax is not None
+    plt.close(fig)

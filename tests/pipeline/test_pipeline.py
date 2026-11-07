@@ -1412,3 +1412,583 @@ def test_changed_template_mismatch_error_says_how_to_reopen(tmp_path):
         DataSet(zarr_path=zarr_path, cal_yaml_path="ts", custom_path=custom,
                 custom_main_dir_overwrite=str(raw_dir))
     DataSet(zarr_path=zarr_path, custom_main_dir_overwrite=str(raw_dir))
+
+
+################################################################################
+################### apply_cal replacements and DataSet branches ################
+################################################################################
+
+_AC_SOURCE = (
+    "from citkid.pipeline.framework import plStep\n"
+    "\n"
+    "def load_n():\n    return 3\n"
+    "def load_scale():\n    return 2.0\n"
+    "def calc_g(scale):\n    return scale * 10\n"
+    "def calc_bad(p):\n    return p\n"
+    "def load_zt(data_idx):\n    return data_idx + 1.0\n"
+    "def calc_xt(zt, scale):\n    return zt * scale\n"
+    "def calc_px(zt, p, gp):\n    return zt + p + gp\n"
+    "\n"
+    "custom_cal_steps = [\n"
+    "    plStep('load_n', load_n, [], ['nrows'], 'global'),\n"
+    "    plStep('load_scale', load_scale, [], ['scale'], 'global'),\n"
+    "    plStep('calc_g', calc_g, ['scale'], ['gscaled'], 'global'),\n"
+    "    plStep('calc_bad', calc_bad, ['p'], ['bad'], 'global'),\n"
+    "    plStep('load_zt', load_zt, ['data_idx'], ['zt'], 'per-row'),\n"
+    "    plStep('calc_xt', calc_xt, ['zt', 'scale'], ['xt'], 'vectorized'),\n"
+    "    plStep('calc_px', calc_px, ['zt', 'p', 'gp'], ['px'], 'per-row'),\n"
+    "]\n"
+)
+
+
+def _apply_cal_dataset(tmp_path):
+    """
+    Build a 3-row DataSet for apply_cal tests.
+
+    The calibration runs load_n, load_scale (scale = 2), calc_g
+    (gscaled = 10 * scale, with a child sequence holding calc_bad, a global
+    step reading the per-row analysis parameter ``p``), load_zt
+    (zt = row + 1), calc_xt (xt = zt * scale) and calc_px
+    (px = zt + p + gp, with ``p`` and ``gp`` analysis parameters).
+
+    Parameters:
+    tmp_path (pathlib.Path): directory for the YAML and the zarr store.
+
+    Returns:
+    ds (DataSet): the dataset.
+    """
+    cal_yaml = tmp_path / "ac_cal.yaml"
+    cal_yaml.write_text(
+        "CAL_STEPS:\n"
+        "  1:\n    task: load_n\n"
+        "  2:\n    task: load_scale\n"
+        "  3:\n    task: calc_g\n"
+        "    BAD_STEPS:\n"
+        "      1:\n        task: calc_bad\n"
+        "  4:\n    task: load_zt\n"
+        "  5:\n    task: calc_xt\n"
+        "  6:\n    task: calc_px\n",
+        encoding="utf-8",
+    )
+    return DataSet(zarr_path=str(tmp_path / "ac.zarr"),
+                   cal_yaml_path=str(cal_yaml), custom_source=_AC_SOURCE)
+
+
+def test_apply_cal_runs_path_and_takes_global_replacements(tmp_path):
+    """
+    Check that apply_cal computes per-row inputs itself, uses a global
+    replacement as a global, returns global outputs unchanged, and leaves
+    the dataset untouched.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+
+    out = ds.apply_cal([0, 2], "xt", replacements={"scale": 5.0})
+    np.testing.assert_array_equal(out["xt"], [5.0, 15.0])
+
+    out = ds.apply_cal([0, 2], ["xt", "gscaled"])
+    np.testing.assert_array_equal(out["xt"], [2.0, 6.0])
+    assert out["gscaled"] == 20.0
+
+    assert ds._global_cache == {}
+    assert "zt" not in ds._param_meta and "xt" not in ds._param_meta
+
+
+def test_apply_cal_global_replacement_of_loaded_param(tmp_path):
+    """
+    Check that replacing a global the dataset has already loaded doesn't
+    change the stored value.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    assert ds.scale == 2.0
+
+    out = ds.apply_cal(0, "xt", replacements={"scale": 4.0})
+
+    assert out["xt"] == 4.0
+    assert ds.scale == 2.0
+
+
+def test_apply_cal_reads_analysis_params_from_dataset(tmp_path):
+    """
+    Check that inputs no calibration step produces are read from the
+    dataset (per-row rows and globals), and can be replaced per row.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    _save_rows(ds, "p", [0, 1, 2], offset=0.5)
+    ds._store_param("gp", 100.0, is_global=True)
+
+    out = ds.apply_cal([1, 2], "px")
+    np.testing.assert_array_equal(out["px"], [103.5, 105.5])
+
+    out = ds.apply_cal([1, 2], "px", replacements={"p": [0.0, 0.0]})
+    np.testing.assert_array_equal(out["px"], [102.0, 103.0])
+
+
+def test_global_step_cannot_consume_per_row_param(tmp_path):
+    """
+    Check that a global step reading a per-row parameter raises, both in
+    apply_cal and when the dataset produces it.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    _save_rows(ds, "p", [0, 1, 2])
+    match = "Global step 'calc_bad' cannot consume per-row parameter 'p'"
+
+    with pytest.raises(ValueError, match=match):
+        ds.apply_cal(None, "bad")
+    with pytest.raises(ValueError, match=match):
+        _ = ds.bad
+
+
+def test_apply_cal_per_row_replacement_requires_data_indices(tmp_path):
+    """
+    Check that a per-row replacement without rows raises.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    with pytest.raises(ValueError, match="Replacement 'zt' is per-row and "
+                       "requires data_indices"):
+        ds.apply_cal(None, "xt", replacements={"zt": 1.0})
+
+
+@pytest.mark.parametrize("value", [
+    np.array([7.0]), [7.0], (7.0,), np.array(7.0), 7.0,
+])
+def test_apply_cal_single_row_replacement_forms(tmp_path, value):
+    """
+    Check that for one row a replacement can be a scalar, a 0-d array, or a
+    length-1 array, list or tuple, and the output is a scalar.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    out = ds.apply_cal(1, "xt", replacements={"zt": value})
+    assert np.ndim(out["xt"]) == 0
+    assert out["xt"] == 14.0
+
+
+@pytest.mark.parametrize("value, expected", [
+    (np.array([1.0, 2.0]), [2.0, 4.0]),
+    ([1.0, 2.0], [2.0, 4.0]),
+    ((1.0, 2.0), [2.0, 4.0]),
+    (3.0, [6.0, 6.0]),
+])
+def test_apply_cal_multi_row_replacement_forms(tmp_path, value, expected):
+    """
+    Check that for several rows a replacement can have one value per row or
+    be a scalar used for every row.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    out = ds.apply_cal([0, 2], "xt", replacements={"zt": value})
+    np.testing.assert_array_equal(out["xt"], expected)
+
+
+@pytest.mark.parametrize("value", [[1.0, 2.0, 3.0], np.ones(3), [1.0]])
+def test_apply_cal_replacement_with_wrong_row_count_raises(tmp_path, value):
+    """
+    Check that a per-row replacement with the wrong number of values raises.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    with pytest.raises(ValueError, match="Replacement 'zt' must provide one "
+                       "value per requested row"):
+        ds.apply_cal([0, 2], "xt", replacements={"zt": value})
+
+
+@pytest.mark.parametrize("outputs, match", [
+    ([], "at least one calibration output"),
+    ("nope", "cannot produce output 'nope'"),
+])
+def test_apply_cal_rejects_bad_outputs(tmp_path, outputs, match):
+    """
+    Check that empty or unknown outputs raise.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    with pytest.raises(ValueError, match=match):
+        ds.apply_cal([0], outputs)
+
+
+def test_invalidated_calibration_global_is_recomputed(tmp_path):
+    """
+    Check that a calibration global invalidated in memory is produced again
+    on the next access.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    ds._store_param("scale", 99.0, is_global=True)
+    assert ds.scale == 99.0
+
+    ds.invalidate_memory_params(["scale"])
+
+    assert ds.scale == 2.0
+    assert "scale" not in ds._invalidated_globals
+
+
+def test_invalidated_analysis_global_is_unavailable(tmp_path):
+    """
+    Check that an invalidated global no step can produce raises
+    AttributeError.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    ds._store_param("gp", 5.0, is_global=True)
+    ds.invalidate_memory_params(["gp"])
+    with pytest.raises(AttributeError, match="Global parameter 'gp' is not "
+                       "available"):
+        _ = ds.gp
+
+
+def test_write_params_produces_and_saves_unloaded_global(tmp_path):
+    """
+    Check that write_params produces a calibration global that was never
+    loaded, and that a saved global reloads in another DataSet.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    ds.write_params(["gscaled"])
+    assert ds.root["gscaled"]["data"][...] == 20.0
+
+    ds._store_param("gp", 5.0, is_global=True, pipeline_scope="analysis",
+                    save=True)
+    assert DataSet(zarr_path=ds.root).gp == 5.0
+
+
+@pytest.mark.parametrize("kwargs, exc, match", [
+    ({"custom_path": 5}, TypeError, "custom_path must be a string"),
+    ({"custom_source": 5}, TypeError, "custom_source must be a string"),
+    ({"custom_source": "x = 1", "custom_path": "a.py"}, ValueError,
+     "can't be combined"),
+    ({"custom_source": "x = 1", "custom_cal_steps": []}, ValueError,
+     "can't be combined"),
+    ({"cal_yaml_path": 5}, TypeError, "cal_yaml_path must be a string"),
+    ({"custom_main_dir_overwrite": 5}, TypeError,
+     "custom_main_dir_overwrite must be a string"),
+    ({"zarr_path": "data.h5"}, ValueError, "must point to a .zarr file"),
+    ({"zarr_path": 5}, TypeError, "zarr.Group or string path"),
+    ({"custom_path": "steps.txt"}, ValueError, "must point to a .py file"),
+    ({"custom_cal_steps": []}, ValueError, "cal_yaml_path is required"),
+    ({}, ValueError, "No calibration YAML was provided"),
+    ({"cal_yaml_path": "cal.txt"}, ValueError, "a .yaml or .yml file"),
+])
+def test_dataset_init_rejects_invalid_arguments(tmp_path, kwargs, exc, match):
+    """
+    Check the argument validation of DataSet.__init__.
+    """
+    kwargs = dict(kwargs)
+    if kwargs.get("zarr_path") == "data.h5":
+        kwargs["zarr_path"] = str(tmp_path / "data.h5")
+    kwargs.setdefault("zarr_path", str(tmp_path / "v.zarr"))
+    with pytest.raises(exc, match=match):
+        DataSet(**kwargs)
+
+
+@pytest.mark.parametrize("source, task, match", [
+    ("def a():\n    return 1\n"
+     "custom_cal_steps = [plStep('a', a, [], ['a_out'], 'global')]\n",
+     "a", "must be able to produce 'nrows'"),
+    ("def a(data_idx):\n    return 1\n"
+     "custom_cal_steps = [plStep('a', a, ['data_idx'], ['nrows'])]\n",
+     "a", "'nrows' must be produced by a global step"),
+    ("custom_cal_steps = []\n", "nonexistent",
+     "Step 'nonexistent' not found in available steps"),
+])
+def test_dataset_init_rejects_bad_calibration(tmp_path, source, task, match):
+    """
+    Check that a calibration without a global ``nrows`` step, or with an
+    unknown task, raises.
+    """
+    cal_yaml = tmp_path / "bad.yaml"
+    cal_yaml.write_text(f"CAL_STEPS:\n  1:\n    task: {task}\n",
+                        encoding="utf-8")
+    source = "from citkid.pipeline.framework import plStep\n" + source
+    with pytest.raises(ValueError, match=match):
+        DataSet(zarr_path=str(tmp_path / "bad.zarr"),
+                cal_yaml_path=str(cal_yaml), custom_source=source)
+
+
+def test_register_analysis_definition_rejects_changes(tmp_path):
+    """
+    Check that a different analysis YAML or custom source is rejected once
+    one is registered, and the same definition is accepted again.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    ds.register_analysis_definition("A_STEPS: {}\n", "x = 1\n")
+    ds.register_analysis_definition("A_STEPS: {}\n", "x = 1\n")
+
+    with pytest.raises(ValueError, match="different analysis YAML"):
+        ds.register_analysis_definition("B_STEPS: {}\n", "x = 1\n")
+    with pytest.raises(ValueError, match="different analysis custom step"):
+        ds.register_analysis_definition("A_STEPS: {}\n", "y = 2\n")
+
+
+def test_dataset_opens_read_only_group(tmp_path):
+    """
+    Check that a DataSet opens a read-only zarr group and reads saved rows
+    and calibration globals.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    _save_rows(ds, "p", [1], offset=0.5)
+    group = zarr.open_group(str(tmp_path / "ac.zarr"), mode="r")
+
+    ro = DataSet(zarr_path=group)
+
+    assert ro.p[1] == 1.5
+    assert ro.scale == 2.0
+
+
+def test_write_per_row_param_requires_cached_rows(tmp_path):
+    """
+    Check that writing a per-row parameter needs its rows in memory, and
+    that writing no rows does nothing.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    ds._store_param("q", [1.0, 2.0], is_global=False, data_idx=[0, 1])
+
+    with pytest.raises(ValueError, match="'q' row 2 is not cached"):
+        ds._write_per_row_param("q", data_idx=[1, 2])
+    ds._write_per_row_param("q", data_idx=[])
+    assert "q" not in ds.root
+
+    ds.release_rows([0, 1])
+    with pytest.raises(ValueError, match="'q' has no cached rows to save"):
+        ds._write_per_row_param("q")
+
+
+def test_delete_saved_params_removes_whole_parameters(tmp_path):
+    """
+    Check that deleting a global, or a per-row parameter without rows,
+    removes its group.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    _save_rows(ds, "p", [0, 2])
+    ds._store_param("gp", 5.0, is_global=True, save=True)
+    assert "p" in ds.root and "gp" in ds.root
+
+    ds.delete_saved_params(["gp"], data_idx=[0])
+    ds.delete_saved_params(["p"])
+
+    assert "p" not in ds.root and "gp" not in ds.root
+
+
+def test_delete_rows_of_parameter_without_saved_rows_removes_group(tmp_path):
+    """
+    Check that deleting rows of a per-row parameter group that holds no row
+    arrays removes the group.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    ds.root.create_group("empty", attributes={"global": False})
+    ds2 = DataSet(zarr_path=ds.root)
+    assert ds2._param_meta["empty"]["global"] is False
+
+    ds2.delete_saved_params(["empty"], data_idx=[0])
+
+    assert "empty" not in ds2.root
+
+
+def test_group_without_parameter_metadata_is_not_an_attribute(tmp_path):
+    """
+    Check that a zarr group without the ``global`` attribute isn't treated
+    as a parameter.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    ds.root.create_group("other")
+    assert ds._refresh_param_meta("other") is None
+    with pytest.raises(AttributeError, match="no attribute 'other'"):
+        _ = ds.other
+
+
+def test_saved_row_mask_unsaved_and_pending_only(tmp_path):
+    """
+    Check the saved-row mask of an unsaved parameter (all False) and of one
+    saved only to the pending write buffer.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    np.testing.assert_array_equal(ds.saved_row_mask("w"), [False] * 3)
+
+    buffered = DataSet(zarr_path=ds.root, write_buffer=True)
+    _save_rows(buffered, "w", [1])
+
+    np.testing.assert_array_equal(buffered.saved_row_mask("w"),
+                                  [False, True, False])
+
+
+def test_store_and_execute_reject_invalid_calls(tmp_path):
+    """
+    Check the errors for a reserved name, a value of the wrong length,
+    missing rows and a non-step.
+    """
+    ds = _apply_cal_dataset(tmp_path)
+    with pytest.raises(ValueError, match="'copy' because the name is "
+                       "reserved"):
+        ds._store_param("copy", 1.0, is_global=True)
+    with pytest.raises(ValueError, match="Length mismatch"):
+        ds._store_param("q", [1.0, 2.0, 3.0], is_global=False,
+                        data_idx=[0, 1])
+    with pytest.raises(ValueError, match="data_idx required for per-row "
+                       "parameter 'zt'"):
+        ds._fetch_rows("zt", None)
+    with pytest.raises(TypeError, match="step must be a plStep"):
+        ds._execute_step("load_zt")
+    step = next(s for s in ds.cal_steps if s.name == "load_zt")
+    with pytest.raises(ValueError, match="data_idx required for step "
+                       "'load_zt'"):
+        ds._execute_step(step)
+
+
+################################################################################
+####################### check_calibration report branches ######################
+################################################################################
+
+def _check_steps():
+    """
+    Build calibration steps that hit the structure checks of
+    ``check_calibration``.
+
+    Returns:
+    steps (list of plStep): custom calibration steps.
+    """
+    from citkid.pipeline.framework import plStep
+
+    def boom(data_idx):
+        """
+        Fail inside user code.
+        """
+        raise RuntimeError("boom in user code")
+
+    return [
+        plStep("load_n", lambda: 2, [], ["nrows"], "global"),
+        plStep("load_all", lambda: np.arange(3), [], ["all_v"],
+               "global-res"),
+        plStep("load_ff", lambda data_idx: (np.ones((2, 2)), 1.0),
+               ["data_idx"], ["ff", "other"], "per-row"),
+        plStep("glob_idx", lambda data_idx: data_idx is None, ["data_idx"],
+               ["gi"], "global"),
+        plStep("needs_late", lambda late: late, ["late"], ["early"],
+               "per-row"),
+        plStep("late", lambda data_idx: 1.0, ["data_idx"], ["late"],
+               "per-row"),
+        plStep("boom", boom, ["data_idx"], ["b"], "per-row"),
+    ]
+
+
+def _check_dataset(tmp_path, nrows_value=2):
+    """
+    Build an in-memory DataSet from ``_check_steps``.
+
+    Parameters:
+    tmp_path (pathlib.Path): directory for the YAML.
+    nrows_value (object): value the ``load_n`` step returns.
+
+    Returns:
+    ds (DataSet): the dataset.
+    """
+    from citkid.pipeline.framework import plStep
+    steps = _check_steps()
+    steps[0] = plStep("load_n", lambda: nrows_value, [], ["nrows"], "global")
+    cal_yaml = tmp_path / "check.yaml"
+    cal_yaml.write_text(
+        "CAL_STEPS:\n" + "".join(f"  {i}:\n    task: {s.name}\n"
+                                 for i, s in enumerate(steps, start=1)),
+        encoding="utf-8",
+    )
+    root = zarr.open_group(zarr.storage.MemoryStore(), mode="w")
+    return DataSet(zarr_path=root, cal_yaml_path=str(cal_yaml),
+                   custom_cal_steps=steps)
+
+
+def test_check_calibration_reports_structure_problems(tmp_path):
+    """
+    Check the statuses and messages of steps with structure problems, a
+    global step taking data_idx, an input produced later, and an error in
+    user code, and how the report shows them.
+    """
+    from citkid.pipeline.check import format_check_report
+    ds = _check_dataset(tmp_path)
+
+    results = {r["step"]: r for r in ds.check_cal(0, verbose=False)}
+
+    assert results["load_n"]["status"] == "ok"
+    assert results["load_all"]["status"] == "failed"
+    assert "global-res step must return one entry per resonator: length " \
+        "nrows = 2" in results["load_all"]["error"]
+    assert results["load_all"]["traceback"] is None
+    assert results["load_ff"]["status"] == "warning"
+    assert any("'ff' should be a real 1-D frequency array" in m
+               for m in results["load_ff"]["messages"])
+    assert results["glob_idx"]["status"] == "ok"
+    assert results["glob_idx"]["outputs"] == {"gi": "bool True"}
+    assert results["needs_late"]["status"] == "failed"
+    assert results["needs_late"]["messages"] == [
+        "needs 'late', which step 'late' produces later"]
+    assert results["boom"]["error"] == "RuntimeError: boom in user code"
+    assert "boom in user code" in results["boom"]["traceback"]
+
+    report = format_check_report(list(results.values()), 0)
+    lines = report.splitlines()
+    ff_line = lines.index(next(line for line in lines if "load_ff" in line))
+    assert lines[ff_line + 1].strip() == "inputs:  data_idx = int 0"
+    assert "           RuntimeError: boom in user code" in lines
+    assert any(line.startswith("             ") and "raise RuntimeError" in
+               line for line in lines)
+    assert "1 with warnings, 3 failed" in report
+
+
+@pytest.mark.parametrize("nrows_value", [2.5, -1, np.ones(2)])
+def test_check_calibration_rejects_bad_nrows(tmp_path, nrows_value):
+    """
+    Check that an ``nrows`` that isn't a whole number fails its step.
+    """
+    ds = _check_dataset(tmp_path, nrows_value=nrows_value)
+    result = ds.check_cal(0, verbose=False)[0]
+    assert result["step"] == "load_n"
+    assert result["status"] == "failed"
+    assert "nrows must be a whole number" in result["error"]
+
+
+################################################################################
+############################ migrate_step_names ################################
+################################################################################
+
+def test_rename_tasks_in_yaml_without_renames_returns_text():
+    """
+    Check that an empty rename table leaves the text unchanged.
+    """
+    from citkid.pipeline.migrate import rename_tasks_in_yaml
+    assert rename_tasks_in_yaml("A: 1\n", {}) == ("A: 1\n", [])
+
+
+def test_rename_tasks_in_yaml_refuses_list_form_tasks():
+    """
+    Check that a task inside a YAML list (which the line-based rename can't
+    handle) raises instead of changing the text partly.
+    """
+    from citkid.pipeline.migrate import (_rename_tasks_in_tree,
+                                         rename_tasks_in_yaml)
+    renames = {"old": "new"}
+    assert _rename_tasks_in_tree([{"task": "old"}, 3], renames) == [
+        {"task": "new"}, 3]
+    with pytest.raises(ValueError, match="changed more than the task names"):
+        rename_tasks_in_yaml("STEPS:\n  - task: old\n", renames)
+
+
+def test_migrate_step_names_on_open_group_without_failures(capsys):
+    """
+    Check migrating an open zarr group with no ``_failures`` group: the dry
+    run and the migration print the changes, and a second run reports that
+    the dataset is up to date.
+    """
+    from citkid.pipeline.migrate import (_METADATA_ATTR, RENAMED_STEPS,
+                                         migrate_step_names)
+    old, new = next(iter(RENAMED_STEPS.items()))
+    root = zarr.open_group(zarr.storage.MemoryStore(), mode="w")
+    yaml_text = f"CAL_STEPS:\n  1:\n    task: {old}\n"
+    root.attrs[_METADATA_ATTR] = {"cal_yaml": yaml_text}
+    root.create_group("xt", attributes={"step_name": old})
+
+    planned = migrate_step_names(root, dry_run=True)
+    assert root.attrs[_METADATA_ATTR]["cal_yaml"] == yaml_text
+    changes = migrate_step_names(root)
+
+    assert changes == planned == [
+        f"cal_yaml: task '{old}' -> '{new}'",
+        f"parameter 'xt': step_name '{old}' -> '{new}'",
+    ]
+    out = capsys.readouterr().out
+    assert f"Would change cal_yaml: task '{old}'" in out
+    assert f"Changed parameter 'xt': step_name '{old}'" in out
+    assert root["xt"].attrs["step_name"] == new
+    assert f"task: {new}" in root.attrs[_METADATA_ATTR]["cal_yaml"]
+
+    assert migrate_step_names(root) == []
+    assert "Already up to date" in capsys.readouterr().out

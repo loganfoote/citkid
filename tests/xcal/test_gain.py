@@ -205,3 +205,51 @@ def test_make_fr_spans(fres_all, qres_all):
 def test_make_fr_spans_invalid_input(fres_all, qres_all):
     with pytest.raises(Exception):
         gain.make_fr_spans(fres_all, qres_all)
+@pytest.mark.parametrize("f,z,fr_spans,match", [
+    ([0, 1, 2, 3], [1, 1, 1], [], 'same length'),
+    ([0, 1, 2], [1, 1, 1], [], 'at least 4'),
+    (1.0, [1, 1, 1, 1], [], '1D array'),
+    ([0, 1, 2, 3, 4], [1] * 5, [(2, 1, 0)], 'Incorrect fr_spans format'),
+    ([0, 1, 2, 3, 4], [1] * 5, [(2,)], 'Incorrect fr_spans format'),
+    ([0, 1, 2, 3, 4], [1] * 5, [(1, 1), (3, -1)], 'Span must be positive'),
+])
+def test_fit_gain_invalid_input_messages(f, z, fr_spans, match):
+    with pytest.raises(ValueError, match = match):
+        gain.fit_gain(f, z, fr_spans)
+
+def test_fit_gain_no_phase_runs_warns_nan():
+    # Cuts leave only isolated points (0, 3, 6): the amplitude can still be
+    # fit, but no uncut run has the >= 2 points needed for a phase fit
+    f = np.arange(7, dtype = np.float64)
+    p_amp_exp = [0.1, -0.2, -20]
+    z = 10 ** (np.polyval(p_amp_exp, f) / 20) * np.exp(0.3j * f)
+    fr_spans = [(1.5, 1), (4.5, 1)]
+    with pytest.warns(UserWarning, match = 'No phase data to fit'):
+        p_amp, p_phase, mask = gain.fit_gain(f, z, fr_spans)
+    np.testing.assert_equal(np.flatnonzero(mask), [0, 3, 6])
+    np.testing.assert_allclose(p_amp, p_amp_exp, atol = 1e-9)
+    assert p_phase.shape == (2,) and np.isnan(p_phase).all()
+
+def test_fit_gain_two_point_phase_runs():
+    # Runs of only 2 points are used when no run has >= 4 points
+    f = np.arange(8, dtype = np.float64)
+    z = np.exp(1j * (0.05 * f + 0.3))
+    fr_spans = [(2.5, 1), (5.5, 1)]  # keeps [0, 1], [4], [7]
+    p_amp, p_phase, mask = gain.fit_gain(f, z, fr_spans)
+    np.testing.assert_equal(np.flatnonzero(mask), [0, 1, 4, 7])
+    np.testing.assert_allclose(p_phase, [0.05, 0.3], atol = 1e-9)
+
+@pytest.mark.parametrize("fr_spans,match", [
+    ([('a', 1)], 'Resonant frequency must be numeric'),
+    ([(1, 'a')], 'Span must be numeric'),
+    ([(1, -1)], 'Span must be positive'),
+])
+def test_get_res_mask_invalid_messages(fr_spans, match):
+    with pytest.raises(ValueError, match = match):
+        gain.get_res_mask([0, 1, 2, 3], fr_spans)
+
+@pytest.mark.parametrize("dtype", [np.int64, np.float32])
+def test_get_res_mask_numpy_scalars(dtype):
+    fr_spans = np.array([[2, 1]], dtype = dtype)
+    mask = gain.get_res_mask([0, 1, 2, 3, 4], fr_spans)
+    np.testing.assert_equal(mask, [True, True, False, True, True])

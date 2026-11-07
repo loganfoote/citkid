@@ -3,7 +3,7 @@ import zarr
 from datetime import datetime
 from typing import TYPE_CHECKING
 from tqdm.auto import tqdm
-from citkid.multitone.fres import update_fres
+from citkid.res.fres import update_fres
 from . import util
 from ..zarr_util import set_name
 
@@ -44,7 +44,7 @@ async def target_sweep(
     fres_update_method (str): method for updating the tone frequencies after
         the rough sweep, if npoints_rough is not None. Can be 'spacing'
         (default), 'distance', or 'minS21'. See
-        ``citkid.multitone.fres.update_fres``.
+        ``citkid.res.fres.update_fres``.
     verbose (bool): If True, displays progress bars while taking data.
 
     Returns:

@@ -1427,3 +1427,615 @@ def test_rematch_adds_one_undo_step_with_the_state_before(matcher):
 
     assert len(matcher.undo_stack) == n_undo + 1
     assert len(matcher.groups) == 1  # the two singles are now one pair
+
+
+################################################################################
+# Scatter clicks and selection
+################################################################################
+
+def _point(data):
+    """
+    Build a mock scatter point.
+
+    Parameters:
+    data (tuple or None): value returned by the point's ``data()``.
+
+    Returns:
+    pt (Mock): mock scatter point.
+    """
+    pt = Mock()
+    pt.data.return_value = data
+    return pt
+
+
+def _click(button=QtCore.Qt.LeftButton, modifiers=QtCore.Qt.NoModifier):
+    """
+    Build a mock scatter click event.
+
+    Parameters:
+    button (Qt.MouseButton): button returned by ``ev.button()``.
+    modifiers (Qt.KeyboardModifiers): modifiers returned by
+        ``ev.modifiers()``.
+
+    Returns:
+    ev (Mock): mock mouse click event.
+    """
+    ev = Mock()
+    ev.button.return_value = button
+    ev.modifiers.return_value = modifiers
+    return ev
+
+
+def _clickable_matcher(matcher):
+    """
+    Prepare a headless matcher for scatter-click tests.
+
+    Parameters:
+    matcher (ResMatcher): matcher from the ``matcher`` fixture.
+
+    Returns:
+    matcher (ResMatcher): the same matcher with markers mocked out.
+    """
+    _prepare_headless_matcher(matcher)
+    matcher.log = Mock()
+    matcher.update_markers = Mock()
+    return matcher
+
+
+def test_plain_click_replaces_selection(matcher):
+    m = _clickable_matcher(matcher)
+    m._selected_resonances = {(0, 1, 4.5e9), (1, 2, 5.21e9)}
+    m._on_scatter_clicked([_point((2, 1, 6.1e9))], _click())
+    assert m._selected_resonances == {(2, 1, 6.1e9)}
+    assert m._scatter_just_clicked is True
+    m.update_markers.assert_called_once()
+    m.sel_label.setText.assert_called_once()
+    assert 'Group 2' in m.sel_label.setText.call_args.args[0]
+
+
+def test_ctrl_click_toggles_selection(matcher):
+    m = _clickable_matcher(matcher)
+    m._selected_resonances = {(0, 1, 4.5e9)}
+    ctrl = _click(modifiers=QtCore.Qt.ControlModifier)
+    m._on_scatter_clicked([_point((1, 2, 5.21e9))], ctrl)
+    assert m._selected_resonances == {(0, 1, 4.5e9), (1, 2, 5.21e9)}
+    m._on_scatter_clicked([_point((0, 1, 4.5e9))], ctrl)
+    assert m._selected_resonances == {(1, 2, 5.21e9)}
+
+
+@pytest.mark.parametrize('pts, button', [
+    ([_point((0, 1, 4.5e9))], QtCore.Qt.RightButton),
+    ([], QtCore.Qt.LeftButton),
+    ([_point(None)], QtCore.Qt.LeftButton),
+])
+def test_scatter_click_ignored(matcher, pts, button):
+    """Right-clicks, empty point lists, and points without data do nothing."""
+    m = _clickable_matcher(matcher)
+    m._selected_resonances = {(1, 2, 5.21e9)}
+    m._on_scatter_clicked(pts, _click(button=button))
+    assert m._selected_resonances == {(1, 2, 5.21e9)}
+    assert m._scatter_just_clicked is False
+    m.update_markers.assert_not_called()
+
+
+def test_scatter_click_without_event_methods_uses_app_modifiers(matcher):
+    """Old pyqtgraph events lack button/modifiers; fall back to Qt state."""
+    m = _clickable_matcher(matcher)
+    m._selected_resonances = {(0, 1, 4.5e9)}
+    with patch.object(QtWidgets.QApplication, 'keyboardModifiers',
+                      return_value=QtCore.Qt.ControlModifier):
+        m._on_scatter_clicked([_point((1, 1, 5.2e9))], object())
+    assert m._selected_resonances == {(0, 1, 4.5e9), (1, 1, 5.2e9)}
+
+
+@pytest.mark.parametrize('n_args', [2, 3])
+def test_scatter_handler_forwards_points_and_event(matcher, n_args):
+    """The handler accepts both pyqtgraph signal signatures."""
+    matcher._on_scatter_clicked = Mock()
+    handler = matcher._make_scatter_handler()
+    pts, ev = [Mock()], Mock()
+    args = (pts, ev) if n_args == 2 else (Mock(), pts, ev)
+    handler(*args)
+    matcher._on_scatter_clicked.assert_called_once_with(pts, ev)
+
+
+def test_scatter_handler_ignores_other_signatures(matcher):
+    matcher._on_scatter_clicked = Mock()
+    handler = matcher._make_scatter_handler()
+    handler(Mock())
+    handler()
+    matcher._on_scatter_clicked.assert_not_called()
+
+
+def test_scene_click_after_scatter_click_is_suppressed(matcher):
+    """A Shift+click that landed on a marker does not also add a resonance."""
+    m = _clickable_matcher(matcher)
+    m.add_resonance = Mock()
+    m._on_scatter_clicked([_point((0, 1, 4.5e9))], _click())
+    m._on_scene_clicked(_click(modifiers=QtCore.Qt.ShiftModifier))
+    m.add_resonance.assert_not_called()
+    assert m._scatter_just_clicked is False
+
+
+################################################################################
+# Marker drawing
+################################################################################
+
+def _marker_matcher(matcher, offset=0.0):
+    """
+    Prepare a headless matcher whose scatter items record ``setData`` calls.
+
+    Parameters:
+    matcher (ResMatcher): matcher from the ``matcher`` fixture.
+    offset (float): DS2 display offset in Hz. Default is 0.
+
+    Returns:
+    matcher (ResMatcher): the same matcher, ready for ``update_markers``.
+    """
+    _prepare_headless_matcher(matcher)
+    for name in ['ds1_mag', 'ds2_mag', 'ds1_phase', 'ds2_phase']:
+        setattr(matcher, f'scatter_{name}', Mock())
+        setattr(matcher, f'scatter_sel_{name}', Mock())
+    matcher._sync_mag2_geom = Mock()
+    matcher._sync_phase2_geom = Mock()
+    matcher._update_curves = Mock()
+    matcher.auto_scale_y = Mock()
+    matcher._update_overview_region = Mock()
+    matcher._set_ds2_frequency_offset(offset)
+    return matcher
+
+
+def _spots(scatter):
+    """
+    Return the spot list passed to a mock scatter's last ``setData`` call.
+
+    Parameters:
+    scatter (Mock): mock scatter plot item.
+
+    Returns:
+    spots (list): list of spot dictionaries.
+    """
+    return scatter.setData.call_args.args[0]
+
+
+def test_update_markers_draws_both_datasets_with_offset(matcher):
+    from citkid.vna.res_matcher import _group_color
+    offset = 2e6
+    m = _marker_matcher(matcher, offset=offset)
+    m.groups = [
+        MatchGroup(3, [(5.0e9, 1)], [(5.01e9, 2)]),
+        MatchGroup(4, [], [(6.0e9, 3)], ambiguous=True),
+    ]
+    m.plot_mag.viewRange.return_value = [[4.0e9, 8.0e9], [0.0, 1.0]]
+
+    m.update_markers()
+
+    ds1_mag, ds2_mag = _spots(m.scatter_ds1_mag), _spots(m.scatter_ds2_mag)
+    ds1_ph, ds2_ph = _spots(m.scatter_ds1_phase), _spots(m.scatter_ds2_phase)
+    assert [s['data'] for s in ds1_mag] == [(3, 1, 5.0e9)]
+    assert [s['data'] for s in ds2_mag] == [(3, 2, 5.01e9), (4, 2, 6.0e9)]
+    assert len(ds1_ph) == 1 and len(ds2_ph) == 2
+
+    i1 = m._nearest_idx(m.f1, 5.0e9)
+    assert ds1_mag[0]['pos'] == (m.f1[i1], m.filtered_mag1[i1])
+    assert ds1_ph[0]['pos'] == (m.f1[i1], m.phase1[i1])
+    i2 = m._nearest_idx(m.f2, 5.01e9)
+    assert ds2_mag[0]['pos'] == pytest.approx(
+        (m.f2[i2] + offset, m.filtered_mag2[i2]))
+    assert ds2_ph[0]['pos'] == pytest.approx(
+        (m.f2[i2] + offset, m.phase2[i2]))
+
+    # DS1: filled with the group colour, solid pen
+    assert ds1_mag[0]['brush'].color().getRgb() == _group_color(3)
+    assert ds1_mag[0]['pen'].style() == QtCore.Qt.SolidLine
+    # DS2: open squares; ambiguous groups get a thicker dashed pen
+    assert ds2_mag[0]['brush'].style() == QtCore.Qt.NoBrush
+    assert ds2_mag[0]['pen'].color().getRgb() == _group_color(3)
+    assert ds2_mag[0]['pen'].style() == QtCore.Qt.SolidLine
+    assert ds2_mag[0]['pen'].widthF() == 2
+    assert ds2_mag[1]['pen'].style() == QtCore.Qt.DashLine
+    assert ds2_mag[1]['pen'].widthF() == 2.5
+    m._sync_mag2_geom.assert_called()
+    m._sync_phase2_geom.assert_called()
+
+
+def test_update_markers_ambiguous_ds1_pen_is_dashed(matcher):
+    m = _marker_matcher(matcher)
+    m.groups = [MatchGroup(0, [(5.0e9, 1)], [], ambiguous=True)]
+    m.update_markers()
+    assert _spots(m.scatter_ds1_mag)[0]['pen'].style() == QtCore.Qt.DashLine
+
+
+def test_update_markers_skips_groups_out_of_view(matcher):
+    """Groups beyond the view plus 30% padding are not drawn."""
+    m = _marker_matcher(matcher)
+    m.plot_mag.viewRange.return_value = [[5.0e9, 5.1e9], [0.0, 1.0]]
+    m.groups = [
+        MatchGroup(0, [(5.05e9, 1)], []),
+        MatchGroup(1, [(5.12e9, 2)], []),   # inside padding
+        MatchGroup(2, [(5.2e9, 3)], []),    # outside padding
+        MatchGroup(3, [], []),              # empty group is not skipped
+    ]
+    m.update_markers()
+    assert [s['data'][0] for s in _spots(m.scatter_ds1_mag)] == [0, 1]
+
+
+def test_update_markers_uses_display_freq_for_ds2_visibility(matcher):
+    """A DS2 entry is visible when its display frequency is in view."""
+    m = _marker_matcher(matcher, offset=-1e9)
+    m.plot_mag.viewRange.return_value = [[5.0e9, 5.1e9], [0.0, 1.0]]
+    m.groups = [MatchGroup(0, [], [(6.05e9, 1)])]
+    m.update_markers()
+    assert [s['data'] for s in _spots(m.scatter_ds2_mag)] == [
+        (0, 2, 6.05e9)]
+
+
+def test_update_markers_without_plots_returns(matcher):
+    assert not hasattr(matcher, 'plot_mag')
+    matcher.update_markers()
+
+
+def test_selection_rings_empty_selection_clears(matcher):
+    m = _marker_matcher(matcher)
+    m._selected_resonances = set()
+    m._update_selection_ring()
+    for name in ['ds1_mag', 'ds2_mag', 'ds1_phase', 'ds2_phase']:
+        getattr(m, f'scatter_sel_{name}').setData.assert_called_with([])
+
+
+def test_selection_rings_placed_at_display_positions(matcher):
+    offset = 3e6
+    m = _marker_matcher(matcher, offset=offset)
+    m._selected_resonances = {(0, 1, 5.0e9), (1, 2, 6.0e9)}
+    m._update_selection_ring()
+    i1 = m._nearest_idx(m.f1, 5.0e9)
+    i2 = m._nearest_idx(m.f2, 6.0e9)
+    assert _spots(m.scatter_sel_ds1_mag) == [
+        {'pos': (m.f1[i1], m.filtered_mag1[i1])}]
+    assert _spots(m.scatter_sel_ds1_phase) == [
+        {'pos': (m.f1[i1], m.phase1[i1])}]
+    assert _spots(m.scatter_sel_ds2_mag)[0]['pos'] == pytest.approx(
+        (m.f2[i2] + offset, m.filtered_mag2[i2]))
+    assert _spots(m.scatter_sel_ds2_phase)[0]['pos'] == pytest.approx(
+        (m.f2[i2] + offset, m.phase2[i2]))
+
+
+def test_check_selection_visibility_deselects_out_of_view(matcher):
+    m = _clickable_matcher(matcher)
+    m._update_curves = Mock()
+    m.auto_scale_y = Mock()
+    m._update_overview_region = Mock()
+    m._set_ds2_frequency_offset(-1e9)
+    m.plot_mag.viewRange.return_value = [[5.0e9, 5.1e9], [0.0, 1.0]]
+    m._selected_resonances = {
+        (0, 1, 5.05e9),   # in view
+        (1, 1, 7.0e9),    # out of view
+        (2, 2, 6.05e9),   # DS2, in view after the display offset
+        (3, 2, 5.05e9),   # DS2, out of view after the display offset
+    }
+    m._check_selection_visibility()
+    assert m._selected_resonances == {(0, 1, 5.05e9), (2, 2, 6.05e9)}
+    m.log.assert_called_once_with('Deselected 2 out-of-view resonances')
+
+
+def test_check_selection_visibility_keeps_visible(matcher):
+    m = _clickable_matcher(matcher)
+    m.plot_mag.viewRange.return_value = [[5.0e9, 5.1e9], [0.0, 1.0]]
+    m._selected_resonances = {(0, 1, 5.05e9)}
+    m._check_selection_visibility()
+    assert m._selected_resonances == {(0, 1, 5.05e9)}
+    m.log.assert_not_called()
+    m._selected_resonances = set()
+    m._check_selection_visibility()
+    m.plot_mag.viewRange.assert_called_once()
+
+
+################################################################################
+# Re-adding removed resonances
+################################################################################
+
+REMOVED = [(5.001e9, 77), (5.003e9, 78)]
+
+
+@pytest.mark.parametrize('code, expected', [
+    (1, 77),       # OK with the first (default) radio button checked
+    (2, 'new'),    # Create New res_idx
+    (0, None),     # Cancel
+])
+def test_ask_reuse_res_idx_returns_choice(matcher, code, expected):
+    matcher.win = None
+    with patch.object(QtWidgets.QDialog, 'exec_', return_value=code):
+        choice = matcher._ask_reuse_res_idx(5.0e9, 1, REMOVED)
+    assert choice == expected
+
+
+def test_ask_reuse_res_idx_shows_one_radio_per_removed(matcher):
+    """The dialog lists every removed resonance with its distance."""
+    matcher.win = None
+    seen = {}
+
+    def fake_exec(dlg):
+        """
+        Record the radio buttons, check the second, and press OK.
+
+        Parameters:
+        dlg (QDialog): dialog being shown.
+
+        Returns:
+        code (int): dialog result code for OK.
+        """
+        radios = dlg.findChildren(QtWidgets.QRadioButton)
+        seen['texts'] = [r.text() for r in radios]
+        radios[1].setChecked(True)
+        return 1
+
+    with patch.object(QtWidgets.QDialog, 'exec_', fake_exec):
+        choice = matcher._ask_reuse_res_idx(5.0e9, 2, REMOVED)
+    assert choice == 78
+    assert len(seen['texts']) == 2
+    assert 'res_idx 77' in seen['texts'][0]
+    assert 'Δ = 1000.0 kHz' in seen['texts'][0]
+    assert 'Δ = 3000.0 kHz' in seen['texts'][1]
+
+
+def test_ask_reuse_res_idx_ok_without_options_is_new(matcher):
+    matcher.win = None
+    with patch.object(QtWidgets.QDialog, 'exec_', return_value=1):
+        assert matcher._ask_reuse_res_idx(5.0e9, 1, []) == 'new'
+
+
+def _matcher_with_removed(matcher):
+    """
+    Prepare a headless matcher with removed resonances in both datasets.
+
+    Parameters:
+    matcher (ResMatcher): matcher from the ``matcher`` fixture.
+
+    Returns:
+    matcher (ResMatcher): the same matcher with a 4.9-5.1 GHz view.
+    """
+    m = _clickable_matcher(matcher)
+    m._update_curves = Mock()
+    m.auto_scale_y = Mock()
+    m._update_overview_region = Mock()
+    m.plot_mag.viewRange.return_value = [[4.9e9, 5.1e9], [0.0, 1.0]]
+    m._removed_resonances = [
+        (5.003e9, 78, 1),
+        (5.001e9, 77, 1),
+        (7.0e9, 79, 1),     # out of view
+        (5.002e9, 80, 2),   # other dataset
+    ]
+    return m
+
+
+def _added_group(m, before_ids):
+    """
+    Return the single group added since ``before_ids`` was recorded.
+
+    Parameters:
+    m (ResMatcher): matcher after an add.
+    before_ids (set): group IDs before the add.
+
+    Returns:
+    group (MatchGroup): the new group.
+    """
+    new = [g for g in m.groups if g.group_id not in before_ids]
+    assert len(new) == 1
+    return new[0]
+
+
+def test_add_resonance_offers_visible_removed_sorted_by_distance(matcher):
+    m = _matcher_with_removed(matcher)
+    with patch.object(m, '_ask_reuse_res_idx', return_value=None) as ask:
+        m.add_resonance(5.0e9, ds=1)
+    ask.assert_called_once_with(5.0e9, 1, [(5.001e9, 77), (5.003e9, 78)])
+
+
+def test_add_resonance_cancel_changes_nothing(matcher):
+    import copy
+    m = _matcher_with_removed(matcher)
+    groups_before = copy.deepcopy(m.groups)
+    removed_before = list(m._removed_resonances)
+    with patch.object(m, '_ask_reuse_res_idx', return_value=None):
+        m.add_resonance(5.0e9, ds=1)
+    assert m.groups == groups_before
+    assert m._removed_resonances == removed_before
+    assert m.undo_stack == []
+    m.log.assert_not_called()
+
+
+def test_add_resonance_reuses_chosen_res_idx(matcher):
+    m = _matcher_with_removed(matcher)
+    before_ids = {g.group_id for g in m.groups}
+    next_new = m._next_new_idx
+    with patch.object(m, '_ask_reuse_res_idx', return_value=78):
+        m.add_resonance(5.0e9, ds=1)
+    g = _added_group(m, before_ids)
+    assert g.entries1 == [(5.0e9, 78)] and g.entries2 == []
+    assert m._next_new_idx == next_new
+    # Only the reused DS1 entry leaves the removed list
+    assert m._removed_resonances == [
+        (5.001e9, 77, 1), (7.0e9, 79, 1), (5.002e9, 80, 2)]
+    assert len(m.undo_stack) == 1
+    assert 'res_idx=78' in m.log.call_args.args[0]
+
+
+def test_add_resonance_new_choice_allocates_new_idx(matcher):
+    m = _matcher_with_removed(matcher)
+    before_ids = {g.group_id for g in m.groups}
+    removed_before = list(m._removed_resonances)
+    next_new = m._next_new_idx
+    with patch.object(m, '_ask_reuse_res_idx', return_value='new'):
+        m.add_resonance(5.0e9, ds=1)
+    g = _added_group(m, before_ids)
+    assert g.entries1 == [(5.0e9, next_new)]
+    assert m._next_new_idx == next_new + 1
+    assert m._removed_resonances == removed_before
+
+
+def test_add_resonance_ds2_uses_data_window(matcher):
+    """DS2 removed resonances are matched against the offset-free window."""
+    m = _matcher_with_removed(matcher)
+    m._set_ds2_frequency_offset(1e9)   # view 4.9-5.1 GHz is 3.9-4.1 GHz data
+    m._removed_resonances = [(5.002e9, 80, 2), (4.0e9, 81, 2)]
+    before_ids = {g.group_id for g in m.groups}
+    with patch.object(m, '_ask_reuse_res_idx', return_value=81) as ask:
+        m.add_resonance(4.0e9, ds=2)
+    ask.assert_called_once_with(4.0e9, 2, [(4.0e9, 81)])
+    g = _added_group(m, before_ids)
+    assert g.entries1 == [] and g.entries2 == [(4.0e9, 81)]
+    assert m._removed_resonances == [(5.002e9, 80, 2)]
+
+
+################################################################################
+# Filter controls and DS2 offset drag
+################################################################################
+
+def _filter_matcher(matcher):
+    """
+    Prepare a headless matcher with mock filter widgets.
+
+    Parameters:
+    matcher (ResMatcher): matcher from the ``matcher`` fixture.
+
+    Returns:
+    matcher (ResMatcher): the same matcher with filter controls mocked.
+    """
+    _prepare_headless_matcher(matcher)
+    matcher.status_label = Mock()
+    matcher.win = Mock()
+    for ds, (method, hp, order) in [(1, ('highpass', 5.0, 2)),
+                                    (2, ('polynomial', 7.0, 3))]:
+        combo = Mock()
+        combo.currentText.return_value = method
+        hp_spin, poly_spin = Mock(), Mock()
+        hp_spin.value.return_value = hp
+        poly_spin.value.return_value = order
+        setattr(matcher, f'smooth_combo{ds}', combo)
+        setattr(matcher, f'hp_spin{ds}', hp_spin)
+        setattr(matcher, f'poly_spin{ds}', poly_spin)
+    return matcher
+
+
+@pytest.mark.parametrize('ds, expected', [
+    (1, {'smoothing': 'highpass', 'highpass_mhz': 5.0, 'poly_order': 2}),
+    (2, {'smoothing': 'polynomial', 'highpass_mhz': 7.0, 'poly_order': 3}),
+])
+def test_on_filter_changed_reads_controls_and_starts_timer(
+    matcher, ds, expected
+):
+    m = _filter_matcher(matcher)
+    other = 2 if ds == 1 else 1
+    other_before = dict(getattr(m, f'filter_params{other}'))
+    m._on_filter_changed(ds)
+    timer = getattr(m, f'_filter_timer{ds}')
+    try:
+        params = getattr(m, f'filter_params{ds}')
+        assert {k: params[k] for k in expected} == expected
+        assert getattr(m, f'filter_params{other}') == other_before
+        assert getattr(m, f'_filter_timer{other}') is None
+        assert timer.isSingleShot() and timer.isActive()
+        assert 'Updating' in m.status_label.setText.call_args.args[0]
+        # A second change restarts the same timer
+        m._on_filter_changed(ds)
+        assert getattr(m, f'_filter_timer{ds}') is timer
+    finally:
+        timer.stop()
+
+
+@pytest.mark.parametrize('ds', [1, 2])
+def test_do_filter_update_refilters_one_dataset(matcher, ds):
+    from citkid.vna.s21_filt import filter_mag
+    m = _filter_matcher(matcher)
+    m._update_curves = Mock()
+    m.update_markers = Mock()
+    m.auto_scale_y = Mock()
+    params = {'smoothing': 'polynomial', 'highpass_mhz': 1.0,
+              'poly_order': 1}
+    setattr(m, f'filter_params{ds}', params)
+    other = 2 if ds == 1 else 1
+    other_before = getattr(m, f'filtered_mag{other}')
+    with patch('citkid.vna.res_matcher.run_responsive',
+               side_effect=lambda fn, *a: fn(*a)):
+        m._do_filter_update(ds)
+    f = getattr(m, f'f{ds}')
+    mag = getattr(m, f'mag_db{ds}')
+    expected = filter_mag(f, mag, 'polynomial', 1.0, 1)
+    np.testing.assert_allclose(getattr(m, f'filtered_mag{ds}'), expected)
+    assert getattr(m, f'filtered_mag{other}') is other_before
+    m._update_curves.assert_called_once()
+    m.update_markers.assert_called_once()
+    m.auto_scale_y.assert_called_once()
+    assert 'Ready' in m.status_label.setText.call_args.args[0]
+    m.win.setCursor.assert_called_with(QtCore.Qt.ArrowCursor)
+
+
+def test_shift_ds2_frequency_offset_is_relative(matcher):
+    matcher._set_ds2_frequency_offset(1e6)
+    matcher._shift_ds2_frequency_offset(0)
+    assert matcher.ds2_f_offset == 1e6
+    matcher._shift_ds2_frequency_offset(-2.5e5)
+    assert matcher.ds2_f_offset == 7.5e5
+    np.testing.assert_allclose(matcher.f2_display, matcher.f2 + 7.5e5)
+
+
+def _drag_event(button=QtCore.Qt.LeftButton):
+    """
+    Build a mock drag event from scene x = 10 to scene x = 25.
+
+    Parameters:
+    button (Qt.MouseButton): button returned by ``ev.button()``.
+
+    Returns:
+    ev (Mock): mock mouse drag event.
+    """
+    ev = Mock()
+    ev.button.return_value = button
+    ev.lastScenePos.return_value = QtCore.QPointF(10.0, 0.0)
+    ev.scenePos.return_value = QtCore.QPointF(25.0, 0.0)
+    return ev
+
+
+def _drag_viewbox(callback):
+    """
+    Build a CustomViewBox whose scene-to-view map scales x by 1000.
+
+    Parameters:
+    callback (callable or None): drag callback for the view box.
+
+    Returns:
+    vb (CustomViewBox): view box with ``mapSceneToView`` mocked.
+    """
+    vb = CustomViewBox(drag_callback=callback)
+    vb.mapSceneToView = lambda p: QtCore.QPointF(p.x() * 1000.0, p.y())
+    return vb
+
+
+def test_ctrl_left_drag_calls_callback_with_x_shift():
+    callback = Mock()
+    vb = _drag_viewbox(callback)
+    ev = _drag_event()
+    with patch.object(QtWidgets.QApplication, 'keyboardModifiers',
+                      return_value=QtCore.Qt.ControlModifier), \
+         patch('pyqtgraph.ViewBox.mouseDragEvent') as base_drag:
+        vb.mouseDragEvent(ev)
+    callback.assert_called_once_with(pytest.approx(15000.0))
+    ev.accept.assert_called_once()
+    base_drag.assert_not_called()
+
+
+@pytest.mark.parametrize('has_callback, button, modifiers', [
+    (False, QtCore.Qt.LeftButton, QtCore.Qt.ControlModifier),
+    (True, QtCore.Qt.RightButton, QtCore.Qt.ControlModifier),
+    (True, QtCore.Qt.LeftButton, QtCore.Qt.NoModifier),
+])
+def test_other_drags_pan_normally(has_callback, button, modifiers):
+    callback = Mock()
+    vb = _drag_viewbox(callback if has_callback else None)
+    ev = _drag_event(button)
+    with patch.object(QtWidgets.QApplication, 'keyboardModifiers',
+                      return_value=modifiers), \
+         patch('pyqtgraph.ViewBox.mouseDragEvent') as base_drag:
+        vb.mouseDragEvent(ev, axis=0)
+    callback.assert_not_called()
+    base_drag.assert_called_once_with(ev, axis=0)

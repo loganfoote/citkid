@@ -426,8 +426,13 @@ class XCalPanel(StepPanel):
                 _bulk_mask_early = get_theta_t_bulk_mask(
                     _thetat_early, std_cut)
                 zt_full = np.asarray(DS.zt_cent[di], dtype=np.complex128)
-                zt_bulk = _density_subsample(zt_full[_bulk_mask_early])
+                # Same caps as prefetch_plot_data, so a row looks the same
+                # whether or not it was prefetched
+                zt_bulk = _density_subsample(zt_full[_bulk_mask_early],
+                                             n_keep=4000)
                 zt_tail = zt_full[~_bulk_mask_early]
+                if len(zt_tail) > 2000:
+                    zt_tail = _density_subsample(zt_tail, n_keep=2000)
                 self._zt_iq.setData(zt_bulk.real, zt_bulk.imag)
                 self._zt_iq_cut.setData(zt_tail.real, zt_tail.imag)
         except Exception:

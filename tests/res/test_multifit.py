@@ -161,3 +161,75 @@ def test_fit_resonators_upward():
     # differ
     assert abs(up['a'][0] - 0.9) < 0.03 and up['rss'] < 0.5 * down['rss']
     assert not up['downward'] and down['downward']
+
+def _record_init_qr_scales(monkeypatch, exc):
+    """
+    Replace ``fit_poles`` in ``citkid.res.multifit`` with a fake that records
+    the candidate linewidth of each screening fit and raises ``exc``.
+
+    Parameters:
+    monkeypatch (pytest.MonkeyPatch): pytest monkeypatch fixture.
+    exc (type): exception class raised by every fake fit.
+
+    Returns:
+    lws (list of float): filled with the candidate linewidth of each call.
+    """
+    lws = []
+
+    def fake(f, z, frs, Qrs, gain_deg = 2, Qr_bounds = None, tol = None):
+        """
+        Record the candidate linewidth and raise ``exc``.
+
+        Parameters:
+        f, z, frs, Qrs, gain_deg, Qr_bounds, tol: as ``fit_poles``.
+
+        Raises:
+        exc: always.
+        """
+        lws.append(frs[0] / Qrs[0])
+        raise exc('fake failure')
+    monkeypatch.setattr(multifit, 'fit_poles', fake)
+    return lws
+
+@pytest.mark.parametrize("exc", [np.linalg.LinAlgError, ValueError])
+def test_init_qr_fit_errors_give_nan(monkeypatch, exc):
+    # Every screening fit fails: the errors are swallowed, all scales are
+    # tried, and NaNs are returned
+    lws = _record_init_qr_scales(monkeypatch, exc)
+    f = np.linspace(1e9 - 5e6, 1e9 + 5e6, 20001)  # df = 500 Hz
+    out = multifit.init_qr(f, np.ones_like(f, complex), 1e9)
+    assert np.all(np.isnan(out)) and len(out) == 3
+    np.testing.assert_allclose(lws[0], 1500)  # 3 * df
+    np.testing.assert_allclose(np.diff(np.log2(lws)), 1)  # factor 2
+    assert lws[-1] <= 3e6 * 1.0001 < lws[-1] * 2
+
+def test_init_qr_lw_hint_limits_scales(monkeypatch):
+    lws = _record_init_qr_scales(monkeypatch, ValueError)
+    f = np.linspace(1e9 - 5e6, 1e9 + 5e6, 20001)
+    multifit.init_qr(f, np.ones_like(f, complex), 1e9, lw_hint = 1e5)
+    np.testing.assert_allclose(lws, 1e5 / 6 * 2. ** np.arange(6))
+    assert all(1e5 / 6 * 0.9999 <= lw <= 6e5 for lw in lws)
+
+def test_init_qr_lw_hint_nan_ignored(monkeypatch):
+    lws = _record_init_qr_scales(monkeypatch, ValueError)
+    f = np.linspace(1e9 - 5e6, 1e9 + 5e6, 20001)
+    multifit.init_qr(f, np.ones_like(f, complex), 1e9, lw_hint = np.nan)
+    np.testing.assert_allclose(lws[0], 1500)
+
+def test_init_qr_lw_hint_above_lw_max(monkeypatch):
+    # The hinted range lies above lw_max: only lw_hint / hint_range is tried
+    lws = _record_init_qr_scales(monkeypatch, ValueError)
+    f = np.linspace(1e9 - 5e6, 1e9 + 5e6, 20001)
+    multifit.init_qr(f, np.ones_like(f, complex), 1e9, lw_hint = 1e8)
+    np.testing.assert_allclose(lws, [1e8 / 6])
+
+def test_init_qr_with_lw_hint():
+    # A correct hint finds the same resonance as the full search
+    rng = np.random.default_rng(3)
+    Qr = 3e4
+    f, z = _window(rng, [1e9], [Qr], [0.5], [0.1], 1e-3, n = 20001,
+                   span = 4e6)
+    fr, Qr_fit, snr = multifit.init_qr(f, z, 1e9, lw_hint = 1e9 / Qr)
+    assert abs(fr - 1e9) < 0.1 * 1e9 / Qr
+    assert 0.7 < Qr_fit / Qr < 1.4
+    assert snr > 50

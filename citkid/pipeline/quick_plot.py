@@ -284,8 +284,8 @@ def plot_full_cal(DS, data_idx, plot_types=None, as_figure=False, **kwargs):
     plot_types (list of str or None): plot types to try, in order. None
         (default) tries ``FULL_CAL_TYPES``.
     as_figure (bool): If True, return the matplotlib figure (e.g. to view or
-        zoom it in a notebook). If False (default), return a PNG image, as
-        the legacy pipeline did, and close the figure.
+        zoom it in a notebook). If False (default), return a PNG image and
+        close the figure.
     **kwargs: options of the plot functions (see ``plot``), passed to every
         plot type that uses them.
 

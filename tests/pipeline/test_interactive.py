@@ -2710,3 +2710,892 @@ def test_circle_panel_marks_bad_rows_with_idx_t_minus_one(qt_app):
     panel.update_plots()
     x, _ = panel._idx_t_amp.getData()
     assert x is None or len(x) == 0
+
+
+################################################################################
+# Panel drawing and state with real arrays
+################################################################################
+
+
+def _curve_len(curve):
+    """
+    Return the number of points in a plot curve.
+
+    Parameters:
+    curve (pg.PlotDataItem): The curve.
+
+    Returns:
+    n (int): Number of points (0 for an empty curve).
+    """
+    x = curve.getData()[0]
+    return 0 if x is None else len(x)
+
+
+def _all_curve_data(panel):
+    """
+    Return the data of every curve of a panel.
+
+    Parameters:
+    panel (StepPanel): The panel.
+
+    Returns:
+    data (dict): ``{attribute name: (x, y)}``, with empty arrays for empty
+        curves.
+    """
+    import pyqtgraph as pg
+    out = {}
+    for name, curve in vars(panel).items():
+        if isinstance(curve, pg.PlotDataItem):
+            x, y = curve.getData()
+            out[name] = (np.asarray([] if x is None else x),
+                         np.asarray([] if y is None else y))
+    return out
+
+
+def _gain_ds():
+    """
+    Build a stand-in DataSet with one gain sweep and its fit results.
+
+    Returns:
+    DS (SimpleNamespace): ``fg``, ``zg``, ``p_amp``, ``p_phase`` and
+        ``gain_mask`` (False for the 21 central points) of one row.
+    """
+    from types import SimpleNamespace
+    fg = np.linspace(4e8 - 5e5, 4e8 + 5e5, 101)
+    p_amp = np.array([0., 1e-6, -401.])         # -1 dB at the center
+    p_phase = np.array([2e-6, -800.])           # 0 rad at the center
+    zg = (10 ** (np.polyval(p_amp, fg) / 20)
+          * np.exp(1j * np.polyval(p_phase, fg)))
+    mask = np.ones(101, dtype=bool)
+    mask[40:61] = False
+    return SimpleNamespace(nrows=1, fg=[fg], zg=[zg], p_amp=[p_amp],
+                           p_phase=[p_phase], gain_mask=[mask])
+
+
+def _gain_panel(DS):
+    """
+    Build a GainFitPanel over ``DS``.
+
+    Parameters:
+    DS (SimpleNamespace): Stand-in DataSet.
+
+    Returns:
+    panel (GainFitPanel): The panel, at row 0.
+    """
+    from citkid.pipeline.interactive import gain
+    steps = ('fit_gain',)
+    ar, _ = _make_ar(*steps)
+    ar.DS = DS
+    return gain.GainFitPanel(ar, steps, data_idx=0)
+
+
+def test_gain_panel_plots_data_mask_and_fits(qt_app):
+    DS = _gain_ds()
+    panel = _gain_panel(DS)
+    fg, zg, mask = DS.fg[0], DS.zg[0], DS.gain_mask[0]
+
+    panel.update_plots()
+
+    x, y = panel._amp_data.getData()
+    np.testing.assert_allclose(x, (fg[mask] - fg.mean()) * 1e-3)
+    np.testing.assert_allclose(y, 20 * np.log10(np.abs(zg[mask])))
+    assert _curve_len(panel._amp_masked) == 21
+    assert _curve_len(panel._phase_masked) == 21
+    _, phase = panel._phase_data.getData()
+    np.testing.assert_allclose(phase, np.angle(zg[mask]), atol=1e-12)
+    x, y = panel._amp_fit.getData()
+    assert len(x) == 101
+    np.testing.assert_allclose(y, np.polyval(DS.p_amp[0], fg))
+    _, y = panel._phase_fit.getData()
+    np.testing.assert_allclose(y, np.polyval(DS.p_phase[0], fg))
+    assert '400.0 MHz' in panel._plot_amp.getAxis('bottom').labelText
+    assert panel._autorange_next is False
+
+    # Before fit_gain ran: every point shown, no fit or masked points
+    del DS.p_amp
+    panel.update_plots()
+    assert _curve_len(panel._amp_data) == 101
+    assert _curve_len(panel._phase_data) == 101
+    for curve in (panel._amp_masked, panel._amp_fit, panel._phase_fit):
+        assert _curve_len(curve) == 0
+
+    panel.autoscale_plots()
+    panel.clear_plots()
+    assert all(_curve_len(c) == 0 for c in (
+        panel._amp_data, panel._phase_data, panel._amp_masked,
+        panel._phase_masked, panel._amp_fit, panel._phase_fit))
+    assert panel._status_label.text() == '—'
+
+    # Missing sweep: say so
+    DS.fg = []
+    panel.update_plots()
+    assert 'Data load error' in panel._status_label.text()
+
+
+def test_gain_panel_span_mult_follows_the_row(qt_app):
+    DS = _gain_ds()
+    DS.nrows = 3
+    DS.span_mult = [3.0, None, 4.5]
+    panel = _gain_panel(DS)
+    assert panel._span_spin.value() == 3.0       # saved value of row 0
+    step = panel.steps[0]
+    assert panel.get_params_for_step(step) == {'span_mult': 3.0}
+    assert panel.get_params_for_step(_make_step('other')) == {}
+
+    panel._span_spin.setValue(7.5)
+    panel.refresh_plots = MagicMock()
+    assert panel.run_steps() is True             # caches 7.5 for row 0
+    params = panel.AR.execute_step.call_args.kwargs['user_params']
+    assert params == {'span_mult': 7.5}
+
+    panel.data_idx = 2
+    panel.on_data_idx_changing()
+    assert panel._span_spin.value() == 4.5       # saved value of row 2
+    panel.data_idx = 1
+    panel.on_data_idx_changing()
+    assert panel._span_spin.value() == 4.5       # nothing saved: kept
+    panel.data_idx = 0
+    panel.on_data_idx_changing()
+    assert panel._span_spin.value() == 7.5       # this session's value
+    assert panel._autorange_next is True
+
+    nan = panel._nan_outputs()
+    assert nan['p_amp'].shape == (3,) and np.isnan(nan['p_amp']).all()
+    assert nan['p_phase'].shape == (2,) and np.isnan(nan['p_phase']).all()
+    assert nan['gain_mask'].shape == (101,) and not nan['gain_mask'].any()
+    assert nan['gain_mask'].dtype == bool
+    DS.fg = []
+    assert panel._nan_outputs()['gain_mask'].shape == (1,)
+
+
+def test_bad_data_button_reports_and_marks_downstream(qt_app):
+    panel = _gain_panel(_gain_ds())
+    emitted = []
+    panel.downstream_rerun.connect(emitted.append)
+
+    panel._write_nan_outputs = MagicMock(return_value=True)
+    panel._bad_btn.click()
+    assert panel._status_label.text() == 'Bad data marked ✓'
+    assert emitted == [panel]
+
+    panel._write_nan_outputs = MagicMock(return_value=False)
+    panel._bad_btn.click()
+    assert panel._status_label.text() == 'Bad data failed ✗'
+    assert emitted == [panel]
+
+
+def _circle_ds(circ_mask=None):
+    """
+    Build a stand-in DataSet with one resonance circle and its fit results.
+
+    Parameters:
+    circ_mask (np.ndarray or None): Saved ``circ_mask`` of the row, or None.
+
+    Returns:
+    DS (SimpleNamespace): 101-point sweep on a circle of radius 0.4 at 0.5,
+        with ``idx_t`` = 50 and a 300-point timestream around point 50.
+    """
+    from types import SimpleNamespace
+    ff = np.linspace(1e9 - 5e4, 1e9 + 5e4, 101)
+    zf = 0.5 + 0.4 * np.exp(1j * np.linspace(-0.9, 0.9, 101) * np.pi)
+    rng = np.random.default_rng(1)
+    zt = zf[50] + 0.01 * (rng.normal(size=300) + 1j * rng.normal(size=300))
+    return SimpleNamespace(
+        nrows=1, ff=[ff], zf_rmv=[zf], idx_t=[np.int64(50)],
+        circ_origin=[np.complex128(0.5)], circ_radius=[0.4],
+        zt_rmv=[zt], circ_mask=[circ_mask])
+
+
+def _circle_panel(DS):
+    """
+    Build a CircleFitPanel over ``DS``.
+
+    Parameters:
+    DS (SimpleNamespace): Stand-in DataSet.
+
+    Returns:
+    panel (CircleFitPanel): The panel, at row 0.
+    """
+    from citkid.pipeline.interactive import circ
+    steps = ('fit_iq_circle', 'get_idx_t', 'get_theta_phase_offset')
+    ar, _ = _make_ar(*steps)
+    ar.DS = DS
+    return circ.CircleFitPanel(ar, steps, data_idx=0)
+
+
+def test_circle_panel_prefetch_draws_what_the_dataset_draws(qt_app):
+    DS = _circle_ds()
+    ff, zf = DS.ff[0], DS.zf_rmv[0]
+    panel = _circle_panel(DS)
+    panel.update_plots()
+    direct = _all_curve_data(panel)
+
+    panel.prefetch_plot_data(0)
+    assert panel._cache_key(None, 0) in panel._plot_cache
+    for name in ('ff', 'zf_rmv', 'zt_rmv', 'idx_t', 'circ_origin',
+                 'circ_radius'):
+        setattr(DS, name, None)                # the cache must be used
+    panel.clear_plots()
+    panel.update_plots()
+
+    assert panel._plot_cache == {}             # cache consumed
+    prefetched = _all_curve_data(panel)
+    assert prefetched.keys() == direct.keys()
+    for name in direct:
+        np.testing.assert_allclose(prefetched[name][0], direct[name][0])
+        np.testing.assert_allclose(prefetched[name][1], direct[name][1])
+    x, y = direct['_circle_fit']
+    assert len(x) == 360
+    np.testing.assert_allclose(np.hypot(x - 0.5, y), 0.4)
+    np.testing.assert_allclose(direct['_idx_t_amp'][0],
+                               [(ff[50] - ff.mean()) * 1e-3])
+    np.testing.assert_allclose(direct['_idx_t_iq'][0], [zf[50].real])
+    assert len(direct['_zt_iq'][0]) == 300
+    assert len(direct['_amp_data'][0]) == 101  # no mask: all in
+    assert len(direct['_amp_excl'][0]) == 0
+
+
+def test_circle_panel_prefetch_without_fit_or_sweep(qt_app):
+    DS = _circle_ds()
+    DS.circ_origin = [np.complex128(np.nan)]
+    del DS.idx_t, DS.zt_rmv
+    panel = _circle_panel(DS)
+    panel.prefetch_plot_data(0)
+    cache = panel._plot_cache[panel._cache_key(None, 0)]
+    assert len(cache['xc']) == 0
+    assert cache['idx_t'] is None and cache['zt'] is None
+    panel.update_plots()
+    for curve in (panel._circle_fit, panel._idx_t_amp, panel._zt_iq):
+        assert _curve_len(curve) == 0
+    assert _curve_len(panel._amp_data) == 101
+
+    del DS.ff                                  # nothing to prefetch
+    panel.prefetch_plot_data(0)
+    assert panel._plot_cache == {}
+
+
+def test_circle_panel_mask_restore_select_and_reset(qt_app):
+    saved = np.zeros(101, dtype=bool)
+    saved[20:81] = True
+    DS = _circle_ds(circ_mask=saved)
+    ff = DS.ff[0]
+    panel = _circle_panel(DS)
+    panel.on_data_idx_changing()
+    np.testing.assert_array_equal(panel._mask, saved)
+    panel.update_plots()
+
+    # The region starts at the saved mask's edges and gives back the mask
+    lo, hi = panel._region.getRegion()
+    assert lo == pytest.approx((ff[20] - ff.mean()) * 1e-3)
+    assert hi == pytest.approx((ff[80] - ff.mean()) * 1e-3)
+    np.testing.assert_array_equal(panel._mask, saved)
+    assert _curve_len(panel._amp_data) == 61
+    assert _curve_len(panel._iq_excl) == 40
+    step = panel.steps[0]
+    np.testing.assert_array_equal(
+        panel.get_params_for_step(step)['circ_mask'], saved)
+    assert panel.get_params_for_step(panel.steps[1]) == {}
+
+    # Shift+drag selection: 10 kHz either side of the center
+    panel._plot_amp.getViewBox().sig_range_selected.emit(-10.0, 10.0)
+    np.testing.assert_array_equal(
+        panel._mask, np.abs(ff - ff.mean()) <= 1e4 + 1e-6)
+    assert panel._region.getRegion() == pytest.approx((-10.0, 10.0))
+    assert 'Mask set' in panel._status_label.text()
+
+    # Reset: whole sweep, no mask passed to the fit
+    panel._reset_btn.click()
+    assert panel._mask is None
+    assert panel.get_params_for_step(step) == {'circ_mask': None}
+    assert panel._region.getRegion() == pytest.approx((-50.0, 50.0))
+    assert 'Mask reset' in panel._status_label.text()
+    panel.prepare_run()                        # region -> full mask
+    assert panel._mask.all()
+
+    # A row without a saved mask starts unmasked
+    DS.circ_mask = [None]
+    panel.on_data_idx_changing()
+    assert panel._mask is None and panel._region_initialized is False
+
+
+class _FakeDrag:
+    """
+    Stand-in for a pyqtgraph MouseDragEvent, in ViewBox coordinates.
+
+    Parameters:
+    down_x (float): x of the button-down position, in pixels.
+    x (float): Current x, in pixels.
+    shift (bool): True if Shift is held. Default True.
+    start (bool): True for the first event of the drag. Default False.
+    finish (bool): True for the last event of the drag. Default False.
+    """
+
+    def __init__(self, down_x, x, shift=True, start=False, finish=False):
+        """
+        Store the event state. See the class docstring for parameters.
+        """
+        self._down = QtCore.QPointF(down_x, 10.0)
+        self._pos = QtCore.QPointF(x, 10.0)
+        self._shift = shift
+        self._start = start
+        self._finish = finish
+        self.accepted = False
+
+    def modifiers(self):
+        """
+        Return the keyboard modifiers held during the event.
+
+        Returns:
+        modifiers (Qt.KeyboardModifier): Shift, or no modifier.
+        """
+        return _Qt.ShiftModifier if self._shift else _Qt.NoModifier
+
+    def accept(self):
+        """
+        Mark the event accepted.
+        """
+        self.accepted = True
+
+    def isStart(self):
+        """
+        Return whether this is the first event of the drag.
+
+        Returns:
+        start (bool): True for the first event.
+        """
+        return self._start
+
+    def isFinish(self):
+        """
+        Return whether this is the last event of the drag.
+
+        Returns:
+        finish (bool): True for the last event.
+        """
+        return self._finish
+
+    def buttonDownPos(self):
+        """
+        Return the button-down position.
+
+        Returns:
+        pos (QPointF): Position in ViewBox coordinates.
+        """
+        return self._down
+
+    def pos(self):
+        """
+        Return the current position.
+
+        Returns:
+        pos (QPointF): Position in ViewBox coordinates.
+        """
+        return self._pos
+
+
+@pytest.mark.parametrize('module', ['circ', 'fit_iq'])
+def test_mask_viewbox_shift_drag_emits_the_range(qt_app, monkeypatch, module):
+    import importlib
+    import pyqtgraph as pg
+
+    mod = importlib.import_module(f'citkid.pipeline.interactive.{module}')
+    vb = mod._MaskViewBox()
+    vb.setGeometry(QtCore.QRectF(0, 0, 200, 100))
+    vb.setRange(xRange=(-10, 10), yRange=(0, 1), padding=0)
+    emitted = []
+    vb.sig_range_selected.connect(lambda lo, hi: emitted.append((lo, hi)))
+    assert vb.mapToView(QtCore.QPointF(50, 10)).x() == pytest.approx(-5.0)
+
+    ev = _FakeDrag(150, 50, start=True)
+    vb.mouseDragEvent(ev)
+    assert ev.accepted
+    vb.mouseDragEvent(_FakeDrag(150, 180, finish=True))
+    assert emitted == [pytest.approx((-5.0, 5.0)),
+                       pytest.approx((5.0, 8.0))]
+    assert vb._drag_origin_x is None
+
+    # A drag whose start wasn't seen with Shift held selects nothing
+    vb.mouseDragEvent(_FakeDrag(150, 40))
+    assert len(emitted) == 2
+
+    # Without Shift: normal pan/zoom
+    calls = []
+    monkeypatch.setattr(pg.ViewBox, 'mouseDragEvent',
+                        lambda self, ev, axis=None: calls.append(axis))
+    vb.mouseDragEvent(_FakeDrag(150, 40, shift=False), axis=1)
+    assert calls == [1] and len(emitted) == 2
+
+
+def test_fit_iq_panel_shift_drag_params_and_clear(qt_app):
+    from citkid.pipeline.interactive import fit_iq
+    steps = ('fit_iq',)
+    ar, _ = _make_ar(*steps)
+    ar.DS = _tone_ds(res_idxs=None)
+    ar.DS.iq_popt = [np.array([1000., 1000., 0.5, 0., 0., 1., 0., 0.])]
+    panel = fit_iq.IQFitPanel(ar, steps, data_idx=0)
+    ff = ar.DS.ff[0]
+    step = panel.steps[0]
+
+    # Before any plot there are no frequencies to mask yet
+    panel._on_range_selected(-1.0, 1.0)
+    assert panel._mask is None
+    panel.on_data_idx_changing()
+    panel.update_plots()
+    assert _curve_len(panel._iq_fit) == 1000
+
+    # Region in kHz around the 1000 Hz center: 998 to 1003 Hz
+    panel._plot_amp.getViewBox().sig_range_selected.emit(-2e-3, 3e-3)
+    expected = (ff >= 998. - 1e-9) & (ff <= 1003. + 1e-9)
+    assert expected.sum() == 51
+    np.testing.assert_array_equal(panel._mask, expected)
+    assert 'Mask set' in panel._status_label.text()
+    np.testing.assert_array_equal(
+        panel.get_params_for_step(step)['iq_mask'], expected)
+    assert panel.get_params_for_step(_make_step('other')) == {}
+    panel.update_plots()
+    assert _curve_len(panel._amp_data) == 51
+    assert _curve_len(panel._iq_data_excl) == 150
+
+    panel.autoscale_plots()
+    panel.clear_plots()
+    for curve in (panel._amp_data, panel._amp_excl, panel._amp_fit,
+                  panel._iq_data, panel._iq_data_excl, panel._iq_fit):
+        assert _curve_len(curve) == 0
+    assert panel._fit_text.textItem.toPlainText() == ''
+    assert panel._status_label.text() == '—'
+
+
+def _xcal_full_ds(n_t=300, std_t=0.3):
+    """
+    Build a stand-in DataSet with two rows for the x calibration panel.
+
+    Parameters:
+    n_t (int): Number of timestream points per row. Default 300.
+    std_t (float): Standard deviation of the timestream theta, in rad.
+        Default 0.3.
+
+    Returns:
+    DS (SimpleNamespace): Sweep, theta, x, timestream and fit data of two
+        rows, with theta_f from 3 to -3 rad, x = 1e-4 theta, and
+        ``xcal_mask`` from ``get_xcal_mask`` with the panel defaults
+        (offsets 3 and 9, std cutoff 12).
+    """
+    from types import SimpleNamespace
+    from citkid.xcal.xcal import get_xcal_mask
+    n = 100
+    ff = np.linspace(1e9 - 5e4, 1e9 + 5e4, n)
+    thetaf = np.linspace(3, -3, n)
+    zf_cent = np.exp(1j * thetaf)
+    rng = np.random.default_rng(2)
+    thetats = [rng.normal(0, std_t, n_t) for _ in range(2)]
+    return SimpleNamespace(
+        nrows=2, ff=[ff] * 2, zf_rmv=[zf_cent + 2] * 2,
+        zf_cent=[zf_cent] * 2, thetaf=[thetaf] * 2, xf=[1e-4 * thetaf] * 2,
+        poly_x=[np.array([0, 0, 1e-4, 0])] * 2, thetat=thetats,
+        zt_cent=[np.exp(1j * t) for t in thetats],
+        xcal_mask=[get_xcal_mask(ff, thetaf, t, 3, 9, 12) for t in thetats])
+
+
+def _xcal_panel(DS):
+    """
+    Build an XCalPanel over ``DS``.
+
+    Parameters:
+    DS (SimpleNamespace): Stand-in DataSet.
+
+    Returns:
+    panel (XCalPanel): The panel, at row 0.
+    """
+    from citkid.pipeline.interactive import xcal
+    steps = ('get_xcal_mask', 'fit_x_theta')
+    ar, _ = _make_ar(*steps)
+    ar.DS = DS
+    return xcal.XCalPanel(ar, steps, data_idx=0)
+
+
+def _padded(values):
+    """
+    Return the range of ``values`` padded by 5% on each side.
+
+    Parameters:
+    values (np.ndarray): Values.
+
+    Returns:
+    lo, hi (float): Padded range.
+    """
+    pad = 0.05 * np.ptp(values)
+    return [values.min() - pad, values.max() + pad]
+
+
+def test_xcal_panel_draws_mask_timestream_and_fit(qt_app):
+    DS = _xcal_full_ds()
+    panel = _xcal_panel(DS)
+    mask, thetaf = DS.xcal_mask[0], DS.thetaf[0]
+    panel.update_plots()
+
+    assert 0 < mask.sum() < 100
+    assert _curve_len(panel._amp_data) == mask.sum()
+    assert _curve_len(panel._iq_excl) == (~mask).sum()
+    x, y = panel._xcal_inc.getData()
+    np.testing.assert_allclose(x, thetaf[mask])
+    np.testing.assert_allclose(y, 1e-4 * thetaf[mask])
+    x, y = panel._xcal_fit.getData()
+    assert len(x) == 500 and x.min() == -3 and x.max() == 3
+    np.testing.assert_allclose(y, 1e-4 * x, atol=1e-18)
+    # Timestream: everything within 12 sigma is bulk
+    assert _curve_len(panel._zt_iq) == 300
+    assert _curve_len(panel._zt_iq_cut) == 0
+    x, y = panel._xcal_ts.getData()
+    np.testing.assert_allclose(x, DS.thetat[0])
+    np.testing.assert_allclose(y, 1e-4 * DS.thetat[0], atol=1e-18)
+    # The draggable region spans the mask with the default offsets (3, 9)
+    w = np.where(mask)[0]
+    ff_plot = (DS.ff[0] - DS.ff[0].mean()) * 1e-3
+    assert panel._mask_region.getRegion() == pytest.approx(
+        (ff_plot[w[0]], ff_plot[w[-1]]))
+    # x vs theta is ranged to the masked points plus 5%
+    xr, _ = panel._plot_xcal.getViewBox().viewRange()
+    assert xr == pytest.approx(_padded(thetaf[mask]))
+
+    # Before the steps ran: all points shown, no x vs theta plot
+    for name in ('xcal_mask', 'thetaf', 'xf', 'poly_x'):
+        delattr(DS, name)
+    panel.update_plots()
+    assert _curve_len(panel._amp_data) == 100
+    assert _curve_len(panel._amp_excl) == 0
+    for curve in (panel._xcal_inc, panel._xcal_fit, panel._xcal_ts):
+        assert _curve_len(curve) == 0
+    assert _curve_len(panel._zt_iq) == 300
+
+
+def test_xcal_panel_prefetch_draws_what_the_dataset_draws(qt_app):
+    DS = _xcal_full_ds()
+    panel = _xcal_panel(DS)
+    panel.update_plots()
+    direct = _all_curve_data(panel)
+    region = panel._mask_region.getRegion()
+
+    panel.prefetch_plot_data(0)
+    for name in ('ff', 'zf_rmv', 'zf_cent', 'xcal_mask', 'thetaf', 'xf',
+                 'poly_x', 'thetat', 'zt_cent'):
+        setattr(DS, name, None)               # the cache must be used
+    panel.clear_plots()
+    panel._idx0_base = panel._idx1_base = 0  # restored from the cache
+    panel.update_plots()
+
+    assert panel._plot_cache == {}
+    prefetched = _all_curve_data(panel)
+    for name in direct:
+        np.testing.assert_allclose(prefetched[name][0], direct[name][0])
+        np.testing.assert_allclose(prefetched[name][1], direct[name][1])
+    assert panel._mask_region.getRegion() == pytest.approx(region)
+
+    panel.prefetch_plot_data(0)               # no sweep: nothing cached
+    assert panel._plot_cache == {}
+
+
+def test_xcal_panel_subsamples_long_timestreams(qt_app):
+    """
+    The x vs theta and IQ timestreams keep at most 4000 bulk and 2000 tail
+    points, whether drawn from the DataSet or from the prefetch cache.
+    """
+    from citkid.xcal.xcal import get_theta_t_bulk_mask
+    # std_cut 0.5: ~38% of 12000 points (> 4000) are bulk, the rest tail
+    DS = _xcal_full_ds(n_t=12000)
+    DS.xcal_std_cutoff = [0.5, 0.5]
+    n_bulk = get_theta_t_bulk_mask(DS.thetat[0], 0.5).sum()
+    assert 4000 < n_bulk < 5000
+    panel = _xcal_panel(DS)
+    assert panel._std_spin.value() == 0.5
+    panel.update_plots()
+    assert _curve_len(panel._xcal_ts) == 4000
+    assert _curve_len(panel._xcal_ts_cut) == 2000
+    assert _curve_len(panel._zt_iq) == 4000
+    assert _curve_len(panel._zt_iq_cut) == 2000
+
+    panel.prefetch_plot_data(0)
+    panel.update_plots()
+    assert _curve_len(panel._xcal_ts) == 4000
+    assert _curve_len(panel._xcal_ts_cut) == 2000
+    assert _curve_len(panel._zt_iq) == 4000
+    assert _curve_len(panel._zt_iq_cut) == 2000
+
+
+def test_xcal_panel_restores_row_params_and_ranges_after_run(qt_app):
+    DS = _xcal_full_ds()
+    DS.xcal_idx0_offset = [5, 2]
+    DS.xcal_idx1_offset = [6, None]
+    DS.xcal_std_cutoff = [10.0, 8.0]
+    panel = _xcal_panel(DS)
+    spins = (panel._idx0_spin, panel._idx1_spin, panel._std_spin)
+    assert [s.value() for s in spins] == [5, 6, 10.0]
+    assert panel.get_params_for_step(panel.steps[0]) == {
+        'xcal_idx0_offset': 5, 'xcal_idx1_offset': 6,
+        'xcal_std_cutoff': 10.0}
+    assert panel.get_params_for_step(panel.steps[1]) == {}
+
+    panel.update_plots()
+    panel._plot_xcal.setXRange(-100, 100, padding=0)
+    panel._idx0_spin.setValue(1)
+    panel._std_spin.setValue(11.0)
+    assert panel.run_steps() is True          # caches (1, 6, 11.0)
+    calls = panel.AR.execute_step.call_args_list
+    assert calls[0].kwargs['user_params'] == {
+        'xcal_idx0_offset': 1, 'xcal_idx1_offset': 6,
+        'xcal_std_cutoff': 11.0}
+    xr, _ = panel._plot_xcal.getViewBox().viewRange()
+    assert xr == pytest.approx(_padded(DS.thetaf[0][DS.xcal_mask[0]]))
+
+    panel.data_idx = 1
+    panel.on_data_idx_changing()
+    assert [s.value() for s in spins] == [2, 6, 8.0]   # idx1: none saved
+    assert panel._std_cutoff_value == 8.0
+    panel.data_idx = 0
+    panel.on_data_idx_changing()
+    assert [s.value() for s in spins] == [1, 6, 11.0]  # this session's
+    assert panel._std_cutoff_value == 11.0
+
+    nan = panel._nan_outputs()
+    assert nan['xcal_mask'].shape == (100,) and not nan['xcal_mask'].any()
+    assert nan['poly_x'].shape == (4,) and np.isnan(nan['poly_x']).all()
+    DS.ff = []
+    assert panel._nan_outputs()['xcal_mask'].shape == (1,)
+
+
+def test_xcal_panel_autoscale_ranges_x_theta_to_the_mask(qt_app):
+    DS = _xcal_full_ds()
+    panel = _xcal_panel(DS)
+    panel.update_plots()
+    xm = DS.xf[0][DS.xcal_mask[0]]
+    panel._plot_xcal.setRange(xRange=(-50, 50), yRange=(-1, 1), padding=0)
+
+    panel.autoscale_plots()
+
+    _, yr = panel._plot_xcal.getViewBox().viewRange()
+    assert yr == pytest.approx(_padded(xm))
+
+    # Nothing in the mask: fall back to auto-range
+    DS.xcal_mask = [np.zeros(100, dtype=bool)] * 2
+    panel.autoscale_plots()
+    xr, _ = panel._plot_xcal.getViewBox().viewRange()
+    assert xr[0] < -2.9 and xr[1] > 2.9
+
+
+def test_fixed_theta_panel_prefetch_run_and_autoscale(qt_app):
+    from citkid.pipeline.interactive import xcal_fixed_theta as ixf
+    steps = ('get_xcal_mask_fixed_theta', 'fit_x_theta')
+    ar, _ = _make_ar(*steps)
+    DS = ar.DS = _xcal_ds()
+    panel = ixf.XCalFixedThetaPanel(ar, steps, data_idx=0)
+    panel.on_data_idx_changing()
+    panel.update_plots()
+    direct = _all_curve_data(panel)
+
+    panel.prefetch_plot_data(0)
+    assert panel._cache_key(None, 0) in panel._plot_cache
+    ar.DS = None                               # the cache must be used
+    panel.clear_plots()
+    panel.update_plots()
+    for name, (x, y) in _all_curve_data(panel).items():
+        np.testing.assert_allclose(x, direct[name][0])
+        np.testing.assert_allclose(y, direct[name][1])
+    panel.prefetch_plot_data(0)                # no DataSet: nothing cached
+    assert panel._plot_cache == {}
+    ar.DS = DS
+
+    # Run caches the offsets for the row and ranges x vs theta to the band
+    thetaf = DS.thetaf[0]
+    band = thetaf[(thetaf >= -2) & (thetaf <= 2.8)]
+    panel._min_spin.setValue(1.0)
+    panel._plot_xcal.setXRange(-50, 50, padding=0)
+    assert panel.run_steps() is True
+    xr, _ = panel._plot_xcal.getViewBox().viewRange()
+    assert xr == pytest.approx(_padded(band))
+    panel._min_spin.setValue(0.5)
+    panel.on_data_idx_changing()
+    assert panel._offsets() == (1.0, 0.2)
+
+    panel.update_plots()
+    panel._plot_xcal.setXRange(-50, 50, padding=0)
+    panel.autoscale_plots()
+    xr, _ = panel._plot_xcal.getViewBox().viewRange()
+    assert xr == pytest.approx(_padded(band))
+
+
+################################################################################
+# StepPanel and window internals
+################################################################################
+
+
+def test_outputs_exist_checks_the_last_steps_outputs(qt_app):
+    from types import SimpleNamespace
+    ar = MagicMock()
+    ar.analysis_steps = [_make_step('a', return_names=['u']),
+                         _make_step('b', return_names=['v', 'w'])]
+    ar.DS = SimpleNamespace(v=[1.0, None], w=[2.0, 3.0])
+    panel = _ParamPanel(ar, ('a', 'b'), data_idx=0)
+    assert panel._outputs_exist() is True     # 'u' of step 'a' not checked
+    panel.data_idx = 1
+    assert panel._outputs_exist() is False    # v is None for row 1
+    panel.data_idx = 5
+    assert panel._outputs_exist() is False    # row out of range
+    del ar.DS.w
+    panel.data_idx = 0
+    assert panel._outputs_exist() is False    # output missing
+
+    # Global steps are looked up with data_idx None
+    ar.analysis_steps = [_make_step('g', 'global', return_names=['spans'])]
+    ar.DS = SimpleNamespace(spans={None: [1, 2]})
+    panel = _ParamPanel(ar, ('g',), data_idx=0)
+    assert panel._outputs_exist() is True
+    ar.DS.spans = {None: None}
+    assert panel._outputs_exist() is False
+
+
+def test_auto_initialize_runs_missing_global_prereqs_then_draws_or_runs(
+    qt_app
+):
+    from types import SimpleNamespace
+    pre = _make_step('make_x', 'global', return_names=['x'])
+    unrelated = _make_step('other', 'global', return_names=['q'])
+    per_row = _make_step('later_row', return_names=['x'])
+    ar = MagicMock()
+    ar.analysis_steps = [_make_step('a')]
+    ar.path = [{'task': pre}, {'task': unrelated}, {'task': per_row}]
+    ar.DS = SimpleNamespace(y=[1.0])
+    panel = _ParamPanel(ar, ('a',), data_idx=0)
+    panel.refresh_plots = MagicMock()
+    panel.run_steps = MagicMock(return_value=True)
+
+    panel._auto_initialize()          # 'x' missing: make_x runs first
+    ar.execute_step.assert_called_once_with(pre, data_idx=None, save=False)
+    panel.refresh_plots.assert_called_once()   # 'y' exists: just draw
+    panel.run_steps.assert_not_called()
+
+    ar.execute_step.reset_mock()
+    ar.DS = SimpleNamespace(x=None)    # prerequisite not done, no 'y'
+    panel._auto_initialize()
+    ar.execute_step.assert_called_once_with(pre, data_idx=None, save=False)
+    panel.run_steps.assert_called_once_with(save=False)
+
+    ar.execute_step.reset_mock()
+    ar.DS = SimpleNamespace(x=[0.0], y=[1.0])  # prerequisite done
+    panel._auto_initialize()
+    ar.execute_step.assert_not_called()
+
+    # A failing prerequisite is reported, not raised
+    ar.DS = SimpleNamespace(y=[1.0])
+    ar.execute_step.side_effect = ValueError('no spans')
+    panel._auto_initialize()
+    assert panel.refresh_plots.call_count == 3
+
+    # A runner without a path skips the prerequisites
+    del ar.path
+    ar.execute_step.reset_mock()
+    panel._auto_initialize()
+    ar.execute_step.assert_not_called()
+
+
+def _prefetch_window(qt_app, monkeypatch):
+    """
+    Build an InteractiveAnalysisWindow whose panels record prefetch calls.
+
+    Parameters:
+    qt_app (QApplication): Qt application fixture.
+    monkeypatch (pytest.MonkeyPatch): Fixture used to stub panels/timers.
+
+    Returns:
+    win (InteractiveAnalysisWindow): The window over rows 0 and 1, at row
+        0; each panel's ``prefetched`` list holds the rows passed to its
+        ``prefetch_plot_data``.
+    """
+    win = _make_window(qt_app, monkeypatch)
+    win.AR.path = [{'task': step} for step in win.AR.analysis_steps]
+    for panel in win.panels:
+        panel.prefetched = []
+        panel.prefetch_plot_data = panel.prefetched.append
+    return win
+
+
+def _close_window(win):
+    """
+    Close a window, answering Yes to any confirmation.
+
+    Parameters:
+    win (QMainWindow): The window.
+    """
+    with patch.object(QtWidgets.QMessageBox, 'question',
+                      return_value=QtWidgets.QMessageBox.Yes):
+        win.close()
+
+
+def test_prefetch_next_prefetches_every_panel_for_the_next_row(
+    qt_app, monkeypatch
+):
+    win = _prefetch_window(qt_app, monkeypatch)
+    win.panels[0].prefetch_plot_data = MagicMock(
+        side_effect=ValueError('boom'))     # one failing panel
+    win._prefetch_next()
+    win._prefetch_thread.join(timeout=5)
+    assert win._prefetched_idx == 1
+    assert win.panels[1].prefetched == [1]
+    win.panels[0].prefetch_plot_data.assert_called_once_with(1)
+    qt_app.processEvents()
+    assert win._prefetch_label.text() == '✓ prefetch 1'
+
+    # Already prefetched: no new thread
+    thread = win._prefetch_thread
+    win._prefetch_next()
+    assert win._prefetch_thread is thread
+    assert win.panels[1].prefetched == [1]
+    _close_window(win)
+
+
+@pytest.mark.parametrize('case', ['last_row', 'no_path', 'in_progress'])
+def test_prefetch_next_skips(qt_app, monkeypatch, case):
+    win = _prefetch_window(qt_app, monkeypatch)
+    if case == 'last_row':
+        win._nav_pos = 1
+    elif case == 'no_path':
+        win.AR.path = []
+    else:
+        win._prefetch_thread = MagicMock()
+        win._prefetch_thread.is_alive.return_value = True
+        win._prefetching_idx = 1
+    before = win._prefetch_thread
+    win._prefetch_next()
+    assert win._prefetch_thread is before
+    assert all(p.prefetched == [] for p in win.panels)
+    win._prefetch_thread = None
+    _close_window(win)
+
+
+def test_run_through_panel_runs_following_panels_until_a_failure(
+    qt_app, monkeypatch
+):
+    win = _make_window(qt_app, monkeypatch)
+    for panel in win.panels:
+        panel.prepare_run = MagicMock()
+
+    win._run_through_panel(5)                 # past the end: nothing
+    win.AR.execute_step.assert_not_called()
+
+    win._run_through_panel(0)
+    names = [c.args[0].name for c in win.AR.execute_step.call_args_list]
+    assert names == ['step1', 'step2']
+    assert all(p._status_label.text() == 'Done ✓' for p in win.panels)
+    assert all(p.prepare_run.call_count == 1 for p in win.panels)
+
+    # The first panel fails (step error or crash): the second doesn't run
+    for panel in win.panels:
+        panel._status_label.setText('-')
+    win.AR.execute_step.reset_mock()
+    win.AR.execute_step.side_effect = ValueError('bad')
+    win._run_through_panel(0)
+    assert win.AR.execute_step.call_count == 1
+    assert win.panels[1]._status_label.text() == '-'
+    win.panels[0].run_steps = MagicMock(side_effect=RuntimeError('crash'))
+    win._run_through_panel(0)
+    assert win.panels[1].prepare_run.call_count == 1
+    win.AR.execute_step.side_effect = None
+    _close_window(win)

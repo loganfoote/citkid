@@ -50,10 +50,11 @@ def get_res_mask(fg, fr_spans):
         m += 'fres_all and qres_all are sorted.'
         raise ValueError(m)
     
+    numeric = (int, float, np.integer, np.floating)
     for c, s in fr_spans:
-        if not isinstance(c, (int, float)): 
+        if not isinstance(c, numeric):
             raise ValueError('Resonant frequency must be numeric')
-        if not isinstance(s, (int, float)):
+        if not isinstance(s, numeric):
             raise ValueError('Span must be numeric')
         if s < 0:
             raise ValueError('Span must be positive')
@@ -109,6 +110,8 @@ def fit_gain(f, z, fr_spans, span_mult = 1):
     shape_check = shape_check or (f.shape == tuple()) or (z.shape == tuple())
     if not shape_check:
         raise ValueError('f and z must be the same length')
+    if f.ndim != 1:
+        raise ValueError('f must be a 1D array')
     if len(f) < 4:
         raise ValueError('len(f) must be at least 4')
 

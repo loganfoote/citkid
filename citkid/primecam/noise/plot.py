@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from ..plot import plot_circle
 from .psd import bin_psd
-from ...util import combine_figs_horz
+from ..figures import combine_figs_horz
 
 import warnings 
 

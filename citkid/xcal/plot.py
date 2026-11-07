@@ -310,7 +310,8 @@ def plot_xcal(
     thetaf (np.array, float64): Fine sweep theta data.
     xf (np.array, float64): Fine sweep x data.
     zf_cent (np.array, complex128): Fine sweep centered IQ data.
-    xcal_mask (np.array, bool): Mask of fine sweep data used for x calibration.
+    xcal_mask (np.array, bool): Mask of fine sweep data used for x
+        calibration, the same shape as ``thetaf``.
     poly_x (np.array, float64): Polynomial fit parameters for x vs theta.
     thetat (np.array, float64 or None): Timestream theta data, or None to omit
         from plot.
@@ -343,8 +344,8 @@ def plot_xcal(
         zt_cent = np.asarray(zt_cent, dtype = np.complex128)
     if thetaf.shape != xf.shape:
         raise ValueError("thetaf and xf must have the same shape.")
-    if not np.all((xcal_mask >= 0) & (xcal_mask < len(thetaf))):
-        raise ValueError("xcal_mask must be within the range of thetaf.")
+    if xcal_mask.shape != thetaf.shape:
+        raise ValueError("xcal_mask must have the same shape as thetaf.")
     if poly_x.ndim != 1:
         raise ValueError("poly_x must be 1-dimensional.")
     if zf_cent.shape != thetaf.shape:
@@ -488,33 +489,3 @@ def plot_nonlinear_iq_fit(ff, zf_rmv, popt, mask, axs = None):
         loc = [1.01, 0.]
         )
     return fig, axs
-
-################################################################################
-########################## Default Plotting Functions ##########################
-################################################################################
-default_plot_funcs = {
-    'raw_data': (
-        'Raw Data', plot_s21, ['ff', 'zf', 'zt', 'fg', 'zg'], {}
-        ),
-    'gain_fit': (
-        'Gain Fit', plot_gain_fit, 
-        ['fg', 'zg', 'gain_mask', 'p_amp', 'p_phase'], {}
-        ),
-    's21_rmv': (
-        'Gain Removed Fine Sweep', plot_s21, 
-        ['ff', 'zf_rmv', 'zt_rmv'], {}
-        ),
-    'circfit': (
-        'Circle Fit', plot_circfit, 
-        ['zf_rmv', 'circ_origin', 'circ_radius', 'zt_rmv', 'circ_mask'], {}
-        ),
-    'sparper': (
-        'Par/Per Noise PSDs', plot_sparper, 
-        ['sparper_freq', 'spar', 'sper'], {'nbins': 100, 'fmin': 0.1}
-        ),
-    'xcal': (
-        r'$x$ Calibration', plot_xcal, 
-        ['thetaf', 'xf', 'zf_cent', 'xcal_mask', 'poly_x', 
-         'thetat', 'zt_cent', 'xcal_std_cutoff'], {}
-        )
-}

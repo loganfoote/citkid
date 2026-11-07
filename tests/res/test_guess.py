@@ -4,9 +4,25 @@ from citkid.res import guess, funcs
 import numpy as np 
 from scipy.ndimage import gaussian_filter
 
+# guess_p0_nonlinear_iq is legacy and warns on every call
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:citkid.res.guess.guess_p0_nonlinear_iq is legacy")
+
 ################################################################################
 ############################# guess_p0_nonlinear_iq ############################
 ################################################################################
+def test_guess_p0_nonlinear_iq_warns_that_it_is_legacy():
+    """
+    Calling the legacy guess warns and points to guess_p0_pole.
+    """
+    f = np.linspace(1e9, 1.1e9, 5)
+    z = np.ones_like(f, dtype = np.complex128)
+    with pytest.warns(DeprecationWarning, match = "guess_p0_pole"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            guess.guess_p0_nonlinear_iq(f, z)
+
+
 def test_guess_p0_nonlinear_iq_shape():
     f = np.linspace(1e9, 1.1e9, 5)
     z = np.ones_like(f, dtype = np.complex128)
