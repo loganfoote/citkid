@@ -71,3 +71,42 @@ notebooks = ["jupyterlab>=4.5.0"]
 
 [tool.setuptools]
 package-data = {}
+
+[tool.uv]
+# uv.lock is the source of truth for the development environment. The
+# constraints below pin the lock to the versions the package is developed
+# and tested against (the same versions environment.yml pins); they do not
+# change the ``>=`` bounds that ``pip install`` users get.
+constraint-dependencies = [
+  "numpy==1.26.4",
+  "scipy==1.16.3",
+  "numba==0.62.1",
+  "rocket-fft==0.3.1",
+  "pyfftw==0.15.1",
+  "matplotlib==3.10.8",
+  "pillow==12.3.0",
+  "pyqtgraph==0.13.7",
+  "pyqt5==5.15.11",
+  "tqdm==4.67.1",
+  "pandas==2.3.3",
+  "zarr==3.1.5",
+  "pyyaml==6.0.3",
+  "psutil==7.2.2",
+  "paramiko==4.0.0",
+  "rfmux==1.4.1",
+  "jupyterlab==4.5.0",
+  "pytest==9.0.1",
+  "pytest-asyncio==1.4.0",
+  "pytest-cov==7.1.0",
+]
+# Make the lock pick versions that ship wheels for every platform citkid is
+# used on (PyQt5's Qt wheels for Windows stop at 5.15.2, for example).
+required-environments = [
+  "sys_platform == 'win32'",
+  "sys_platform == 'darwin'",
+  "sys_platform == 'linux'",
+]
+
+[dependency-groups]
+# Installed by ``uv sync`` by default: the test tools and JupyterLab.
+dev = ["citkid[dev,notebooks]"]

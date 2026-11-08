@@ -32,9 +32,8 @@ from .full_sweep import (
     fit_from_guesses, recover_drifted, rescale_snr_to_sweep
 )
 
-_INSTALL = ("the CNN finder needs PyTorch: create the environment from "
-            "environment-cnn.yml, or run 'mamba install -n citkid -c "
-            "conda-forge pytorch=2.13.0 numpy=1.26.4'")
+_INSTALL = ("the CNN finder needs PyTorch: run 'uv sync --extra cnn' "
+            "(or 'pip install citkid[cnn]')")
 
 ################################################################################
 ############################## Analysis functions ##############################

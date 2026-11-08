@@ -3,7 +3,7 @@
 import os as _os
 
 # citkid's Qt code is written and tested for PyQt5, the binding pinned in
-# environment.yml. rfmux also installs PyQt6, which pyqtgraph would
+# pyproject.toml. rfmux also installs PyQt6, which pyqtgraph would
 # otherwise prefer. This only takes effect if pyqtgraph is imported after
 # citkid (``citkid.qt_compat`` checks).
 _os.environ['PYQTGRAPH_QT_LIB'] = 'PyQt5'

@@ -18,28 +18,46 @@ data). Documents are in `documents/`: `pipeline_guide.md`,
 `xcal_derivations.md`, and `crs_streaming_format.md`. Derivations for resonator fitting and
 optimal filtering are in `res_fitting.pdf` and `optimal_filtering.pdf`.
 
-## Installation with conda environment setup
-1. Clone this repository: `git clone https://github.com/loganfoote/citkid`
-2. Navigate to the repository directory
-3. Create the conda environment and install the repository in editable mode with
+## Installation with uv (recommended)
+The development environment is managed with [uv](https://docs.astral.sh/uv/)
+and pinned in `uv.lock`.
+1. [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
+2. Clone this repository: `git clone https://github.com/loganfoote/citkid`
+3. Navigate to the repository directory
+4. Create the environment in `.venv/`, with citkid installed in editable
+   mode plus the test tools and JupyterLab:
 ```bash
-conda env create -f environment.yml
+uv sync
 ```
-To activate the environment, run 
+Run commands inside the environment with `uv run`, for example
 ```bash
-conda activate citkid
+uv run jupyter lab
 ```
-## Installation without conda environment setup
+or activate it with `.venv\Scripts\activate` (Windows) or
+`source .venv/bin/activate` (macOS/Linux). To also install PyTorch for the
+CNN resonance finder, run `uv sync --extra cnn`.
+
+## Installation with pip
 1. Clone this repository: `git clone https://github.com/loganfoote/citkid`
 2. Navigate to the repository directory
 3. Install the package using pip:
 ```bash
 python -m pip install .
 ```
- Or, to install in editable mode run  
- ```bash
- python -m pip install --editable .
+Or, to install in editable mode with the test tools and JupyterLab, run
+```bash
+python -m pip install --editable ".[dev,notebooks]"
 ```
+
+## Installation with conda (legacy)
+`environment.yml` and `environment-cnn.yml` are kept for conda users:
+```bash
+conda env create -f environment.yml
+```
+They are no longer the reference environment. On Windows the conda
+environment installs a second copy of Qt 6 (through conda-forge's
+matplotlib), which prevents `rfmux`, and so `citkid.crs`, from importing.
+Use the uv environment for CRS work.
 
 ## Citation
 
