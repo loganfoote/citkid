@@ -59,7 +59,8 @@ def predict_maps(model, x, chunk = 65536, overlap = 4096, device = None):
     x (np.array): features, shape (C, L).
     chunk (int): piece length (multiple of 2**depth). Default 65536.
     overlap (int): overlap on each side, discarded. Default 4096.
-    device (str or None): torch device. Default None (the model's device).
+    device (str or None): torch device; the model is moved there. Default
+        None (the model's device).
 
     Returns:
     heat (np.array): heatmap probabilities, shape (L,).
@@ -67,7 +68,10 @@ def predict_maps(model, x, chunk = 65536, overlap = 4096, device = None):
     log_q (np.array): log10(Qr), shape (L,).
     """
     model.eval()
-    device = device or next(model.parameters()).device
+    if device is None:
+        device = next(model.parameters()).device
+    else:
+        model.to(device)
     m = 2 ** model.depth
     L = x.shape[1]
     outs = np.zeros((3, L), dtype = np.float32)
@@ -144,7 +148,8 @@ def detect(
     min_step (float or None): fractional step below which data is block
         averaged. Default 1.5e-6 (30 points per linewidth at Qr 2e4).
         None disables.
-    device (str or None): torch device. Default None (the model's).
+    device (str or None): torch device; the model is moved there.
+        Default None (the model's).
 
     Returns:
     fr (np.array): candidate frequencies in Hz, ascending.

@@ -27,6 +27,7 @@ import zarr
 from tqdm.auto import tqdm
 from ..res.funcs import product_s21
 from ..res.util import qi_qc
+from ..zarr_util import to_jsonable
 from ..res.multifit import (
     fit_poles, fit_resonators, multifit_model, init_qr, group_resonances,
     window_mask, gain_degree, block_average, resid_noise_sigma,
@@ -216,7 +217,8 @@ _WORKER = {}
 
 def _worker_init(f, z):
     """
-    Store the sweep in a worker process (``_refine`` with ``n_workers``).
+    Store the sweep in a worker process (``fit_from_guesses`` with
+    ``n_workers``).
 
     Parameters:
     f (np.array): frequencies in Hz.
@@ -241,7 +243,8 @@ def _init_task(args):
 
 def _stage_a(f, z, st, members, Qr_init, screen = False):
     """
-    Fit one group of resonances with the pole model (``_refine`` steps 2-3).
+    Fit one group of resonances with the pole model
+    (``fit_from_guesses`` steps 2-3).
 
     Parameters:
     f (np.array): frequencies in Hz, ascending.
@@ -285,7 +288,7 @@ def _stage_a(f, z, st, members, Qr_init, screen = False):
 
 def _final_unit(f, z, st, g, opts):
     """
-    Fit one unit for good (``_refine`` step 3): Stage A, optionally the
+    Fit one unit for good (``fit_from_guesses`` step 3): Stage A, optionally the
     missing-pole search and redundant-pole removal, and Stage B. A failed
     joint fit is redone one member at a time.
 
@@ -460,7 +463,7 @@ def _chunks(items, n):
     size = max(1, int(np.ceil(len(items) / max(n, 1))))
     return [items[i:i + size] for i in range(0, len(items), size)]
 
-def _refine(
+def fit_from_guesses(
     f, z, fr0, Qr0 = None, fit_nonlinear = False, downward = True,
     add_poles = False, n_lw = 8., lw_max = 3e6, n_pass = 3, ext_lw = 30.,
     max_group = 8, Qr_bounds = (1e2, 1e7), min_Qr_frac = 0.2, dup_lw = 0.1,
@@ -802,7 +805,7 @@ def _refine(
     df['recovered'] = False
     return df, lw_guess, tuple(bounds)
 
-def _recover_drifted(
+def recover_drifted(
     f, z, df, lw_guess, n_lw = 8., ext_lw = 30., max_move_lw = 1.,
     bound_lw = 0.5, min_sep_lw = 0.3, min_dchi2 = 50.,
     amp_range = (0.03, 1.2), Qr_bounds = (1e2, 1e7)
@@ -824,7 +827,7 @@ def _recover_drifted(
     Parameters:
     f (np.array): frequencies in Hz, ascending.
     z (np.array): complex S21 data.
-    df (pd.DataFrame): ``_refine`` table.
+    df (pd.DataFrame): ``fit_from_guesses`` table.
     lw_guess (np.array): step-1 linewidth (Hz) per guess.
     n_lw (float): window half-width in linewidths. Default 8.
     ext_lw (float): fits within this many of their own linewidths of the
@@ -940,7 +943,7 @@ def _recover_drifted(
     df = df.drop(index = drop)
     return pd.concat([df, pd.DataFrame(new_rows)], ignore_index = True)
 
-def _sweep_snr(table, window = 51):
+def rescale_snr_to_sweep(table, window = 51):
     """
     Recompute SNR against a sweep-level noise estimate.
 
@@ -952,7 +955,7 @@ def _sweep_snr(table, window = 51):
     interpolated in frequency.
 
     Parameters:
-    table (pd.DataFrame): ``_refine`` table.
+    table (pd.DataFrame): ``fit_from_guesses`` table.
     window (int): running-median window in fit groups. Default 51.
 
     Returns:
@@ -1018,7 +1021,7 @@ def fit_full_sweep(
         ``n_pass`` 3, ``ext_lw`` 30, ``max_group`` 8, ``Qr_bounds``,
         ``min_Qr_frac`` 0.2, ``dup_lw`` 0.1, ``max_pts_lw`` 10,
         ``max_pts_lw_final`` 20, ``n_workers`` (processes; default up to
-        4, the result does not depend on it); see ``_refine``).
+        4, the result does not depend on it); see ``fit_from_guesses``).
 
     Returns:
     res (pd.DataFrame): one row per listed frequency, columns
@@ -1042,12 +1045,12 @@ def fit_full_sweep(
     n_lw = kwargs.get('n_lw', 8.)
     ext_lw = kwargs.get('ext_lw', 30.)
     if len(fres):
-        table, lw_guess, q_bounds = _refine(
+        table, lw_guess, q_bounds = fit_from_guesses(
             f, z, fres, Qr0, fit_nonlinear, downward, progress = progress,
             **kwargs)
-        table = _recover_drifted(f, z, table, lw_guess, n_lw = n_lw,
+        table = recover_drifted(f, z, table, lw_guess, n_lw = n_lw,
                                  ext_lw = ext_lw, Qr_bounds = q_bounds)
-        table = _sweep_snr(table)
+        table = rescale_snr_to_sweep(table)
     else:
         table = pd.DataFrame(columns = ['guess_idx'])
     rows = []
@@ -1116,28 +1119,6 @@ def fit_full_sweep(
         else 0
     return res[FIT_COLUMNS], gain, dict(gain = ginfo, n_recovered = n_rec,
                                         narrow_core = narrow)
-
-def _jsonable(v):
-    """
-    Convert a value to plain Python types for zarr attributes.
-
-    Parameters:
-    v (object): value (dicts, lists, tuples, numpy scalars and arrays).
-
-    Returns:
-    out (object): JSON-serializable copy (non-finite floats as None).
-    """
-    if isinstance(v, dict):
-        return {str(k): _jsonable(x) for k, x in v.items()}
-    if isinstance(v, (list, tuple, np.ndarray)):
-        return [_jsonable(x) for x in v]
-    if isinstance(v, (np.integer, int)) and not isinstance(v, bool):
-        return int(v)
-    if isinstance(v, (np.floating, float)):
-        return float(v) if np.isfinite(v) else None
-    if isinstance(v, np.bool_):
-        return bool(v)
-    return v
 
 def run_full_sweep_fit(
     f, z, zarr_grp, fit_nonlinear = False, downward = True,
@@ -1228,7 +1209,7 @@ def run_full_sweep_fit(
     settings = dict(kwargs, corr_length = corr_length,
                     runtime_s = round(time.time() - t0, 1),
                     n_recovered = info['n_recovered'], gain = info['gain'])
-    out.attrs.update(_jsonable(dict(
+    out.attrs.update(to_jsonable(dict(
         created = time.strftime('%Y-%m-%d %H:%M:%S'),
         citkid_version = __version__, source = 'fres_manual',
         fit_nonlinear = fit_nonlinear, downward = downward,

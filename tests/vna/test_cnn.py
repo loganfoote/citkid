@@ -80,6 +80,84 @@ def test_detect_and_finder(full_sweep, tmp_path):
                                            fit_candidates = False)
     assert len(fres) == len(cand) and 'score' in cand
 
+def test_find_resonances_cnn_device(full_sweep, tmp_path):
+    """
+    Check that ``device`` loads the model there, or moves a loaded model.
+    """
+    f, z, _, _ = full_sweep
+    path = str(_model_file(tmp_path / 'm.pt'))
+    fres, _, _ = find_resonances_cnn(f, z, model_path = path, threshold = 0.,
+                                     classical = False, fit_candidates = False,
+                                     device = 'cpu')
+    net = cm.load_model(path = path, device = 'cpu')
+    fres2, _, _ = find_resonances_cnn(f, z, model = net, threshold = 0.,
+                                      classical = False,
+                                      fit_candidates = False, device = 'cpu')
+    assert next(net.parameters()).device.type == 'cpu'
+    np.testing.assert_array_equal(fres, fres2)
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason = 'no CUDA')
+def test_predict_maps_moves_model_to_device(tmp_path):
+    """
+    Check that ``predict_maps(device = ...)`` runs a model loaded on another
+    device, the same as on the CPU.
+    """
+    net = cm.load_model(path = _model_file(tmp_path / 'm.pt'),
+                        device = 'cpu')
+    x = infer.detector_features(np.exp(1j * np.linspace(0, 3, 300)))
+    cpu = infer.predict_maps(net, x)
+    gpu = infer.predict_maps(net, x, device = 'cuda')
+    assert next(net.parameters()).device.type == 'cuda'
+    for a, b in zip(cpu, gpu):
+        np.testing.assert_allclose(a, b, atol = 1e-4)
+
+def test_candidates_qr_hints(full_sweep, tmp_path, monkeypatch):
+    """
+    Check that every candidate is fit with its detector's Qr as the hint,
+    the matched filter's included.
+    """
+    import citkid.vna.res_finder_cnn as rfc
+    f, z, _, _ = full_sweep
+    seen = {}
+
+    def fake_fit(f, z, fr0, Qr0, **kw):
+        """
+        Record the guesses and stop.
+
+        Parameters:
+        f, z, fr0, Qr0, kw: as ``fit_from_guesses``.
+
+        Raises:
+        RuntimeError: always.
+        """
+        seen['fr0'], seen['Qr0'] = np.asarray(fr0), np.asarray(Qr0)
+        raise RuntimeError('stop')
+
+    monkeypatch.setattr(rfc, 'fit_from_guesses', fake_fit)
+    path = str(_model_file(tmp_path / 'm.pt'))
+    _, _, cand = find_resonances_cnn(f, z, model_path = path,
+                                     threshold = 0.99, fit_candidates = False)
+    with pytest.raises(RuntimeError, match = 'stop'):
+        find_resonances_cnn(f, z, model_path = path, threshold = 0.99)
+    assert (cand.source == 'classical').any()
+    np.testing.assert_array_equal(seen['fr0'], cand.fr.values)
+    np.testing.assert_array_equal(seen['Qr0'], cand.Qr.values)
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason = 'no CUDA')
+def test_find_resonances_cnn_cuda_matches_cpu(full_sweep, tmp_path):
+    """
+    Check that the network gives the same candidates on CUDA and the CPU.
+    """
+    f, z, _, _ = full_sweep
+    path = str(_model_file(tmp_path / 'm.pt'))
+    kw = dict(model_path = path, threshold = 0., classical = False,
+              fit_candidates = False)
+    fc, qc, _ = find_resonances_cnn(f, z, device = 'cpu', **kw)
+    fg, qg, _ = find_resonances_cnn(f, z, device = 'cuda', **kw)
+    assert len(fc) == len(fg)
+    np.testing.assert_allclose(fg, fc, rtol = 1e-9)
+    np.testing.assert_allclose(qg, qc, rtol = 1e-3)
+
 def test_run_res_finder_cnn(full_sweep, tmp_path):
     f, z, _, t = full_sweep
     path = _model_file(tmp_path / 'm.pt')

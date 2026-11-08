@@ -36,9 +36,10 @@ def test_merge_candidates():
 
 def _fit_table(full_sweep):
     """Fit the true resonances of the fixture as a candidate table."""
-    from citkid.vna.full_sweep import _refine, _sweep_snr
+    from citkid.vna.full_sweep import fit_from_guesses, rescale_snr_to_sweep
     f, z, _, t = full_sweep
-    table = _sweep_snr(_refine(f, z, t['fr'], n_workers = 1)[0])
+    table = rescale_snr_to_sweep(
+        fit_from_guesses(f, z, t['fr'], n_workers = 1)[0])
     table['accepted'] = accept_candidates(table, f)
     return f, z, t, table.reset_index(drop = True)
 

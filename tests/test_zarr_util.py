@@ -11,7 +11,20 @@ from citkid.zarr_util import (
     write_single_array,
     set_name,
     list_sets,
+    to_jsonable,
 )
+
+
+def test_to_jsonable_numpy_types():
+    """
+    Check that numpy scalars, arrays, tuples, NaN and non-str keys convert
+    to JSON types.
+    """
+    out = to_jsonable({'a': np.bool_(True),
+                       1: (np.float64(np.nan), np.int64(2)),
+                       'b': np.array([1.5, np.inf]), 'c': 'x'})
+    assert out == {'a': True, '1': [None, 2], 'b': [1.5, None], 'c': 'x'}
+    assert type(out['a']) is bool and type(out['1'][1]) is int
 
 
 ################################################################################

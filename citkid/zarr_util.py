@@ -143,4 +143,26 @@ def write_single_array(root, name, value, dtype = None):
         return
  
     root.create_array(name, data = value) # no chunking
-        
+
+def to_jsonable(v):
+    """
+    Convert a value to plain Python types for zarr attributes.
+
+    Parameters:
+    v (object): value (dicts, lists, tuples, numpy scalars and arrays).
+
+    Returns:
+    out (object): JSON-serializable copy (dict keys as str, non-finite
+        floats as None).
+    """
+    if isinstance(v, dict):
+        return {str(k): to_jsonable(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple, np.ndarray)):
+        return [to_jsonable(x) for x in v]
+    if isinstance(v, (np.integer, int)) and not isinstance(v, bool):
+        return int(v)
+    if isinstance(v, (np.floating, float)):
+        return float(v) if np.isfinite(v) else None
+    if isinstance(v, np.bool_):
+        return bool(v)
+    return v

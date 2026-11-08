@@ -576,6 +576,28 @@ def init_qr(
         valid.
     Qr (float): estimated total quality factor, or NaN.
     snr (float): SNR of the chosen scale, or NaN.
+
+    Notes:
+    Known weakness, deliberately not fixed. When ``lw_min`` is far below
+    the true linewidth (e.g. 3 kHz steps under a 50 kHz line), the first
+    windows cover only the resonance core. The smallest scale can pass as
+    valid with a low SNR, and the next scales fail with Qr pinned at the
+    lower limit, so the "two worse scales" rule stops the search and Qr
+    comes out 5-12x too high. On 60 simulated isolated resonances this
+    happened for 5 of 58; ``vna.full_sweep`` then fails a lone resonance
+    with 'Qr at a bound' (``test_fit_full_sweep_single_deep_resonance``,
+    xfail).
+
+    Tried and rejected (2026-11): not counting scales pinned at the lower
+    Qr limit toward the stop. It fixed all 5 simulated failures at the
+    same cost, but on 28 held-out real full VNA sweeps reviewed by hand
+    (22006 resonances, CNN finder, 1-linewidth matching) it made the
+    finder slightly worse on both counts: missed 311 -> 320, extra
+    599 -> 613, with misses up on 9 devices and down on 3. The current
+    rule gives missed 1.41% and extra 2.72% there, which is acceptable.
+    Any change here must be checked on real sweeps, not only simulations:
+    the guard is that missed and extra on the held-out sweeps must not
+    rise.
     """
     i = np.clip(np.searchsorted(f, fr0), 1, len(f) - 1)
     df = np.median(np.diff(f[max(0, i - 50):i + 50]))

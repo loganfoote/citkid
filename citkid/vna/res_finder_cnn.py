@@ -27,7 +27,10 @@ from .dips import dip_significance, unexplained_dips
 from .gain import fit_gain_spline
 from .matched_filter import find_candidates_mf
 from .sweep_info import prepare_full_sweep
-from .full_sweep import _refine, _recover_drifted, _sweep_snr, _jsonable
+from ..zarr_util import to_jsonable
+from .full_sweep import (
+    fit_from_guesses, recover_drifted, rescale_snr_to_sweep
+)
 
 _INSTALL = ("the CNN finder needs PyTorch: create the environment from "
             "environment-cnn.yml, or run 'mamba install -n citkid -c "
@@ -70,9 +73,10 @@ def accept_candidates(
     Select the fits of the candidates that look like resonances.
 
     Parameters:
-    table (pd.DataFrame): candidate fit table (``vna.full_sweep._refine``
-        rows: ``fr``, ``Qr``, ``amp``, ``phi``, ``snr``, ``error``,
-        ``duplicate_of``, ``a_at_bound``).
+    table (pd.DataFrame): candidate fit table
+        (``vna.full_sweep.fit_from_guesses`` rows: ``fr``, ``Qr``,
+        ``amp``, ``phi``, ``snr``, ``error``, ``duplicate_of``,
+        ``a_at_bound``).
     f (np.array): the fitted frequencies in Hz, ascending.
     min_snr (float): minimum SNR (amp |gain| / noise). Default 5.
     amp_min (float): minimum amp. Default 0.03 (a 0.26 dB dip; gain
@@ -365,7 +369,7 @@ def dip_only_resonances(
 def find_resonances_cnn(
     f, z, model = None, model_path = None, threshold = None,
     classical = True, fit_candidates = True, min_snr = 5., n_workers = None,
-    progress = False
+    device = None, progress = False
 ):
     """
     Find the resonances of a full VNA sweep with the CNN (see the module
@@ -389,6 +393,9 @@ def find_resonances_cnn(
     min_snr (float): minimum fitted SNR to accept. Default 5.
     n_workers (int or None): processes for the fits (``full_sweep``).
         Default None (up to 4).
+    device (str or None): torch device for the network, e.g. 'cpu' or
+        'cuda'. Default None: a loaded ``model`` stays where it is; a model
+        loaded here goes to CUDA if available, else the CPU.
     progress (bool): If True, show progress bars. Default False.
 
     Returns:
@@ -407,8 +414,10 @@ def find_resonances_cnn(
         from .cnn.infer import detect
     except ImportError as exc:
         raise ImportError(_INSTALL) from exc
-    net = model if hasattr(model, 'settings') else \
-        load_model(model, model_path)
+    if hasattr(model, 'settings'):
+        net = model if device is None else model.to(device)
+    else:
+        net = load_model(model, model_path, device = device)
     s = net.settings
     f, z, _ = prepare_full_sweep(f, z)
     fr_c, q_c, score = detect(
@@ -430,13 +439,20 @@ def find_resonances_cnn(
     if not fit_candidates or len(fr_c) == 0:
         return fr_c, q_c, pd.DataFrame(dict(fr = fr_c, Qr = q_c,
                                             score = score, source = source))
+    # Every candidate's Qr, the matched filter's included, limits its Qr
+    # search (init_qr, within a factor 6). The matched filter's Qr is
+    # rough, but searching its candidates without the hint (and merging
+    # on the CNN's linewidth only) was tried in 2026-11 and rejected: on
+    # 28 held-out real sweeps it added extras (with init_qr changed too:
+    # missed 320 -> 308, extra 613 -> 640). See init_qr's Notes.
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        table, lw_guess, q_bounds = _refine(f, z, fr_c, q_c, add_poles = True,
-                                            n_workers = n_workers,
-                                            progress = progress)
-        table = _recover_drifted(f, z, table, lw_guess, Qr_bounds = q_bounds)
-        table = _sweep_snr(table).reset_index(drop = True)
+        table, lw_guess, q_bounds = fit_from_guesses(
+            f, z, fr_c, q_c, add_poles = True, n_workers = n_workers,
+            progress = progress)
+        table = recover_drifted(f, z, table, lw_guess,
+                                Qr_bounds = q_bounds)
+        table = rescale_snr_to_sweep(table).reset_index(drop = True)
         gi = table.guess_idx.fillna(-1).astype(int).values
         table['score'] = [score[i] if i >= 0 else np.nan for i in gi]
         table['source'] = [source[i] if i >= 0 else '' for i in gi]
@@ -460,7 +476,7 @@ def find_resonances_cnn(
 def run_res_finder_cnn(
     f, z, zarr_grp, model = None, model_path = None, threshold = None,
     classical = True, fit_candidates = True, n_workers = None,
-    overwrite = False, progress = True
+    device = None, overwrite = False, progress = True
 ):
     """
     Find the resonances of a full VNA sweep with the CNN and save them as
@@ -488,6 +504,8 @@ def run_res_finder_cnn(
         raw candidates.
     n_workers (int or None): processes for the fits. Default None (up to
         4).
+    device (str or None): torch device for the network. Default None
+        (CUDA if available, else the CPU).
     overwrite (bool): If True, replace an existing 'fres_auto'. Default
         False (raise instead).
     progress (bool): If True (default), show progress bars.
@@ -508,14 +526,14 @@ def run_res_finder_cnn(
                               "overwrite = True to replace it")
     fres, qres, table = find_resonances_cnn(
         f, z, model, model_path, threshold, classical, fit_candidates,
-        n_workers = n_workers, progress = progress)
+        n_workers = n_workers, device = device, progress = progress)
     for name, v in (('fres_auto', fres), ('qres_auto', qres)):
         zarr_grp.create_array(name, data = np.asarray(v, dtype = np.float64),
                               overwrite = True)
     if 'res_finder_auto' in zarr_grp:
         del zarr_grp['res_finder_auto']
     g = zarr_grp.create_group('res_finder_auto')
-    g.attrs.update(_jsonable(dict(
+    g.attrs.update(to_jsonable(dict(
         finder = 'cnn', model = model_path or model or 'default',
         threshold = threshold, classical = classical,
         fit_candidates = fit_candidates, n_found = len(fres),

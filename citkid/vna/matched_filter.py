@@ -184,7 +184,10 @@ def find_candidates_mf(
 
     Returns:
     fr (np.array): candidate frequencies in Hz, ascending.
-    Qr (np.array): candidate quality factors (best scale).
+    Qr (np.array): candidate quality factors (best scale). Rough: the
+        response is nearly flat over a factor ~4 in scale around the true
+        Qr, so noise picks the scale; values several times too low are
+        common (0.13-0.98x the true Qr seen on simulations).
     score (np.array): peak response (noise units).
     """
     f = np.asarray(f, dtype = np.float64)

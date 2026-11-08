@@ -162,7 +162,7 @@ def _boom(*args, **kwargs):
 
 def _table(rows):
     """
-    Build a minimal ``_refine`` table for ``_recover_drifted``.
+    Build a minimal ``fit_from_guesses`` table for ``recover_drifted``.
 
     Parameters:
     rows (list of dict): rows; missing columns get defaults (a clean fit).
@@ -309,9 +309,9 @@ def test_refine_split_large_cluster():
     """Check that clusters above max_group are split into separate fits."""
     fr = [FA, FA + 2 * LW, FA + 4 * LW]
     f, z = _sweep(fr, [0.6] * 3)
-    joint = fs._refine(f, z, fr)[0]
+    joint = fs.fit_from_guesses(f, z, fr)[0]
     assert joint.group.nunique() == 1
-    df = fs._refine(f, z, fr, max_group = 1)[0]
+    df = fs.fit_from_guesses(f, z, fr, max_group = 1)[0]
     assert df.group.nunique() == 3
     assert (df.error == '').all() and df.b_ok.all()
     np.testing.assert_allclose(df.sort_values('guess_idx').fr, fr,
@@ -322,7 +322,7 @@ def test_refine_joint_failure_fits_members(monkeypatch):
     calls = _joint_at_bound(monkeypatch)
     fr = [FA, FA + 6 * LW]
     f, z = _sweep(fr, [0.6, 0.6])
-    df = fs._refine(f, z, fr)[0]
+    df = fs.fit_from_guesses(f, z, fr)[0]
     assert 2 in calls
     assert df.group.nunique() == 2 and (df.error == '').all()
     np.testing.assert_allclose(df.sort_values('guess_idx').fr, fr,
@@ -342,7 +342,7 @@ def test_refine_duplicate_guesses():
     """Check that two guesses of one resonance give one fit and a link."""
     fr = [1.001e9, 1.002e9, 1.002e9 + 5e3, 1.003e9]
     f, z = _sweep([1.001e9, 1.002e9, 1.003e9], [0.6] * 3)
-    df = fs._refine(f, z, fr, max_group = 1)[0]
+    df = fs.fit_from_guesses(f, z, fr, max_group = 1)[0]
     dup = df[df.guess_idx == 2].iloc[0]
     assert dup.duplicate_of == 1 and np.isnan(dup.fr) and dup.error == ''
     res = fs.fit_full_sweep(f, z, fr, max_group = 1)[0]
@@ -353,7 +353,7 @@ def test_refine_add_poles_links_redundant_guess():
     """Check that a guess removed as redundant links to the kept one."""
     fr = [1.001e9, 1.002e9, 1.002e9 + 2e4, 1.003e9]
     f, z = _sweep([1.001e9, 1.002e9, 1.003e9], [0.6] * 3)
-    df = fs._refine(f, z, fr, add_poles = True)[0]
+    df = fs.fit_from_guesses(f, z, fr, add_poles = True)[0]
     assert len(df) == 4 and (df.guess_idx >= 0).all()
     dup = df[df.duplicate_of >= 0]
     assert len(dup) == 1 and np.isnan(dup.fr.iloc[0])
@@ -365,7 +365,7 @@ def test_refine_add_poles_links_redundant_guess():
 def test_fit_full_sweep_empty_spot_pinned():
     """Check that a listed spot with no resonance ends 'Qr at a bound'."""
     f, z = _sweep([1.001e9, 1.002e9, 1.003e9], [0.6] * 3)
-    df = fs._refine(f, z, [1.001e9, 1.0025e9])[0]
+    df = fs.fit_from_guesses(f, z, [1.001e9, 1.0025e9])[0]
     r = df[df.guess_idx == 1].iloc[0]
     assert r.error == 'Qr at a bound' and np.isnan(r.fr)
     res = fs.fit_full_sweep(f, z, [1.001e9, 1.0025e9])[0]
@@ -378,7 +378,7 @@ def test_refine_duplicate_fit_keeps_higher_snr(monkeypatch, snr_mult, loser):
     _fake_overlap(monkeypatch, snr_mult)
     fr = [1.001e9, 1.002e9]
     f, z = _sweep(fr, [0.6, 0.6])
-    df = fs._refine(f, z, fr)[0].set_index('guess_idx')
+    df = fs.fit_from_guesses(f, z, fr)[0].set_index('guess_idx')
     assert df.error[loser] == 'duplicate fit'
     assert df.error[1 - loser] == ''
 
@@ -403,7 +403,7 @@ def test_recover_drifted_onto_neighbor():
         dict(guess_idx = 0, fr0 = FA, fr = FA),
         dict(guess_idx = 1, fr0 = fb, fr = FA + 100., group = 1,
              error = 'duplicate fit')])
-    out = fs._recover_drifted(f, z, df, np.full(2, LW))
+    out = fs.recover_drifted(f, z, df, np.full(2, LW))
     assert len(out) == 3
     # The drifted fit is kept but no longer tied to the listed frequency
     assert out.guess_idx.iloc[1] == -1 and out.fr.iloc[1] == FA + 100.
@@ -421,7 +421,7 @@ def test_recover_drifted_merged_no_fit_inside():
         dict(guess_idx = 0, fr0 = FA, fr = FA),
         dict(guess_idx = 1, fr0 = fb, fr = np.nan, Qr = np.nan,
              amp = np.nan, phi = np.nan, group = np.nan, duplicate_of = 0)])
-    out = fs._recover_drifted(f, z, df, np.full(2, LW))
+    out = fs.recover_drifted(f, z, df, np.full(2, LW))
     # The merged row is replaced by the recovered fit
     assert len(out) == 2 and list(out.guess_idx) == [0, 1]
     r = out.iloc[1]
@@ -448,11 +448,11 @@ def test_recover_drifted_skips():
         dict(guess_idx = 4, fr0 = FA + 0.3 * LW, fr = FA + 1e6),
         # window outside the sweep
         dict(guess_idx = 5, fr0 = 1.01e9, fr = FA, error = 'duplicate fit')])
-    out = fs._recover_drifted(f, z, df, np.full(6, LW))
+    out = fs.recover_drifted(f, z, df, np.full(6, LW))
     assert out is df
 
 def test_fit_full_sweep_status_mapping(monkeypatch):
-    """Check how each kind of _refine row maps to fit_status."""
+    """Check how each kind of fit_from_guesses row maps to fit_status."""
     fr = 1.001e9
     f, z = _sweep([fr], [0.6])
     base = dict(group = 0, b_ok = True, a_at_bound = False, fr = fr,
@@ -472,9 +472,9 @@ def test_fit_full_sweep_status_mapping(monkeypatch):
     table = pd.DataFrame([dict(r, guess_idx = k) for k, r in
                           enumerate(rows)])
     fres = np.full(len(rows) + 1, fr)
-    monkeypatch.setattr(fs, '_refine',
+    monkeypatch.setattr(fs, 'fit_from_guesses',
                         lambda *a, **k: (table, np.full(9, LW), (1e2, 1e7)))
-    monkeypatch.setattr(fs, '_recover_drifted', lambda f, z, t, *a, **k: t)
+    monkeypatch.setattr(fs, 'recover_drifted', lambda f, z, t, *a, **k: t)
     res = fs.fit_full_sweep(f, z, fres)[0]
     assert list(res.fit_status) == [
         'failed: Qr at a bound', 'failed: merged with a neighbor',
@@ -492,9 +492,11 @@ def test_fit_full_sweep_empty():
     assert gain.shape == f.shape and info['n_recovered'] == 0
 
 @pytest.mark.xfail(strict = True, reason = (
-    "res.multifit.init_qr overestimates Qr 10x for this deep resonance; "
-    "with one guess the Qr floor (0.2 x that) is above the true Qr, so a "
-    "clean, isolated resonance fails with 'Qr at a bound'"))
+    "res.multifit.init_qr stops its scale search early and returns Qr ~10x "
+    "too high for this resonance; with one guess the Qr floor (0.2 x that) "
+    "is above the true Qr, so it fails with 'Qr at a bound'. A fix was "
+    "tried and rejected: it made real sweeps worse (see the init_qr "
+    "docstring Notes)"))
 def test_fit_full_sweep_single_deep_resonance():
     """Check that one clean, deep resonance listed alone is fit."""
     f, z = _sweep([1.002e9], [0.9])
@@ -503,26 +505,22 @@ def test_fit_full_sweep_single_deep_resonance():
     assert abs(res.Qr.iloc[0] / 2e4 - 1) < 0.05
 
 def test_sweep_snr_edge_cases():
-    """Check _sweep_snr with no usable rows and with no healthy group."""
+    """
+    Check rescale_snr_to_sweep with no usable rows and with no healthy
+    group.
+    """
     t = pd.DataFrame(dict(fr = [np.nan], sigma_noise = [np.nan],
                           snr = [1.], amp = [0.5], a_at_bound = [False],
                           group = [0]))
-    out = fs._sweep_snr(t)
+    out = fs.rescale_snr_to_sweep(t)
     assert np.isnan(out.sigma_sweep.iloc[0]) and out.snr.iloc[0] == 1.
     # Every group unhealthy (amp > 1.2): all groups are used anyway
     t = pd.DataFrame(dict(fr = [1., 2., 3.], sigma_noise = [1., 5., 3.],
                           snr = [10.] * 3, amp = [2.] * 3,
                           a_at_bound = [False] * 3, group = [0, 1, 2]))
-    out = fs._sweep_snr(t)
+    out = fs.rescale_snr_to_sweep(t)
     np.testing.assert_allclose(out.sigma_sweep, [1., 3., 3.])
     np.testing.assert_allclose(out.snr, [10., 50 / 3, 10.])
-
-def test_jsonable_numpy_bool():
-    """Check that numpy bools and NaN convert to JSON types."""
-    out = fs._jsonable({'a': np.bool_(True),
-                        1: (np.float64(np.nan), np.int64(2))})
-    assert out == {'a': True, '1': [None, 2]}
-    assert type(out['a']) is bool
 
 def test_run_full_sweep_fit_no_phase(tmp_path):
     """Check that a sweep with no phase is refused."""

@@ -186,3 +186,4 @@ pytest_run_verbose.txt
 CLAUDE.md
 PIPELINE_V2_CONTEXT.md
 CLAUDE_*.md
+documents/daq_layout.md
