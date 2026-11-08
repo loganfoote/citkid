@@ -13,8 +13,8 @@ resonances (``resolve_close_pairs``); and clear dips in |S21| without a
 usable fit are added as frequency-only resonances
 (``dip_only_resonances``). On 28 held-out real full VNA sweeps reviewed by
 hand, this missed ~1.4% of the resonances and ~2.7% of what it found were
-not on the reviewed lists. Needs PyTorch
-(``environment-cnn.yml``, or ``pip install citkid[cnn]``).
+not on the reviewed lists. Needs PyTorch (``uv sync --extra cnn``, or
+``pip install citkid[cnn]``).
 """
 import os
 import time

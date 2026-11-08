@@ -24,7 +24,9 @@ _RELEASES = 'https://github.com/loganfoote/citkid/releases/download'
 # name: (url, sha256). A model is usable once its release is published and
 # its checksum is filled in.
 MODELS = {
-    'det_v2': (f'{_RELEASES}/cnn-det_v2/citkid_cnn_det_v2.pt', None),
+    'det_v2': (f'{_RELEASES}/cnn-det_v2/citkid_cnn_det_v2.pt',
+               '4585a18bccb2040643208883ec88fe24'
+               '7b4f93a71dda354f650af9ab6f76bd8d'),
 }
 DEFAULT_MODEL = 'det_v2'
 CACHE_DIR = Path(os.environ.get('CITKID_CACHE', '~/.citkid')).expanduser() \
