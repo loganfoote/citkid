@@ -1,10 +1,16 @@
 """Tests for CRS procedures helpers."""
 
+from unittest.mock import Mock, MagicMock
 import numpy as np
 import pytest
 import zarr
-from unittest.mock import Mock, MagicMock
-from citkid.crs.procedures import _validate_target_sweep_inputs
+from citkid import daq_layout as dl
+from .fake_crs import FakeVnaCRS
+from citkid.crs.procedures import (
+    NYQUIST_FREQ, NYQUIST_TRIM, VNA_NCHANNELS, VNA_STEP,
+    _validate_target_sweep_inputs,
+    plan_vna_sweep, vna_range, vna_step, vna_sweep, vna_sweep_to_store
+)
 
 
 @pytest.fixture
@@ -1596,3 +1602,299 @@ async def test_target_sweep_rough_update_with_real_update_fres(
     assert fres[0] == fres_in[0]
     assert np.all(np.abs(fres - fres_in) <= fres_in / qres / 2)
     np.testing.assert_array_equal(target_sweep_inputs['grp']['fres'][:], fres)
+
+
+################################################################################
+################################# VNA sweeps ###################################
+################################################################################
+def test_vna_step_and_range():
+    assert vna_step() == VNA_STEP == 2e-6
+    assert vna_step(2e4, 10) == pytest.approx(5e-6)
+    with pytest.raises(ValueError, match = 'positive'):
+        vna_step(0)
+    assert vna_range() == (100e6, 2.5e9)
+    assert vna_range('2') == (2.5e9, 5e9)
+    assert vna_range('both', fmax = 3e9) == (100e6, 3e9)
+    with pytest.raises(ValueError, match = 'nyquist'):
+        vna_range('3')
+
+
+def _grid(freqs):
+    """
+    Return the sorted frequencies of a plan.
+
+    Parameters:
+    freqs (list of np.array): ``plan_vna_sweep`` band frequencies.
+
+    Returns:
+    f (np.array): all frequencies, ascending.
+    """
+    return np.sort(np.concatenate([fb.ravel() for fb in freqs]))
+
+
+@pytest.mark.parametrize('nyquist', ['1', '2', 'both'])
+@pytest.mark.parametrize('step', [2e-6, 2e-5])
+@pytest.mark.parametrize('modules', [[1], [1, 2, 3, 4]])
+@pytest.mark.parametrize('bw', [500e6, 600e6])
+def test_plan_vna_sweep_geometric(nyquist, step, modules, bw):
+    fmin, fmax = vna_range(nyquist)
+    bands, freqs, npc = plan_vna_sweep(fmin, fmax, bw, modules, step)
+    f = _grid(freqs)
+    # Geometric in each zone, no finer than needed
+    for part in (f[f < NYQUIST_FREQ], f[f >= NYQUIST_FREQ]):
+        r = np.diff(np.log(part))
+        if len(r):
+            assert r.max() <= np.log1p(step) * (1 + 1e-9)
+            assert r.min() >= np.log1p(step) * (1 - 2e-3)
+    # Covering the range (fmax excluded), except up to NYQUIST_TRIM next
+    # to 2.5 GHz
+    trim_lo = NYQUIST_TRIM if fmin == NYQUIST_FREQ else 0.
+    trim_hi = NYQUIST_TRIM if fmax == NYQUIST_FREQ else 0.
+    assert fmin <= f[0] <= fmin + trim_lo and f[-1] < fmax
+    assert fmax <= (f[-1] + trim_hi) * (1 + step) * (1 + 1e-9)
+    if fmin < NYQUIST_FREQ < fmax:
+        below, above = f[f < NYQUIST_FREQ], f[f >= NYQUIST_FREQ]
+        assert NYQUIST_FREQ - below[-1] <= NYQUIST_TRIM + NYQUIST_FREQ * step
+        assert above[0] - NYQUIST_FREQ <= NYQUIST_TRIM
+    nb = len(freqs)
+    for i, fb in enumerate(freqs):
+        assert fb.shape == (bands['chunk_nchannels'][i], npc)
+        assert fb.shape[0] <= VNA_NCHANNELS
+        # Rows ascend and continue each other
+        assert np.all(np.diff(fb.ravel()) > 0)
+        lo, hi = bands['chunk_edges'][i]
+        assert (lo, hi) == (fb[0, 0], fb[-1, -1])
+        assert hi - lo < bw
+        assert np.all(np.abs(fb - bands['chunk_ncos'][i]) < bw / 2 - 100)
+        zone = bands['chunk_zones'][i]
+        assert hi < NYQUIST_FREQ if zone == 1 else lo >= NYQUIST_FREQ
+    assert np.all(np.diff(bands['chunk_edges'][:, 0]) > 0)
+    np.testing.assert_array_equal(bands['chunk_passes'],
+                                  np.arange(nb) // len(modules))
+    np.testing.assert_array_equal(
+        bands['chunk_modules'], np.array(modules)[np.arange(nb) %
+                                                  len(modules)])
+    # Each band is as wide as the channels or the bandwidth allow: one
+    # more channel would exceed one of them. Bands are packed up from the
+    # bottom, or down from the top for the second zone from 2.5 GHz.
+    zones = bands['chunk_zones']
+    for i in range(nb - 1):
+        if zones[i] != zones[i + 1]:
+            continue
+        down = zones[i] == 2
+        k = i + 1 if down else i
+        if down:
+            more = bands['chunk_edges'][k, 1] - freqs[i][-1, 0]
+        else:
+            more = freqs[i + 1][0, -1] - bands['chunk_edges'][k, 0]
+        assert bands['chunk_nchannels'][k] == VNA_NCHANNELS or \
+            more > bw * (1 - 1e-6)
+
+
+@pytest.mark.parametrize('nyquist, modules, trims', [
+    ('both', [1], True), ('2', [1], True), ('1', [1], False),
+    ('both', [1, 2, 3, 4], False)])
+def test_plan_vna_sweep_nyquist_trim(nyquist, modules, trims):
+    """
+    Check that a small band next to 2.5 GHz is left out only when that
+    saves a pass.
+    """
+    step = 2e-6 if nyquist != '2' else 1e-5
+    args = (*vna_range(nyquist), 500e6, modules, step)
+    b0, f0, _ = plan_vna_sweep(*args, nyquist_trim = 0)
+    b1, f1, _ = plan_vna_sweep(*args)
+    n0, n1 = b0['chunk_passes'].max() + 1, b1['chunk_passes'].max() + 1
+    f0, f1 = _grid(f0), _grid(f1)
+    fmin, fmax = args[:2]
+    # Uncovered: below the sweep, above it, and the widest gap inside
+    below = f1[0] - fmin
+    above = fmax - f1[-1] * (1 + step)
+    i = np.argmax(np.diff(np.log(f1)))
+    gap = (f1[i], f1[i + 1])
+    if trims:
+        assert n1 < n0
+        # Some data is left out, all of it next to 2.5 GHz
+        assert below > 1e5 or gap[1] - gap[0] > 1e5
+        if below > 0:
+            assert fmin == NYQUIST_FREQ and below <= NYQUIST_TRIM
+        if gap[1] - gap[0] > 1e5:
+            assert gap[0] < NYQUIST_FREQ <= gap[1]
+            assert gap[1] - gap[0] <= NYQUIST_TRIM + NYQUIST_FREQ * step
+    else:
+        assert n1 == n0 and len(f1) == len(f0) and below == 0
+    assert above <= 0
+
+
+def test_plan_vna_sweep_chooses_fast_npoints():
+    """
+    Check that the chosen points per channel give the lowest estimated
+    time of all choices.
+    """
+    def cost(npc):
+        """
+        Return the estimated cost of a plan.
+
+        Parameters:
+        npc (int): points per channel.
+
+        Returns:
+        cost (float): passes x (npc + 50).
+        """
+        b, _, _ = plan_vna_sweep(100e6, 2.5e9, 500e6, [1], 1e-5,
+                                 npoints_per_ch = npc)
+        return (b['chunk_passes'].max() + 1) * (npc + 50)
+
+    _, _, best = plan_vna_sweep(100e6, 2.5e9, 500e6, [1], 1e-5)
+    assert all(cost(best) <= cost(n) for n in range(1, 400, 7))
+
+
+def test_plan_vna_sweep_invalid():
+    with pytest.raises(ValueError, match = 'fmin'):
+        plan_vna_sweep(1e9, 1e9, 500e6, [1])
+    with pytest.raises(ValueError, match = 'module_idxs'):
+        plan_vna_sweep(1e9, 2e9, 500e6, [])
+    with pytest.raises(ValueError, match = 'step'):
+        plan_vna_sweep(1e9, 2e9, 500e6, [1], step = 0)
+    with pytest.raises(ValueError, match = 'npoints_per_ch'):
+        plan_vna_sweep(1e9, 2e9, 500e6, [1], npoints_per_ch = 0)
+    # 1000 points at df/f 1e-3 span far more than 500 MHz
+    with pytest.raises(ValueError, match = 'bandwidth'):
+        plan_vna_sweep(1e9, 2e9, 500e6, [1], step = 1e-3,
+                       npoints_per_ch = 1000)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('modules', [(1,), (1, 2), (1, 2, 3, 4)])
+async def test_vna_sweep_passes_and_stitching(modules):
+    crs = FakeVnaCRS(modules = modules, fres = (1.0e9, 1.9e9))
+    f, z, bands = await vna_sweep(crs, 400e6, 2400e6, -50., 10,
+                                  step = 2e-5, verbose = False)
+    npass = bands['chunk_passes'].max() + 1
+    assert len(crs.sweep_calls) == len(crs.nco_calls) == npass
+    assert len(f) == bands['chunk_nchannels'].sum() * \
+        crs.sweep_calls[0]['frequencies'].shape[1]
+    # Geometric across the sweep up to the 50 Hz dithering
+    assert np.all(np.diff(f) > 0) and f[0] > 400e6 - 50 and f[-1] < 2400e6
+    ideal = 400e6 * np.exp(np.arange(len(f)) * np.log(2400 / 400) / len(f))
+    assert np.abs(f - ideal).max() <= 50
+    # The dips are where the resonances are
+    for fr in (1.0e9, 1.9e9):
+        near = np.flatnonzero(np.abs(f - fr) < 1e6)
+        assert abs(f[near[np.argmin(np.abs(z[near]))]] - fr) < 1e5
+    assert bands['chunk_times'].shape == (len(bands['chunk_ncos']),)
+    assert np.all(np.diff(bands['chunk_times']) >= 0)
+    call = crs.sweep_calls[0]
+    assert np.all(call['ares'] == -50.) and call['nsamps'] == 10
+    assert call['desc'] == f'VNA pass 1/{npass}'
+    # Every channel sweeps downward
+    for call in crs.sweep_calls:
+        assert np.all(np.diff(call['frequencies'], axis = 1) < 0)
+    # Zone 1 only: no Nyquist zone changes
+    assert not [c for c in crs.calls if c[0] == 'configure_modules']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('modules', [(1,), (1, 2)])
+async def test_vna_sweep_both_zones(modules):
+    crs = FakeVnaCRS(modules = modules, fres = (2.4e9, 2.6e9))
+    f, z, bands = await vna_sweep(crs, 2e9, 3e9, -50., 10, step = 2e-5,
+                                  verbose = False)
+    zones = bands['chunk_zones']
+    assert set(zones) == {1, 2}
+    # The fake checks each module's tones are in its zone; here check the
+    # zones it swept with match the plan
+    for p, sweep_zones in enumerate(crs.sweep_zones):
+        idx = bands['chunk_passes'] == p
+        assert sweep_zones == {int(m): int(zn) for m, zn in
+                               zip(bands['chunk_modules'][idx], zones[idx])}
+    # Zones are restored, and the other module settings kept
+    assert all(cfg['nyquist_zone'] == 1 for cfg in crs.module_cfg.values())
+    for name, kw in crs.calls:
+        assert name == 'configure_modules' and kw['full_scale_dbm'] == 7.
+    # Geometric across the zone boundary up to the dithering (each zone's
+    # step is rounded separately, by much less than the dithering)
+    d = np.diff(np.log(f)) / np.log1p(2e-5)
+    assert d.max() < 1.01 and d.min() > 0.99
+    for fr in (2.4e9, 2.6e9):
+        near = np.flatnonzero(np.abs(f - fr) < 1e6)
+        assert abs(f[near[np.argmin(np.abs(z[near]))]] - fr) < 2e5
+
+
+@pytest.mark.asyncio
+async def test_vna_sweep_restores_zones_on_failure():
+    crs = FakeVnaCRS(modules = (1,), fail_pass = 1)
+    with pytest.raises(RuntimeError, match = 'sweep failed'):
+        await vna_sweep(crs, 2.6e9, 3.6e9, -50., 10, step = 2e-5,
+                        verbose = False)
+    assert crs.module_cfg[1]['nyquist_zone'] == 1
+
+
+@pytest.mark.asyncio
+async def test_vna_sweep_extended_bw_and_npoints():
+    crs = FakeVnaCRS(modules = (1,), bw = 600e6)
+    _, _, bands = await vna_sweep(crs, 1e9, 2.1e9, -50., 5, step = 1e-4,
+                                  npoints_per_ch = 20, verbose = False)
+    assert np.diff(bands['chunk_edges']).max() > 500e6
+    assert crs.sweep_calls[0]['frequencies'].shape[1] == 20
+
+
+@pytest.mark.asyncio
+async def test_vna_sweep_to_store(tmp_path):
+    root = dl.create_store(tmp_path / 'dev.zarr', 'devA', 'cd1')
+    crs = FakeVnaCRS(modules = (1, 2), fres = (1.2e9,))
+    k, f, z = await vna_sweep_to_store(crs, root, 400e6, 2400e6, -50., 10,
+                                       step = 2e-5, verbose = False)
+    assert k == 0
+    grp = root['vna/sweep0']
+    assert root['vna'].attrs['kind'] == 'raw' and grp.attrs['kind'] == 'raw'
+    assert grp.attrs['amplitude'] == -50. and grp.attrs['nsamps'] == 10
+    assert grp.attrs['step'] == 2e-5 and grp.attrs['downward'] is True
+    assert grp.attrs['spacing'] == 'geometric'
+    assert grp.attrs['npoints_per_ch'] == \
+        crs.sweep_calls[0]['frequencies'].shape[1]
+    assert grp.attrs['acquisition']['clock_source'] == 'VCXO'
+    cfg = grp['crs_config'].attrs['config']
+    assert cfg['modules'] == [1, 2] and 'ncos' not in cfg
+    assert 'nyquist_zone' not in cfg['module_settings']['1']
+    assert root.attrs['crs_serial_number'] == 46
+    f2, z2, bands = dl.load_vna_sweep(root, bands = True)
+    np.testing.assert_array_equal(f2, f)
+    np.testing.assert_array_equal(z2, z)
+    nb = len(bands['chunk_ncos'])
+    np.testing.assert_array_equal(bands['chunk_modules'],
+                                  [1, 2] * (nb // 2) + [1] * (nb % 2))
+    np.testing.assert_array_equal(bands['chunk_zones'], [1] * nb)
+    # A second sweep is sweep1; sweep0 is untouched
+    k, _, _ = await vna_sweep_to_store(crs, root, 1e9, 1.4e9, -40., 10,
+                                       step = 2e-5, verbose = False)
+    assert k == 1 and root['vna/sweep0'].attrs['amplitude'] == -50.
+
+
+@pytest.mark.asyncio
+async def test_vna_sweep_to_store_failure_leaves_nothing(tmp_path):
+    root = dl.create_store(tmp_path / 'dev.zarr', 'devA', 'cd1')
+    crs = FakeVnaCRS(modules = (1,), fail_pass = 2)
+    with pytest.raises(RuntimeError, match = 'sweep failed'):
+        await vna_sweep_to_store(crs, root, 400e6, 2400e6, -50., 10,
+                                 step = 2e-5, verbose = False)
+    assert dl.list_indices(root['vna'], 'sweep') == []
+    # The next attempt reuses index 0
+    crs.fail_pass = None
+    k, _, _ = await vna_sweep_to_store(crs, root, 400e6, 900e6, -50., 10,
+                                       step = 2e-5, verbose = False)
+    assert k == 0
+
+
+@pytest.mark.asyncio
+async def test_vna_sweep_to_store_refuses_other_crs(tmp_path):
+    root = dl.create_store(tmp_path / 'dev.zarr', 'devA', 'cd1')
+    await vna_sweep_to_store(FakeVnaCRS(), root, 1e9, 1.2e9, -50., 10,
+                             step = 2e-5, verbose = False)
+    for attr, value in (('serial_number', 12), ('rfmux_version', '9.9')):
+        other = FakeVnaCRS()
+        setattr(other, attr, value)
+        with pytest.raises(RuntimeError, match = 'new store'):
+            await vna_sweep_to_store(other, root, 1e9, 1.2e9, -50., 10,
+                                     step = 2e-5, verbose = False)
+        assert other.sweep_calls == []
+    assert dl.list_indices(root['vna'], 'sweep') == [0]

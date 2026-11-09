@@ -19,6 +19,12 @@ reopened later without a custom steps file. ``open_series_datasets`` opens
 one such DataSet per set, for ``run_iq_series(datasets=...)`` or
 ``run_series_analysis``.
 
+The data is found either through a directory and store path (``main_dir``
+mode, for data saved in separate stores) or in the same store as the
+DataSets (same-store mode, for the DAQ layout of ``citkid.daq_layout``,
+where the analysis lives next to the data): there, every path is a group
+inside that store, so nothing needs updating when the store moves.
+
 Fits and tuning
 ---------------
 ``a_vs_power_fit`` and ``responsivity_fit`` are ready-made ``SeriesXYFit``
@@ -44,14 +50,17 @@ from ..zarr_util import list_sets, set_name
 _A_IDX = 4
 # An array given as '<store>.zarr/<key>'
 _ARRAY_SPEC = re.compile(r'^(.*?\.zarr)[/\\](.+)$')
+# Stands in for the store when same-store parameters are only validated
+_SAME_STORE_CHECK = object()
 
 ################################################################################
 ################################### Loading ####################################
 ################################################################################
 
 def target_sweep_steps(
-    data_path, group = '', main_dir = None, fres_all = None, qres_all = None,
-    ts = None, ts_stream = None, ts_nsamps = None, f_avg = 1,
+    data_path = None, group = '', main_dir = None, fres_all = None,
+    qres_all = None, ts = None, ts_stream = None, ts_nsamps = None, f_avg = 1,
+    store = None,
 ):
     """
     Return the calibration steps that load one target sweep.
@@ -62,10 +71,12 @@ def target_sweep_steps(
     load_ft and load_zt if ``ts`` is given. The data is opened on first use.
 
     Parameters:
-    data_path (str): path to the zarr store holding the target sweep.
-        Relative paths are relative to ``main_dir``.
+    data_path (str or None): path to the zarr store holding the target
+        sweep. Relative paths are relative to ``main_dir``. Give either
+        ``data_path`` or ``store``.
     group (str): group holding the target sweep inside the store, e.g.
-        'set3'. '' (default) for the store root.
+        'set3' or 'tune0/power_sweep/set3'. '' (default) for the store
+        root.
     main_dir (str or None): directory that relative paths are relative to.
         None uses the current directory.
     fres_all (str or None): array of every resonance frequency in the band,
@@ -89,6 +100,9 @@ def target_sweep_steps(
         start. None (default) loads all of them.
     f_avg (int): number of adjacent fine sweep points to average together.
         Leftover points at the end are dropped. Default 1 (no averaging).
+    store (zarr.Group or None): root group of the store holding the target
+        sweep, instead of ``data_path`` (same-store mode). ``fres_all`` and
+        ``qres_all`` are then keys inside this store. Default None.
 
     Returns:
     steps (list of plStep): the calibration steps.
@@ -96,6 +110,16 @@ def target_sweep_steps(
     Raises:
     ValueError: If the parameters are invalid.
     """
+    if (data_path is None) == (store is None):
+        raise ValueError('give exactly one of data_path and store')
+    if store is not None:
+        if main_dir is not None:
+            raise ValueError('main_dir is only used with data_path')
+        for spec in (fres_all, qres_all):
+            if isinstance(spec, str) and _ARRAY_SPEC.match(spec):
+                raise ValueError(
+                    'with store, fres_all and qres_all must be keys inside '
+                    "the store (e.g. 'resonators/fres_all')")
     if fres_all is not None and qres_all is None:
         raise ValueError('qres_all is required if fres_all is given')
     if int(f_avg) != f_avg or f_avg < 1:
@@ -107,7 +131,8 @@ def target_sweep_steps(
     f_avg = int(f_avg)
     stream = ts if ts_stream is None else f'{ts}/{ts_stream}'
     ts_slice = slice(None, None if ts_nsamps is None else int(ts_nsamps))
-    data_path = _resolve_path(data_path, main_dir)
+    if data_path is not None:
+        data_path = _resolve_path(data_path, main_dir)
     opened = {}
 
     def grp():
@@ -115,7 +140,8 @@ def target_sweep_steps(
         Open the target sweep group on first use.
         """
         if 'grp' not in opened:
-            root = zarr.open_group(data_path, mode = 'r')
+            root = store if store is not None else \
+                zarr.open_group(data_path, mode = 'r')
             opened['root'] = root
             opened['grp'] = root[group] if group else root
         return opened['grp']
@@ -263,21 +289,31 @@ def target_sweep_steps(
     return steps
 
 def target_sweep_source(
-    main_dir, data_path, group = '', fres_all = None, qres_all = None,
-    ts = None, ts_stream = None, ts_nsamps = None, f_avg = 1,
+    main_dir = None, data_path = None, group = '', fres_all = None,
+    qres_all = None, ts = None, ts_stream = None, ts_nsamps = None, f_avg = 1,
+    same_store = False,
 ):
     """
     Return source code defining ``custom_cal_steps`` with
     ``target_sweep_steps``, for ``DataSet(custom_source=...)``.
 
     The DataSet embeds the source, so it can be reopened with only its zarr
-    path. ``main_dir`` is a top-level assignment in the source, so it can be
-    replaced with ``custom_main_dir_overwrite`` after the data moves.
+    path. In ``main_dir`` mode, ``main_dir`` is a top-level assignment in
+    the source, so it can be replaced with ``custom_main_dir_overwrite``
+    after the data moves. In same-store mode, the source reads the data
+    from ``dataset_store``, the root of the store the DataSet lives in
+    (provided by the DataSet when it runs the source), so nothing needs
+    replacing.
 
     Parameters:
-    main_dir (str): directory the paths are relative to.
-    data_path, group, fres_all, qres_all, ts, ts_stream, ts_nsamps, f_avg:
-        see ``target_sweep_steps``.
+    main_dir (str or None): directory the paths are relative to. None in
+        same-store mode.
+    data_path (str or None): store path (see ``target_sweep_steps``). None
+        in same-store mode.
+    group, fres_all, qres_all, ts, ts_stream, ts_nsamps, f_avg:
+        see ``target_sweep_steps``. In same-store mode, ``group``,
+        ``fres_all`` and ``qres_all`` are paths inside the store.
+    same_store (bool): If True, use same-store mode. Default False.
 
     Returns:
     source (str): the source code.
@@ -286,11 +322,19 @@ def target_sweep_source(
     TypeError: If a parameter isn't a string, number, or None.
     ValueError: If the parameters are invalid (see target_sweep_steps).
     """
+    if same_store and (main_dir is not None or data_path is not None):
+        raise ValueError('main_dir and data_path must be None in '
+                         'same-store mode')
+    if not same_store and (main_dir is None or data_path is None):
+        raise ValueError('main_dir and data_path are required unless '
+                         'same_store is True')
     params = {
         'data_path': data_path, 'group': group, 'fres_all': fres_all,
         'qres_all': qres_all, 'ts': ts, 'ts_nsamps': ts_nsamps,
         'f_avg': f_avg,
     }
+    if same_store:
+        del params['data_path']
     # Only written if given, so existing embedded sources stay unchanged
     if ts_stream is not None:
         params['ts_stream'] = ts_stream
@@ -300,6 +344,21 @@ def target_sweep_source(
         if value is not None and not isinstance(value, (str, int, float)):
             raise TypeError(f'{name} must be a string, number, or None')
     # Build the steps once so invalid parameters fail here, not on load
+    # (the data is only opened when a step runs)
+    if same_store:
+        target_sweep_steps(store = _SAME_STORE_CHECK, **params)
+        return '\n'.join([
+            'from citkid.pipeline.sweep_series import target_sweep_steps',
+            '',
+            '# Same-store mode: dataset_store is the root of the store this',
+            '# DataSet lives in, provided by the DataSet when it runs this',
+            '# source',
+            'custom_cal_steps = target_sweep_steps(',
+            '    store = dataset_store,',
+            *(f'    {name} = {value!r},' for name, value in params.items()),
+            ')',
+            '',
+        ])
     target_sweep_steps(main_dir = main_dir, **params)
     lines = [
         'from citkid.pipeline.sweep_series import target_sweep_steps',
@@ -315,33 +374,49 @@ def target_sweep_source(
     return '\n'.join(lines)
 
 def open_series_datasets(
-    main_dir, data_path, out_root, set_idxs = None, cal_yaml_path = 'iq',
-    prefix = 'set', write_buffer = False, **loader_kwargs,
+    main_dir = None, data_path = None, out_root = None, set_idxs = None,
+    cal_yaml_path = 'iq', prefix = 'set', write_buffer = False, group = '',
+    **loader_kwargs,
 ):
     """
     Open one DataSet per set of a target sweep series.
 
     The DataSet of set i is stored in ``out_root/set{i}``, and embeds its
     loading steps (see ``target_sweep_source``). Reopening with the same
-    parameters loads the existing results. ``main_dir`` may differ from the
-    first time, e.g. after the raw data moves.
+    parameters loads the existing results.
+
+    Two modes:
+        ``main_dir`` mode (``main_dir`` and ``data_path`` given): the sets
+            are in the store ``data_path``, relative to ``main_dir``.
+            ``main_dir`` may differ from the first time, e.g. after the raw
+            data moves.
+        Same-store mode (``main_dir`` and ``data_path`` None): the sets are
+            in the same store as ``out_root`` (e.g. ``tune0/power_sweep``
+            and ``tune0/power_fits`` in a ``citkid.daq_layout`` store).
+            Every path is inside that store, so nothing needs updating when
+            it moves.
 
     Parameters:
-    main_dir (str): directory the data paths are relative to.
-    data_path (str): path of the zarr store holding the sets, relative to
-        ``main_dir``.
+    main_dir (str or None): directory the data paths are relative to. None
+        for same-store mode.
+    data_path (str or None): path of the zarr store holding the sets,
+        relative to ``main_dir``. None for same-store mode.
     out_root (zarr.Group or str): group (or path of a zarr store) to save
-        the DataSets in. Keeping it separate from the raw data store is
-        recommended.
+        the DataSets in. In ``main_dir`` mode, keeping it separate from the
+        raw data store is recommended; in same-store mode it must be a
+        group of the store holding the sets.
     set_idxs (list of int or None): indices of the sets to open, in series
         order. None (default) opens every set in the store, in index order.
     cal_yaml_path (str): calibration YAML path or alias. Default 'iq'.
     prefix (str): set group name prefix. Default 'set'. Use e.g. 'amp' for
         data saved before the 'set' convention.
     write_buffer (bool): passed to DataSet. Default False.
+    group (str): group holding the sets inside the data store, e.g.
+        'tune0/power_sweep'. '' (default) for the store root.
     **loader_kwargs: fres_all, qres_all, ts, ts_stream, ts_nsamps, f_avg.
         See ``target_sweep_steps``. ``ts`` and ``ts_stream`` are the same
-        for every set.
+        for every set. In same-store mode, ``fres_all`` and ``qres_all``
+        are keys inside the store (e.g. 'resonators/fres_all').
 
     Returns:
     datasets (list of DataSet): one DataSet per set.
@@ -350,18 +425,32 @@ def open_series_datasets(
     ValueError: If no sets are found, or the sets' res_idxs differ (rows
         must be the same resonators in every set).
     """
+    if out_root is None:
+        raise ValueError('out_root is required')
+    same_store = main_dir is None and data_path is None
+    if not same_store and (main_dir is None or data_path is None):
+        raise ValueError('give both main_dir and data_path, or neither '
+                         '(same-store mode)')
     if isinstance(out_root, str):
         out_root = zarr.open_group(out_root, mode = 'a')
     if set_idxs is None:
-        data_root = zarr.open_group(_resolve_path(data_path, main_dir),
-                                    mode = 'r')
-        set_idxs = list_sets(data_root, prefix = prefix)
+        if same_store:
+            data_root = zarr.open_group(out_root.store, path = '',
+                                        mode = 'r')
+        else:
+            data_root = zarr.open_group(_resolve_path(data_path, main_dir),
+                                        mode = 'r')
+        series = data_root[group] if group else data_root
+        set_idxs = list_sets(series, prefix = prefix)
     if not len(set_idxs):
-        raise ValueError(f"no '{prefix}' groups found in {data_path}")
+        where = group or data_path or 'the store root'
+        raise ValueError(f"no '{prefix}' groups found in {where}")
     datasets = []
     for set_idx in set_idxs:
         name = set_name(set_idx, prefix = prefix)
-        source = target_sweep_source(main_dir, data_path, name,
+        set_group = f'{group}/{name}' if group else name
+        source = target_sweep_source(main_dir, data_path, set_group,
+                                     same_store = same_store,
                                      **loader_kwargs)
         datasets.append(DataSet(
             zarr_path = out_root.require_group(name),

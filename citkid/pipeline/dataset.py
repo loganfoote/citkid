@@ -1818,8 +1818,23 @@ class DataSet:
             "custom_path": resolved_custom_path,
             "yaml_text": yaml_text,
             "custom_source": custom_source,
-            "custom_steps": _load_custom_cal_steps_from_source(custom_source),
+            "custom_steps": _load_custom_cal_steps_from_source(
+                custom_source, self._store_root()),
         }
+
+    def _store_root(self):
+        """
+        Open the root of the store this DataSet lives in, read-only.
+
+        Embedded custom step sources see it as ``dataset_store``, so a
+        DataSet saved next to its data (same-store mode, see
+        ``sweep_series.target_sweep_source``) finds the data with paths
+        inside the store.
+
+        Returns:
+        root (zarr.Group): root group of ``self.root``'s store.
+        """
+        return zarr.open_group(self.root.store, path = "", mode = "r")
 
     def _read_metadata(self):
         """
@@ -1939,13 +1954,21 @@ def _read_text_file(path):
         return handle.read()
 
 
-def _load_custom_cal_steps_from_source(source):
+def _load_custom_cal_steps_from_source(source, store_root=None):
     """
     Execute custom calibration step source and extract ``custom_cal_steps``.
+
+    Parameters:
+    source (str or None): Python source code defining ``custom_cal_steps``.
+    store_root (zarr.Group or None): root of the store the DataSet lives
+        in, visible to the source as ``dataset_store``. Default None.
+
+    Returns:
+    steps (list of plStep): the custom calibration steps.
     """
     if source is None:
         return []
-    namespace = {}
+    namespace = {"dataset_store": store_root}
     exec(compile(source, "<pipeline_custom_cal>", "exec"), namespace)
     return list(namespace.get("custom_cal_steps", []))
 

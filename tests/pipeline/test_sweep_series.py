@@ -33,7 +33,7 @@ def a_true(power):
     return 0.1 * 10 ** ((power + 50) / 20)
 
 
-def write_power_sweep(path, prefix = 'set', reverse_f = False):
+def write_power_sweep(path, prefix = 'set', reverse_f = False, group = ''):
     """
     Write a synthetic power sweep in the target_sweep format, with a
     timestream group in each set, plus a fres_all array in the store root.
@@ -42,12 +42,15 @@ def write_power_sweep(path, prefix = 'set', reverse_f = False):
     path (str): zarr store path.
     prefix (str): set group prefix.
     reverse_f (bool): if True, store the sweeps in decreasing frequency.
+    group (str): group holding the sets, e.g. 'tune0/power_sweep'. ''
+        (default) for the store root.
     """
     rng = np.random.default_rng(0)
     root = zarr.open_group(path, mode = 'w')
     root.create_array('fres_all', data = FRES * 1.0)
+    series = root.require_group(group) if group else root
     for i, power in enumerate(POWERS):
-        grp = root.create_group(f'{prefix}{i}')
+        grp = series.create_group(f'{prefix}{i}')
         grp.create_array('fres', data = FRES)
         grp.create_array('qres', data = np.full(2, QR / 12))
         grp.create_array('ares', data = np.full(2, power))
@@ -203,6 +206,99 @@ def test_steps_invalid_parameters(kwargs, match):
 
 
 ################################################################################
+############################### same-store mode ################################
+################################################################################
+
+@pytest.fixture
+def layout_store(tmp_path):
+    """
+    Store with the power sweep in 'tune0/power_sweep' and the resonators'
+    frequencies in 'resonators/fres_all', as in a citkid.daq_layout store.
+    """
+    path = str(tmp_path / 'dev.zarr')
+    write_power_sweep(path, group = 'tune0/power_sweep')
+    root = zarr.open_group(path, mode = 'a')
+    root.require_group('resonators').create_array(
+        'fres_all', data = np.array([1e8, 4e8, 4.5e8]))
+    return path
+
+
+def test_steps_same_store(layout_store):
+    root = zarr.open_group(layout_store, mode = 'r')
+    out = run_steps(target_sweep_steps(
+        store = root, group = 'tune0/power_sweep/set2',
+        fres_all = 'resonators/fres_all', qres_all = 6000))
+    np.testing.assert_array_equal(out['fres_all'], [1e8, 4e8, 4.5e8])
+    np.testing.assert_array_equal(out['ares'], [-42., -42.])
+    assert out['ff'].shape == (NPTS,)
+
+
+@pytest.mark.parametrize('kwargs, match', [
+    (dict(), 'exactly one'),
+    (dict(data_path = 'x.zarr', store = zarr.group()), 'exactly one'),
+    (dict(store = zarr.group(), main_dir = 'd'), 'main_dir'),
+    (dict(store = zarr.group(), fres_all = 'p.zarr/fres_all',
+          qres_all = 1.), 'inside the store'),
+])
+def test_steps_same_store_invalid(kwargs, match):
+    with pytest.raises(ValueError, match = match):
+        target_sweep_steps(**kwargs)
+
+
+def test_source_same_store(layout_store):
+    source = target_sweep_source(group = 'tune0/power_sweep/set0',
+                                 fres_all = 'resonators/fres_all',
+                                 qres_all = 6000, same_store = True)
+    assert 'store = dataset_store,' in source
+    assert 'main_dir' not in source and 'data_path' not in source
+    namespace = {'dataset_store': zarr.open_group(layout_store, mode = 'r')}
+    exec(source, namespace)
+    out = run_steps(namespace['custom_cal_steps'])
+    np.testing.assert_array_equal(out['fres_all'], [1e8, 4e8, 4.5e8])
+    with pytest.raises(ValueError, match = 'must be None'):
+        target_sweep_source('d', 'x.zarr', same_store = True)
+    with pytest.raises(ValueError, match = 'required'):
+        target_sweep_source(group = 'set0')
+    with pytest.raises(ValueError, match = 'inside the store'):
+        target_sweep_source(fres_all = 'p.zarr/x', qres_all = 1.,
+                            same_store = True)
+
+
+def test_open_series_datasets_same_store_survives_move(layout_store,
+                                                       tmp_path):
+    root = zarr.open_group(layout_store, mode = 'a')
+    datasets = open_series_datasets(
+        out_root = root.require_group('tune0/power_fits'),
+        group = 'tune0/power_sweep', fres_all = 'resonators/fres_all',
+        qres_all = 6000)
+    assert len(datasets) == len(POWERS)
+    assert sorted(root['tune0/power_fits'].group_keys()) == \
+        [f'set{i}' for i in range(len(POWERS))]
+    np.testing.assert_array_equal(datasets[3].ares[:], [-38., -38.])
+    np.testing.assert_array_equal(datasets[0].fres_all[:], [1e8, 4e8, 4.5e8])
+    ff = datasets[1].ff[0]
+
+    # Move and rename the whole store: the DataSets reopen with only the
+    # store, nothing to overwrite
+    moved = str(tmp_path / 'elsewhere' / 'renamed.zarr')
+    shutil.move(layout_store, moved)
+    DS = DataSet(zarr.open_group(moved, mode = 'a')['tune0/power_fits/set1'])
+    np.testing.assert_array_equal(DS.ff[0], ff)
+    again = open_series_datasets(
+        out_root = zarr.open_group(moved, mode = 'a')['tune0/power_fits'],
+        group = 'tune0/power_sweep', fres_all = 'resonators/fres_all',
+        qres_all = 6000)
+    np.testing.assert_array_equal(again[1].ff[0], ff)
+
+
+def test_open_series_datasets_same_store_no_sets(layout_store):
+    root = zarr.open_group(layout_store, mode = 'a')
+    with pytest.raises(ValueError, match = "no 'set' groups found in tune0"):
+        open_series_datasets(out_root = root.require_group('tune0/fits'),
+                             group = 'tune0')
+
+
+################################################################################
 ########################## source and DataSet opening ##########################
 ################################################################################
 
@@ -289,6 +385,13 @@ def test_open_series_datasets_prefix_and_subset(tmp_path):
     assert [float(DS.ares[0]) for DS in datasets] == [-42., -50.]
     with pytest.raises(ValueError, match = "no 'set' groups"):
         open_series_datasets(str(tmp_path), 'old.zarr', zarr.group())
+
+
+def test_open_series_datasets_mode_arguments(data_dir):
+    with pytest.raises(ValueError, match = 'or neither'):
+        open_series_datasets(data_dir, None, zarr.group())
+    with pytest.raises(ValueError, match = 'out_root'):
+        open_series_datasets(data_dir, 'sweep.zarr')
 
 
 def test_open_series_datasets_rejects_different_res_idxs(data_dir):
