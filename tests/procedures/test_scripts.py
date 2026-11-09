@@ -117,8 +117,11 @@ def test_01_vna_quick_check_nyquist(monkeypatch, nyquist, lo, hi):
     f, _, _ = m.main(m.parse_args(
         ['--modules', '1', '2', '--nyquist', nyquist, '--qr-median', '1e4',
          '--pts-per-lw', '1', '--no-gui', '--no-count']))
-    # Up to 10 MHz next to 2.5 GHz may be left out to save a pass
-    assert lo - 50 <= f[0] < lo + 10e6 and hi * (1 - 2e-4) < f[-1] < hi
+    # Nothing within the 10 MHz guard band around 2.5 GHz is swept
+    start = lo + 10e6 if lo == 2.5e9 else lo
+    assert start - 50 <= f[0] < start * (1 + 1e-4)
+    assert hi * (1 - 2e-4) < f[-1] < hi
+    assert not np.any(np.abs(f - 2.5e9) < 10e6 - 50)
     zones = {zn for sz in fake.sweep_zones for zn in sz.values()}
     assert zones == ({1, 2} if nyquist == 'both' else {2})
     # Back to zone 1 afterwards

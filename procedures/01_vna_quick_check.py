@@ -1,14 +1,17 @@
 """
 01: quick VNA check of one device.
 
-Opens a window (``citkid.crs.quick_check``) that sweeps with this
-session's modules over the first Nyquist zone (100-2500 MHz), the second
-(2500-5000 MHz), or both, on a geometric grid (constant df/f), and plots
-|S21| and phase with a rough count of the resonances (matched filter). The
-settings can be changed in the window and the sweep run again. Nothing is
-saved to zarr; the plot can be saved as a PNG. Use it to check the wiring,
-power levels, and that resonances are there before the full sweep
-(02_vna_sweep.py).
+Opens a window (``citkid.crs.quick_check``) with the settings below,
+connects to this session's modules, and waits for the Sweep button
+(Ctrl+R). A sweep covers the first Nyquist zone (100-2500 MHz), the second
+(2500-5000 MHz), or both, on a geometric grid (constant df/f), leaving a
+10 MHz guard band on each side of 2500 MHz (the point nearest it
+glitches), with a progress bar, and plots |S21| and phase with a rough
+count of the
+resonances (matched filter). The settings can be changed in the window
+and the sweep run again. Nothing is saved to zarr; the plot can be saved
+as a PNG. Use it to check the wiring, power levels, and that resonances
+are there before the full sweep (02_vna_sweep.py).
 
 With --no-gui (e.g. over ssh without a display), it sweeps once with the
 settings below, prints the count, and saves the plot with --png.

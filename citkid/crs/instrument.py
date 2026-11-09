@@ -956,7 +956,8 @@ class CRS:
 
     async def sweep(
         self, frequencies, ares, nsamps, ch_map = None, allow_missing = False,
-        acq_cfg_grp = None, verbose = True, pbar_description = 'Sweeping'
+        acq_cfg_grp = None, verbose = True, pbar_description = 'Sweeping',
+        progress = None
     ):
         """
         Perform a frequency sweep and return complex S21 at each frequency.
@@ -979,6 +980,12 @@ class CRS:
             this zarr group.
         verbose (bool): If True, displays a progress bar while sweeping.
         pbar_description (str): description for the progress bar.
+        progress (callable or None): if given, called as ``progress(done,
+            total)`` from the sweeping thread with the number of points
+            (channel x frequency) taken so far and the total, once at the
+            start and again after every frequency step of every module.
+            Independent of ``verbose``; for GUIs and other progress
+            displays.
 
         Returns:
         f (M X N np.array): swept (dithered) frequencies in Hz. Missing
@@ -1002,6 +1009,8 @@ class CRS:
         ch_map = util._validate_ch_map(ch_map)
         if not isinstance(pbar_description, str):
             raise TypeError('pbar_description must be a string')
+        if progress is not None and not callable(progress):
+            raise TypeError('progress must be callable or None')
         if acq_cfg_grp is not None and not isinstance(
             acq_cfg_grp, zarr.core.group.Group
             ):
@@ -1067,12 +1076,31 @@ class CRS:
         check_dec_stage = None if self.global_control else 6
         sweep_f, sweep_z = {}, {}
         modules = util.get_modules(self.d, list(self.fres_map.keys()))
+        # The modules sweep at once; add up their points for the caller
+        step_progress = None
+        if progress is not None:
+            total = sum(len(chs) for chs in ch_map.values()) * \
+                frequencies.shape[1]
+            done = [0]
+
+            def step_progress(n):
+                """
+                Report ``n`` more points taken.
+
+                Parameters:
+                n (int): points taken in this step.
+                """
+                done[0] += int(n)
+                progress(min(done[0], total), total)
+
+            progress(0, total)
         await modules._sweep(self.nco_freqs, self.fres_map,
                             self.ares_map, sweep_f, sweep_z, nsamps = nsamps,
                             verbose = verbose,
                             pbar_description = pbar_description,
                             full_scale_dbm = self._full_scale_map(),
-                            check_dec_stage = check_dec_stage)
+                            check_dec_stage = check_dec_stage,
+                            progress = step_progress)
 
         # Clear ares_map after sweeping, since d.sweep clears channels
         for module_idx in ch_map.keys():
@@ -1758,7 +1786,7 @@ async def _write_tones(module, nco_freqs, fres_map, ares_map, full_scale_dbm):
 async def _sweep(
     module, nco_freqs, frequencies_map, ares_map, sweep_f, sweep_z, nsamps = 10,
     verbose = True, pbar_description = 'Sweeping', full_scale_dbm = None,
-    check_dec_stage = None
+    check_dec_stage = None, progress = None
 ):
         """
         Perform a frequency sweep and return the complex S21 value at each
@@ -1791,6 +1819,9 @@ async def _sweep(
             stage is read with every frequency update, and an error is raised
             if it is not check_dec_stage. Used by sessions without global
             control to detect changes made by another session.
+        progress (callable or None): if given, called as ``progress(n)``
+            after every frequency step with the number of points (channels)
+            just taken. ``CRS.sweep`` adds these up across modules.
 
         Returns:
         None
@@ -1804,6 +1835,8 @@ async def _sweep(
                               pbar_description)
         if not isinstance(full_scale_dbm, dict):
             raise TypeError('full_scale_dbm must be a dictionary')
+        if progress is not None and not callable(progress):
+            raise TypeError('progress must be callable or None')
 
         frequencies = np.asarray(frequencies_map[module_idx],
                                  dtype = np.float64)
@@ -1867,6 +1900,8 @@ async def _sweep(
                 / np.sqrt(2)
             )
             z[:, sweep_idx] = zi
+            if progress is not None:
+                progress(n_chs)
 
         # Turn off channels
         await d.clear_channels(module = module_idx)

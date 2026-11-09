@@ -17,9 +17,9 @@ NYQUIST_FREQ = 2.5e9
 VNA_RANGES = {'1': (100e6, 2.5e9), '2': (2.5e9, 5e9), 'both': (100e6, 5e9)}
 # Default VNA df/f: 25 points per linewidth at Qr 2e4 (``vna_step``)
 VNA_STEP = 2e-6
-# Leftover data within this of 2.5 GHz is left out rather than swept in an
-# extra band, Hz
-NYQUIST_TRIM = 10e6
+# Guard band: VNA sweeps never take data within this of 2.5 GHz, where the
+# point nearest the Nyquist frequency glitches, Hz
+NYQUIST_GUARD = 10e6
 
 if TYPE_CHECKING:
     from . import instrument as inst
@@ -288,23 +288,37 @@ def vna_range(nyquist = '1', fmin = None, fmax = None):
     return (lo if fmin is None else float(fmin),
             hi if fmax is None else float(fmax))
 
-def _vna_segments(fmin, fmax):
+def _vna_segments(fmin, fmax, guard = NYQUIST_GUARD):
     """
-    Split a VNA range at the Nyquist frequency.
+    Split a VNA range at the Nyquist frequency, keeping ``guard`` clear of
+    it on both sides.
 
     Parameters:
     fmin, fmax (float): range in Hz.
+    guard (float): guard band around 2.5 GHz in Hz. Default
+        ``NYQUIST_GUARD`` (10 MHz).
 
     Returns:
-    segments (list of tuple): (lo, hi, Nyquist zone) of each part.
-    """
-    if fmin < NYQUIST_FREQ < fmax:
-        return [(fmin, NYQUIST_FREQ, 1), (NYQUIST_FREQ, fmax, 2)]
-    return [(fmin, fmax, 1 if fmax <= NYQUIST_FREQ else 2)]
+    segments (list of tuple): (lo, hi, Nyquist zone) of each non-empty
+        part, in frequency order.
 
-def _segment_bands(
-    lo, hi, step, npc, bw, max_channels, from_top = False, trim = 0.
-):
+    Raises:
+    ValueError: if the range lies entirely within the guard band.
+    """
+    segments = []
+    if fmin < NYQUIST_FREQ:
+        segments.append((fmin, min(fmax, NYQUIST_FREQ - guard), 1))
+    if fmax > NYQUIST_FREQ:
+        segments.append((max(fmin, NYQUIST_FREQ + guard), fmax, 2))
+    segments = [seg for seg in segments if seg[0] < seg[1]]
+    if not segments:
+        raise ValueError(
+            f'the range {fmin / 1e6:g}-{fmax / 1e6:g} MHz lies within '
+            f'{guard / 1e6:g} MHz of the Nyquist frequency '
+            f'({NYQUIST_FREQ / 1e6:g} MHz), where nothing is swept')
+    return segments
+
+def _segment_bands(lo, hi, step, npc, bw, max_channels, from_top = False):
     """
     Lay out one Nyquist-zone segment of a geometric VNA grid in bands.
 
@@ -312,8 +326,7 @@ def _segment_bands(
     multiple of ``npc`` and delta <= log(1 + step). Starting from one end,
     each band takes as many channels of ``npc`` consecutive points as fit
     in ``bw`` and ``max_channels``, so the last band, at the other end, may
-    be small. If what is left for it lies within ``trim`` of that end, it
-    is left out.
+    be small.
 
     Parameters:
     lo, hi (float): segment range in Hz (hi excluded).
@@ -323,8 +336,6 @@ def _segment_bands(
     max_channels (int): channels per module.
     from_top (bool): If True, start from the top, else (default) from the
         bottom.
-    trim (float): leave out a last band that lies within this of its end
-        of the segment, in Hz. Default 0 (never).
 
     Returns:
     if ``npc`` points fit in ``bw`` everywhere:
@@ -341,8 +352,6 @@ def _segment_bands(
         i = 0
         while i < n:
             f0 = lo * np.exp(i * delta)
-            if i > 0 and f0 >= hi - trim:
-                break
             # Points from f0 up that fit within bw
             nfit = int(np.floor(np.log1p(bw / f0) / delta * (1 - 1e-9))) + 1
             nch = min(max_channels, nfit // npc, (n - i) // npc)
@@ -354,8 +363,6 @@ def _segment_bands(
     j = n
     while j > 0:
         f1 = lo * np.exp((j - 1) * delta)
-        if j < n and f1 <= lo + trim:
-            break
         # Points from f1 down that fit within bw
         nfit = j if bw >= f1 else \
             int(np.floor(-np.log1p(-bw / f1) / delta * (1 - 1e-9))) + 1
@@ -368,7 +375,7 @@ def _segment_bands(
 
 def plan_vna_sweep(
     fmin, fmax, bw, module_idxs, step = VNA_STEP, npoints_per_ch = None,
-    pass_overhead = 50, nyquist_trim = NYQUIST_TRIM,
+    pass_overhead = 50, nyquist_guard = NYQUIST_GUARD,
     max_channels = VNA_NCHANNELS
 ):
     """
@@ -376,7 +383,9 @@ def plan_vna_sweep(
     every resonance gets the same points per linewidth for its Qr).
 
     The range is split at the Nyquist frequency (2.5 GHz) if it crosses
-    it. Each part's grid has a step of at most ``step`` and is cut into
+    it, and nothing within ``nyquist_guard`` of 2.5 GHz is swept (the
+    point nearest it glitches). Each part's grid has a step of at most
+    ``step`` and is cut into
     channels of ``npoints_per_ch`` consecutive points; channels are grouped
     into bands of up to ``max_channels`` channels spanning at most ``bw``,
     each swept around an NCO at its center. Low bands are limited by the
@@ -384,10 +393,7 @@ def plan_vna_sweep(
     low frequencies and high bands use fewer channels. Bands go to the
     modules in turn: band i is swept by module i % len(module_idxs) in
     pass i // len(module_idxs). Bands are laid out away from 2.5 GHz (up
-    from the bottom in the first zone, down from the top in the second),
-    and a small last band that would lie within ``nyquist_trim`` of 2.5
-    GHz is left out if that saves a pass (and doesn't make the sweep
-    slower).
+    from the bottom in the first zone, down from the top in the second).
 
     With ``npoints_per_ch`` None, it is chosen to minimize the estimated
     sweep time, passes x (npoints_per_ch + ``pass_overhead``) in sweep
@@ -404,9 +410,8 @@ def plan_vna_sweep(
         chosen as above.
     pass_overhead (float): cost of a pass in sweep steps, for choosing
         ``npoints_per_ch``. Default 50.
-    nyquist_trim (float): data within this of 2.5 GHz may be left out to
-        save a band, in Hz. Default ``NYQUIST_TRIM`` (10 MHz). 0 never
-        leaves data out.
+    nyquist_guard (float): no data is taken within this of 2.5 GHz, in
+        Hz. Default ``NYQUIST_GUARD`` (10 MHz).
     max_channels (int): channels per module. Default 1024.
 
     Returns:
@@ -419,8 +424,8 @@ def plan_vna_sweep(
     npoints_per_ch (int): points per channel.
 
     Raises:
-    ValueError: if the inputs are invalid, or ``npoints_per_ch`` points
-        span more than ``bw``.
+    ValueError: if the inputs are invalid, the range lies within the
+        guard band, or ``npoints_per_ch`` points span more than ``bw``.
     """
     fmin, fmax, bw, step = float(fmin), float(fmax), float(bw), float(step)
     module_idxs = [int(m) for m in module_idxs]
@@ -430,60 +435,56 @@ def plan_vna_sweep(
         raise ValueError('bw must be positive and module_idxs not empty')
     if not 0 < step < 1:
         raise ValueError('step must be in (0, 1)')
+    if not float(nyquist_guard) >= 0:
+        raise ValueError('nyquist_guard must be non-negative')
     nm = len(module_idxs)
-    # Lay out each segment away from 2.5 GHz, trimming there
-    segments = []
-    for lo, hi, zone in _vna_segments(fmin, fmax):
-        from_top = zone == 2 and lo == NYQUIST_FREQ
-        at_nyquist = from_top or (zone == 1 and hi == NYQUIST_FREQ)
-        segments.append((lo, hi, zone, from_top,
-                         float(nyquist_trim) if at_nyquist else 0.))
+    # Lay out each segment away from 2.5 GHz: the second zone's segment
+    # that starts at the guard band is filled down from the top
+    segments = [(lo, hi, zone, zone == 2 and lo > fmin)
+                for lo, hi, zone in
+                _vna_segments(fmin, fmax, float(nyquist_guard))]
     # Margin for rounding and the CRS dithering (50 Hz, inward at the edges)
     bw_eff = bw * (1 - 1e-6)
 
-    def plan(npc, trimmed):
+    def plan(npc):
         """
         Lay out every segment with ``npc`` points per channel.
 
         Parameters:
         npc (int): points per channel.
-        trimmed (bool): If True, leave out small bands near 2.5 GHz.
 
         Returns:
-        plan (tuple or None): (cost, passes), ``npc``, and the
-            ``_segment_bands`` output per segment; None if ``npc`` points
-            span more than ``bw``.
+        plan (tuple or None): cost, ``npc``, and the ``_segment_bands``
+            output per segment; None if ``npc`` points span more than
+            ``bw``.
         """
         lay = [_segment_bands(lo, hi, step, npc, bw_eff, max_channels,
-                              from_top, trim if trimmed else 0.)
-               for lo, hi, _, from_top, trim in segments]
+                              from_top)
+               for lo, hi, _, from_top in segments]
         if any(o is None for o in lay):
             return None
         npass = -(-sum(len(b) for _, _, b in lay) // nm)
-        return (npass * (npc + pass_overhead), npass), npc, lay
+        return npass * (npc + pass_overhead), npc, lay
 
     if npoints_per_ch is None:
         # More points per channel than fill the lowest bw-wide band can't
         # reduce the band count further
         npc_max = max(int(np.log1p(bw / lo) / np.log1p(step) / max_channels)
-                      for lo, _, _, _, _ in segments) + 1
+                      for lo, _, _, _ in segments) + 1
         candidates = range(1, npc_max + 1)
     else:
         if not isinstance(npoints_per_ch, (int, np.integer)) or \
                 npoints_per_ch <= 0:
             raise ValueError('npoints_per_ch must be a positive integer')
         candidates = [int(npoints_per_ch)]
-    full, trimmed = [min((p for p in (plan(npc, t) for npc in candidates)
-                          if p is not None), default = None,
-                         key = lambda p: p[0]) for t in (False, True)]
-    if full is None:
+    best = min((p for p in (plan(npc) for npc in candidates)
+                if p is not None), default = None, key = lambda p: p[0])
+    if best is None:
         raise ValueError(f'{candidates[0]} points per channel at df/f '
                          f'{step:g} span more than the module bandwidth')
-    # Leave data out near 2.5 GHz only if that saves a pass
-    use_trim = trimmed[0][1] < full[0][1] and trimmed[0][0] <= full[0][0]
-    _, npc, lay = trimmed if use_trim else full
+    _, npc, lay = best
     freqs, edges, zones, nchs = [], [], [], []
-    for (lo, _, zone, _, _), (_, delta, segment) in zip(segments, lay):
+    for (lo, _, zone, _), (_, delta, segment) in zip(segments, lay):
         for i0, nch in segment:
             fb = lo * np.exp((i0 + np.arange(nch * npc)) * delta)
             freqs.append(fb.reshape(nch, npc))
@@ -522,8 +523,8 @@ async def _set_nyquist_zones(crs, zones):
 
 async def vna_sweep(
     crs, fmin, fmax, amplitude, nsamps, step = VNA_STEP,
-    npoints_per_ch = None, pass_overhead = 50, nyquist_trim = NYQUIST_TRIM,
-    verbose = True
+    npoints_per_ch = None, pass_overhead = 50,
+    nyquist_guard = NYQUIST_GUARD, verbose = True, progress = None
 ):
     """
     Sweep a frequency range on a geometric grid with this session's
@@ -543,10 +544,14 @@ async def vna_sweep(
     fmin, fmax (float): frequency range in Hz (``vna_range``).
     amplitude (float): tone power in dBm, the same for every channel.
     nsamps (int): samples averaged per point.
-    step, npoints_per_ch, pass_overhead, nyquist_trim: see
+    step, npoints_per_ch, pass_overhead, nyquist_guard: see
         ``plan_vna_sweep``.
     verbose (bool): If True (default), print the plan and show progress
         bars.
+    progress (callable or None): if given, called as ``progress(done,
+        total)`` with the number of points taken so far over the whole
+        sweep and the total, at the start of each pass and after every
+        frequency step (``CRS.sweep``). Independent of ``verbose``.
 
     Returns:
     f (np.array): frequencies in Hz (dithered), ascending.
@@ -557,19 +562,23 @@ async def vna_sweep(
     Raises:
     ValueError: if the inputs are invalid.
     """
+    if progress is not None and not callable(progress):
+        raise TypeError('progress must be callable or None')
     bands, freqs, npc = plan_vna_sweep(
         fmin, fmax, crs.bw, crs.active_module_idxs, step = step,
         npoints_per_ch = npoints_per_ch, pass_overhead = pass_overhead,
-        nyquist_trim = nyquist_trim)
+        nyquist_guard = nyquist_guard)
     passes = np.unique(bands['chunk_passes'])
+    npoints = sum(fb.size for fb in freqs)
     bands['chunk_times'] = np.zeros(len(freqs))
     if verbose:
-        print(f'VNA sweep: {sum(fb.size for fb in freqs)} points, '
-              f'{len(freqs)} bands in {len(passes)} passes, {npc} points '
-              'per channel')
+        print(f'VNA sweep: {npoints} points, {len(freqs)} bands in '
+              f'{len(passes)} passes, {npc} points per channel')
     zones0 = {int(m): int(crs.module_cfg[m]['nyquist_zone'])
               for m in np.unique(bands['chunk_modules'])}
     fs, zs = [], []
+    # Points taken before the current pass, for progress
+    done_before = 0
     try:
         for p in passes:
             idx = np.flatnonzero(bands['chunk_passes'] == p)
@@ -586,12 +595,27 @@ async def vna_sweep(
             ch_map = {m: list(range(starts[k], starts[k + 1]))
                       for k, m in enumerate(modules)}
             bands['chunk_times'][idx] = time.time()
+            pass_progress = None
+            if progress is not None:
+                offset = done_before
+
+                def pass_progress(done, total, offset = offset):
+                    """
+                    Report this pass's progress as sweep progress.
+
+                    Parameters:
+                    done, total (int): points taken and total in the pass.
+                    offset (int): points taken before the pass.
+                    """
+                    progress(offset + done, npoints)
             f, z = await crs.sweep(
                 rows, np.full(len(rows), float(amplitude)), nsamps,
                 ch_map = ch_map, allow_missing = False, verbose = verbose,
-                pbar_description = f'VNA pass {p + 1}/{len(passes)}')
+                pbar_description = f'VNA pass {p + 1}/{len(passes)}',
+                progress = pass_progress)
             fs.append(np.asarray(f).ravel())
             zs.append(np.asarray(z).ravel())
+            done_before += rows.size
     finally:
         await _set_nyquist_zones(crs, zones0)
     f, z = np.concatenate(fs), np.concatenate(zs)
@@ -600,8 +624,8 @@ async def vna_sweep(
 
 async def vna_sweep_to_store(
     crs, root, fmin, fmax, amplitude, nsamps, step = VNA_STEP,
-    npoints_per_ch = None, pass_overhead = 50, nyquist_trim = NYQUIST_TRIM,
-    verbose = True
+    npoints_per_ch = None, pass_overhead = 50,
+    nyquist_guard = NYQUIST_GUARD, verbose = True
 ):
     """
     Take a VNA sweep (``vna_sweep``) and save it as the next
@@ -620,7 +644,7 @@ async def vna_sweep_to_store(
     root (zarr.Group): device store root, writable
         (``daq_layout.create_store``).
     fmin, fmax, amplitude, nsamps, step, npoints_per_ch, pass_overhead,
-        nyquist_trim, verbose: see ``vna_sweep``.
+        nyquist_guard, verbose: see ``vna_sweep``.
 
     Returns:
     k (int): index of the new sweep.
@@ -643,7 +667,7 @@ async def vna_sweep_to_store(
         f, z, bands = await vna_sweep(
             crs, fmin, fmax, amplitude, nsamps, step = step,
             npoints_per_ch = npoints_per_ch, pass_overhead = pass_overhead,
-            nyquist_trim = nyquist_trim, verbose = verbose)
+            nyquist_guard = nyquist_guard, verbose = verbose)
         config = dl.tune_config(crs)
         del config['ncos']
         for cfg in config['module_settings'].values():

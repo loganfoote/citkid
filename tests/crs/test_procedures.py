@@ -7,7 +7,7 @@ import zarr
 from citkid import daq_layout as dl
 from .fake_crs import FakeVnaCRS
 from citkid.crs.procedures import (
-    NYQUIST_FREQ, NYQUIST_TRIM, VNA_NCHANNELS, VNA_STEP,
+    NYQUIST_FREQ, NYQUIST_GUARD, VNA_NCHANNELS, VNA_STEP,
     _validate_target_sweep_inputs,
     plan_vna_sweep, vna_range, vna_step, vna_sweep, vna_sweep_to_store
 )
@@ -1646,16 +1646,20 @@ def test_plan_vna_sweep_geometric(nyquist, step, modules, bw):
         if len(r):
             assert r.max() <= np.log1p(step) * (1 + 1e-9)
             assert r.min() >= np.log1p(step) * (1 - 2e-3)
-    # Covering the range (fmax excluded), except up to NYQUIST_TRIM next
-    # to 2.5 GHz
-    trim_lo = NYQUIST_TRIM if fmin == NYQUIST_FREQ else 0.
-    trim_hi = NYQUIST_TRIM if fmax == NYQUIST_FREQ else 0.
-    assert fmin <= f[0] <= fmin + trim_lo and f[-1] < fmax
-    assert fmax <= (f[-1] + trim_hi) * (1 + step) * (1 + 1e-9)
+    # Covering the range (fmax excluded), except the guard band around
+    # 2.5 GHz, which is never swept
+    guard_lo = NYQUIST_GUARD if fmin == NYQUIST_FREQ else 0.
+    guard_hi = NYQUIST_GUARD if fmax == NYQUIST_FREQ else 0.
+    assert fmin + guard_lo <= f[0] <= (fmin + guard_lo) * (1 + 1e-9)
+    assert f[-1] < fmax - guard_hi
+    assert fmax - guard_hi <= f[-1] * (1 + step) * (1 + 1e-9)
+    assert not np.any(np.abs(f - NYQUIST_FREQ) < NYQUIST_GUARD)
     if fmin < NYQUIST_FREQ < fmax:
         below, above = f[f < NYQUIST_FREQ], f[f >= NYQUIST_FREQ]
-        assert NYQUIST_FREQ - below[-1] <= NYQUIST_TRIM + NYQUIST_FREQ * step
-        assert above[0] - NYQUIST_FREQ <= NYQUIST_TRIM
+        # The last point below is within a step of the guard band
+        assert NYQUIST_FREQ - below[-1] <= NYQUIST_GUARD + \
+            (NYQUIST_FREQ - NYQUIST_GUARD) * step
+        assert above[0] == pytest.approx(NYQUIST_FREQ + NYQUIST_GUARD)
     nb = len(freqs)
     for i, fb in enumerate(freqs):
         assert fb.shape == (bands['chunk_nchannels'][i], npc)
@@ -1691,38 +1695,51 @@ def test_plan_vna_sweep_geometric(nyquist, step, modules, bw):
             more > bw * (1 - 1e-6)
 
 
-@pytest.mark.parametrize('nyquist, modules, trims', [
-    ('both', [1], True), ('2', [1], True), ('1', [1], False),
-    ('both', [1, 2, 3, 4], False)])
-def test_plan_vna_sweep_nyquist_trim(nyquist, modules, trims):
+@pytest.mark.parametrize('fmin, fmax, lo, hi', [
+    # Zone edges move in by the guard; the sweep's own edges don't
+    (100e6, 2.5e9, 100e6, 2.49e9), (2.5e9, 5e9, 2.51e9, 5e9),
+    (100e6, 5e9, 100e6, 5e9), (2.495e9, 3e9, 2.51e9, 3e9),
+    (2e9, 2.505e9, 2e9, 2.49e9), (1e9, 2e9, 1e9, 2e9),
+    (3e9, 4e9, 3e9, 4e9)])
+def test_plan_vna_sweep_nyquist_guard(fmin, fmax, lo, hi):
     """
-    Check that a small band next to 2.5 GHz is left out only when that
-    saves a pass.
+    Check that nothing within NYQUIST_GUARD of 2.5 GHz is swept, whatever
+    the range, and that the sweep otherwise covers it.
     """
-    step = 2e-6 if nyquist != '2' else 1e-5
-    args = (*vna_range(nyquist), 500e6, modules, step)
-    b0, f0, _ = plan_vna_sweep(*args, nyquist_trim = 0)
-    b1, f1, _ = plan_vna_sweep(*args)
-    n0, n1 = b0['chunk_passes'].max() + 1, b1['chunk_passes'].max() + 1
-    f0, f1 = _grid(f0), _grid(f1)
-    fmin, fmax = args[:2]
-    # Uncovered: below the sweep, above it, and the widest gap inside
-    below = f1[0] - fmin
-    above = fmax - f1[-1] * (1 + step)
-    i = np.argmax(np.diff(np.log(f1)))
-    gap = (f1[i], f1[i + 1])
-    if trims:
-        assert n1 < n0
-        # Some data is left out, all of it next to 2.5 GHz
-        assert below > 1e5 or gap[1] - gap[0] > 1e5
-        if below > 0:
-            assert fmin == NYQUIST_FREQ and below <= NYQUIST_TRIM
-        if gap[1] - gap[0] > 1e5:
-            assert gap[0] < NYQUIST_FREQ <= gap[1]
-            assert gap[1] - gap[0] <= NYQUIST_TRIM + NYQUIST_FREQ * step
-    else:
-        assert n1 == n0 and len(f1) == len(f0) and below == 0
-    assert above <= 0
+    step = 1e-5
+    _, freqs, _ = plan_vna_sweep(fmin, fmax, 500e6, [1], step)
+    f = _grid(freqs)
+    assert f[0] == pytest.approx(lo) and f[-1] < hi
+    assert hi <= f[-1] * (1 + step) * (1 + 1e-9)
+    assert not np.any(np.abs(f - NYQUIST_FREQ) < NYQUIST_GUARD)
+    # Within each zone the grid is continuous: the only gap is the guard
+    both = fmin < NYQUIST_FREQ - NYQUIST_GUARD and \
+        fmax > NYQUIST_FREQ + NYQUIST_GUARD
+    r = np.diff(np.log(f))
+    if both:
+        i = np.argmax(r)
+        assert f[i] < NYQUIST_FREQ < f[i + 1]
+        r = np.delete(r, i)
+    assert r.max() <= np.log1p(step) * (1 + 1e-9)
+    # A wider guard moves the edges further; zero puts them at 2.5 GHz
+    if both:
+        _, freqs, _ = plan_vna_sweep(fmin, fmax, 500e6, [1], step,
+                                     nyquist_guard = 50e6)
+        f = _grid(freqs)
+        assert not np.any(np.abs(f - NYQUIST_FREQ) < 50e6)
+        _, freqs, _ = plan_vna_sweep(fmin, fmax, 500e6, [1], step,
+                                     nyquist_guard = 0)
+        f = _grid(freqs)
+        assert f[f >= NYQUIST_FREQ][0] == pytest.approx(NYQUIST_FREQ)
+
+
+def test_plan_vna_sweep_within_guard_is_invalid():
+    for fmin, fmax in [(2.495e9, 2.505e9), (2.492e9, 2.5e9),
+                       (2.5e9, 2.508e9)]:
+        with pytest.raises(ValueError, match = 'Nyquist'):
+            plan_vna_sweep(fmin, fmax, 500e6, [1], 1e-5)
+    with pytest.raises(ValueError, match = 'nyquist_guard'):
+        plan_vna_sweep(1e9, 2e9, 500e6, [1], 1e-5, nyquist_guard = -1)
 
 
 def test_plan_vna_sweep_chooses_fast_npoints():
@@ -1811,13 +1828,43 @@ async def test_vna_sweep_both_zones(modules):
     assert all(cfg['nyquist_zone'] == 1 for cfg in crs.module_cfg.values())
     for name, kw in crs.calls:
         assert name == 'configure_modules' and kw['full_scale_dbm'] == 7.
-    # Geometric across the zone boundary up to the dithering (each zone's
-    # step is rounded separately, by much less than the dithering)
+    # Geometric in each zone up to the dithering (each zone's step is
+    # rounded separately, by much less than the dithering), with the guard
+    # band around 2.5 GHz left out
     d = np.diff(np.log(f)) / np.log1p(2e-5)
+    i = np.argmax(d)
+    assert f[i] < NYQUIST_FREQ - NYQUIST_GUARD * 0.999
+    assert f[i + 1] == pytest.approx(NYQUIST_FREQ + NYQUIST_GUARD, abs = 60)
+    d = np.delete(d, i)
     assert d.max() < 1.01 and d.min() > 0.99
     for fr in (2.4e9, 2.6e9):
         near = np.flatnonzero(np.abs(f - fr) < 1e6)
         assert abs(f[near[np.argmin(np.abs(z[near]))]] - fr) < 2e5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('modules', [(1,), (1, 2)])
+async def test_vna_sweep_progress(modules):
+    crs = FakeVnaCRS(modules = modules)
+    reports = []
+    f, _, bands = await vna_sweep(
+        crs, 400e6, 2400e6, -50., 10, step = 2e-5, verbose = False,
+        progress = lambda done, total: reports.append((done, total)))
+    npass = bands['chunk_passes'].max() + 1
+    assert npass > 1
+    # Progress runs over the whole sweep, not per pass
+    assert reports[0] == (0, len(f)) and reports[-1] == (len(f), len(f))
+    assert all(total == len(f) for _, total in reports)
+    done = [d for d, _ in reports]
+    assert done == sorted(done)
+    # Each pass starts where the last one ended (its first report repeats
+    # the previous pass's last)
+    repeats = sum(reports[i] == reports[i - 1]
+                  for i in range(1, len(reports)))
+    assert repeats == npass - 1
+    with pytest.raises(TypeError, match = 'progress'):
+        await vna_sweep(crs, 400e6, 2400e6, -50., 10, step = 2e-5,
+                        verbose = False, progress = 1)
 
 
 @pytest.mark.asyncio

@@ -29,13 +29,33 @@ and pinned in `uv.lock`.
 ```bash
 uv sync
 ```
-Run commands inside the environment with `uv run`, for example
+5. Activate the environment so that `python`, `jupyter`, and the
+   procedure scripts can import citkid:
+```bash
+source .venv/bin/activate   # macOS/Linux
+.venv\Scripts\activate      # Windows
+```
+   Activation lasts for the current shell session; run the command again in
+   each new terminal, or select `.venv/bin/python` as the interpreter or
+   Jupyter kernel in your editor. Run `deactivate` to leave the environment.
+
+Alternatively, run single commands inside the environment without activating
+it, for example
 ```bash
 uv run jupyter lab
 ```
-or activate it with `.venv\Scripts\activate` (Windows) or
-`source .venv/bin/activate` (macOS/Linux). To also install PyTorch for the
-CNN resonance finder, run `uv sync --extra cnn`.
+`uv run` finds the environment by searching for `pyproject.toml` in the
+current directory and its parents, so it only works from inside this
+repository. To use it from another directory (for example a notebooks
+repository that imports citkid), pass the path to this repository:
+```bash
+uv run --project /path/to/citkid script.py
+```
+or set `UV_PROJECT=/path/to/citkid` in your shell. Otherwise, activate the
+environment as in step 5.
+
+To also install PyTorch for the CNN resonance finder, run
+`uv sync --extra cnn`.
 
 ## Installation with pip
 1. Clone this repository: `git clone https://github.com/loganfoote/citkid`

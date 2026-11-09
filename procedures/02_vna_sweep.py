@@ -2,11 +2,12 @@
 02: full VNA sweep of one device, saved to its store.
 
 Sweeps the first Nyquist zone (100-2500 MHz), the second (2500-5000
-MHz), or both with this session's modules, in several passes if the range
-is wider than the modules cover at once, on a geometric grid (constant
-df/f, from the expected median Qr: 25 points per linewidth there by
-default; every channel sweeps downward), and saves the stitched sweep
-as the next ``vna/sweep{k}`` of the device store
+MHz), or both with this session's modules, leaving a 10 MHz guard band on
+each side of 2500 MHz (the point nearest it glitches), in several passes
+if the range is wider than the modules cover at once, on a geometric grid
+(constant df/f, from the expected median Qr: 25 points per linewidth
+there by default; every channel sweeps downward), and saves the stitched
+sweep as the next ``vna/sweep{k}`` of the device store
 ``<DATA_DIR>/<COOLDOWN>/<DEVICE>.zarr`` (created if needed; see
 ``documents/daq_layout.md``). The next step finds the resonances on it.
 

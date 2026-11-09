@@ -128,6 +128,70 @@ async def test_sweep_with_ch_map(base_crs):
 
 
 @pytest.mark.asyncio
+async def test_sweep_progress(base_crs):
+    """Progress adds up the modules' points and runs from 0 to the total."""
+    crs = base_crs
+    crs.nco_freqs = {1: 4.0e9, 2: 4.5e9}
+
+    # 3 channels x 4 points: 2 channels on module 1, 1 on module 2
+    frequencies = np.array([[3.9e9, 3.95e9, 4.0e9, 4.05e9],
+                            [3.8e9, 3.85e9, 3.9e9, 3.95e9],
+                            [4.4e9, 4.45e9, 4.5e9, 4.55e9]])
+    ares = np.array([-50.0, -50.0, -50.0])
+    ch_map = {1: [0, 1], 2: [2]}
+    reports = []
+
+    crs._clear_channels = AsyncMock()
+    crs.set_decimation = AsyncMock()
+
+    mock_modules = MagicMock()
+    mock_modules._sweep = AsyncMock()
+
+    async def mock_sweep_impl(
+        nco_freqs, fres_map, ares_map, sweep_f, sweep_z, **kwargs
+    ):
+        # Step each module like _sweep: one call per frequency step with
+        # the module's channel count
+        for mod_idx, freqs in fres_map.items():
+            if not len(freqs):
+                continue
+            sweep_f[mod_idx] = freqs
+            sweep_z[mod_idx] = np.ones(freqs.shape, dtype = complex)
+            if kwargs['progress'] is None:
+                continue
+            for _ in range(freqs.shape[1]):
+                kwargs['progress'](freqs.shape[0])
+
+    mock_modules._sweep.side_effect = mock_sweep_impl
+
+    with patch(
+        'citkid.crs.instrument.util.get_modules',
+        return_value = mock_modules
+    ):
+        await crs.sweep(frequencies, ares, 10, ch_map = ch_map,
+                        verbose = False,
+                        progress = lambda d, t: reports.append((d, t)))
+    assert reports[0] == (0, 12) and reports[-1] == (12, 12)
+    assert all(t == 12 for _, t in reports)
+    done = [d for d, _ in reports]
+    assert done == sorted(done) and len(reports) == 9
+
+    # Without a callback, _sweep gets progress = None
+    mock_modules._sweep.reset_mock()
+    with patch(
+        'citkid.crs.instrument.util.get_modules',
+        return_value = mock_modules
+    ):
+        await crs.sweep(frequencies, ares, 10, ch_map = ch_map,
+                        verbose = False)
+    assert mock_modules._sweep.call_args.kwargs['progress'] is None
+
+    with pytest.raises(TypeError, match = 'progress'):
+        await crs.sweep(frequencies, ares, 10, ch_map = ch_map,
+                        verbose = False, progress = 'yes')
+
+
+@pytest.mark.asyncio
 async def test_sweep_allow_missing_true(base_crs):
     """
     Test sweep with allow_missing = True inserts NaNs for

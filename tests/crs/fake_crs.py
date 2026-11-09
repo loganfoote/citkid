@@ -116,7 +116,7 @@ class FakeVnaCRS:
 
     async def sweep(
         self, frequencies, ares, nsamps, ch_map = None, allow_missing = False,
-        verbose = True, pbar_description = ''
+        verbose = True, pbar_description = '', progress = None
     ):
         """
         Record a sweep and return S21 at the requested frequencies,
@@ -132,6 +132,9 @@ class FakeVnaCRS:
         allow_missing (bool): ignored.
         verbose (bool): ignored.
         pbar_description (str): recorded.
+        progress (callable or None): called as ``progress(done, total)``
+            like ``CRS.sweep``: at the start and after every frequency
+            step of every module.
 
         Returns:
         f, z (np.array): (M, N) frequencies and S21.
@@ -139,6 +142,15 @@ class FakeVnaCRS:
         if self.fail_pass is not None and \
                 len(self.sweep_calls) == self.fail_pass:
             raise RuntimeError('sweep failed')
+        if progress is not None:
+            frequencies = np.asarray(frequencies)
+            total = frequencies.size
+            progress(0, total)
+            done = 0
+            for _ in range(frequencies.shape[1]):
+                for rows in ch_map.values():
+                    done += len(rows)
+                    progress(done, total)
         self.sweep_calls.append(dict(
             frequencies = np.array(frequencies), ares = np.array(ares),
             nsamps = nsamps, ch_map = ch_map, desc = pbar_description))

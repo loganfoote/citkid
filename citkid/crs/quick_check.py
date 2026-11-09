@@ -1,15 +1,17 @@
 """
 Interactive quick check of a device with VNA sweeps.
 
-``run_quick_check`` opens a window where the sweep settings (Nyquist zone,
-range, power, resolution, averaging) can be changed and the sweep run
-again, showing |S21| and phase with the band edges and a rough count of
-the resonances (matched filter). Nothing is saved to zarr; the plot can be
+``run_quick_check`` opens a window with the given sweep settings (Nyquist
+zone, range, power, resolution, averaging), connects to the CRS, and waits
+for the Sweep button (Ctrl+R). The settings can be changed and the sweep
+run again; it shows |S21| and phase with the band edges and a rough count
+of the resonances (matched filter). Nothing is saved to zarr; the plot can be
 saved as a PNG. ``procedures/01_vna_quick_check.py`` is the script.
 
 The CRS lives on a background thread with its own asyncio event loop
 (``AsyncWorker``), so the window stays responsive while sweeping. The
-sweep itself is ``crs.procedures.vna_sweep``.
+sweep itself is ``crs.procedures.vna_sweep``; its ``progress`` callback
+drives the window's progress bar.
 """
 import asyncio
 import threading
@@ -218,12 +220,17 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
     result (tuple or None): the last sweep: ``f``, ``z``, ``bands``
         (``vna_sweep`` outputs), and ``fr`` (rough resonance frequencies,
         or None if not counted).
+    progress (QProgressBar): points taken in the running sweep; hidden
+        when idle.
     """
+    # Sweep progress (points done, total), emitted from the background
+    # thread and delivered on the GUI thread
+    _progress = QtCore.Signal(int, int)
 
     def __init__(
         self, connect, module_idxs, nyquist = '1', fmin = None, fmax = None,
         amplitude = -50., qr_median = 2e4, pts_per_lw = 5., nsamps = 10,
-        count = True, sweep_on_start = True, title = 'VNA quick check',
+        count = True, sweep_on_start = False, title = 'VNA quick check',
         ui_scale = 1.0
     ):
         """
@@ -243,7 +250,8 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
             5.
         nsamps (int): samples per point. Default 10.
         count (bool): If True (default), count resonances after sweeping.
-        sweep_on_start (bool): If True (default), sweep once connected.
+        sweep_on_start (bool): If True, sweep as soon as connected. Default
+            False: wait for the Sweep button (Ctrl+R).
         title (str): window title. Default 'VNA quick check'.
         ui_scale (float): font size multiplier. Default 1.0.
         """
@@ -261,6 +269,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         self._build_controls(nyquist, fmin, fmax, amplitude, qr_median,
                              pts_per_lw, nsamps, count)
         self._build_plots()
+        self._progress.connect(self._on_progress)
         central = QtWidgets.QWidget()
         lay = QtWidgets.QHBoxLayout(central)
         lay.addWidget(self._panel)
@@ -348,6 +357,10 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         self.save_btn.clicked.connect(self._ask_save_plot)
         form.addRow(self.sweep_btn)
         form.addRow(self.save_btn)
+        self.progress = QtWidgets.QProgressBar()
+        self.progress.setTextVisible(True)
+        self.progress.setVisible(False)
+        form.addRow(self.progress)
         self.status = QtWidgets.QLabel()
         self.status.setWordWrap(True)
         form.addRow(self.status)
@@ -397,6 +410,35 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
             w.setEnabled(not busy)
         self.save_btn.setEnabled(not busy and self.result is not None)
         self._update_sweep_button()
+
+    def _show_progress(self, show):
+        """
+        Show the progress bar, reset and indeterminate until the first
+        report, or hide it.
+
+        Parameters:
+        show (bool): True to show it.
+        """
+        self.progress.setRange(0, 0)
+        self.progress.setFormat('')
+        self.progress.setVisible(show)
+
+    def _on_progress(self, done, total):
+        """
+        Update the progress bar (GUI thread).
+
+        Parameters:
+        done (int): points taken so far.
+        total (int): points in the sweep.
+        """
+        if self.progress.isHidden():
+            return
+        if total <= 0:
+            self.progress.setRange(0, 0)
+            return
+        self.progress.setRange(0, total)
+        self.progress.setValue(min(done, total))
+        self.progress.setFormat(f'{done:,} / {total:,} points (%p%)')
 
     def _update_sweep_button(self):
         """
@@ -466,11 +508,13 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         self.crs = crs
         self._set_busy(False)
         self._update_plan()
-        self._set_status(
-            f'Connected: modules {list(crs.active_module_idxs)}, '
-            f'{crs.bw / 1e6:.0f} MHz per module.')
+        text = (f'Connected: modules {list(crs.active_module_idxs)}, '
+                f'{crs.bw / 1e6:.0f} MHz per module.')
         if self._sweep_on_start:
+            self._set_status(text)
             self.sweep()
+        else:
+            self._set_status(text + ' Press Sweep (Ctrl+R) to start.')
 
     def sweep(self):
         """
@@ -480,6 +524,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
             return
         s = self.settings()
         crs = self.crs
+        report = self._progress.emit
 
         async def job():
             """
@@ -490,12 +535,13 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
             """
             f, z, bands = await vna_sweep(
                 crs, s['fmin'], s['fmax'], s['amplitude'], s['nsamps'],
-                step = s['step'], verbose = False)
+                step = s['step'], verbose = False, progress = report)
             fr = rough_resonances(f, z) if s['count'] else None
             return f, z, bands, fr
 
         self.worker.submit(job(), self._on_swept)
         self._set_busy(True)
+        self._show_progress(True)
         self._set_status('Sweeping...')
 
     def _on_swept(self, result, error):
@@ -506,6 +552,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         result (tuple or None): ``f``, ``z``, ``bands``, ``fr``.
         error (BaseException or None): the sweep error.
         """
+        self._show_progress(False)
         if error is not None:
             self._set_status(f'Sweep failed: {error!r}')
             self._set_busy(False)
@@ -593,7 +640,8 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
 def run_quick_check(
     connect, module_idxs, nyquist = '1', fmin = None, fmax = None,
     amplitude = -50., qr_median = 2e4, pts_per_lw = 5., nsamps = 10,
-    count = True, title = 'VNA quick check', ui_scale = 1.0
+    count = True, sweep_on_start = False, title = 'VNA quick check',
+    ui_scale = 1.0
 ):
     """
     Open the quick-check window and wait until it is closed.
@@ -605,7 +653,9 @@ def run_quick_check(
         loop, which every sweep then uses.
     module_idxs (list of int): the session's modules.
     nyquist, fmin, fmax, amplitude, qr_median, pts_per_lw, nsamps, count,
-        title, ui_scale: starting settings (see ``QuickCheckWindow``).
+        sweep_on_start, title, ui_scale: starting settings (see
+        ``QuickCheckWindow``). By default the window waits for the Sweep
+        button once connected.
 
     Returns:
     result (tuple or None): the last sweep (``f``, ``z``, ``bands``,
@@ -616,7 +666,7 @@ def run_quick_check(
         connect, module_idxs, nyquist = nyquist, fmin = fmin, fmax = fmax,
         amplitude = amplitude, qr_median = qr_median,
         pts_per_lw = pts_per_lw, nsamps = nsamps, count = count,
-        title = title, ui_scale = ui_scale)
+        sweep_on_start = sweep_on_start, title = title, ui_scale = ui_scale)
     delete_on_close(win)
     fit_window_to_screen(win)
     win.show()
