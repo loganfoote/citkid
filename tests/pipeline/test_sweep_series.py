@@ -233,6 +233,24 @@ def test_steps_same_store(layout_store):
     assert out['ff'].shape == (NPTS,)
 
 
+def test_steps_sort_unsorted_fres_all(layout_store):
+    """
+    A saved resonator list that is out of order (e.g. two fits that
+    swapped) is sorted on load, with qres_all sorted along with it, so
+    make_fr_spans accepts it.
+    """
+    root = zarr.open_group(layout_store, mode = 'a')
+    root['resonators'].create_array('fres_bad',
+                                    data = np.array([4e8, 1e8, 4.5e8]))
+    root['resonators'].create_array('qres_bad',
+                                    data = np.array([4e3, 1e3, 4.5e3]))
+    out = run_steps(target_sweep_steps(
+        store = root, group = 'tune0/power_sweep/set2',
+        fres_all = 'resonators/fres_bad', qres_all = 'resonators/qres_bad'))
+    np.testing.assert_array_equal(out['fres_all'], [1e8, 4e8, 4.5e8])
+    np.testing.assert_array_equal(out['qres_all'], [1e3, 4e3, 4.5e3])
+
+
 @pytest.mark.parametrize('kwargs, match', [
     (dict(), 'exactly one'),
     (dict(data_path = 'x.zarr', store = zarr.group()), 'exactly one'),

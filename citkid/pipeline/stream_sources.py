@@ -150,9 +150,11 @@ def stream_sources_steps(
         nrows (int): number of rows.
         """
         t = table()
-        return (np.asarray(store[fres_all][...], dtype = float),
-                np.asarray(store[qres_all][...], dtype = float),
-                t['dt'], len(t['source']))
+        f = np.asarray(store[fres_all][...], dtype = float)
+        q = np.asarray(store[qres_all][...], dtype = float)
+        # Gain cuts need the resonances in frequency order
+        order = np.argsort(f, kind = 'stable')
+        return f[order], q[order], t['dt'], len(t['source'])
 
     def load_global_res_data():
         """

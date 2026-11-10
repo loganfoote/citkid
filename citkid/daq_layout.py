@@ -579,9 +579,12 @@ def save_resonators(
     Save a resonator list as ``resonators{k}``: the resonators found on VNA
     sweep ``vna{k}`` (or a list ported from another store).
 
-    The resonators get indices 0 ... n - 1 (``res_idxs_all``). Each tuning
-    records which list its ``res_idxs`` refer to (``attrs['resonators']``,
-    see ``new_tuning``), so a list can't be replaced once a tuning uses it.
+    The resonators get indices 0 ... n - 1 (``res_idxs_all``) in ascending
+    frequency order (``fres``, ``qres`` and ``Qr`` are sorted together if
+    they aren't already: the pipeline's gain cuts need a sorted list).
+    Each tuning records which list its ``res_idxs`` refer to
+    (``attrs['resonators']``, see ``new_tuning``), so a list can't be
+    replaced once a tuning uses it.
 
     Parameters:
     root (zarr.Group): store root, writable.
@@ -611,6 +614,8 @@ def save_resonators(
                            fres.shape).copy()
     Qr = np.full(fres.shape, np.nan) if Qr is None else \
         np.broadcast_to(np.asarray(Qr, dtype = np.float64), fres.shape).copy()
+    order = np.argsort(fres, kind = 'stable')
+    fres, qres, Qr = fres[order], qres[order], Qr[order]
     name = set_name(int(k), RESONATORS_PREFIX)
     if name in root:
         users = tunings_using(root, name)

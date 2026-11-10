@@ -180,6 +180,10 @@ def target_sweep_steps(
                 qres_all_ = np.asarray(read_array(qres_all), dtype = float)
             else:
                 qres_all_ = np.full_like(fres_all_, float(qres_all))
+        # Gain cuts need the resonances in frequency order; a saved list
+        # may not be (e.g. two fits that swapped order)
+        order = np.argsort(fres_all_, kind = 'stable')
+        fres_all_, qres_all_ = fres_all_[order], qres_all_[order]
         if ts is None:
             return fres_all_, qres_all_, nrows
         dt = g[f'{stream}/dt'][...]

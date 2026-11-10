@@ -77,6 +77,15 @@ def test_rows_follow_sources_and_writes(streamed):
         rows = 'all')}
     fres_all, qres_all, dt, nrows = steps['load_global_data'].func()
     assert nrows == n and np.isclose(dt, 1 / 38147.0, rtol = 1e-3)
+    assert np.all(np.diff(fres_all) >= 0)
+    # An out-of-order saved list is sorted on load, qres along with it
+    root.create_array('fres_bad', data = np.array([2e9, 1e9, 3e9]))
+    root.create_array('qres_bad', data = np.array([2e3, 1e3, 3e3]))
+    steps = {s.name: s for s in stream_sources_steps(
+        root, src, 'fres_bad', 'qres_bad', rows = 'all')}
+    f, q, _, _ = steps['load_global_data'].func()
+    np.testing.assert_array_equal(f, [1e9, 2e9, 3e9])
+    np.testing.assert_array_equal(q, [1e3, 2e3, 3e3])
     fres, qres, ares, res_idxs, source_idx, write_idx = \
         steps['load_global_res_data'].func()
     np.testing.assert_array_equal(res_idxs, np.arange(n))

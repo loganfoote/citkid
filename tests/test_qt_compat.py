@@ -561,3 +561,36 @@ def test_qt_compat_refuses_another_binding():
     assert 'ImportError' in result.stderr
     assert 'needs PyQt5, but pyqtgraph is using PyQt6' in result.stderr
 
+
+
+def test_citkid_keeps_rfmux_from_loading_pyqt6():
+    """
+    Importing the package sets CRS_EMBEDDED, so importing rfmux (via
+    citkid.crs) skips its periscope GUI and PyQt6 stays unloaded.
+    """
+    import os
+    import subprocess
+    import sys
+    code = '; '.join([
+        'import os, sys, citkid, citkid.crs.instrument',
+        "print(os.environ.get('CRS_EMBEDDED'), 'PyQt6' in sys.modules, "
+        "'rfmux.tools.periscope' in sys.modules)",
+    ])
+    env = {k: v for k, v in os.environ.items() if k != 'CRS_EMBEDDED'}
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True,
+                            text=True, env=env)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split() == ['1', 'False', 'False']
+
+
+def test_get_qapp_refuses_to_create_app_with_pyqt6_loaded():
+    """Another Qt binding loaded: a clear error instead of a segfault."""
+    import sys
+    from citkid import qt_compat
+    with patch.object(qt_compat._QtWidgets.QApplication, 'instance',
+                      return_value=None), \
+         patch.object(qt_compat._pg, 'mkQApp') as mk, \
+         patch.dict(sys.modules, {'PyQt6': object()}):
+        with pytest.raises(RuntimeError, match='PyQt6 is also loaded'):
+            qt_compat.get_qapp()
+    mk.assert_not_called()

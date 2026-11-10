@@ -9,7 +9,12 @@ available — constants live inside nested enum classes instead
 
 citkid itself always uses PyQt5: importing citkid sets
 ``PYQTGRAPH_QT_LIB=PyQt5``, and importing this module raises ImportError if
-pyqtgraph is on another binding (imported before citkid).
+pyqtgraph is on another binding (imported before citkid). Loading a second
+Qt major version into the process (PyQt6, which rfmux's periscope GUI
+imports) crashes when the QApplication is created, so importing citkid
+also sets ``CRS_EMBEDDED`` to keep rfmux from importing periscope, and
+``get_qapp`` refuses to create the application if another binding is
+loaded anyway.
 
 This module exposes every constant used by citkid under a single ``Qt``
 namespace that works regardless of binding, so call sites can write:
@@ -33,6 +38,7 @@ It also provides window helpers shared by all citkid GUIs:
   report the window as not responding.
 """
 
+import sys as _sys
 import threading as _threading
 import warnings as _warnings
 from html import escape as _escape
@@ -50,6 +56,9 @@ if _pg.Qt.QT_LIB != 'PyQt5':
 from pyqtgraph.Qt import (
     QtCore as _QtCore, QtGui as _QtGui, QtWidgets as _QtWidgets
 )
+
+# Qt bindings that must not be loaded alongside PyQt5 (``get_qapp``)
+_OTHER_BINDINGS = ('PyQt6', 'PySide2', 'PySide6')
 
 # Enum groups to probe for members.  Order matters: the first group that
 # contains the name wins.
@@ -255,9 +264,25 @@ def get_qapp(name=None):
 
     Returns:
     app (QApplication): the running application.
+
+    Raises:
+    RuntimeError: if another Qt binding (PyQt6, PySide2, PySide6) is loaded
+        when the application has to be created. Two Qt major versions in
+        one process segfault in QApplication, so this fails clearly first.
     """
     app = _QtWidgets.QApplication.instance()
     if app is None:
+        others = [lib for lib in _OTHER_BINDINGS if lib in _sys.modules]
+        if others:
+            raise RuntimeError(
+                f"citkid's Qt code uses PyQt5, but {', '.join(others)} "
+                f'{"is" if len(others) == 1 else "are"} also loaded, and '
+                'two Qt versions in one process crash when the '
+                'QApplication is created. rfmux.tools.periscope imports '
+                'PyQt6: import citkid before rfmux (it then sets '
+                'CRS_EMBEDDED so rfmux skips periscope), and do not import '
+                'periscope or other Qt6 code in the same process.'
+            )
         app = _pg.mkQApp(name)
         _use_system_ui_font(app)
         return app

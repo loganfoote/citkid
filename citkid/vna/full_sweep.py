@@ -1273,13 +1273,17 @@ def resonator_list(fit_grp, span_lw = 5.):
     Qr / ``span_lw`` (spans of ``span_lw`` linewidths), with the median Qr
     where Qr is NaN.
 
+    The list is sorted by frequency (the pipeline's gain cuts need it so).
+    Two neighboring fits can converge on each other's resonance and swap
+    order; a warning names them, since one of them is probably a bad fit.
+
     Parameters:
     fit_grp (zarr.Group): a ``full_sweep_fit`` group
         (``run_full_sweep_fit``).
     span_lw (float): span in linewidths. Default 5.
 
     Returns:
-    fres (np.array): resonance frequencies in Hz, in the fit's order.
+    fres (np.array): resonance frequencies in Hz, ascending.
     qres (np.array): span factors.
     Qr (np.array): total quality factors (NaN where unreliable).
     """
@@ -1294,4 +1298,11 @@ def resonator_list(fit_grp, span_lw = 5.):
     Qr[~(Qr > 0)] = np.nan
     fill = np.nanmedian(Qr) if np.isfinite(Qr).any() else 2e4
     qres = np.where(np.isfinite(Qr), Qr, fill) / span_lw
-    return fres, qres, Qr
+    order = np.argsort(fres, kind = 'stable')
+    crossed = np.flatnonzero(fres[1:] < fres[:-1])
+    if len(crossed):
+        pairs = ', '.join(f'{i} ({fres[i] / 1e6:.3f} MHz) and {i + 1} '
+                          f'({fres[i + 1] / 1e6:.3f} MHz)' for i in crossed)
+        warnings.warn(f'fits {pairs} swapped order (each may have fit the '
+                      "other's resonance); the list is sorted by frequency")
+    return fres[order], qres[order], Qr[order]

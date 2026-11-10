@@ -574,3 +574,25 @@ def test_resonator_list(tmp_path):
     np.testing.assert_allclose(qres, [2e3, 5e3, 5e3, 8e3])
     _, qres, _ = fs.resonator_list(grp, span_lw = 10.)
     np.testing.assert_allclose(qres, [1e3, 2.5e3, 2.5e3, 4e3])
+
+
+def test_resonator_list_sorts_crossed_fits(tmp_path):
+    """
+    Two neighboring fits that converged on each other's resonance leave
+    the fitted fr out of order: the list is sorted (Qr and qres along
+    with it) and the fits are named in a warning.
+    """
+    grp = zarr.open_group(str(tmp_path / 'g.zarr'), mode = 'w')
+    grp.create_array('fr', data = np.array([1e9, 2.2e9, 2.0e9, 3e9]))
+    grp.create_array('fres_input', data = np.array([1e9, 1.9e9, 2.1e9,
+                                                    3e9]))
+    grp.create_array('Qr', data = np.array([1e4, 2e4, 3e4, 4e4]))
+    for name, v in (('fit_status', ['ok'] * 4), ('flags', [''] * 4)):
+        arr = grp.create_array(name, shape = (4,), dtype = str,
+                               fill_value = '')
+        arr[:] = np.array(v)
+    with pytest.warns(UserWarning, match = 'fits 1 .* and 2 .* swapped'):
+        fres, qres, Qr = fs.resonator_list(grp)
+    np.testing.assert_array_equal(fres, [1e9, 2.0e9, 2.2e9, 3e9])
+    np.testing.assert_array_equal(Qr, [1e4, 3e4, 2e4, 4e4])
+    np.testing.assert_allclose(qres, [2e3, 6e3, 4e3, 8e3])

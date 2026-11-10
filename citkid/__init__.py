@@ -7,6 +7,12 @@ import os as _os
 # otherwise prefer. This only takes effect if pyqtgraph is imported after
 # citkid (``citkid.qt_compat`` checks).
 _os.environ['PYQTGRAPH_QT_LIB'] = 'PyQt5'
+# Importing rfmux also imports its periscope GUI, which loads PyQt6. Two Qt
+# major versions in one process crash (segfault) when the QApplication is
+# created, so tell rfmux to skip periscope (its switch for running on the
+# board, where PyQt6 is absent; rfmux.tools checks it on import). citkid
+# never uses periscope. This only works if rfmux is imported after citkid.
+_os.environ.setdefault('CRS_EMBEDDED', '1')
 
 try:
     from importlib.metadata import PackageNotFoundError, version

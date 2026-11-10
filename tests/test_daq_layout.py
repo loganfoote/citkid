@@ -314,6 +314,20 @@ def test_resonator_lists(store):
         dl.new_tuning(store, 5)
 
 
+def test_save_resonators_sorts_by_frequency(store):
+    """
+    An unsorted list is saved in ascending frequency order, with its span
+    factors and Qr sorted along with it.
+    """
+    dl.save_resonators(store, 3, [2e9, 1e9, 3e9], [2e4, 1e4, 3e4], 'x',
+                       Qr = [2e5, 1e5, np.nan])
+    res = dl.load_resonators(store, 3)
+    np.testing.assert_array_equal(res['res_idxs_all'], [0, 1, 2])
+    np.testing.assert_array_equal(res['fres_all'], [1e9, 2e9, 3e9])
+    np.testing.assert_array_equal(res['qres_all'], [1e4, 2e4, 3e4])
+    np.testing.assert_array_equal(res['Qr_all'], [1e5, 2e5, np.nan])
+
+
 def test_tones_round_trip(store):
     """
     Check saving and loading tones, the default tone set, and the length
