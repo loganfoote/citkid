@@ -6,7 +6,7 @@ zone, range, power, resolution, averaging), connects to the CRS, and waits
 for the Sweep button (Ctrl+R). The settings can be changed and the sweep
 run again; it shows |S21| and phase with the band edges and a rough count
 of the resonances (matched filter). Nothing is saved to zarr; the plot can be
-saved as a PNG. ``procedures/01_vna_quick_check.py`` is the script.
+saved as a PNG. ``procedures/vna_quick_check.py`` is the script.
 
 The CRS lives on a background thread with its own asyncio event loop
 (``AsyncWorker``), so the window stays responsive while sweeping. The

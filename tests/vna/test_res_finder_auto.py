@@ -394,11 +394,13 @@ def test_save_results(mock_update, synthetic_vna_data, tmp_path):
     fres_loaded = grp['fres_auto'][:]
     np.testing.assert_array_almost_equal(fres_loaded, finder.fres)
 
-    # Check parameters are stored as attributes
-    assert 'f_min' in grp.attrs
-    assert 'f_max' in grp.attrs
-    assert 'smoothing' in grp.attrs
-    assert 'height' in grp.attrs
+    # The settings are recorded in the res_finder_auto subgroup, not in
+    # the sweep group's attributes
+    rec = grp['res_finder_auto'].attrs
+    assert rec['finder'] == 'auto' and rec['n_found'] == len(finder.fres)
+    for key in ('f_min', 'f_max', 'smoothing', 'height'):
+        assert key in rec['settings']
+    assert 'f_min' not in grp.attrs
 
 
 @patch('citkid.vna.res_finder_auto.AutoResFinder.update_peaks')

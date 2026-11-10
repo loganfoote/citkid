@@ -238,6 +238,30 @@ def target_sweep_steps(
         idx = np.argsort(fg)
         return fg[idx], zg[idx]
 
+    def ts_positions(data_idx):
+        """
+        Map sweep rows to rows of the tone write. A write streamed in
+        chunks (``crs.procedures.stream_tone_sets``) holds only some of the
+        sweep's tones, with ``sweep_rows`` giving each one's sweep row;
+        other writes hold every tone in the sweep's order.
+
+        Parameters:
+        data_idx (np.ndarray): sweep rows (tone indices).
+
+        Returns:
+        pos (np.ndarray): rows in the write; -1 where the tone wasn't
+            streamed.
+        """
+        data_idx = np.asarray(data_idx, dtype = np.int64)
+        g = grp()
+        if f'{ts}/sweep_rows' not in g:
+            return data_idx
+        rows = np.asarray(g[f'{ts}/sweep_rows'][...], dtype = np.int64)
+        lut = np.full(max(int(rows.max(initial = -1)),
+                          int(data_idx.max(initial = -1))) + 1, -1)
+        lut[rows] = np.arange(len(rows))
+        return lut[data_idx]
+
     def load_ft(data_idx):
         """
         Load the timestream tone frequencies.
@@ -246,9 +270,17 @@ def target_sweep_steps(
         data_idx (np.ndarray): tone indices.
 
         Returns:
-        ft (np.ndarray): tone frequencies.
+        ft (np.ndarray): tone frequencies (NaN for tones not streamed in
+            this write).
         """
-        return grp()[f'{ts}/fres'][data_idx]
+        pos = ts_positions(data_idx)
+        if np.all(pos >= 0):
+            return grp()[f'{ts}/fres'][pos]
+        ft = np.full(pos.shape, np.nan)
+        ok = pos >= 0
+        if ok.any():
+            ft[ok] = grp()[f'{ts}/fres'][pos[ok]]
+        return ft
 
     def load_zt(data_idx):
         """
@@ -259,14 +291,20 @@ def target_sweep_steps(
 
         Returns:
         zt (np.ndarray): complex S21 timestreams, shape
-            (len(data_idx), nsamps).
+            (len(data_idx), nsamps); NaN rows for tones not streamed in
+            this write.
         """
         g = grp()
-        zt = g[f'{stream}/z'][:, data_idx, ts_slice]
-        zt = zt[0] + 1j * zt[1]
-        zt *= np.asarray(
-            g[f'{stream}/counts_to_s21'][data_idx])[:, np.newaxis]
-        return zt
+        pos = np.atleast_1d(ts_positions(data_idx))
+        ok = pos >= 0
+        z = g[f'{stream}/z']
+        nsamps = len(range(z.shape[2])[ts_slice])
+        zt = np.full((len(pos), nsamps), np.nan + 1j * np.nan)
+        if ok.any():
+            zs = z[:, pos[ok], ts_slice]
+            zt[ok] = (zs[0] + 1j * zs[1]) * np.asarray(
+                g[f'{stream}/counts_to_s21'][pos[ok]])[:, np.newaxis]
+        return zt if np.ndim(data_idx) else zt[0]
 
     global_names = ['fres_all', 'qres_all', 'nrows']
     if ts is not None:

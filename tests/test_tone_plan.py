@@ -242,3 +242,36 @@ def test_plan_invalid(args, kwargs, match):
 def test_plan_no_tones():
     plan = plan_tone_sets([], [1])
     assert plan['ncos'] == [] and plan['window_edges'].shape == (0, 2)
+
+
+################################################################################
+########################### place_cal_tones ####################################
+################################################################################
+def test_place_cal_tones_widest_gaps():
+    from citkid.tone_plan import place_cal_tones
+    fr = np.array([1.00e9, 1.01e9, 1.05e9, 1.06e9])
+    lw = np.full(4, 5e4)
+    f = place_cal_tones(fr, lw, 0.99e9, 1.10e9, 2)
+    # Widest gaps: 1.06-1.10 (edge) and 1.01-1.05
+    np.testing.assert_allclose(f, [1.03e9, 1.08e9])
+    assert len(place_cal_tones(fr, lw, 0.99e9, 1.10e9, 0)) == 0
+    # Asking for more than there are gaps returns what there is
+    assert len(place_cal_tones(fr, lw, 0.99e9, 1.10e9, 10)) == 5
+
+
+def test_place_cal_tones_clearance():
+    from citkid.tone_plan import place_cal_tones
+    # A wide resonance next to a gap's middle rules it out
+    fr = np.array([1.00e9, 1.02e9, 1.021e9])
+    lw = np.array([5e4, 5e4, 2e6])     # the last is very wide
+    f = place_cal_tones(fr, lw, 1.00e9, 1.022e9, 3, min_sep_lw = 10.)
+    assert not np.any(np.isclose(f, 1.0205e9))
+    for fc in f:
+        assert np.all(np.abs(fc - fr) >= 10 * lw)
+    # NaN linewidths use the median
+    f2 = place_cal_tones(fr, [5e4, np.nan, 5e4], 1.0e9, 1.022e9, 1)
+    assert len(f2) == 1
+    with pytest.raises(ValueError):
+        place_cal_tones(fr, lw[:2], 1e9, 2e9, 1)
+    with pytest.raises(ValueError):
+        place_cal_tones(fr, lw, 2e9, 1e9, 1)

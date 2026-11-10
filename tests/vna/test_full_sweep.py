@@ -52,6 +52,26 @@ def test_fit_full_sweep_workers_identical(full_sweep):
         else:
             assert list(a[c]) == list(b[c])
 
+@pytest.mark.parametrize('status, flags, expected', [
+    ('ok', '', (1, 1, 1, 1)),
+    ('stage_a', '', (1, 1, 1, 1)),
+    ('ok', 'overlap', (1, 1, 0, 0)),
+    ('ok', 'poor fit', (1, 0, 0, 0)),
+    ('ok', 'overlap, distorted', (1, 0, 0, 0)),
+    ('ok', 'bifurcated', (1, 0, 0, 0)),
+    ('failed: not fit', '', (0, 0, 0, 0)),
+    ('failed: Qr at a bound', 'overlap', (0, 0, 0, 0)),
+])
+def test_parameter_masks(status, flags, expected):
+    m = fs.parameter_masks([status, 'ok'], [flags, ''])
+    got = tuple(int(m[k][0]) for k in ('valid_fr', 'valid_Qi', 'valid_Qc',
+                                       'valid_phi'))
+    assert got == expected
+    assert all(m[k][1] for k in m)
+    with pytest.raises(ValueError, match = 'same length'):
+        fs.parameter_masks(['ok'], [])
+
+
 def test_run_full_sweep_fit(full_sweep, tmp_path, capsys):
     f, z, gain, t = full_sweep
     path = str(tmp_path / 'sweep.zarr')
@@ -65,6 +85,9 @@ def test_run_full_sweep_fit(full_sweep, tmp_path, capsys):
     for c in fs.FIT_COLUMNS:
         assert out[c].shape == (len(t['fr']),)
     assert out['fit_status'][0] == 'ok'
+    masks = fs.parameter_masks(out['fit_status'][:], out['flags'][:])
+    for name, mask in masks.items():
+        np.testing.assert_array_equal(out[name][:], mask)
     assert out['gain/gain'].dtype == np.complex128
     assert out.attrs['report'] == report
     assert out.attrs['fit_nonlinear'] is False
@@ -530,3 +553,24 @@ def test_run_full_sweep_fit_no_phase(tmp_path):
     with pytest.raises(ValueError, match = 'no usable phase'):
         fs.run_full_sweep_fit(f, np.abs(z), grp, progress = False)
     assert 'full_sweep_fit' not in grp
+
+
+def test_resonator_list(tmp_path):
+    grp = zarr.open_group(str(tmp_path / 'g.zarr'), mode = 'w')
+    grp.create_array('fr', data = np.array([1e9, np.nan, 2e9, 3e9]))
+    grp.create_array('fres_input', data = np.array([1e9, 1.5e9, 2e9,
+                                                    3.001e9]))
+    grp.create_array('Qr', data = np.array([1e4, 2e4, 3e4, 4e4]))
+    for name, v in (('fit_status', ['ok', 'failed: not fit', 'ok', 'ok']),
+                    ('flags', ['overlap', '', 'poor fit', ''])):
+        arr = grp.create_array(name, shape = (4,), dtype = str,
+                               fill_value = '')
+        arr[:] = np.array(v)
+    fres, qres, Qr = fs.resonator_list(grp)
+    np.testing.assert_array_equal(fres, [1e9, 1.5e9, 2e9, 3e9])
+    # Qr kept with overlap (fine for linewidths), not for a failed or poor
+    # fit; spans of 5 linewidths, the median Qr where unknown
+    np.testing.assert_array_equal(Qr, [1e4, np.nan, np.nan, 4e4])
+    np.testing.assert_allclose(qres, [2e3, 5e3, 5e3, 8e3])
+    _, qres, _ = fs.resonator_list(grp, span_lw = 10.)
+    np.testing.assert_allclose(qres, [1e3, 2.5e3, 2.5e3, 4e3])

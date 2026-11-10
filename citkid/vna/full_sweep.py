@@ -191,6 +191,38 @@ def reliability_flags(
                       for i in range(len(excess))], dtype = object)
     return flags, misfit
 
+def parameter_masks(fit_status, flags):
+    """
+    Decide which fitted parameters of each resonance are reliable.
+
+    The independent parameters are fr, Qi, Qc, and phi (Qr and amp follow
+    from Qi and Qc and are as reliable as Qc). A neighbor's reflections
+    dress the pole (Qr, Qc, amp, phi) but not the transmission zero (fr,
+    Qi), so 'overlap' keeps fr and Qi. A poor fit, a distorted line shape,
+    or a fit beyond bifurcation keeps only fr; a failed fit keeps nothing.
+
+    Parameters:
+    fit_status (array-like str): ``fit_full_sweep`` fit status ('ok',
+        'stage_a', or 'failed: ...').
+    flags (array-like str): ``reliability_flags`` flags (comma-separated).
+
+    Returns:
+    masks (dict): ``valid_fr``, ``valid_Qi``, ``valid_Qc``, ``valid_phi``
+        (np.array, bool), True where the parameter is reliable.
+    """
+    status = np.asarray(fit_status, dtype = str)
+    flags = [set(s.strip() for s in str(fl).split(',') if s.strip())
+             for fl in flags]
+    if len(flags) != len(status):
+        raise ValueError('fit_status and flags must have the same length')
+    ok = np.array([not s.startswith('failed') for s in status], bool)
+    bad_shape = np.array([bool(fl & {'poor fit', 'distorted',
+                                     'bifurcated'}) for fl in flags], bool)
+    overlap = np.array(['overlap' in fl for fl in flags], bool)
+    pole = ok & ~bad_shape & ~overlap
+    return dict(valid_fr = ok, valid_Qi = ok & ~bad_shape,
+                valid_Qc = pole, valid_phi = pole.copy())
+
 ################################################################################
 ############################ Bookkeeping functions #############################
 ################################################################################
@@ -1134,7 +1166,9 @@ def run_full_sweep_fit(
         fres_input, fr, fr_err, Qr, Qr_err, Qi, Qi_err, Qc, Qc_err, amp,
         amp_err, phi, phi_err, a, a_err, snr, nrmse (float arrays, one per
         listed frequency, in the order of ``fres_manual``), fit_status,
-        flags (str arrays), group (int array);
+        flags (str arrays), group (int array); valid_fr, valid_Qi,
+        valid_Qc, valid_phi (bool arrays, ``parameter_masks``: Qr and amp
+        are as reliable as Qc);
         gain/f, gain/gain: the analyzed frequencies and the smooth complex
         gain there (gain-removed S21 = z / gain after the same preparation);
         attrs: created, citkid_version, source, fit_nonlinear, downward,
@@ -1203,6 +1237,9 @@ def run_full_sweep_fit(
             out.create_array(c, data = res[c].values.astype(np.int64))
         else:
             out.create_array(c, data = res[c].values.astype(np.float64))
+    for name, mask in parameter_masks(res['fit_status'],
+                                      res['flags']).items():
+        out.create_array(name, data = mask)
     g = out.create_group('gain')
     g.create_array('f', data = f)
     g.create_array('gain', data = gain)
@@ -1222,3 +1259,39 @@ def run_full_sweep_fit(
         q_variation = rinfo['q'],
         report = report)))
     return res, report
+
+def resonator_list(fit_grp, span_lw = 5.):
+    """
+    Build a resonator list for tuning from a saved full sweep fit.
+
+    Frequencies are the fitted fr, or the input frequency where the fit
+    failed. Qr is kept for linewidths (tone spacing and spans) where Qi is
+    reliable (``valid_Qi``): a neighbor's reflections move Qr by up to the
+    coupling (``coupling_error``), which is good enough for linewidths and
+    better than a typical value for exactly the close resonators the
+    spacing rules are for. Elsewhere it is NaN. The span factors are
+    Qr / ``span_lw`` (spans of ``span_lw`` linewidths), with the median Qr
+    where Qr is NaN.
+
+    Parameters:
+    fit_grp (zarr.Group): a ``full_sweep_fit`` group
+        (``run_full_sweep_fit``).
+    span_lw (float): span in linewidths. Default 5.
+
+    Returns:
+    fres (np.array): resonance frequencies in Hz, in the fit's order.
+    qres (np.array): span factors.
+    Qr (np.array): total quality factors (NaN where unreliable).
+    """
+    fr, fin = fit_grp['fr'][:], fit_grp['fres_input'][:]
+    if 'valid_fr' in fit_grp:
+        valid_fr, valid_Qi = fit_grp['valid_fr'][:], fit_grp['valid_Qi'][:]
+    else:
+        m = parameter_masks(fit_grp['fit_status'][:], fit_grp['flags'][:])
+        valid_fr, valid_Qi = m['valid_fr'], m['valid_Qi']
+    fres = np.where(valid_fr & np.isfinite(fr), fr, fin)
+    Qr = np.where(valid_Qi, fit_grp['Qr'][:], np.nan)
+    Qr[~(Qr > 0)] = np.nan
+    fill = np.nanmedian(Qr) if np.isfinite(Qr).any() else 2e4
+    qres = np.where(np.isfinite(Qr), Qr, fill) / span_lw
+    return fres, qres, Qr

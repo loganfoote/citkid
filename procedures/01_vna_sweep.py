@@ -1,5 +1,5 @@
 """
-02: full VNA sweep of one device, saved to its store.
+01: full VNA sweep of one device, saved to its store.
 
 Sweeps the first Nyquist zone (100-2500 MHz), the second (2500-5000
 MHz), or both with this session's modules, leaving a 10 MHz guard band on
@@ -7,19 +7,19 @@ each side of 2500 MHz (the point nearest it glitches), in several passes
 if the range is wider than the modules cover at once, on a geometric grid
 (constant df/f, from the expected median Qr: 25 points per linewidth
 there by default; every channel sweeps downward), and saves the stitched
-sweep as the next ``vna/sweep{k}`` of the device store
+sweep as the next ``vna{k}`` of the device store
 ``<DATA_DIR>/<COOLDOWN>/<DEVICE>.zarr`` (created if needed; see
 ``documents/daq_layout.md``). The next step finds the resonances on it.
 
-Needs the board configured by 00_crs_init.py. This session attaches to
+Needs the board configured by crs_init.py. This session attaches to
 its modules only, so several of these can run at once, one per device.
 Before sweeping, it checks that the CRS (serial number, firmware, rfmux)
 is the one the store was measured with; the other CRS settings may differ
 between acquisitions and are saved with the sweep.
 
 Usage:
-    python 02_vna_sweep.py --device deviceA --modules 1
-    python 02_vna_sweep.py --device deviceA --modules 1 2 3 4 --nyquist both
+    python 01_vna_sweep.py --device deviceA --modules 1
+    python 01_vna_sweep.py --device deviceA --modules 1 2 3 4 --nyquist both
 
 Edit the settings below for your setup; the command-line options override
 them for one run.
@@ -108,7 +108,7 @@ async def main(args):
     args (argparse.Namespace): options from ``parse_args``.
 
     Returns:
-    k (int): index of the saved sweep (``vna/sweep{k}``).
+    k (int): index of the saved sweep (``vna{k}``).
     """
     path = store_path(args)
     root = dl.create_store(path, args.device, args.cooldown, setup = SETUP)
@@ -121,7 +121,7 @@ async def main(args):
         crs, root, fmin, fmax, args.amplitude, args.nsamps,
         step = vna_step(args.qr_median, args.pts_per_lw),
         npoints_per_ch = args.npoints)
-    print(f'Saved {len(f)} points as vna/sweep{k} in {path}')
+    print(f'Saved {len(f)} points as vna{k} in {path}')
     print(dl.tree(root, max_depth = 2))
     return k
 

@@ -276,3 +276,58 @@ def plan_tone_sets(
     return dict(tone_set = tone_set, tone_module = tone_module, ncos = ncos,
                 extended_bw = bool(use_ext), window_edges = window_edges,
                 window_ncos = window_ncos)
+
+def place_cal_tones(fres_all, lw, lo, hi, n, min_sep_lw = 10.):
+    """
+    Place calibration tones (off resonance) in a frequency window, at the
+    middles of the widest gaps between resonances.
+
+    The gaps are those between consecutive resonances in ``fres_all``
+    inside [lo, hi], and between the window's edges and the nearest
+    resonances. A gap's middle is kept if it is at least ``min_sep_lw``
+    linewidths from every resonance (each resonance's own linewidth); the
+    widest such gaps get the tones.
+
+    Parameters:
+    fres_all (array-like): every resonance frequency in Hz (with or
+        without tones).
+    lw (array-like): their linewidths fr / Qr in Hz. NaN (no fit) is
+        replaced by the median of the finite linewidths.
+    lo, hi (float): window in Hz (e.g. an NCO window less its edge margin).
+    n (int): number of tones wanted.
+    min_sep_lw (float): smallest distance from a resonance, in its
+        linewidths. Default 10.
+
+    Returns:
+    fcal (np.array): tone frequencies in Hz, ascending (fewer than ``n``
+        if not enough gaps qualify).
+
+    Raises:
+    ValueError: if the inputs are invalid.
+    """
+    fres_all = np.asarray(fres_all, dtype = np.float64)
+    lw = np.asarray(lw, dtype = np.float64)
+    if fres_all.shape != lw.shape or fres_all.ndim != 1:
+        raise ValueError('fres_all and lw must be 1D arrays of one length')
+    if not hi > lo or int(n) != n or n < 0:
+        raise ValueError('need hi > lo and a non-negative integer n')
+    if int(n) == 0:
+        return np.zeros(0)
+    good = np.isfinite(lw) & (lw > 0)
+    fill = np.median(lw[good]) if good.any() else 0.
+    lw = np.where(good, lw, fill)
+    o = np.argsort(fres_all)
+    f, w = fres_all[o], lw[o]
+    inside = (f >= lo) & (f <= hi)
+    edges = np.concatenate(([lo], f[inside], [hi]))
+    mids = 0.5 * (edges[:-1] + edges[1:])
+    width = np.diff(edges)
+    if len(f):
+        # Distance to every resonance, in its own linewidths
+        d = np.abs(mids[:, None] - f[None, :]) / w[None, :]
+        ok = d.min(axis = 1) >= min_sep_lw
+    else:
+        ok = np.ones(len(mids), bool)
+    cand = np.flatnonzero(ok)
+    best = cand[np.argsort(-width[cand], kind = 'stable')][:int(n)]
+    return np.sort(mids[best])

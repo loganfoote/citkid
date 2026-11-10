@@ -1,8 +1,9 @@
 """
-00: configure the CRS board.
+Configure the CRS board (not a numbered step: run it whenever the
+board needs configuring, e.g. after a power cycle).
 
-Run once before the module scripts (01_vna_quick_check.py,
-02_vna_sweep.py, ...).
+Run it before the module scripts (vna_quick_check.py, 01_vna_sweep.py,
+...), and again whenever the board loses its configuration.
 This session has global control: it sets the clock source, analog bank,
 DAC full scale, extended bandwidth, and decimation (stage 6, streaming
 every module in the bank, so other sessions can sweep), then exits. The
@@ -13,8 +14,8 @@ Running this again while other scripts are measuring resets the board
 under them.
 
 Usage:
-    python 00_crs_init.py
-    python 00_crs_init.py --clock SMA --extended-bw
+    python crs_init.py
+    python crs_init.py --clock SMA --extended-bw
 
 Edit the settings below for your setup; the command-line options override
 them for one run.

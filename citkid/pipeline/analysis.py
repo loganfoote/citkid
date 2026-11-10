@@ -91,6 +91,48 @@ class AnalysisRunner:
                 for index, step_dict in enumerate(self.path, start=1)
             }
 
+    def missing_rows(self):
+        """
+        Return the rows the analysis path hasn't finished: those without the
+        first output of its last step.
+
+        Returns:
+        rows (np.ndarray, int): row indices, ascending.
+        """
+        name = self.path[-1]["task"].return_names[0]
+        nrows = len(np.atleast_1d(self.DS.res_idxs[:]))
+        return np.array([r for r in range(nrows)
+                         if not self._param_available(name, r)], dtype=int)
+
+    def execute_remaining(self, verbose=True, **execute_kwargs):
+        """
+        Run the analysis path on the rows it hasn't finished
+        (``missing_rows``), e.g. after reviewing some rows interactively or
+        when continuing an interrupted run. Leading global steps whose
+        outputs already exist are skipped, so finished rows are kept.
+
+        Parameters:
+        verbose (bool): If True (default), show a progress bar.
+        **execute_kwargs: other ``execute_path`` parameters (not
+            ``data_idx`` or ``step_start_idx``).
+
+        Returns:
+        rows (np.ndarray, int): the rows that were run (empty if none).
+        """
+        rows = self.missing_rows()
+        if not len(rows):
+            return rows
+        start = 0
+        for step_dict in self.path:
+            task = step_dict["task"]
+            if task.func_type != "global" or not all(
+                    self._param_available(n, None) for n in task.return_names):
+                break
+            start += 1
+        self.execute_path(data_idx=rows, step_start_idx=start,
+                          verbose=verbose, **execute_kwargs)
+        return rows
+
     def execute_path(
         self, data_idx=None, step_start_idx=0, step_end_idx=None, verbose=True,
         save=True, vectorize=True, path_per_row=False,

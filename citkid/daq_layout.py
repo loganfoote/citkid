@@ -5,9 +5,10 @@ organized as a tree that follows the measurement procedure (see
 
 ```
 <device>.zarr/
-├── vna/sweep{k}/          raw VNA sweeps (stitched over bands)
-├── resonators/            resonator identities (res_idxs_all, ...)
+├── vna{k}/                raw VNA sweeps (stitched over bands)
+├── resonators{k}/         resonators found on vna{k} (res_idxs_all, ...)
 └── tune{k}/               tunings: crs_config/, tones_init/, tones/, ...
+                           (attrs['resonators']: the list they use)
     └── sweep{j}/write{w}/ts{s}/
 ```
 
@@ -37,7 +38,9 @@ ACQ_MODULE_SETTINGS = ('adc_calibration_mode', 'adc_autocal')
 VNA_BAND_ARRAYS = ('chunk_edges', 'chunk_ncos', 'chunk_modules',
                    'chunk_passes', 'chunk_zones', 'chunk_nchannels',
                    'chunk_times')
-TONE_ARRAYS = ('fres', 'qres', 'ares', 'res_idxs', 'tone_set')
+TONE_ARRAYS = ('fres', 'qres', 'ares', 'res_idxs', 'tone_set',
+               'tone_module')
+RESONATORS_PREFIX = 'resonators'
 RESONATOR_ARRAYS = ('res_idxs_all', 'fres_all', 'qres_all', 'Qr_all',
                     'source_all')
 # Largest chunk of a 1D array; longer arrays are sharded into one file
@@ -192,7 +195,7 @@ def create_group(parent, name, kind, attrs = None, overwrite = False):
 
     Parameters:
     parent (zarr.Group): parent group.
-    name (str): group name (may be a path, e.g. 'vna/sweep0').
+    name (str): group name (may be a path, e.g. 'tune0/tones').
     kind (str): 'raw', 'decision', or 'analysis'.
     attrs (dict or None): more attributes. Default None.
     overwrite (bool): If True, replace an existing 'decision' or 'analysis'
@@ -225,7 +228,7 @@ def create_group(parent, name, kind, attrs = None, overwrite = False):
 
 def require_group(parent, name, kind):
     """
-    Open a layout group, creating it if needed (e.g. the ``vna`` container
+    Open a layout group, creating it if needed (e.g. a ``power_sweep``
     that holds the ``sweep{k}`` groups).
 
     Parameters:
@@ -388,6 +391,33 @@ def acquisition_settings(crs):
             for m in sorted(crs.module_cfg)
             if m in crs.active_module_idxs})
 
+def tuning_config(crs, plan):
+    """
+    Return a tuning's CRS settings with its tone-set plan: the NCOs are
+    those of each tone set, not the board's current ones.
+
+    Parameters:
+    crs (CRS): configured CRS instrument.
+    plan (dict): ``tone_plan.plan_tone_sets`` output.
+
+    Returns:
+    config (dict): ``tune_config`` without ``ncos``, plus ``tone_sets``
+        (per set, {module: NCO in Hz}).
+
+    Raises:
+    ValueError: if the plan's ``extended_bw`` differs from the board's.
+    """
+    if bool(plan['extended_bw']) != bool(crs.extended_bw):
+        raise ValueError(
+            f"the plan uses extended_bw = {plan['extended_bw']}, the board "
+            f'{crs.extended_bw}: plan with the board\'s setting, or change '
+            'it with crs_init.py')
+    config = tune_config(crs)
+    del config['ncos']
+    config['tone_sets'] = [{str(m): float(f) for m, f in s.items()}
+                           for s in plan['ncos']]
+    return config
+
 def write_tune_config(tune_grp, config):
     """
     Save a tuning's CRS settings as ``tune{k}/crs_config``.
@@ -408,7 +438,9 @@ def check_tune_config(tune_grp, crs, rtol = 1e-9, atol = 1e-6):
     Check that the board matches a tuning's saved CRS settings.
 
     Only the settings of ``tune_config`` are compared; extra keys in the
-    saved config (e.g. the tone-set plan) are ignored.
+    saved config are ignored. With a tone-set plan (``tuning_config``), the
+    NCOs are not compared: each pass sets its tone set's NCOs from the
+    saved plan.
 
     Parameters:
     tune_grp (zarr.Group): tuning group with ``crs_config``.
@@ -421,6 +453,8 @@ def check_tune_config(tune_grp, crs, rtol = 1e-9, atol = 1e-6):
     """
     saved = tune_grp['crs_config'].attrs['config']
     now = to_jsonable(tune_config(crs))
+    if 'tone_sets' in saved:
+        del now['ncos']
     diffs = _diff(saved, now, rtol, atol)
     if diffs:
         raise RuntimeError(
@@ -471,7 +505,7 @@ def save_vna_sweep(
     Save a stitched VNA sweep and its band arrays in a raw sweep group.
 
     Parameters:
-    sweep_grp (zarr.Group): the raw ``vna/sweep{k}`` group, empty.
+    sweep_grp (zarr.Group): the raw ``vna{k}`` group, empty.
     f (np.array): frequencies in Hz.
     z (np.array): complex S21, same shape as ``f``.
     chunk_edges (np.array): (nb, 2) first and last frequency of each band
@@ -528,9 +562,8 @@ def load_vna_sweep(root, k = None, bands = False):
     band_arrays (dict): only if ``bands``: ``VNA_BAND_ARRAYS`` by name.
     """
     root = open_store(root)
-    vna = root['vna']
-    k = latest_index(vna, 'sweep') if k is None else int(k)
-    grp = vna[set_name(k, 'sweep')]
+    k = latest_index(root, 'vna') if k is None else int(k)
+    grp = root[set_name(k, 'vna')]
     f, z = grp['f'][:], grp['z'][:]
     if not bands:
         return f, z
@@ -539,82 +572,136 @@ def load_vna_sweep(root, k = None, bands = False):
 ################################################################################
 ################################# Resonators ###################################
 ################################################################################
-def add_resonators(root, fres, qres, source, Qr = None):
+def save_resonators(
+    root, k, fres, qres, source, Qr = None, overwrite = False
+):
     """
-    Append resonators to the store's identity table (``resonators/``),
-    creating it if needed.
+    Save a resonator list as ``resonators{k}``: the resonators found on VNA
+    sweep ``vna{k}`` (or a list ported from another store).
 
-    New resonators get indices max + 1, max + 2, ...; existing indices are
-    never changed, so ``res_idxs`` mean the same thing in every tuning.
+    The resonators get indices 0 ... n - 1 (``res_idxs_all``). Each tuning
+    records which list its ``res_idxs`` refer to (``attrs['resonators']``,
+    see ``new_tuning``), so a list can't be replaced once a tuning uses it.
 
     Parameters:
     root (zarr.Group): store root, writable.
-    fres (array-like): new resonance frequencies in Hz.
+    k (int): list index (the VNA sweep's index).
+    fres (array-like): resonance frequencies in Hz.
     qres (array-like or float): span factors for cutting them out of gain
         fits, one per resonator or one for all.
-    source (str): where they were found, e.g. 'vna/sweep0'.
+    source (str): where they were found, e.g. 'vna0/full_sweep_fit'.
     Qr (array-like or None): fitted total quality factors (NaN where the
-        fit failed), used for linewidths (e.g. ``tone_plan.select_isolated``).
-        None (default): all NaN.
+        fit is unreliable), used for linewidths (e.g.
+        ``tone_plan.select_isolated``). None (default): all NaN.
+    overwrite (bool): If True, replace an existing list that no tuning
+        uses. Default False.
 
     Returns:
-    res_idxs (np.array, int32): indices of the new resonators.
+    grp (zarr.Group): the ``resonators{k}`` group.
+
+    Raises:
+    FileExistsError: if the list exists and ``overwrite`` is False.
+    ValueError: if the list exists and a tuning uses it, or ``fres`` is
+        not 1D.
     """
     fres = np.atleast_1d(np.asarray(fres, dtype = np.float64))
+    if fres.ndim != 1:
+        raise ValueError('fres must be 1D')
     qres = np.broadcast_to(np.asarray(qres, dtype = np.float64),
                            fres.shape).copy()
     Qr = np.full(fres.shape, np.nan) if Qr is None else \
         np.broadcast_to(np.asarray(Qr, dtype = np.float64), fres.shape).copy()
-    if fres.ndim != 1:
-        raise ValueError('fres must be 1D')
-    old = load_resonators(root) if 'resonators' in root else None
-    start = int(old['res_idxs_all'].max()) + 1 \
-        if old is not None and len(old['res_idxs_all']) else 0
-    new = dict(
-        res_idxs_all = np.arange(start, start + len(fres), dtype = np.int32),
+    name = set_name(int(k), RESONATORS_PREFIX)
+    if name in root:
+        users = tunings_using(root, name)
+        if users:
+            raise ValueError(f'{name} is used by {users}; its res_idxs '
+                             'must not change')
+        if not overwrite:
+            raise FileExistsError(f'{name} exists; pass overwrite = True '
+                                  'to replace it')
+    grp = create_group(root, name, 'decision', attrs = dict(source = source),
+                       overwrite = overwrite)
+    arrays = dict(
+        res_idxs_all = np.arange(len(fres), dtype = np.int32),
         fres_all = fres, qres_all = qres, Qr_all = Qr,
         source_all = np.full(len(fres), str(source)))
-    if old is not None:
-        merged = {k: np.concatenate((old[k], new[k]))
-                  for k in RESONATOR_ARRAYS}
-        attrs = dict(root['resonators'].attrs)
-        del root['resonators']
-        grp = root.create_group('resonators')
-        grp.attrs.update(attrs)
-    else:
-        merged = new
-        grp = create_group(root, 'resonators', 'decision')
-    for name in RESONATOR_ARRAYS:
-        write_array(grp, name, merged[name])
-    return new['res_idxs_all']
+    for key in RESONATOR_ARRAYS:
+        write_array(grp, key, arrays[key])
+    return grp
 
-def load_resonators(root):
+def load_resonators(root, k = None):
     """
-    Load the resonator identity table.
+    Load a resonator list.
 
     Parameters:
     root (zarr.Group, str, or os.PathLike): store root or path.
+    k (int or str or None): list index, or a group name such as a
+        tuning's ``attrs['resonators']``. None (default): the latest.
 
     Returns:
     resonators (dict): ``RESONATOR_ARRAYS`` by name (``source_all`` as
-        str; ``Qr_all`` NaN if the table has none).
+        str; ``Qr_all`` NaN if the list has none).
     """
-    grp = open_store(root)['resonators']
-    out = {name: grp[name][:] for name in RESONATOR_ARRAYS if name in grp}
+    root = open_store(root)
+    if k is None:
+        k = latest_index(root, RESONATORS_PREFIX)
+    name = k if isinstance(k, str) else set_name(int(k), RESONATORS_PREFIX)
+    grp = root[name]
+    out = {key: grp[key][:] for key in RESONATOR_ARRAYS if key in grp}
     if 'Qr_all' not in out:
         out['Qr_all'] = np.full(len(out['fres_all']), np.nan)
     out['source_all'] = np.asarray(out['source_all'], dtype = str)
     return out
 
+def tunings_using(root, name):
+    """
+    List the tunings whose ``res_idxs`` refer to a resonator list.
+
+    Parameters:
+    root (zarr.Group): store root.
+    name (str): resonator list, e.g. 'resonators0'.
+
+    Returns:
+    names (list of str): tuning group names, e.g. ['tune0'].
+    """
+    return [set_name(j, 'tune') for j in list_indices(root, 'tune')
+            if root[set_name(j, 'tune')].attrs.get('resonators') == name]
+
+def new_tuning(root, resonators, attrs = None):
+    """
+    Create the next tuning, ``tune{k}``, recording the resonator list its
+    ``res_idxs`` refer to.
+
+    Parameters:
+    root (zarr.Group): store root, writable.
+    resonators (int or str): resonator list index or group name.
+    attrs (dict or None): more attributes. Default None.
+
+    Returns:
+    grp (zarr.Group): the new tuning.
+    k (int): its index.
+
+    Raises:
+    KeyError: if the resonator list doesn't exist.
+    """
+    name = resonators if isinstance(resonators, str) else \
+        set_name(int(resonators), RESONATORS_PREFIX)
+    if name not in root:
+        raise KeyError(f'no resonator list {name!r}')
+    return new_indexed_group(root, 'tune', 'decision',
+                             attrs = dict(attrs or {}, resonators = name))
+
 ################################################################################
 ################################### Tones ######################################
 ################################################################################
 def save_tones(
-    grp, fres, qres, ares, res_idxs, tone_set = None, source = None
+    grp, fres, qres, ares, res_idxs, tone_set = None, tone_module = None,
+    source = None
 ):
     """
     Save a tone list (``fres``, ``qres``, ``ares``, ``res_idxs``,
-    ``tone_set``) in a group.
+    ``tone_set``, and ``tone_module`` if given) in a group.
 
     Parameters:
     grp (zarr.Group): group, e.g. a new ``tones`` or ``tones_init`` group.
@@ -625,6 +712,8 @@ def save_tones(
         tones).
     tone_set (array-like int or None): tone set of each tone. None
         (default): all in set 0.
+    tone_module (array-like int or None): module of each tone (from the
+        tone-set plan). None (default): not saved.
     source (dict or None): where each array came from, saved as
         ``attrs['source']`` (e.g. {'fres': 'tune0/fq_sweep/fres_opt'}).
         Default None.
@@ -642,9 +731,11 @@ def save_tones(
         res_idxs = np.asarray(res_idxs, dtype = np.int32),
         tone_set = np.zeros(n, dtype = np.int32) if tone_set is None
         else np.asarray(tone_set, dtype = np.int32))
+    if tone_module is not None:
+        arrays['tone_module'] = np.asarray(tone_module, dtype = np.int32)
     if any(v.shape != (n,) for v in arrays.values()):
-        raise ValueError('fres, qres, ares, res_idxs and tone_set must '
-                         'have the same length')
+        raise ValueError('fres, qres, ares, res_idxs, tone_set and '
+                         'tone_module must have the same length')
     for name, value in arrays.items():
         write_array(grp, name, value)
     if source is not None:
@@ -659,12 +750,148 @@ def load_tones(grp):
 
     Returns:
     tones (dict): ``TONE_ARRAYS`` by name; ``tone_set`` is all zeros if the
-        group has none.
+        group has none, and ``tone_module`` is left out if it has none.
     """
     out = {name: grp[name][:] for name in TONE_ARRAYS if name in grp}
     if 'tone_set' not in out:
         out['tone_set'] = np.zeros(len(out['fres']), dtype = np.int32)
     return out
+
+################################################################################
+################################### Streams ####################################
+################################################################################
+def _store_root(grp):
+    """
+    Open the root of the store a group is in, read-only.
+
+    Parameters:
+    grp (zarr.Group): any group of the store.
+
+    Returns:
+    root (zarr.Group): the store root.
+    """
+    return zarr.open_group(grp.store, path = '', mode = 'r')
+
+def stream_runs(tune):
+    """
+    Return a tuning's stream runs (``crs.procedures.stream_tone_sets``),
+    with each run's chunk layout.
+
+    Parameters:
+    tune (zarr.Group): the tuning.
+
+    Returns:
+    runs (list of dict): per run, in order: the saved record (``name``,
+        ``notes``, ``dec_stage``, ``duration_s``, ``time``, ``paths``) plus
+        ``run`` (index), ``nsamples``, ``chunk_samples`` (zarr chunk length
+        along time), ``n_chunks``, and ``chunk_s`` (chunk length in s).
+    """
+    if 'streams' not in tune:
+        return []
+    root = _store_root(tune)
+    out = []
+    for i, run in enumerate(tune['streams'].attrs.get('runs', [])):
+        run = dict(run, run = i)
+        if run['paths']:
+            ts = root[run['paths'][0]]
+            n, chunk = int(ts['z'].shape[2]), int(ts['z'].chunks[2])
+            dt = float(ts['dt'][...])
+            run.update(nsamples = n, chunk_samples = chunk,
+                       n_chunks = -(-n // chunk), chunk_s = chunk * dt)
+        out.append(run)
+    return out
+
+def describe_stream_runs(tune):
+    """
+    Describe a tuning's stream runs, one line each, for choosing what to
+    calibrate.
+
+    Parameters:
+    tune (zarr.Group): the tuning.
+
+    Returns:
+    text (str): the description.
+    """
+    lines = [f'{tune.basename} stream runs (run: name, stage, length, '
+             'zarr chunks, notes):']
+    for r in stream_runs(tune):
+        chunks = (f"{r['n_chunks']} chunks of {r['chunk_s']:.3g} s"
+                  if 'n_chunks' in r else 'no streams')
+        lines.append(f"  {r['run']}: {r['name']}, stage {r['dec_stage']}, "
+                     f"{r['duration_s']:g} s, {chunks}"
+                     + (f", {r['notes']}" if r['notes'] else ''))
+    if len(lines) == 1:
+        lines.append('  none')
+    return '\n'.join(lines)
+
+def select_streams(
+    tune, name = None, run = None, chunks = None, tone_sets = None
+):
+    """
+    Turn one choice of streams into sources for
+    ``pipeline.stream_sources``: one per tone set of the run (its
+    calibration sweep with all its writes), with a window of zarr chunks.
+
+    Parameters:
+    tune (zarr.Group): the tuning.
+    name (str or None): run name: the latest run with this name, unless
+        ``run`` is given.
+    run (int or None): run index (``stream_runs``).
+    chunks (int, tuple, or None): window along time, in zarr chunks: None
+        (default) for all of it, n for the first n chunks, or (first,
+        stop) for chunks first, ..., stop - 1.
+    tone_sets (list of int or None): tone sets to keep. None (default):
+        all.
+
+    Returns:
+    sources (list of dict): ``group``, ``writes``, ``start``, ``stop``.
+    run (dict): the run (``stream_runs``), plus ``start`` and ``stop``.
+
+    Raises:
+    KeyError: if no run matches.
+    ValueError: if the chunk window is empty, or the run's writes have
+        different lengths.
+    """
+    runs = stream_runs(tune)
+    if run is not None:
+        if not 0 <= int(run) < len(runs):
+            raise KeyError(f'{tune.basename} has no run {run}')
+        r = runs[int(run)]
+        if name is not None and r['name'] != name:
+            raise KeyError(f"run {run} is {r['name']!r}, not {name!r}")
+    else:
+        named = [r for r in runs if r['name'] == name]
+        if not named:
+            raise KeyError(f'{tune.basename} has no run named {name!r}')
+        r = named[-1]
+    if 'n_chunks' not in r:
+        raise KeyError(f"run {r['run']} has no streams")
+    if chunks is None:
+        first, stop = 0, r['n_chunks']
+    elif isinstance(chunks, (int, np.integer)):
+        first, stop = 0, int(chunks)
+    else:
+        first, stop = (int(c) for c in chunks)
+    start = first * r['chunk_samples']
+    end = min(stop * r['chunk_samples'], r['nsamples'])
+    if end <= start:
+        raise ValueError(f"chunks {chunks} select no samples of run "
+                         f"{r['run']} ({r['n_chunks']} chunks)")
+    root = _store_root(tune)
+    sources = []
+    for path in r['paths']:
+        sweep, write, _ = path.rsplit('/', 2)
+        if root[path]['z'].shape[2] != r['nsamples']:
+            raise ValueError(f'{path} has a different length')
+        if tone_sets is not None and \
+                int(root[sweep].attrs['tone_set']) not in tone_sets:
+            continue
+        if sources and sources[-1]['group'] == sweep:
+            sources[-1]['writes'].append(write)
+        else:
+            sources.append(dict(group = sweep, writes = [write],
+                                start = int(start), stop = int(end)))
+    return sources, dict(r, start = int(start), stop = int(end))
 
 ################################################################################
 ################################## Porting #####################################
@@ -673,8 +900,10 @@ def port_tuning(src, tune, dst, cooldown = None, setup = None):
     """
     Copy a tuning to another store, without the data used to make it.
 
-    Copies ``resonators/``, the tuning's ``tones/`` and ``crs_config/`` to
-    the next free ``tune{k}`` of ``dst``. Raw data and analysis are not
+    Copies the tuning's ``tones/`` and ``crs_config/`` to the next free
+    ``tune{k}`` of ``dst``, with the resonator list it uses: an identical
+    list already in ``dst`` is reused, else it is copied to the next free
+    ``resonators{j}``. Raw data and analysis are not
     copied, and ``src`` is not modified. See ``documents/daq_layout.md``,
     section 7.2.
 
@@ -692,9 +921,9 @@ def port_tuning(src, tune, dst, cooldown = None, setup = None):
     k (int): index of the new tuning in ``dst``.
 
     Raises:
-    ValueError: if ``dst`` belongs to another device, or its resonators
-        differ from ``src``'s.
-    KeyError: if the tuning has no ``tones``.
+    ValueError: if ``dst`` belongs to another device.
+    KeyError: if the tuning has no ``tones`` or records no resonator
+        list.
     """
     src_root = open_store(src)
     src_path = str(src) if not isinstance(src, zarr.Group) else \
@@ -703,6 +932,9 @@ def port_tuning(src, tune, dst, cooldown = None, setup = None):
     src_tune = src_root[name]
     if 'tones' not in src_tune:
         raise KeyError(f"{name} has no 'tones' to port")
+    if 'resonators' not in src_tune.attrs:
+        raise KeyError(f'{name} records no resonator list')
+    src_res = src_tune.attrs['resonators']
     dst = os.path.expanduser(str(dst))
     if os.path.exists(os.path.join(dst, 'zarr.json')):
         # An existing store keeps its own cooldown and setup
@@ -717,26 +949,28 @@ def port_tuning(src, tune, dst, cooldown = None, setup = None):
             src_root.attrs['cooldown'] if cooldown is None else cooldown,
             setup = dict(src_root.attrs.get('setup', {})) if setup is None
             else setup)
-    res = load_resonators(src_root)
-    if 'resonators' in dst_root:
-        old = load_resonators(dst_root)
-        same = (np.array_equal(old['res_idxs_all'], res['res_idxs_all'])
-                and np.array_equal(old['fres_all'], res['fres_all']))
-        if not same:
-            raise ValueError(
-                "dst's resonators differ from src's: the res_idxs would "
-                "mean different things")
-    else:
-        grp = create_group(dst_root, 'resonators', 'decision',
-                           attrs = dict(ported_from = dict(
-                               store = src_path, group = 'resonators',
+    res = load_resonators(src_root, src_res)
+    dst_res = None
+    for j in list_indices(dst_root, RESONATORS_PREFIX):
+        old = load_resonators(dst_root, j)
+        if all(np.array_equal(old[key], res[key], equal_nan = key not in
+                              ('res_idxs_all', 'source_all'))
+               for key in RESONATOR_ARRAYS):
+            dst_res = set_name(j, RESONATORS_PREFIX)
+            break
+    if dst_res is None:
+        dst_res = set_name(next_index(dst_root, RESONATORS_PREFIX),
+                           RESONATORS_PREFIX)
+        grp = create_group(dst_root, dst_res, 'decision', attrs = dict(
+            source = src_root[src_res].attrs.get('source'),
+            ported_from = dict(store = src_path, group = src_res,
                                time = _now())))
         for key in RESONATOR_ARRAYS:
             write_array(grp, key, res[key])
     ported = dict(store = src_path, group = name, time = _now(),
                   citkid_version = citkid_version)
-    new_tune, k = new_indexed_group(dst_root, 'tune', 'decision',
-                                    attrs = dict(ported_from = ported))
+    new_tune, k = new_tuning(dst_root, dst_res,
+                             attrs = dict(ported_from = ported))
     tones = load_tones(src_tune['tones'])
     grp = create_group(new_tune, 'tones', 'decision', attrs = dict(
         ported_from = dict(ported, group = f'{name}/tones',

@@ -1892,8 +1892,8 @@ async def test_vna_sweep_to_store(tmp_path):
     k, f, z = await vna_sweep_to_store(crs, root, 400e6, 2400e6, -50., 10,
                                        step = 2e-5, verbose = False)
     assert k == 0
-    grp = root['vna/sweep0']
-    assert root['vna'].attrs['kind'] == 'raw' and grp.attrs['kind'] == 'raw'
+    grp = root['vna0']
+    assert grp.attrs['kind'] == 'raw'
     assert grp.attrs['amplitude'] == -50. and grp.attrs['nsamps'] == 10
     assert grp.attrs['step'] == 2e-5 and grp.attrs['downward'] is True
     assert grp.attrs['spacing'] == 'geometric'
@@ -1914,7 +1914,7 @@ async def test_vna_sweep_to_store(tmp_path):
     # A second sweep is sweep1; sweep0 is untouched
     k, _, _ = await vna_sweep_to_store(crs, root, 1e9, 1.4e9, -40., 10,
                                        step = 2e-5, verbose = False)
-    assert k == 1 and root['vna/sweep0'].attrs['amplitude'] == -50.
+    assert k == 1 and root['vna0'].attrs['amplitude'] == -50.
 
 
 @pytest.mark.asyncio
@@ -1924,7 +1924,7 @@ async def test_vna_sweep_to_store_failure_leaves_nothing(tmp_path):
     with pytest.raises(RuntimeError, match = 'sweep failed'):
         await vna_sweep_to_store(crs, root, 400e6, 2400e6, -50., 10,
                                  step = 2e-5, verbose = False)
-    assert dl.list_indices(root['vna'], 'sweep') == []
+    assert dl.list_indices(root, 'vna') == []
     # The next attempt reuses index 0
     crs.fail_pass = None
     k, _, _ = await vna_sweep_to_store(crs, root, 400e6, 900e6, -50., 10,
@@ -1944,4 +1944,4 @@ async def test_vna_sweep_to_store_refuses_other_crs(tmp_path):
             await vna_sweep_to_store(other, root, 1e9, 1.2e9, -50., 10,
                                      step = 2e-5, verbose = False)
         assert other.sweep_calls == []
-    assert dl.list_indices(root['vna'], 'sweep') == [0]
+    assert dl.list_indices(root, 'vna') == [0]

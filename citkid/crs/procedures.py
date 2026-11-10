@@ -234,6 +234,373 @@ async def power_sweep(
     return fres, ch_map
 
 ################################################################################
+############################ Stitched target sweeps ############################
+################################################################################
+def _merge_passes(dst, parts, n):
+    """
+    Merge the target sweep groups of several passes into one group, with
+    the rows of every per-tone array back in tone order.
+
+    An array is per-tone if its first axis has one entry per tone of its
+    pass in every pass; it is assembled with each pass's rows at that
+    pass's tone indices. Other arrays are taken from the first pass, except
+    the channel maps (``chs_module*``), which only describe one pass (the
+    stitched sweep has ``tone_module`` and ``tone_channel`` instead).
+    Attributes come from the first pass, without the NCO attributes
+    (``nco_module*``; the stitched sweep has ``pass_ncos``); timestamps of
+    every pass are kept as ``pass_timestamps``.
+
+    Parameters:
+    dst (zarr.Group): destination group, empty.
+    parts (list of tuple): (tone indices, pass group) per pass.
+    n (int): number of tones.
+    """
+    groups = [g for _, g in parts]
+    attrs = {k: v for k, v in dict(groups[0].attrs).items()
+             if not k.startswith('nco_module')}
+    if 'timestamp' in attrs:
+        attrs['pass_timestamps'] = [g.attrs.get('timestamp')
+                                    for g in groups]
+    dst.attrs.update(attrs)
+    for name in groups[0].array_keys():
+        if name.startswith('chs_module'):
+            continue
+        arrays = [g[name] for g in groups]
+        if all(a.ndim >= 1 and a.shape[0] == len(idx)
+               for a, (idx, _) in zip(arrays, parts)):
+            a0 = arrays[0]
+            fill = np.nan if a0.dtype.kind in 'fc' else 0
+            full = np.full((n,) + tuple(a0.shape[1:]), fill, dtype = a0.dtype)
+            for a, (idx, _) in zip(arrays, parts):
+                full[idx] = a[...]
+        else:
+            full = arrays[0][...]
+        dst.create_array(name = name, data = full)
+    for name in groups[0].group_keys():
+        _merge_passes(dst.require_group(name),
+                      [(idx, g[name]) for idx, g in parts], n)
+
+async def stitched_target_sweep(
+    crs, fres, ares, qres, res_idxs, tone_set, tone_module, ncos, grp,
+    verbose = True, **target_sweep_kwargs
+):
+    """
+    Take a target sweep of tones split into tone sets, one pass per set,
+    and save it as one target sweep.
+
+    Each pass sets the NCOs of its tone set (``ncos``), takes a
+    ``target_sweep`` of the set's tones with each tone on its module
+    (``tone_module``), and keeps the result in memory. When every pass is
+    done, the passes are merged into ``grp`` in the input tone order
+    (``_merge_passes``), so the group has the usual target sweep layout
+    (``fres``, ``ares``, ``qres``, ``res_idxs``, ``gain_sweep/``,
+    ``fine_sweep/``, ...) and loads like a single sweep. It also gets
+    ``tone_set``, ``tone_module``, ``tone_channel`` (channel within the
+    module, per tone), and the attributes ``pass_ncos`` (per pass, {module:
+    NCO in Hz}), ``pass_times`` (start of each pass, Unix seconds), and
+    ``complete`` (True). If a pass fails, ``grp`` is left as it was.
+
+    Parameters:
+    crs (CRS): configured CRS instrument.
+    fres, ares, qres (array-like float): tone frequencies (Hz), powers
+        (dBm), and span factors.
+    res_idxs (array-like int): resonator indices (negative for calibration
+        tones).
+    tone_set (array-like int): tone set of each tone (index into ``ncos``).
+    tone_module (array-like int): module of each tone.
+    ncos (list of dict): per tone set, {module: NCO in Hz} (keys may be
+        strings, as saved in JSON).
+    grp (zarr.Group): destination group, empty.
+    verbose (bool): If True (default), show progress bars.
+    **target_sweep_kwargs: other ``target_sweep`` parameters
+        (``npoints_fine``, ``npoints_gain``, ``npoints_rough``, ``nsamps``,
+        ``gain_span_factor``, ``fres_update_method``).
+
+    Returns:
+    fres (np.array): tone frequencies after the sweep (updated by the rough
+        sweep, if any), in input order.
+
+    Raises:
+    ValueError: if the inputs are inconsistent or ``grp`` isn't empty.
+    """
+    fres = np.asarray(fres, dtype = np.float64)
+    n = len(fres)
+    ares = np.broadcast_to(np.asarray(ares, dtype = np.float64), (n,))
+    qres = np.broadcast_to(np.asarray(qres, dtype = np.float64), (n,))
+    res_idxs = np.asarray(res_idxs, dtype = np.int32)
+    tone_set = np.asarray(tone_set, dtype = np.int32)
+    tone_module = np.asarray(tone_module, dtype = np.int32)
+    if fres.ndim != 1 or any(v.shape != (n,) for v in
+                             (res_idxs, tone_set, tone_module)):
+        raise ValueError('fres, res_idxs, tone_set and tone_module must be '
+                         '1D arrays of the same length')
+    if not isinstance(grp, zarr.core.group.Group) or len(list(grp.keys())):
+        raise ValueError('grp must be an empty zarr group')
+    ncos = [{int(m): float(f) for m, f in s.items()} for s in ncos]
+    sets = np.unique(tone_set)
+    if len(sets) and (sets[0] < 0 or sets[-1] >= len(ncos)):
+        raise ValueError('tone_set must index ncos')
+    fres_out = fres.copy()
+    tone_channel = np.zeros(n, dtype = np.int32)
+    parts, pass_ncos, pass_times = [], [], []
+    for p, s in enumerate(sets):
+        idx = np.flatnonzero(tone_set == s)
+        mods = tone_module[idx]
+        missing = sorted(set(mods.tolist()) - set(ncos[s]))
+        if missing:
+            raise ValueError(f'tone set {s} has no NCO for modules {missing}')
+        set_ncos = {int(m): ncos[s][int(m)] for m in np.unique(mods)}
+        await crs.set_nco(set_ncos, verbose = False)
+        ch_map = {}
+        for m in set_ncos:
+            rows = np.flatnonzero(mods == m)
+            ch_map[m] = rows.tolist()
+            tone_channel[idx[rows]] = np.arange(len(rows))
+        tmp = zarr.open_group(zarr.storage.MemoryStore(), mode = 'w')
+        pass_times.append(time.time())
+        pass_ncos.append({str(m): f for m, f in set_ncos.items()})
+        if verbose and len(sets) > 1:
+            print(f'Tone set {s} ({p + 1}/{len(sets)}): {len(idx)} tones')
+        fres_out[idx], _ = await target_sweep(
+            crs, fres[idx], ares[idx], qres[idx], res_idxs[idx], tmp,
+            ch_map = ch_map, verbose = verbose, **target_sweep_kwargs)
+        parts.append((idx, tmp))
+    _merge_passes(grp, parts, n)
+    for name, value in (('tone_set', tone_set), ('tone_module', tone_module),
+                        ('tone_channel', tone_channel)):
+        grp.create_array(name = name, data = value)
+    grp.attrs.update(dict(pass_ncos = pass_ncos, pass_times = pass_times,
+                          complete = True))
+    return fres_out
+
+async def stitched_power_sweep(
+    crs, fres, aress, qres, res_idxs, tone_set, tone_module, ncos, root,
+    shuffle = False, seed = None, verbose = True, **target_sweep_kwargs
+):
+    """
+    Take a stitched target sweep (``stitched_target_sweep``) at each of a
+    series of tone powers, saving sweep i as ``root/set{i}``.
+
+    Sets already complete (``attrs['complete']``) are skipped, so an
+    interrupted power sweep can be continued; a set left empty by a failed
+    pass is taken again. With a rough sweep, each set starts from the
+    frequencies found by the previous one.
+
+    Parameters:
+    crs (CRS): configured CRS instrument.
+    fres (array-like float): tone frequencies in Hz.
+    aress (array-like float): powers in dBm, shape (n_sets,) (every tone
+        the same) or (n_sets, ntones).
+    qres, res_idxs, tone_set, tone_module, ncos: see
+        ``stitched_target_sweep``.
+    root (zarr.Group): group for the sets.
+    shuffle (bool): If True, each tone's powers are randomly reordered
+        across the sets (the powers used are saved in each set's
+        ``ares``). Default False. Use the same ``seed`` to continue a
+        shuffled sweep.
+    seed (int or None): random seed for ``shuffle``. Default None.
+    verbose (bool): If True (default), show progress bars.
+    **target_sweep_kwargs: other ``target_sweep`` parameters.
+
+    Returns:
+    fres (np.array): tone frequencies after the last set.
+
+    Raises:
+    ValueError: if ``aress`` has the wrong shape, or a set group is not
+        empty and not complete.
+    """
+    fres = np.asarray(fres, dtype = np.float64)
+    aress = np.asarray(aress, dtype = np.float64)
+    if aress.ndim == 1:
+        aress = np.repeat(aress[:, np.newaxis], len(fres), axis = 1)
+    if aress.ndim != 2 or aress.shape[1] != len(fres) or not len(aress):
+        raise ValueError(
+            'aress must have shape (n_sets,) or (n_sets, len(fres))')
+    if shuffle:
+        aress = np.random.default_rng(seed).permuted(aress, axis = 0)
+    pbar = tqdm(range(len(aress)), desc = 'Power sweep', leave = False,
+                disable = not verbose)
+    for i in pbar:
+        name = set_name(i)
+        if name in root and root[name].attrs.get('complete'):
+            fres = np.asarray(root[name]['fres'][:], dtype = np.float64)
+            continue
+        if name in root:
+            if len(list(root[name].keys())):
+                raise ValueError(f'{name} is neither empty nor complete')
+            del root[name]
+        fres = await stitched_target_sweep(
+            crs, fres, aress[i], qres, res_idxs, tone_set, tone_module, ncos,
+            root.create_group(name), verbose = verbose, **target_sweep_kwargs)
+    return fres
+
+################################################################################
+################################### Streaming ##################################
+################################################################################
+def plan_stream_chunks(tone_module, dec_stage):
+    """
+    Split one tone set's tones into chunks that can each be streamed at
+    once at a decimation stage, without changing NCOs.
+
+    As many modules stream together as the frame rate allows
+    (``util.max_stream_tones``), with at most the per-module and total
+    tone limits; a module's tones beyond them go to later chunks. At stages
+    where every tone fits (e.g. stage 6, or a tone set planned for this
+    stage), there is one chunk.
+
+    Parameters:
+    tone_module (array-like int): module of each tone of the set.
+    dec_stage (int): decimation stage.
+
+    Returns:
+    chunks (list of np.array): indices into ``tone_module`` per chunk, in
+        order, covering every tone once.
+
+    Raises:
+    ValueError: if not even one module can stream at ``dec_stage``.
+    """
+    tone_module = np.asarray(tone_module, dtype = np.int32)
+    mods = sorted(set(tone_module.tolist()))
+    if not mods:
+        return []
+    k = max((n for n in range(1, len(mods) + 1)
+             if util.max_stream_tones(dec_stage, n)[0] > 0), default = 0)
+    if not k:
+        raise ValueError(f'no module can stream at decimation stage '
+                         f'{dec_stage} within the verified limits')
+    chunks = []
+    for g in range(0, len(mods), k):
+        group = mods[g:g + k]
+        per_module, total = util.max_stream_tones(dec_stage, len(group))
+        per_module = min(per_module, total // len(group))
+        rows = {m: np.flatnonzero(tone_module == m) for m in group}
+        n_rounds = max(-(-len(r) // per_module) for r in rows.values())
+        for i in range(n_rounds):
+            chunk = np.concatenate([r[i * per_module:(i + 1) * per_module]
+                                    for r in rows.values()])
+            if len(chunk):
+                chunks.append(np.sort(chunk))
+    return chunks
+
+async def write_stream_chunk(
+    crs, fres, ares, tone_module, set_ncos, grp = None
+):
+    """
+    Write a chunk of one tone set's tones for streaming, each on its
+    module, with the set's NCOs (``CRS.write_tones_for_stream``).
+
+    Parameters:
+    crs (CRS): configured CRS instrument.
+    fres, ares (array-like): the chunk's tone frequencies (Hz) and powers
+        (dBm).
+    tone_module (array-like int): module of each tone.
+    set_ncos (dict): the tone set's {module: NCO in Hz} (keys may be
+        strings).
+    grp (zarr.Group or None): write group to save the tones in. Default
+        None (nothing saved).
+
+    Returns:
+    fres_written (np.array): written (dithered) tone frequencies in Hz.
+    """
+    tone_module = np.asarray(tone_module, dtype = np.int32)
+    set_ncos = {int(m): float(f) for m, f in set_ncos.items()}
+    mods = sorted(set(tone_module.tolist()))
+    await crs.set_nco({m: set_ncos[m] for m in mods}, verbose = False)
+    ch_map = {m: np.flatnonzero(tone_module == m).tolist() for m in mods}
+    return await crs.write_tones_for_stream(fres, ares, grp = grp,
+                                            ch_map = ch_map)
+
+async def stream_tone_sets(
+    crs, tune, name, duration_s, dec_stage, notes = '', set_idxs = None,
+    status = None, verbose = True, **target_sweep_kwargs
+):
+    """
+    Take a named timestream of a tuning's tones: for each tone set, a new
+    calibration sweep, then the stream, in chunks if the decimation stage
+    needs them (``plan_stream_chunks``).
+
+    For tone set s, the calibration is the next ``tune/sweep{j}``
+    (``stitched_target_sweep`` of the set's tones; attrs ``tone_set``,
+    ``run``). Each chunk is a ``sweep{j}/write{w}`` (``write_stream_chunk``,
+    plus ``sweep_rows``: each tone's row in the calibration sweep,
+    ``res_idxs``, ``qres``) holding one stream ``ts0`` (``CRS.stream``;
+    attrs ``name``, ``notes``, ``dec_stage``, ``duration_s``, ``run``). An
+    unchunked write lists the set's tones in the sweep's order. The run is
+    added to ``tune/streams``' ``attrs['runs']`` (name, notes, stage,
+    duration, time, and the stream paths).
+
+    Parameters:
+    crs (CRS): configured CRS instrument (with global control to stream at
+        another decimation stage than the board's).
+    tune (zarr.Group): the tuning, with ``tones`` and ``crs_config``.
+    name (str): timestream name, e.g. 'dark_dec6'. Names may repeat.
+    duration_s (float): stream length in seconds.
+    dec_stage (int): decimation stage.
+    notes (str): free-form notes saved with the streams. Default ''.
+    set_idxs (list of int or None): tone sets to stream. None (default):
+        all.
+    status (callable or None): called with a progress message before
+        each step. Default None.
+    verbose (bool): If True (default), show progress bars.
+    **target_sweep_kwargs: calibration sweep settings (``target_sweep``).
+
+    Returns:
+    paths (list of str): the streams' group paths, e.g.
+        'tune0/sweep3/write0/ts0'.
+
+    Raises:
+    ValueError: if ``name`` is empty.
+    """
+    if not str(name).strip():
+        raise ValueError('the timestream needs a name')
+    say = status or (lambda message: None)
+    t = dl.load_tones(tune['tones'])
+    ncos = tune['crs_config'].attrs['config']['tone_sets']
+    sets = sorted(set(t['tone_set'].tolist())) if set_idxs is None else \
+        [int(s) for s in set_idxs]
+    streams = dl.require_group(tune, 'streams', 'decision')
+    run = len(streams.attrs.get('runs', []))
+    paths = []
+    for s in sets:
+        idx = np.flatnonzero(t['tone_set'] == s)
+        say(f'Tone set {s}: calibration sweep')
+        cal, j = dl.new_indexed_group(tune, 'sweep', 'raw', attrs = dict(
+            tone_set = int(s), run = run, name = str(name)))
+        await stitched_target_sweep(
+            crs, t['fres'][idx], t['ares'][idx], t['qres'][idx],
+            t['res_idxs'][idx], t['tone_set'][idx], t['tone_module'][idx],
+            ncos, cal, verbose = verbose, **target_sweep_kwargs)
+        chunks = plan_stream_chunks(t['tone_module'][idx], dec_stage)
+        for c_i, rows in enumerate(chunks):
+            say(f'Tone set {s}: stream {c_i + 1}/{len(chunks)} '
+                f'({len(rows)} tones, {duration_s:g} s at stage '
+                f'{dec_stage})')
+            write, _ = dl.new_indexed_group(cal, 'write', 'raw')
+            await write_stream_chunk(
+                crs, cal['fres'][:][rows], cal['ares'][:][rows],
+                t['tone_module'][idx][rows], ncos[s], grp = write)
+            for key, value in (('sweep_rows', rows),
+                               ('res_idxs', cal['res_idxs'][:][rows]),
+                               ('qres', cal['qres'][:][rows])):
+                write.create_array(name = key, data = np.asarray(value))
+            ts = dl.create_group(write, 'ts0', 'raw', attrs = dict(
+                name = str(name), notes = str(notes),
+                dec_stage = int(dec_stage), duration_s = float(duration_s),
+                run = run))
+            await crs.stream(duration_s, dec_stage, ts, verbose = verbose)
+            paths.append(ts.path)
+        await crs.clear_tones()
+    runs = list(streams.attrs.get('runs', []))
+    runs.append(dict(name = str(name), notes = str(notes),
+                     dec_stage = int(dec_stage),
+                     duration_s = float(duration_s),
+                     time = time.strftime('%Y-%m-%d %H:%M:%S'),
+                     paths = paths))
+    streams.attrs['runs'] = runs
+    say(f'{name}: done ({len(paths)} streams)')
+    return paths
+
+################################################################################
 ################################# VNA sweeps ###################################
 ################################################################################
 def vna_step(qr_median = 2e4, pts_per_lw = 25.):
@@ -629,7 +996,7 @@ async def vna_sweep_to_store(
 ):
     """
     Take a VNA sweep (``vna_sweep``) and save it as the next
-    ``vna/sweep{k}`` of a device store (``citkid.daq_layout``).
+    ``vna{k}`` of a device store (``citkid.daq_layout``).
 
     Saves ``f``, ``z``, the band arrays, the sweep settings and the
     per-acquisition CRS settings (attributes), and the CRS settings it was
@@ -656,13 +1023,12 @@ async def vna_sweep_to_store(
     """
     dl.check_store(root)
     dl.check_crs_identity(root, crs)
-    vna = dl.require_group(root, 'vna', 'raw')
     settings = dict(
         amplitude = float(amplitude), nsamps = int(nsamps),
         step = float(step), fmin = float(fmin), fmax = float(fmax),
         spacing = 'geometric', downward = True,
         acquisition = dl.acquisition_settings(crs))
-    grp, k = dl.new_indexed_group(vna, 'sweep', 'raw', attrs = settings)
+    grp, k = dl.new_indexed_group(root, 'vna', 'raw', attrs = settings)
     try:
         f, z, bands = await vna_sweep(
             crs, fmin, fmax, amplitude, nsamps, step = step,
@@ -678,7 +1044,7 @@ async def vna_sweep_to_store(
             len(f) // bands['chunk_nchannels'].sum())
         dl.save_vna_sweep(grp, f, z, **bands)
     except BaseException:
-        del vna[set_name(k, 'sweep')]
+        del root[set_name(k, 'vna')]
         raise
     return k, f, z
 
@@ -739,8 +1105,8 @@ def _validate_target_sweep_inputs(
     fres, ares, qres, res_idxs: validated and converted inputs.
     """
     # Check if it's a CRS instance by verifying class name
-    if type(crs).__name__ != 'CRS' and type(crs).__name__ != 'DummyCRS':
-        raise TypeError("crs must be an instance of CRS class.") 
+    if type(crs).__name__ not in util.CRS_CLASS_NAMES:
+        raise TypeError("crs must be an instance of CRS class.")
     # Validate array-like inputs
     fres = np.asarray(fres, dtype = np.float64)
     ares = np.asarray(ares, dtype = np.float64)

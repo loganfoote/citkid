@@ -1,5 +1,6 @@
 """
-01: quick VNA check of one device.
+Quick VNA check of one device (not a numbered step: use it whenever
+a quick look helps).
 
 Opens a window (``citkid.crs.quick_check``) with the settings below,
 connects to this session's modules, and waits for the Sweep button
@@ -11,19 +12,19 @@ count of the
 resonances (matched filter). The settings can be changed in the window
 and the sweep run again. Nothing is saved to zarr; the plot can be saved
 as a PNG. Use it to check the wiring, power levels, and that resonances
-are there before the full sweep (02_vna_sweep.py).
+are there before the full sweep (01_vna_sweep.py).
 
 With --no-gui (e.g. over ssh without a display), it sweeps once with the
 settings below, prints the count, and saves the plot with --png.
 
-Needs the board configured by 00_crs_init.py. This session attaches to
+Needs the board configured by crs_init.py. This session attaches to
 its modules only, so several of these (or other module scripts) can run at
 once on different modules.
 
 Usage:
-    python 01_vna_quick_check.py --modules 1
-    python 01_vna_quick_check.py --modules 1 2 --nyquist both
-    python 01_vna_quick_check.py --modules 1 --no-gui --png quick.png
+    python vna_quick_check.py --modules 1
+    python vna_quick_check.py --modules 1 2 --nyquist both
+    python vna_quick_check.py --modules 1 --no-gui --png quick.png
 
 Edit the settings below for your setup; the command-line options override
 them for one run.

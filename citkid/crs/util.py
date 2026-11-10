@@ -18,6 +18,10 @@ from tqdm.auto import tqdm
 from typing import TYPE_CHECKING
 from .. import zarr_util
 
+# Classes accepted as a CRS by the zarr writers and procedures (the
+# instrument, test doubles, and the simulated board of ``crs.sim``)
+CRS_CLASS_NAMES = ('CRS', 'DummyCRS', 'SimulatedCRS')
+
 if TYPE_CHECKING:
     from .instrument import CRS
 
@@ -448,6 +452,44 @@ def check_stream_write_rate(dec_stage, ntones):
             'decimation stage.'
             )
     return rate
+
+# Channels in a short (one-frame) and a long packet
+SHORT_PACKET_CHANNELS = 128
+LONG_PACKET_CHANNELS = 1024
+
+def max_stream_tones(dec_stage, nmodules):
+    """
+    Return how many tones can be streamed at once at a decimation stage,
+    within the verified frame-rate and write-rate limits
+    (``MAX_FRAME_RATE``, ``MAX_STREAM_WRITE_RATE``).
+
+    Long packets (up to 1024 tones per module) are used if the frame rate
+    allows them, else short packets (up to 128 per module). The total is
+    also limited by the write rate. Raising the limits (e.g. for a faster
+    network) raises these numbers with no other change.
+
+    Parameters:
+    dec_stage (int): decimation stage (0-6).
+    nmodules (int): number of streamed modules.
+
+    Returns:
+    per_module (int): most tones per module (0 if even short packets
+        exceed the frame rate).
+    total (int): most tones in all, at most ``nmodules * per_module``.
+    """
+    nmodules = int(nmodules)
+    per_module = 0
+    for short, nch in ((False, LONG_PACKET_CHANNELS),
+                       (True, SHORT_PACKET_CHANNELS)):
+        try:
+            check_frame_rate(dec_stage, nmodules, short)
+        except ValueError:
+            continue
+        per_module = nch
+        break
+    write_limit = int(MAX_STREAM_WRITE_RATE * (1 + 1e-9) //
+                      (2 * 4 * get_sample_freq(dec_stage)))
+    return per_module, min(per_module * nmodules, write_limit)
 
 ################################################################################
 ############################## packet receiving ################################
@@ -1053,7 +1095,7 @@ def write_acq_cfg_to_zarr(crs, grp):
     None
     """
     # Input validation 
-    if type(crs).__name__ != 'CRS' and type(crs).__name__ != 'DummyCRS':
+    if type(crs).__name__ not in CRS_CLASS_NAMES:
         raise TypeError("crs must be an instance of CRS class.")
     if not isinstance(grp, zarr.core.group.Group):
         raise TypeError("grp must be a zarr Group instance.") 
@@ -1124,7 +1166,7 @@ def write_system_cfg_to_zarr(crs, grp):
     None
     """
     # Input validation 
-    if type(crs).__name__ != 'CRS' and type(crs).__name__ != 'DummyCRS':
+    if type(crs).__name__ not in CRS_CLASS_NAMES:
         raise TypeError("crs must be an instance of CRS class.")
     if not isinstance(grp, zarr.core.group.Group):
         raise TypeError("grp must be a zarr Group instance.") 

@@ -12,7 +12,9 @@ import zarr
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 import os
+import time
 from .s21_filt import filter_mag, find_res_dips
+from ..zarr_util import to_jsonable
 from ..qt_compat import (
     Qt as _Qt,
     delete_on_close,
@@ -772,10 +774,15 @@ class AutoResFinder:
         Save resonances to zarr group.
 
         The resonances are written to 'fres_auto' (overwriting any existing
-        array), and ``self.params`` is saved as group attributes.
+        array). How they were found goes in a 'res_finder_auto' subgroup
+        (replaced if it exists), as for the CNN finder: attributes
+        ``finder`` ('auto'), ``settings`` (``self.params``), ``n_found``,
+        and ``created``.
         """
         fres_array = np.array(self.fres, dtype = np.float64)
-        params = dict(self.params)
+        record = dict(finder = 'auto', settings = dict(self.params),
+                      n_found = len(fres_array),
+                      created = time.strftime('%Y-%m-%d %H:%M:%S'))
 
         def write():
             """
@@ -786,8 +793,11 @@ class AutoResFinder:
                 data = fres_array,
                 overwrite = True
                 )
-            # Save parameters as group attributes, in one metadata write
-            self.zarr_group.attrs.update(params)
+            # Record how they were found, in one metadata write
+            if 'res_finder_auto' in self.zarr_group:
+                del self.zarr_group['res_finder_auto']
+            self.zarr_group.create_group('res_finder_auto').attrs.update(
+                to_jsonable(record))
 
         # In a worker thread, so the window keeps responding on slow drives
         run_responsive(write)

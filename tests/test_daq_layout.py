@@ -149,8 +149,8 @@ def test_write_array_sharding_and_strings(store, monkeypatch):
     a = dl.write_array(store, 'long', np.arange(250.))
     assert a.chunks == (100,) and a.shards == (300,)
     np.testing.assert_array_equal(a[:], np.arange(250.))
-    s = dl.write_array(store, 's', np.array(['vna/sweep0', 'x']))
-    assert list(s[:]) == ['vna/sweep0', 'x']
+    s = dl.write_array(store, 's', np.array(['vna0', 'x']))
+    assert list(s[:]) == ['vna0', 'x']
     e = dl.write_array(store, 'e', np.array([], dtype = str))
     assert e.shape == (0,)
 
@@ -251,8 +251,7 @@ def test_vna_sweep_round_trip(store):
     f = np.array([3e8, 1e8, 2e8, 7e8])
     z = f / 1e9 + 1j
     for k in range(2):
-        grp, _ = dl.new_indexed_group(store.require_group('vna'), 'sweep',
-                                      'raw')
+        grp, _ = dl.new_indexed_group(store, 'vna', 'raw')
         dl.save_vna_sweep(grp, f * (k + 1), z, **_bands(),
                           settings = dict(amplitude = -50., nsamps = 10))
     f0, z0, bands = dl.load_vna_sweep(store, 0, bands = True)
@@ -260,7 +259,7 @@ def test_vna_sweep_round_trip(store):
     np.testing.assert_array_equal(z0, np.sort(f) / 1e9 + 1j)
     assert bands['chunk_edges'].shape == (2, 2)
     assert bands['chunk_modules'].dtype == np.int32
-    assert store['vna/sweep0'].attrs['amplitude'] == -50.
+    assert store['vna0'].attrs['amplitude'] == -50.
     f1, _ = dl.load_vna_sweep(store)
     np.testing.assert_array_equal(f1, np.sort(f) * 2)
 
@@ -269,7 +268,7 @@ def test_vna_sweep_bad_shapes(store):
     """
     Check that mismatched f/z or band arrays are refused.
     """
-    grp = dl.create_group(store, 'vna/sweep0', 'raw')
+    grp = dl.create_group(store, 'vna0', 'raw')
     with pytest.raises(ValueError, match = 'same length'):
         dl.save_vna_sweep(grp, [1., 2.], [1j], **_bands())
     bands = _bands()
@@ -281,23 +280,38 @@ def test_vna_sweep_bad_shapes(store):
 ################################################################################
 ############################ Resonators and tones ##############################
 ################################################################################
-def test_add_resonators_appends(store):
+def test_resonator_lists(store):
     """
-    Check that resonators get sequential indices that later additions never
-    change.
+    Check per-sweep resonator lists: indices, loading the latest or a given
+    list, and that a list a tuning uses can't be replaced.
     """
-    idx = dl.add_resonators(store, [1e9, 2e9], 2e4, 'vna/sweep0',
-                            Qr = [2.1e4, np.nan])
-    np.testing.assert_array_equal(idx, [0, 1])
-    idx = dl.add_resonators(store, [1.5e9], [3e4], 'vna/sweep1')
-    np.testing.assert_array_equal(idx, [2])
-    res = dl.load_resonators(store)
-    np.testing.assert_array_equal(res['res_idxs_all'], [0, 1, 2])
-    np.testing.assert_array_equal(res['fres_all'], [1e9, 2e9, 1.5e9])
-    np.testing.assert_array_equal(res['qres_all'], [2e4, 2e4, 3e4])
-    np.testing.assert_array_equal(res['Qr_all'], [2.1e4, np.nan, np.nan])
-    assert list(res['source_all']) == ['vna/sweep0'] * 2 + ['vna/sweep1']
-    assert store['resonators'].attrs['kind'] == 'decision'
+    dl.save_resonators(store, 0, [1e9, 2e9], 2e4, 'vna0/full_sweep_fit',
+                       Qr = [2.1e4, np.nan])
+    dl.save_resonators(store, 1, [1.5e9], [3e4], 'vna1/full_sweep_fit')
+    res = dl.load_resonators(store, 0)
+    np.testing.assert_array_equal(res['res_idxs_all'], [0, 1])
+    np.testing.assert_array_equal(res['fres_all'], [1e9, 2e9])
+    np.testing.assert_array_equal(res['qres_all'], [2e4, 2e4])
+    np.testing.assert_array_equal(res['Qr_all'], [2.1e4, np.nan])
+    assert list(res['source_all']) == ['vna0/full_sweep_fit'] * 2
+    assert store['resonators0'].attrs['kind'] == 'decision'
+    assert store['resonators0'].attrs['source'] == 'vna0/full_sweep_fit'
+    latest = dl.load_resonators(store)
+    np.testing.assert_array_equal(latest['res_idxs_all'], [0])
+    np.testing.assert_array_equal(
+        dl.load_resonators(store, 'resonators1')['fres_all'], [1.5e9])
+    with pytest.raises(FileExistsError):
+        dl.save_resonators(store, 0, [1e9], 2e4, 'x')
+    dl.save_resonators(store, 0, [1.1e9], 2e4, 'x', overwrite = True)
+    np.testing.assert_array_equal(dl.load_resonators(store, 0)['fres_all'],
+                                  [1.1e9])
+    tune, k = dl.new_tuning(store, 0)
+    assert (k, tune.attrs['resonators']) == (0, 'resonators0')
+    assert dl.tunings_using(store, 'resonators0') == ['tune0']
+    with pytest.raises(ValueError, match = 'tune0'):
+        dl.save_resonators(store, 0, [1e9], 2e4, 'x', overwrite = True)
+    with pytest.raises(KeyError):
+        dl.new_tuning(store, 5)
 
 
 def test_tones_round_trip(store):
@@ -314,9 +328,14 @@ def test_tones_round_trip(store):
     np.testing.assert_array_equal(t['tone_set'], [0, 0])
     assert t['res_idxs'].dtype == np.int32
     assert grp.attrs['source'] == {'fres': 'tune0/fq_sweep/fres_opt'}
+    assert 'tone_module' not in t
     with pytest.raises(ValueError, match = 'same length'):
         dl.save_tones(dl.create_group(store, 't2', 'decision'), [1e9, 2e9],
                       2e4, -50., [0])
+    g3 = dl.create_group(store, 't3', 'decision')
+    dl.save_tones(g3, [1e9, 2e9], 2e4, -50., [0, 1], tone_set = [0, 1],
+                  tone_module = [1, 1])
+    np.testing.assert_array_equal(dl.load_tones(g3)['tone_module'], [1, 1])
 
 
 ################################################################################
@@ -334,10 +353,11 @@ def _tuned_store(path):
     root (zarr.Group): store root.
     """
     root = dl.create_store(path, 'devA', 'cd1', setup = dict(fridge_ch = 3))
-    vna = dl.create_group(root, 'vna/sweep0', 'raw')
+    vna = dl.create_group(root, 'vna0', 'raw')
     dl.save_vna_sweep(vna, [1e8, 2e8], [1j, 1j], **_bands(1))
-    dl.add_resonators(root, [1e9, 1.1e9, 2e9], 2e4, 'vna/sweep0')
-    tune = dl.create_group(root, 'tune0', 'decision')
+    dl.save_resonators(root, 0, [1e9, 1.1e9, 2e9], 2e4,
+                       'vna0/full_sweep_fit')
+    tune, _ = dl.new_tuning(root, 0)
     dl.write_tune_config(tune, dl.tune_config(_crs()))
     dl.create_group(tune, 'power_sweep', 'raw')
     dl.create_group(tune, 'power_fits', 'analysis')
@@ -360,7 +380,11 @@ def test_port_tuning(tmp_path):
     assert k == 0
     assert (dst.attrs['device'], dst.attrs['cooldown']) == ('devA', 'cd2')
     assert dst.attrs['setup'] == {'fridge_ch': 3}
-    assert sorted(dst.group_keys()) == ['resonators', 'tune0']
+    assert sorted(dst.group_keys()) == ['resonators0', 'tune0']
+    assert dst['tune0'].attrs['resonators'] == 'resonators0'
+    assert dst['resonators0'].attrs['source'] == 'vna0/full_sweep_fit'
+    assert dst['resonators0'].attrs['ported_from']['group'] == \
+        'resonators0'
     assert sorted(dst['tune0'].group_keys()) == ['crs_config', 'tones']
     t = dl.load_tones(dst['tune0/tones'])
     np.testing.assert_array_equal(t['tone_set'], [0, 1])
@@ -381,25 +405,36 @@ def test_port_tuning(tmp_path):
     assert dst.attrs['cooldown'] == 'cd2'
     assert dst.attrs['setup'] == {'fridge_ch': 3}
     assert not src.attrs.get('ported_from')
+    # The identical resonator list is reused, not copied again
+    assert dl.list_indices(dst, 'resonators') == [0]
+    assert dst['tune1'].attrs['resonators'] == 'resonators0'
 
 
 def test_port_tuning_refusals(tmp_path):
     """
-    Check that porting refuses mismatched resonators, another device, and
-    a tuning without tones.
+    Check that porting into a store with another resonator list adds the
+    tuning's list next to it, and that porting refuses another device and
+    a tuning without tones or a resonator list.
     """
     _tuned_store(tmp_path / 'a.zarr')
     other = dl.create_store(tmp_path / 'c.zarr', 'devA', 'cd1')
-    dl.add_resonators(other, [5e8], 2e4, 'vna/sweep0')
-    with pytest.raises(ValueError, match = 'resonators differ'):
-        dl.port_tuning(tmp_path / 'a.zarr', 0, tmp_path / 'c.zarr')
+    dl.save_resonators(other, 0, [5e8], 2e4, 'vna0/full_sweep_fit')
+    assert dl.port_tuning(tmp_path / 'a.zarr', 0, tmp_path / 'c.zarr') == 0
+    other = dl.open_store(tmp_path / 'c.zarr')
+    assert other['tune0'].attrs['resonators'] == 'resonators1'
+    np.testing.assert_array_equal(dl.load_resonators(other, 1)['fres_all'],
+                                  [1e9, 1.1e9, 2e9])
     dl.create_store(tmp_path / 'd.zarr', 'devB', 'cd1')
     with pytest.raises(ValueError, match = 'device'):
         dl.port_tuning(tmp_path / 'a.zarr', 0, tmp_path / 'd.zarr')
     src = dl.open_store(tmp_path / 'a.zarr', mode = 'a')
-    dl.create_group(src, 'tune1', 'decision')
+    dl.new_tuning(src, 0)
     with pytest.raises(KeyError, match = 'tones'):
         dl.port_tuning(src, 1, tmp_path / 'e.zarr')
+    t2 = dl.create_group(src, 'tune2', 'decision')
+    dl.create_group(t2, 'tones', 'decision')
+    with pytest.raises(KeyError, match = 'resonator list'):
+        dl.port_tuning(src, 2, tmp_path / 'e.zarr')
 
 
 def test_archive_store(tmp_path):
@@ -430,7 +465,7 @@ def test_tree(tmp_path):
         dl.create_group(root['tune0'], f'sweep{i}', 'raw')
     text = dl.tree(root)
     lines = text.splitlines()
-    assert lines[0] == 'resonators/  [decision]'
+    assert lines[0] == 'resonators0/  [decision]'
     sweeps = [s.strip() for s in lines if s.strip().startswith('sweep')]
     assert sweeps[:3] == ['sweep0/  [raw]', 'sweep2/  [raw]',
                           'sweep10/  [raw]']
