@@ -24,10 +24,10 @@ def fit_nonlinear_iq(
         bounds[1] to bound the fitting problem. If None, sets default
         bounds: fr within the data, Qr within a factor 10 of p0, amp in
         [0.01, 1 - 1e-6], phi in [-pi/2, pi/2], a in [0, 1], i0 and q0 in
-        +-10 |i0 + j q0| of p0 (either sign), tau in +-1 us. A fitted a
-        above bifurcation (4 sqrt(3) / 9 ~ 0.77) means the resonator is
-        bifurcated; strongly bifurcated ones end at the bound a = 1 with a
-        poor fit.
+        +-10 |i0 + j q0| of p0 (either sign), tau in +-1 us. A fitted
+        nonlinearity parameter a_nl (``a``) above bifurcation
+        (4 sqrt(3) / 9 ~ 0.77) means the resonator is bifurcated; strongly
+        bifurcated ones end at the bound a_nl = 1 with a poor fit.
     p0 (list or None): initial guesses for all parameters
         fr_guess  = p0[0]
         Qr_guess  = p0[1]

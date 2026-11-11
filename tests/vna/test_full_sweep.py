@@ -596,3 +596,80 @@ def test_resonator_list_sorts_crossed_fits(tmp_path):
     np.testing.assert_array_equal(fres, [1e9, 2.0e9, 2.2e9, 3e9])
     np.testing.assert_array_equal(Qr, [1e4, 3e4, 2e4, 4e4])
     np.testing.assert_allclose(qres, [2e3, 6e3, 4e3, 8e3])
+
+
+################################################################################
+############################### measured_depths ################################
+################################################################################
+def depth_sweep(fr, Qr, amp, n = 200001, span = 4e6):
+    """
+    Make a gain-free sweep of resonators with phi = 0.
+
+    Parameters:
+    fr, Qr, amp (array-like): resonator parameters.
+    n (int): number of points. Default 200001.
+    span (float): span in Hz around the mean fr. Default 4 MHz.
+
+    Returns:
+    f, s21 (np.array): the sweep.
+    """
+    from citkid.res.funcs import product_s21
+    fr = np.asarray(fr, dtype = float)
+    f = np.linspace(fr.mean() - span / 2, fr.mean() + span / 2, n)
+    s21 = product_s21(f, fr, np.asarray(Qr, dtype = float),
+                      np.asarray(amp, dtype = float), np.zeros(len(fr)))
+    return f, s21
+
+
+def test_measured_depths_isolated():
+    """
+    Isolated resonators (phi = 0): the depth is Qr / Qc.
+    """
+    fr, Qr, amp = [1.0e9 - 1e6, 1.0e9 + 1e6], [2e4, 2e4], [0.7, 0.3]
+    f, s21 = depth_sweep(fr, Qr, amp)
+    depth = fs.measured_depths(f, s21, fr, np.asarray(fr) / Qr)
+    np.testing.assert_allclose(depth, amp, atol = 1e-3)
+
+
+@pytest.mark.parametrize('sep_lw', [0.3, 1., 3.])
+def test_measured_depths_close_pair(sep_lw):
+    """
+    Of a close pair, the deeper resonance measures deeper, at any
+    separation: the windows stop halfway between the two, so neither takes
+    the other's dip (with plain +-0.5 lw windows, a pair 0.3 lw apart would
+    tie).
+    """
+    lw = 1e9 / 2e4
+    fr = np.array([1.0e9, 1.0e9 + sep_lw * lw])
+    Qr = [2e4, 2e4]
+    for amp in ([0.8, 0.4], [0.4, 0.8]):
+        f, s21 = depth_sweep(fr, Qr, amp)
+        depth = fs.measured_depths(f, s21, fr, fr / Qr)
+        deeper = int(np.argmax(amp))
+        assert depth[deeper] > depth[1 - deeper]
+        # Order of the input doesn't matter
+        rev = fs.measured_depths(f, s21, fr[::-1], fr[::-1] / Qr)
+        np.testing.assert_array_equal(rev, depth[::-1])
+
+
+def test_measured_depths_edge_cases():
+    """
+    NaN linewidths take the median; a window without points uses |s21| at
+    fr; resonances outside the sweep get NaN; bad inputs raise.
+    """
+    fr, Qr, amp = [1.0e9], [2e4], [0.6]
+    f, s21 = depth_sweep(fr, Qr, amp)
+    out = fs.measured_depths(f, s21, [1.0e9, 1.0e9 + 1.5e6, 2e9],
+                             [5e4, np.nan, 5e4])
+    assert abs(out[0] - 0.6) < 1e-3
+    assert abs(out[1]) < 0.05 and np.isnan(out[2])
+    # Coarse sweep: no point within the window
+    fc = np.array([0.99e9, 1.0e9 - 2e5, 1.0e9 + 2e5, 1.01e9])
+    zc = np.array([1., 0.5, 0.7, 1.])
+    np.testing.assert_allclose(
+        fs.measured_depths(fc, zc, [1.0e9], [1e3]), [0.4])
+    assert fs.measured_depths(f, s21, [], []).shape == (0,)
+    with pytest.raises(ValueError, match = 'linewidth'):
+        fs.measured_depths(f, s21, [1e9], [np.nan])
+    with pytest.raises(ValueError, match = 'same length'):
+        fs.measured_depths(f, s21[:-1], [1e9], [5e4])

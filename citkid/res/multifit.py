@@ -17,7 +17,7 @@ amp, phi or the gain is needed.
 
 Stage B (``fit_resonators``): fit G(x) * product_s21 directly, the gain
 again solved linearly, the search over (fr, log10 Qr, amp, phi) per
-resonator (plus the nonlinearity a, optionally). This gives the
+resonator (plus the nonlinearity parameter a_nl, optionally). This gives the
 parameter errors.
 
 Resonances outside the window whose tails reach into it enter as a fixed
@@ -823,7 +823,7 @@ def fit_resonators(
         resonances, as in ``fit_poles``. Default None.
     Qr_bounds (tuple): (min, max) bounds on Qr. Default (1e2, 1e7).
     max_nfev (int): maximum optimizer function evaluations. Default 200.
-    fit_nonlinear (bool): If True, also fit the nonlinearity parameter a of
+    fit_nonlinear (bool): If True, also fit the nonlinearity parameter a_nl of
         each resonator, so ``fr`` is the low-power resonance frequency.
         Default False (linear model).
     a0 (array-like or None): initial a, shape (N,). Default None (0.01).

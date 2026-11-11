@@ -25,6 +25,7 @@ import pandas as pd
 from .. import __version__ as citkid_version
 from .. import daq_layout as dl
 from . import util
+from .instrument import uses_board
 from ..vna import simulate as sim
 from .procedures import NYQUIST_FREQ, VNA_STEP, vna_range, vna_sweep_to_store
 
@@ -92,6 +93,7 @@ class SimulatedCRS:
         self.module_cfg = {m: dict(DEFAULT_MODULE_CFG) for m in module_idxs}
         self.nco_freqs, self._seam = {}, {}
 
+    @uses_board
     async def configure_system(
         self, clock_source = 'VCXO', full_scale_dbm = 7,
         analog_bank_high = False, verbose = True
@@ -120,6 +122,7 @@ class SimulatedCRS:
         self.extended_bw = bool(extended)
         self.bw = 600e6 if extended else 500e6
 
+    @uses_board
     async def attach(self, full_scale_dbm = 7, verbose = True):
         """
         Attach to the board: default module settings with this full scale.
@@ -167,6 +170,7 @@ class SimulatedCRS:
             self._seam[m] = 10 ** (self.rng.normal(0, self.seam_db) / 20) * \
                 np.exp(1j * np.radians(self.rng.normal(0, self.seam_deg)))
 
+    @uses_board
     async def sweep(
         self, frequencies, ares, nsamps, ch_map = None, allow_missing = False,
         acq_cfg_grp = None, verbose = True, pbar_description = '',
@@ -287,6 +291,7 @@ class SimulatedCRS:
         self.dec_stage = dec_stage
         self.sample_freq = util.get_sample_freq(dec_stage)
 
+    @uses_board
     async def write_tones_for_stream(
         self, fres, ares, grp = None, ch_map = None, allow_missing = False
     ):
@@ -342,6 +347,7 @@ class SimulatedCRS:
         """
         self.ch_map, self.ntones, self._stream_tones = {}, 0, None
 
+    @uses_board
     async def stream_to_memory(self, ts_duration_s, dec_stage, verbose = True):
         """
         Stream the written tones into memory, as S21.
@@ -387,6 +393,7 @@ class SimulatedCRS:
         zt[ok] = z0[:, None] + sigma[:, None] * (noise[0] + 1j * noise[1])
         return zt
 
+    @uses_board
     async def stream(
         self, ts_duration_s, dec_stage, grp, tmp_directory = None,
         verbose = True
@@ -414,7 +421,9 @@ class SimulatedCRS:
         counts[0, ok] = np.round(zt[ok].real / scale[ok, None])
         counts[1, ok] = np.round(zt[ok].imag / scale[ok, None])
         per_module = max(len(r) for r in self.ch_map.values())
-        max_ntones = util.SHORT_PACKET_CHANNELS if             per_module <= util.SHORT_PACKET_CHANNELS else             util.LONG_PACKET_CHANNELS
+        short = per_module <= util.SHORT_PACKET_CHANNELS
+        max_ntones = util.SHORT_PACKET_CHANNELS if short else \
+            util.LONG_PACKET_CHANNELS
         z, _ = util._create_z_array(
             grp, zt.shape[0], zt.shape[1], util.get_stream_chunk_length(
                 zt.shape[0], len(self.ch_map), max_ntones, zt.shape[1]))

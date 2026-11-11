@@ -13,7 +13,8 @@ from ``procedures/03_tune.py``):
   the stream in the IQ plane. Nothing is saved.
 - Run: enter a name (and notes), a decimation stage, and a length, and
   run: every tone set gets a new calibration sweep and its stream, saved
-  in the tuning (``crs.procedures.stream_tone_sets``). Presets fill in the
+  as the next run ``ts{n}`` at the store root
+  (``crs.procedures.stream_tone_sets``). Presets fill in the
   usual runs (e.g. a long dark stream at stage 6 and a short one at stage
   0). Repeat for the next timestream.
 
@@ -74,7 +75,8 @@ class StreamWindow(QtWidgets.QMainWindow):
         preview_s (float): preview length in seconds. Default 5.
         presets (sequence of dict): runs offered in the preset list, each
             with ``name``, ``dec_stage``, ``duration_s`` (and optionally
-            ``notes``). Default none.
+            ``notes`` and ``tone_sets``, the tone sets to run; all if not
+            given). Default none.
         sweep_kwargs (dict or None): calibration sweep settings
             (``target_sweep``). Default None (its defaults).
         title (str): window title. Default 'Timestreams'.
@@ -195,6 +197,18 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.notes_edit.setFixedHeight(60)
         self.run_dec = dec_box(6)
         self.run_s = secs_box(60.)
+        # Tone sets (NCO settings) of the run: all by default; fewer saves
+        # time, e.g. a long run on one tone set
+        self.run_sets = QtWidgets.QListWidget()
+        for s in sorted(set(self.tones['tone_set'].tolist())):
+            item = QtWidgets.QListWidgetItem(f'Tone set {s}')
+            item.setData(QtCore.Qt.UserRole, int(s))
+            item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
+            item.setCheckState(QtCore.Qt.Checked)
+            self.run_sets.addItem(item)
+        self.run_sets.setFixedHeight(min(
+            100, 22 * self.run_sets.count() + 6))
+        self.run_sets.itemChanged.connect(self._update_buttons)
         self.run_btn = QtWidgets.QPushButton('Run')
         self.run_btn.clicked.connect(self.run)
         form.addRow('Preset', self.preset_box)
@@ -202,21 +216,21 @@ class StreamWindow(QtWidgets.QMainWindow):
         form.addRow('Notes', self.notes_edit)
         form.addRow('Stage', self.run_dec)
         form.addRow('Length', self.run_s)
+        form.addRow('Tone sets', self.run_sets)
         form.addRow(self.run_btn)
         outer.addWidget(box)
 
         self.runs_list = QtWidgets.QListWidget()
-        for r in self.tune['streams'].attrs.get('runs', []) \
-                if 'streams' in self.tune else []:
+        for r in self.tuning_runs():
             self.runs_list.addItem(self._run_label(r))
-        outer.addWidget(QtWidgets.QLabel('Runs in this tuning'))
+        outer.addWidget(QtWidgets.QLabel('Runs of this tuning'))
         outer.addWidget(self.runs_list)
         self.status = QtWidgets.QLabel()
         self.status.setWordWrap(True)
         outer.addWidget(self.status)
         self._inputs = (self.set_box, self.preview_dec, self.preview_s,
                         self.preset_box, self.name_edit, self.notes_edit,
-                        self.run_dec, self.run_s)
+                        self.run_dec, self.run_s, self.run_sets)
         self._panel.setFixedWidth(self._panel.sizeHint().width() + 40)
         if self.presets:
             self.preset_box.setCurrentIndex(1)
@@ -241,14 +255,24 @@ class StreamWindow(QtWidgets.QMainWindow):
         Describe a run for the runs list.
 
         Parameters:
-        run (dict): a run record (``stream_tone_sets``).
+        run (dict): a run (``daq_layout.stream_runs``).
 
         Returns:
         label (str): one line.
         """
-        return (f"{run['name']}: stage {run['dec_stage']}, "
-                f"{run['duration_s']:g} s, {len(run['paths'])} stream(s), "
-                f"{run['time']}")
+        return (f"{run['group']}: {run.get('name')}, stage "
+                f"{run.get('dec_stage')}, {run.get('duration_s', 0):g} s, "
+                f"sets {run.get('tone_sets')}, {len(run['paths'])} "
+                f"stream(s), {run.get('created', '')}")
+
+    def tuning_runs(self):
+        """
+        Return this tuning's timestream runs (``ts{n}`` at the store root).
+
+        Returns:
+        runs (list of dict): ``daq_layout.stream_runs`` of the tuning.
+        """
+        return dl.stream_runs(dl.store_root(self.tune), self.tune.basename)
 
     def _set_status(self, text):
         """
@@ -270,7 +294,8 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.capture_btn.setEnabled(
             idle and self.cal is not None and
             self.cal['set'] == self.set_box.currentData())
-        self.run_btn.setEnabled(idle and bool(self.name_edit.text().strip()))
+        self.run_btn.setEnabled(idle and bool(self.name_edit.text().strip())
+                                and bool(self.run_set_idxs()))
 
     def _set_rows(self):
         """
@@ -320,6 +345,31 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.notes_edit.setPlainText(p.get('notes', ''))
         self.run_dec.setValue(int(p['dec_stage']))
         self.run_s.setValue(float(p['duration_s']))
+        self.set_run_sets(p.get('tone_sets'))
+
+    def run_set_idxs(self):
+        """
+        Return the tone sets checked for the run.
+
+        Returns:
+        sets (list of int): the checked tone sets.
+        """
+        return [self.run_sets.item(i).data(QtCore.Qt.UserRole)
+                for i in range(self.run_sets.count())
+                if self.run_sets.item(i).checkState() == QtCore.Qt.Checked]
+
+    def set_run_sets(self, sets = None):
+        """
+        Check the run's tone sets.
+
+        Parameters:
+        sets (list of int or None): tone sets to check. None (default): all.
+        """
+        for i in range(self.run_sets.count()):
+            item = self.run_sets.item(i)
+            on = sets is None or item.data(QtCore.Qt.UserRole) in sets
+            item.setCheckState(QtCore.Qt.Checked if on
+                               else QtCore.Qt.Unchecked)
 
     def _submit(self, coro, callback, message):
         """
@@ -466,6 +516,7 @@ class StreamWindow(QtWidgets.QMainWindow):
         dec, secs = self.run_dec.value(), self.run_s.value()
         coro = stream_tone_sets(
             self.crs, self.tune, name, secs, dec, notes = notes,
+            set_idxs = self.run_set_idxs(),
             status = self._message.emit, verbose = False,
             **self.sweep_kwargs)
         self._submit(coro, self._on_run, f'Running {name}...')
@@ -480,10 +531,11 @@ class StreamWindow(QtWidgets.QMainWindow):
         """
         if error is None:
             self.runs.append(paths)
-            run = self.tune['streams'].attrs['runs'][-1]
+            run = self.tuning_runs()[-1]
             self.runs_list.addItem(self._run_label(run))
             self._set_status(f"{run['name']}: saved {len(paths)} "
-                             'stream(s). Ready for the next one.')
+                             f"stream(s) as {run['group']}. Ready for the "
+                             'next one.')
         else:
             self._set_status(f'Run failed: {error!r}')
         self._update_buttons()

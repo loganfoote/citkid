@@ -3,9 +3,9 @@ Load timestreams from several sources, one after another, into one
 DataSet, for the 'ts' (and 'ts_offres') calibrations of a
 ``citkid.daq_layout`` store.
 
-A source is one calibration sweep of a tuning (``tune{k}/sweep{j}``, one
-tone set of one run, see ``crs.procedures.stream_tone_sets``) with its
-streams: every write under it (``write{w}/ts0``; at fast decimation stages
+A source is one calibration sweep of a timestream run (``ts{n}/set{s}``,
+one tone set of one run, see ``crs.procedures.stream_tone_sets``) with its
+streams: every write under it (``write{w}/stream``; at fast decimation stages
 a tone set streams in several writes, each with some of its tones) and a
 window of samples. The DataSet's rows are the sources' tones in order:
 source 0's tones, then source 1's, and so on. Each row loads its sweep
@@ -41,9 +41,10 @@ def stream_sources_steps(
     Parameters:
     store (zarr.Group): root of the store.
     sources (list of dict): one per source: ``group`` (the calibration
-        sweep, e.g. 'tune0/sweep3'), ``writes`` (write names under it, e.g.
+        sweep, e.g. 'ts3/set0'), ``writes`` (write names under it, e.g.
         ['write0', 'write1']), ``start`` and ``stop`` (sample window of the
-        streams), and optionally ``stream`` (stream name, default 'ts0').
+        streams), and optionally ``stream`` (stream name, default
+        'stream').
     fres_all, qres_all (str): keys of every resonance's frequency and span
         factor in the store (e.g. 'resonators0/fres_all'), for cutting
         neighbors out of the fits.
@@ -95,7 +96,7 @@ def stream_sources_steps(
             keep = np.ones(len(res_idxs), bool) if rows == 'all' else \
                 (res_idxs >= 0 if rows == 'resonators' else res_idxs < 0)
             where = np.full((len(res_idxs), 2), -1)
-            stream = s.get('stream', 'ts0')
+            stream = s.get('stream', 'stream')
             for w, name in enumerate(s['writes']):
                 write = sweep[name]
                 held = np.asarray(write['sweep_rows'][...]) \
@@ -266,7 +267,7 @@ def stream_sources_steps(
         zt = np.empty((len(idx), int(s0['stop']) - int(s0['start'])),
                       dtype = np.complex128)
         for pos, write, ts_rows, s in by_write(idx):
-            stream = write[s.get('stream', 'ts0')]
+            stream = write[s.get('stream', 'stream')]
             o = np.argsort(ts_rows)
             z = stream['z'][:, ts_rows[o], int(s['start']):int(s['stop'])]
             scale = np.asarray(stream['counts_to_s21'][...])[ts_rows[o]]

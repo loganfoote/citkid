@@ -535,7 +535,8 @@ def fit_from_guesses(
     fr0 (np.array): initial resonance frequencies in Hz.
     Qr0 (np.array or None): rough quality factors (NaN: unknown), same
         order as ``fr0``. Default None.
-    fit_nonlinear (bool): If True, Stage B also fits the nonlinearity a.
+    fit_nonlinear (bool): If True, Stage B also fits the nonlinearity
+        parameter a_nl.
         Default False.
     downward (bool): sweep direction for the nonlinear model. Default True.
     add_poles (bool): If True, search for resonances missing from the
@@ -1259,6 +1260,74 @@ def run_full_sweep_fit(
         q_variation = rinfo['q'],
         report = report)))
     return res, report
+
+def measured_depths(f, s21, fres, lw, half_width_lw = 0.5):
+    """
+    Measure each resonance's dip depth directly from a gain-removed sweep,
+    without fit parameters.
+
+    The depth is 1 - min |s21| over a window around the resonance
+    frequency. The window is +-``half_width_lw`` linewidths, but never
+    reaches past halfway to the nearest other resonance, so two neighbors'
+    windows never overlap and a resonator can't take its neighbor's dip.
+    For two resonances whose dips have merged, each gets the deepest point
+    on its own side of the midpoint. Unlike the fitted Qr / Qc, this needs
+    no reliable fit, so it works for overlapping resonances and failed
+    fits (with the finder's frequency).
+
+    Parameters:
+    f (np.array): frequencies in Hz, ascending.
+    s21 (np.array): gain-removed complex S21 at ``f`` (e.g. z / gain with
+        the ``full_sweep_fit`` gain).
+    fres (array-like): resonance frequencies in Hz, any order.
+    lw (array-like): linewidths fr / Qr in Hz. NaN or non-positive values
+        are replaced by the median of the valid ones.
+    half_width_lw (float): window half-width in linewidths. Default 0.5.
+
+    Returns:
+    depth (np.array): 1 - min |s21| in each window, in the order of
+        ``fres``. Where a window holds no sweep point, |s21| interpolated
+        at the resonance frequency is used. NaN for resonances outside the
+        sweep.
+
+    Raises:
+    ValueError: if the inputs have mismatched shapes or no linewidth is
+        valid.
+    """
+    f = np.asarray(f, dtype = np.float64)
+    mag = np.abs(np.asarray(s21))
+    fres = np.atleast_1d(np.asarray(fres, dtype = np.float64))
+    lw = np.broadcast_to(np.asarray(lw, dtype = np.float64),
+                         fres.shape).copy()
+    if f.ndim != 1 or mag.shape != f.shape:
+        raise ValueError('f and s21 must be 1D arrays of the same length')
+    n = len(fres)
+    if n == 0:
+        return np.zeros(0)
+    valid = np.isfinite(lw) & (lw > 0)
+    if not valid.any():
+        raise ValueError('no finite, positive linewidth')
+    lw = np.where(valid, lw, np.median(lw[valid]))
+    # Half the distance to the nearest neighbor (inf for a lone resonance)
+    o = np.argsort(fres, kind = 'stable')
+    gaps = np.diff(fres[o])
+    half_gap = np.full(n, np.inf)
+    if n > 1:
+        half_gap_sorted = np.minimum(np.r_[np.inf, gaps],
+                                     np.r_[gaps, np.inf]) / 2
+        half_gap[o] = half_gap_sorted
+    half = np.minimum(half_width_lw * lw, half_gap)
+    lo = np.searchsorted(f, fres - half, side = 'left')
+    hi = np.searchsorted(f, fres + half, side = 'right')
+    at_fr = np.interp(fres, f, mag)
+    depth = np.empty(n)
+    for i in range(n):
+        if not f[0] <= fres[i] <= f[-1]:
+            depth[i] = np.nan
+            continue
+        lowest = mag[lo[i]:hi[i]].min() if hi[i] > lo[i] else at_fr[i]
+        depth[i] = 1 - min(lowest, at_fr[i])
+    return depth
 
 def resonator_list(fit_grp, span_lw = 5.):
     """

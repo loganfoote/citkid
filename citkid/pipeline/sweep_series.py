@@ -46,7 +46,7 @@ from .framework import plStep
 from .series_xy_fit import SeriesXYFit
 from ..zarr_util import list_sets, set_name
 
-# Index of the nonlinearity parameter a in iq_popt
+# Index of the nonlinearity parameter a_nl in iq_popt
 _A_IDX = 4
 # An array given as '<store>.zarr/<key>'
 _ARRAY_SPEC = re.compile(r'^(.*?\.zarr)[/\\](.+)$')
@@ -545,18 +545,19 @@ def a_vs_power_fit(
     a_max = 0.8, a_min = 0, name = 'a_vs_power', group = None
 ):
     """
-    Return a fit of the nonlinearity parameter a versus tone power, linear in
-    tone amplitude: a = a_slope * 10 ** (P / 20) + a_offset, with P in dBm.
+    Return a fit of the nonlinearity parameter a_nl versus tone power,
+    linear in tone amplitude: a_nl = a_slope * 10 ** (P / 20) + a_offset,
+    with P in dBm.
 
-    Points from the first one with a > a_max on are left out, since the IQ
-    fit is unreliable past bifurcation. Points before the first one with
-    a >= a_min are left out too (e.g. low powers where a is too small to
-    measure). Points are in order of increasing power.
+    Points from the first one with a_nl > a_max on are left out, since the
+    IQ fit is unreliable past bifurcation. Points before the first one with
+    a_nl >= a_min are left out too (e.g. low powers where a_nl is too small
+    to measure). Points are in order of increasing power.
 
     Parameters:
-    a_max (float): highest a to include in the fit. Default 0.8.
-    a_min (float): the fit starts at the first point with a >= a_min.
-        Default 0 keeps the low-power points (a is never below 0).
+    a_max (float): highest a_nl to include in the fit. Default 0.8.
+    a_min (float): the fit starts at the first point with a_nl >= a_min.
+        Default 0 keeps the low-power points (a_nl is never below 0).
     name (str): fit name. Default 'a_vs_power'.
     group (zarr.Group or None): group to save the fits to. None (default)
         uses ``root/xy_fit`` in ``run_iq_series``.
@@ -566,7 +567,7 @@ def a_vs_power_fit(
         y_param_name = 'a', xy_fit = ...)``. Parameters [a_slope, a_offset];
         NaN if fewer than 2 points are left. Its inverse is ``ares_for_a``,
         so with ``y_target`` the window marks the power at which each
-        resonator's fit reaches the target a (see ``run_iq_series``).
+        resonator's fit reaches the target a_nl (see ``run_iq_series``).
 
     Raises:
     ValueError: If ``a_min`` is not below ``a_max``.
@@ -576,11 +577,11 @@ def a_vs_power_fit(
 
     def fit(x, y):
         """
-        Fit a line to a vs tone amplitude over the range a_min to a_max.
+        Fit a line to a_nl vs tone amplitude over the range a_min to a_max.
 
         Parameters:
         x (np.ndarray): tone powers in dBm, ascending.
-        y (np.ndarray): nonlinearity parameter a at each power.
+        y (np.ndarray): nonlinearity parameter a_nl at each power.
 
         Returns:
         popt (np.ndarray or list): [a_slope, a_offset], NaN if fewer than 2
@@ -597,14 +598,14 @@ def a_vs_power_fit(
 
     def model(x, a_slope, a_offset):
         """
-        Evaluate the linear a vs tone amplitude model.
+        Evaluate the linear a_nl vs tone amplitude model.
 
         Parameters:
         x (np.ndarray): tone powers in dBm.
         a_slope, a_offset (float): fit parameters.
 
         Returns:
-        a (np.ndarray): model nonlinearity parameter.
+        a (np.ndarray): model nonlinearity parameter a_nl.
         """
         return a_slope * 10 ** (x / 20) + a_offset
 
@@ -615,12 +616,12 @@ def a_vs_power_fit(
 def ares_for_a(popt, a_target):
     """
     Return the tone power at which an ``a_vs_power_fit`` reaches a target
-    nonlinearity parameter.
+    nonlinearity parameter a_nl.
 
     Parameters:
     popt (array-like): fitted parameters, shape (2,) or (nrows, 2), e.g.
         ``root['xy_fit/popt'][...]``.
-    a_target (float): target a.
+    a_target (float): target a_nl.
 
     Returns:
     ares (float or np.ndarray): tone power in dBm, shape popt.shape[:-1].
@@ -802,7 +803,7 @@ def _series_ares_and_a(datasets):
 
     Returns:
     aress (np.ndarray): tone powers, shape (n_series, nrows).
-    a (np.ndarray): fitted a, shape (n_series, nrows); NaN without a saved
+    a (np.ndarray): fitted a_nl, shape (n_series, nrows); NaN without a saved
         fit.
     """
     nrows = int(datasets[0].nrows)

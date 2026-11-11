@@ -6,9 +6,11 @@ import zarr
 import numpy as np
 from tqdm.auto import tqdm
 
+import functools
+
 # citkid imports
 from ..util import run_with_time_bar
-from . import util
+from . import board_lock, util
 from .. import __version__ as citkid_version
 
 # rfmux imports
@@ -17,6 +19,35 @@ from rfmux.algorithms.measurement import take_netanal
 
 ALL_MODULE_IDXS = tuple(range(1, 9))
 ADC_CALIBRATION_MODES = ('AUTO', 'MODE1', 'MODE2')
+
+def uses_board(method):
+    """
+    Mark a CRS coroutine method as using the board: it fails immediately
+    if another process holds the board's exclusive lock (timestreams, see
+    ``board_lock``), and leaves an "in use" marker while it runs, so a
+    script can't take the board for timestreams in the middle of it.
+
+    Parameters:
+    method (coroutine function): the method (of an object with
+        ``serial_number``).
+
+    Returns:
+    wrapper (coroutine function): the wrapped method.
+    """
+    @functools.wraps(method)
+    async def wrapper(self, *args, **kwargs):
+        """
+        Run the method inside ``board_lock.in_use``.
+
+        Parameters:
+        *args, **kwargs: the method's arguments.
+
+        Returns:
+        result: the method's result.
+        """
+        with board_lock.in_use(self.serial_number):
+            return await method(self, *args, **kwargs)
+    return wrapper
 
 class CRS:
     """
@@ -140,6 +171,7 @@ class CRS:
         """
         return [mi for mi in self.module_idxs if mi in self.bank_module_idxs]
 
+    @uses_board
     async def configure_system(
         self, clock_source = "VCXO", full_scale_dbm = 7,
         analog_bank_high = False, verbose = True, suppress_dec_printout = True
@@ -212,6 +244,7 @@ class CRS:
         if verbose:
             print('System configured')
 
+    @uses_board
     async def attach(self, full_scale_dbm = 7, verbose = True):
         """
         Connect to a CRS that was configured by another session, without
@@ -954,6 +987,7 @@ class CRS:
             fres_written[chs] = self.fres_map[key]
         return fres_written
 
+    @uses_board
     async def sweep(
         self, frequencies, ares, nsamps, ch_map = None, allow_missing = False,
         acq_cfg_grp = None, verbose = True, pbar_description = 'Sweeping',
@@ -1326,6 +1360,7 @@ class CRS:
         f, z = f[ix], z[ix]
         return f, z
 
+    @uses_board
     async def write_tones_for_stream(
         self, fres, ares, grp = None, ch_map = None, allow_missing = False
     ):
@@ -1449,6 +1484,7 @@ class CRS:
             # Clear all channels after streaming (success or failure)
             await self.clear_tones()
 
+    @uses_board
     async def stream(
         self, ts_duration_s, dec_stage, grp, tmp_directory = None,
         verbose = True
@@ -1556,6 +1592,7 @@ class CRS:
             1 / util.get_sample_freq(dec_stage)
             )
 
+    @uses_board
     async def stream_to_memory(self, ts_duration_s, dec_stage, verbose = True):
         """
         Stream a timestream of the currently written tones into memory and

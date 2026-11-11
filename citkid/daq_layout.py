@@ -1,15 +1,17 @@
 """
 Layout of a device's DAQ store: one zarr store per device per cooldown,
-organized as a tree that follows the measurement procedure (see
-``documents/daq_layout.md``).
+organized as a tree that follows the measurement procedure (see the
+procedure guides in ``documents/procedures/``).
 
 ```
 <device>.zarr/
 ├── vna{k}/                raw VNA sweeps (stitched over bands)
 ├── resonators{k}/         resonators found on vna{k} (res_idxs_all, ...)
-└── tune{k}/               tunings: crs_config/, tones_init/, tones/, ...
-                           (attrs['resonators']: the list they use)
-    └── sweep{j}/write{w}/ts{s}/
+├── tune{k}/               tunings: crs_config/, tones_init/, tones/, ...
+│                          (attrs['resonators']: the list they use)
+├── ts{n}/                 timestream runs (attrs: name, tuning, ...)
+│   └── set{s}/write{w}/stream/
+└── ts_cal{c}/             stream calibrations
 ```
 
 Every group has ``attrs['kind']``: 'raw' (write-once), 'decision', or
@@ -41,8 +43,11 @@ VNA_BAND_ARRAYS = ('chunk_edges', 'chunk_ncos', 'chunk_modules',
 TONE_ARRAYS = ('fres', 'qres', 'ares', 'res_idxs', 'tone_set',
                'tone_module')
 RESONATORS_PREFIX = 'resonators'
+# Timestream runs at the store root (ts{n}) and each executed stream
+TS_PREFIX = 'ts'
+STREAM_NAME = 'stream'
 RESONATOR_ARRAYS = ('res_idxs_all', 'fres_all', 'qres_all', 'Qr_all',
-                    'source_all')
+                    'depth_all', 'source_all')
 # Largest chunk of a 1D array; longer arrays are sharded into one file
 _CHUNK = 2 ** 20
 
@@ -573,15 +578,16 @@ def load_vna_sweep(root, k = None, bands = False):
 ################################# Resonators ###################################
 ################################################################################
 def save_resonators(
-    root, k, fres, qres, source, Qr = None, overwrite = False
+    root, k, fres, qres, source, Qr = None, depth = None, overwrite = False
 ):
     """
     Save a resonator list as ``resonators{k}``: the resonators found on VNA
     sweep ``vna{k}`` (or a list ported from another store).
 
     The resonators get indices 0 ... n - 1 (``res_idxs_all``) in ascending
-    frequency order (``fres``, ``qres`` and ``Qr`` are sorted together if
-    they aren't already: the pipeline's gain cuts need a sorted list).
+    frequency order (``fres``, ``qres``, ``Qr`` and ``depth`` are sorted
+    together if they aren't already: the pipeline's gain cuts need a sorted
+    list).
     Each tuning records which list its ``res_idxs`` refer to
     (``attrs['resonators']``, see ``new_tuning``), so a list can't be
     replaced once a tuning uses it.
@@ -596,6 +602,11 @@ def save_resonators(
     Qr (array-like or None): fitted total quality factors (NaN where the
         fit is unreliable), used for linewidths (e.g.
         ``tone_plan.select_isolated``). None (default): all NaN.
+    depth (array-like or None): resonance dip depths
+        (``vna.full_sweep.measured_depths``), used as the strength when
+        only the stronger of two close resonators gets a tone
+        (``select_isolated`` with ``pairs = 'keep_stronger'``). None
+        (default): all NaN.
     overwrite (bool): If True, replace an existing list that no tuning
         uses. Default False.
 
@@ -612,10 +623,23 @@ def save_resonators(
         raise ValueError('fres must be 1D')
     qres = np.broadcast_to(np.asarray(qres, dtype = np.float64),
                            fres.shape).copy()
-    Qr = np.full(fres.shape, np.nan) if Qr is None else \
-        np.broadcast_to(np.asarray(Qr, dtype = np.float64), fres.shape).copy()
+    def per_resonator(values):
+        """
+        Broadcast optional per-resonator values to ``fres``' shape.
+
+        Parameters:
+        values (array-like or None): the values. None: all NaN.
+
+        Returns:
+        values (np.array): float array of ``fres``' shape.
+        """
+        if values is None:
+            return np.full(fres.shape, np.nan)
+        return np.broadcast_to(np.asarray(values, dtype = np.float64),
+                               fres.shape).copy()
+    Qr, depth = per_resonator(Qr), per_resonator(depth)
     order = np.argsort(fres, kind = 'stable')
-    fres, qres, Qr = fres[order], qres[order], Qr[order]
+    fres, qres, Qr, depth = fres[order], qres[order], Qr[order], depth[order]
     name = set_name(int(k), RESONATORS_PREFIX)
     if name in root:
         users = tunings_using(root, name)
@@ -629,7 +653,7 @@ def save_resonators(
                        overwrite = overwrite)
     arrays = dict(
         res_idxs_all = np.arange(len(fres), dtype = np.int32),
-        fres_all = fres, qres_all = qres, Qr_all = Qr,
+        fres_all = fres, qres_all = qres, Qr_all = Qr, depth_all = depth,
         source_all = np.full(len(fres), str(source)))
     for key in RESONATOR_ARRAYS:
         write_array(grp, key, arrays[key])
@@ -646,7 +670,8 @@ def load_resonators(root, k = None):
 
     Returns:
     resonators (dict): ``RESONATOR_ARRAYS`` by name (``source_all`` as
-        str; ``Qr_all`` NaN if the list has none).
+        str; ``Qr_all`` and ``depth_all`` NaN if the list has none, e.g.
+        lists saved before ``depth_all`` existed).
     """
     root = open_store(root)
     if k is None:
@@ -654,8 +679,9 @@ def load_resonators(root, k = None):
     name = k if isinstance(k, str) else set_name(int(k), RESONATORS_PREFIX)
     grp = root[name]
     out = {key: grp[key][:] for key in RESONATOR_ARRAYS if key in grp}
-    if 'Qr_all' not in out:
-        out['Qr_all'] = np.full(len(out['fres_all']), np.nan)
+    for key in ('Qr_all', 'depth_all'):
+        if key not in out:
+            out[key] = np.full(len(out['fres_all']), np.nan)
     out['source_all'] = np.asarray(out['source_all'], dtype = str)
     return out
 
@@ -765,72 +791,90 @@ def load_tones(grp):
 ################################################################################
 ################################### Streams ####################################
 ################################################################################
-def _store_root(grp):
+def store_root(grp, mode = 'r'):
     """
-    Open the root of the store a group is in, read-only.
+    Open the root of the store a group is in.
 
     Parameters:
     grp (zarr.Group): any group of the store.
+    mode (str): 'r' (default) or 'r+' (writable).
 
     Returns:
     root (zarr.Group): the store root.
     """
-    return zarr.open_group(grp.store, path = '', mode = 'r')
+    return zarr.open_group(grp.store, path = '', mode = mode)
 
-def stream_runs(tune):
+def stream_runs(root, tuning = None):
     """
-    Return a tuning's stream runs (``crs.procedures.stream_tone_sets``),
-    with each run's chunk layout.
+    Return the store's timestream runs (``ts{n}``, made by
+    ``crs.procedures.stream_tone_sets``), with each run's chunk layout.
 
     Parameters:
-    tune (zarr.Group): the tuning.
+    root (zarr.Group): the store root.
+    tuning (str or None): only the runs of this tuning (e.g. 'tune0').
+        None (default): all.
 
     Returns:
-    runs (list of dict): per run, in order: the saved record (``name``,
-        ``notes``, ``dec_stage``, ``duration_s``, ``time``, ``paths``) plus
-        ``run`` (index), ``nsamples``, ``chunk_samples`` (zarr chunk length
-        along time), ``n_chunks``, and ``chunk_s`` (chunk length in s).
+    runs (list of dict): per run, in order: its attributes (``name``,
+        ``notes``, ``dec_stage``, ``duration_s``, ``tone_sets``,
+        ``tuning``, ``tones``, ``resonators``, ``complete``, ``created``)
+        plus ``run`` (n), ``group`` ('ts{n}'), ``paths`` (its streams,
+        e.g. 'ts3/set0/write0/stream'), and, if it has streams,
+        ``nsamples``, ``chunk_samples`` (zarr chunk length along time),
+        ``n_chunks``, and ``chunk_s`` (chunk length in s).
     """
-    if 'streams' not in tune:
-        return []
-    root = _store_root(tune)
     out = []
-    for i, run in enumerate(tune['streams'].attrs.get('runs', [])):
-        run = dict(run, run = i)
-        if run['paths']:
-            ts = root[run['paths'][0]]
-            n, chunk = int(ts['z'].shape[2]), int(ts['z'].chunks[2])
-            dt = float(ts['dt'][...])
-            run.update(nsamples = n, chunk_samples = chunk,
-                       n_chunks = -(-n // chunk), chunk_s = chunk * dt)
+    for n in list_indices(root, TS_PREFIX):
+        grp = root[set_name(n, TS_PREFIX)]
+        run = dict(grp.attrs, run = n, group = grp.basename)
+        if tuning is not None and run.get('tuning') != tuning:
+            continue
+        paths = []
+        for s in list_indices(grp, 'set'):
+            sg = grp[set_name(s)]
+            for w in list_indices(sg, 'write'):
+                if STREAM_NAME in sg[set_name(w, 'write')]:
+                    paths.append(f'{grp.basename}/{set_name(s)}/'
+                                 f'{set_name(w, "write")}/{STREAM_NAME}')
+        run['paths'] = paths
+        if paths:
+            st = root[paths[0]]
+            nsamp, chunk = int(st['z'].shape[2]), int(st['z'].chunks[2])
+            dt = float(st['dt'][...])
+            run.update(nsamples = nsamp, chunk_samples = chunk,
+                       n_chunks = -(-nsamp // chunk), chunk_s = chunk * dt)
         out.append(run)
     return out
 
-def describe_stream_runs(tune):
+def describe_stream_runs(root, tuning = None):
     """
-    Describe a tuning's stream runs, one line each, for choosing what to
-    calibrate.
+    Describe the store's timestream runs, one line each, for choosing what
+    to calibrate.
 
     Parameters:
-    tune (zarr.Group): the tuning.
+    root (zarr.Group): the store root.
+    tuning (str or None): only this tuning's runs. Default None (all).
 
     Returns:
     text (str): the description.
     """
-    lines = [f'{tune.basename} stream runs (run: name, stage, length, '
-             'zarr chunks, notes):']
-    for r in stream_runs(tune):
+    lines = ['Timestream runs (ts{n}: name, tuning, stage, length, tone '
+             'sets, zarr chunks, notes):']
+    for r in stream_runs(root, tuning):
         chunks = (f"{r['n_chunks']} chunks of {r['chunk_s']:.3g} s"
                   if 'n_chunks' in r else 'no streams')
-        lines.append(f"  {r['run']}: {r['name']}, stage {r['dec_stage']}, "
-                     f"{r['duration_s']:g} s, {chunks}"
-                     + (f", {r['notes']}" if r['notes'] else ''))
+        done = '' if r.get('complete') else ', incomplete'
+        lines.append(
+            f"  {r['group']}: {r.get('name')}, {r.get('tuning')}, stage "
+            f"{r.get('dec_stage')}, {r.get('duration_s', 0):g} s, sets "
+            f"{r.get('tone_sets')}, {chunks}{done}"
+            + (f", {r['notes']}" if r.get('notes') else ''))
     if len(lines) == 1:
         lines.append('  none')
     return '\n'.join(lines)
 
 def select_streams(
-    tune, name = None, run = None, chunks = None, tone_sets = None
+    root, name = None, run = None, chunks = None, tone_sets = None
 ):
     """
     Turn one choice of streams into sources for
@@ -838,10 +882,10 @@ def select_streams(
     calibration sweep with all its writes), with a window of zarr chunks.
 
     Parameters:
-    tune (zarr.Group): the tuning.
+    root (zarr.Group): the store root.
     name (str or None): run name: the latest run with this name, unless
         ``run`` is given.
-    run (int or None): run index (``stream_runs``).
+    run (int or None): run index n (``ts{n}``).
     chunks (int, tuple, or None): window along time, in zarr chunks: None
         (default) for all of it, n for the first n chunks, or (first,
         stop) for chunks first, ..., stop - 1.
@@ -849,28 +893,30 @@ def select_streams(
         all.
 
     Returns:
-    sources (list of dict): ``group``, ``writes``, ``start``, ``stop``.
+    sources (list of dict): ``group``, ``writes``, ``start``, ``stop``,
+        ``stream``.
     run (dict): the run (``stream_runs``), plus ``start`` and ``stop``.
 
     Raises:
     KeyError: if no run matches.
-    ValueError: if the chunk window is empty, or the run's writes have
+    ValueError: if the chunk window is empty, or the run's streams have
         different lengths.
     """
-    runs = stream_runs(tune)
+    runs = stream_runs(root)
     if run is not None:
-        if not 0 <= int(run) < len(runs):
-            raise KeyError(f'{tune.basename} has no run {run}')
-        r = runs[int(run)]
-        if name is not None and r['name'] != name:
-            raise KeyError(f"run {run} is {r['name']!r}, not {name!r}")
+        match = [r for r in runs if r['run'] == int(run)]
+        if not match:
+            raise KeyError(f'the store has no ts{run}')
+        r = match[0]
+        if name is not None and r.get('name') != name:
+            raise KeyError(f"ts{run} is {r.get('name')!r}, not {name!r}")
     else:
-        named = [r for r in runs if r['name'] == name]
+        named = [r for r in runs if r.get('name') == name]
         if not named:
-            raise KeyError(f'{tune.basename} has no run named {name!r}')
+            raise KeyError(f'the store has no run named {name!r}')
         r = named[-1]
     if 'n_chunks' not in r:
-        raise KeyError(f"run {r['run']} has no streams")
+        raise KeyError(f"{r['group']} has no streams")
     if chunks is None:
         first, stop = 0, r['n_chunks']
     elif isinstance(chunks, (int, np.integer)):
@@ -880,9 +926,8 @@ def select_streams(
     start = first * r['chunk_samples']
     end = min(stop * r['chunk_samples'], r['nsamples'])
     if end <= start:
-        raise ValueError(f"chunks {chunks} select no samples of run "
-                         f"{r['run']} ({r['n_chunks']} chunks)")
-    root = _store_root(tune)
+        raise ValueError(f"chunks {chunks} select no samples of "
+                         f"{r['group']} ({r['n_chunks']} chunks)")
     sources = []
     for path in r['paths']:
         sweep, write, _ = path.rsplit('/', 2)
@@ -895,7 +940,8 @@ def select_streams(
             sources[-1]['writes'].append(write)
         else:
             sources.append(dict(group = sweep, writes = [write],
-                                start = int(start), stop = int(end)))
+                                start = int(start), stop = int(end),
+                                stream = STREAM_NAME))
     return sources, dict(r, start = int(start), stop = int(end))
 
 ################################################################################
@@ -909,8 +955,8 @@ def port_tuning(src, tune, dst, cooldown = None, setup = None):
     ``tune{k}`` of ``dst``, with the resonator list it uses: an identical
     list already in ``dst`` is reused, else it is copied to the next free
     ``resonators{j}``. Raw data and analysis are not
-    copied, and ``src`` is not modified. See ``documents/daq_layout.md``,
-    section 7.2.
+    copied, and ``src`` is not modified (see
+    ``documents/procedures/tuning_timestreams.pdf``).
 
     Parameters:
     src (zarr.Group, str, or os.PathLike): source store (may be zipped).

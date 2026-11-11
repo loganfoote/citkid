@@ -1,26 +1,29 @@
 """
-05: calibrate a tuning's timestreams.
+05: calibrate timestreams.
 
-Choose the streams in ``CALIBRATE`` (below): each entry is a run of
-04_stream.py by name (the latest run with that name) or index, a window of
-zarr chunks along time (``chunks``: all of it by default, n for the first
-n chunks, or (first, stop)), and optionally some tone sets. Loading only a
-few chunks keeps loading fast. With ``CALIBRATE`` empty, the script lists
-the tuning's runs (name, stage, length, chunks, notes) and stops.
+Choose the streams in ``CALIBRATE`` (below): each entry is a timestream
+run of 04_stream.py (``ts{n}`` at the store root) by name (the latest run
+with that name) or index (``run = n``), a window of zarr chunks along time
+(``chunks``: all of it by default, n for the first n chunks, or (first,
+stop)), and optionally some tone sets. Loading only a few chunks keeps
+loading fast. With ``CALIBRATE`` empty, the script lists the runs (name,
+tuning, stage, length, tone sets, chunks, notes) and stops.
 
 The chosen streams are loaded one after another into one DataSet
-(``pipeline.stream_sources``) per decimation stage and window length:
+(``pipeline.stream_sources``) per decimation stage, window length, and
+resonator list:
 each row is one tone of one run, with ``source_idx`` (which entry and tone
 set) and ``write_idx`` (which tones were streamed together, for
 common-mode removal). The rows are calibrated with the 'ts' path (gain
 fit, IQ circle fit, x calibration): first in the interactive window, then
 in batch for the rows not done there. Calibration tones (res_idxs < 0), if
-the tuning has any, get their own DataSet with the 'ts_offres' path, in
+the runs have any, get their own DataSet with the 'ts_offres' path, in
 batch.
 
-Everything goes in ``tune{k}/cal{c}`` (an analysis group: delete it to
-start over). Running again with the same ``CALIBRATE`` continues in the
-same ``cal{c}``; a different choice, or ``--new``, starts the next one.
+Everything goes in ``ts_cal{c}`` at the store root (an analysis group:
+delete it to start over). Running again with the same ``CALIBRATE``
+continues in the same ``ts_cal{c}``; a different choice, or ``--new``, starts
+the next one.
 No CRS is needed.
 
 Usage:
@@ -44,15 +47,22 @@ from citkid.zarr_util import to_jsonable
 DATA_DIR = '~/data'         # stores are in DATA_DIR/COOLDOWN/DEVICE.zarr
 COOLDOWN = 'cooldown'       # cooldown name
 DEVICE = 'device'           # device name
-# Streams to calibrate. Each entry: name (latest run with that name) or
-# run (index), chunks (None: all; n: the first n zarr chunks; (first,
-# stop)), tone_sets (None: all). Leave empty to list the runs.
+# Timestreams to calibrate. Each entry selects a run by name (the latest
+# run with that name) or by run (its index n in ts{n}); chunks, the zarr
+# chunks to load (None: all; n: the first n; (first, stop): a range); and
+# tone_sets (None: all). Leave the list empty to list the runs.
 CALIBRATE = [
     # dict(name = 'dark_dec6', chunks = 1),
     # dict(name = 'dark_dec0', chunks = 2),
 ]
-F_AVG = 1                   # average this many fine sweep points
-INTERACTIVE = True          # review in the window before the batch
+F_AVG = 1                   # number of fine sweep points averaged together
+INTERACTIVE = True          # review in the interactive window before the
+                            # batch calibration
+
+# Notes saved with the data this script makes (attribute 'notes'), e.g.
+# the filters and attenuators on the DAC and ADC lines. Multi-line is fine.
+NOTES = """
+"""
 
 ################################################################################
 ################################### Script #####################################
@@ -73,13 +83,24 @@ def parse_args(argv = None):
     p.add_argument('--device', default = DEVICE)
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device)')
-    p.add_argument('--tune', type = int, default = None,
-                   help = 'tuning (default: the latest with streams)')
     p.add_argument('--new', action = 'store_true',
-                   help = 'start a new cal group')
+                   help = 'start a new ts_cal group')
     p.add_argument('--no-gui', action = 'store_true',
                    help = 'calibrate in batch only')
+    p.add_argument('--notes', default = NOTES,
+                   help = 'notes saved with the data (quote multi-line text)')
     return p.parse_args(argv)
+
+def save_notes(grp, notes):
+    """
+    Save notes with a group the script made (attribute 'notes'), if any.
+
+    Parameters:
+    grp (zarr.Group): the group.
+    notes (str): the notes (``--notes`` or ``NOTES``); blank is not saved.
+    """
+    if notes and notes.strip():
+        grp.attrs['notes'] = notes.strip()
 
 def store_path(args):
     """
@@ -96,76 +117,62 @@ def store_path(args):
     return os.path.join(os.path.expanduser(args.data_dir), args.cooldown,
                         f'{args.device}.zarr')
 
-def find_tuning(root, k = None):
+def cal_group(root, selection, new, notes = None):
     """
-    Return the tuning whose streams to calibrate.
-
-    Parameters:
-    root (zarr.Group): the store root.
-    k (int or None): tuning index. None: the latest with stream runs.
-
-    Returns:
-    tune (zarr.Group): the tuning.
-
-    Raises:
-    KeyError: if there is no such tuning.
-    """
-    if k is not None:
-        return root[dl.set_name(k, 'tune')]
-    done = [j for j in dl.list_indices(root, 'tune')
-            if dl.stream_runs(root[dl.set_name(j, 'tune')])]
-    if not done:
-        raise KeyError('no tuning has streams yet: run 04_stream.py')
-    return root[dl.set_name(done[-1], 'tune')]
-
-def cal_group(tune, selection, new):
-    """
-    Return the cal group for a choice of streams: the latest one made with
+    Return the ts_cal group for a choice of streams: the latest one made with
     the same choice, or a new one.
 
     Parameters:
-    tune (zarr.Group): the tuning.
+    root (zarr.Group): the store root.
     selection (list of dict): ``CALIBRATE``.
     new (bool): If True, always start a new one.
+    notes (str or None): notes saved with a new group. Default None.
 
     Returns:
     cal (zarr.Group): the group.
     """
     selection = to_jsonable(list(selection))
-    idxs = dl.list_indices(tune, 'cal')
+    idxs = dl.list_indices(root, 'ts_cal')
     if idxs and not new:
-        last = tune[dl.set_name(idxs[-1], 'cal')]
+        last = root[dl.set_name(idxs[-1], 'ts_cal')]
         if last.attrs.get('selection') == selection:
             print(f'Continuing {last.path}')
             return last
-    cal, _ = dl.new_indexed_group(tune, 'cal', 'analysis',
+    cal, _ = dl.new_indexed_group(root, 'ts_cal', 'analysis',
                                   attrs = dict(selection = selection))
+    save_notes(cal, notes)
     print(f'Calibrating into {cal.path}')
     return cal
 
-def plan_datasets(tune, selection):
+def plan_datasets(root, selection):
     """
     Resolve the chosen streams and group them into DataSets: one per
-    decimation stage and window length.
+    decimation stage, window length, and resonator list (the pipeline holds
+    one sample period and one list of neighbors per DataSet).
 
     Parameters:
-    tune (zarr.Group): the tuning.
+    root (zarr.Group): the store root.
     selection (list of dict): ``CALIBRATE``.
 
     Returns:
-    groups (dict): name: dict(sources, entries), in order of first use.
+    groups (dict): name: dict(sources, entries, resonators), in order of
+        first use.
     """
     groups = {}
     for i, entry in enumerate(selection):
-        sources, run = dl.select_streams(tune, **entry)
+        sources, run = dl.select_streams(root, **entry)
         if not sources:
             raise ValueError(f'entry {i} ({entry}) selects no tone sets')
-        key = (run['dec_stage'], run['stop'] - run['start'])
-        name = f"stage{key[0]}_n{key[1]}"
-        g = groups.setdefault(name, dict(sources = [], entries = []))
+        res = run.get('resonators')
+        name = f"stage{run['dec_stage']}_n{run['stop'] - run['start']}"
+        if any(g['resonators'] != res for g in groups.values()) or \
+                name in groups and groups[name]['resonators'] != res:
+            name = f'{name}_{res}'
+        g = groups.setdefault(name, dict(sources = [], entries = [],
+                                         resonators = res))
         g['sources'] += sources
         g['entries'].append(dict(
-            entry = i, run = run['run'], name = run['name'],
+            entry = i, run = run['group'], name = run.get('name'),
             start = run['start'], stop = run['stop'],
             sources = [s['group'] for s in sources]))
     return groups
@@ -183,17 +190,16 @@ def main(args):
     path = store_path(args)
     root = dl.open_store(path, mode = 'a')
     dl.check_store(root)
-    tune = find_tuning(root, args.tune)
-    print(dl.describe_stream_runs(tune))
+    print(dl.describe_stream_runs(root))
     if not CALIBRATE:
         print('Set CALIBRATE at the top of the script to choose streams.')
         return None
-    groups = plan_datasets(tune, CALIBRATE)
-    cal = cal_group(tune, CALIBRATE, args.new)
-    res = tune.attrs['resonators']
-    fres_all, qres_all = f'{res}/fres_all', f'{res}/qres_all'
+    groups = plan_datasets(root, CALIBRATE)
+    cal = cal_group(root, CALIBRATE, args.new, args.notes)
     datasets = {}
     for name, g in groups.items():
+        res = g['resonators']
+        fres_all, qres_all = f'{res}/fres_all', f'{res}/qres_all'
         grp = cal.require_group(name)
         grp.attrs['entries'] = to_jsonable(g['entries'])
         DS = open_stream_dataset(grp, g['sources'], fres_all, qres_all,

@@ -5,8 +5,9 @@ board needs configuring, e.g. after a power cycle).
 Run it before the module scripts (vna_quick_check.py, 01_vna_sweep.py,
 ...), and again whenever the board loses its configuration.
 This session has global control: it sets the clock source, analog bank,
-DAC full scale, extended bandwidth, and decimation (stage 6, streaming
-every module in the bank, so other sessions can sweep), then exits. The
+DAC full scale (always 7 dBm), extended bandwidth, and decimation (stage
+6, streaming every module in the bank, so other sessions can sweep), then
+exits. The
 board keeps these settings, and the module scripts attach to it without
 changing them.
 
@@ -31,8 +32,8 @@ SERIAL_NUMBER = 46          # CRS serial number
 INTERFACE = 'enp5s0'        # Ethernet interface connected to the CRS
 CLOCK_SOURCE = 'VCXO'       # 'VCXO' (internal) or 'SMA' (external 10 MHz)
 ANALOG_BANK_HIGH = False    # False: modules 1-4; True: modules 5-8
-FULL_SCALE_DBM = 7          # DAC full scale, 0-7 dBm
-EXTENDED_BW = False         # True: 600 MHz module bandwidth (loss at edges)
+EXTENDED_BW = False         # True: 600 MHz module bandwidth (more loss
+                            # near the band edges)
 
 ################################################################################
 ################################### Script #####################################
@@ -54,7 +55,6 @@ def parse_args(argv = None):
                    choices = ['VCXO', 'SMA'])
     p.add_argument('--bank-high', action = 'store_true',
                    default = ANALOG_BANK_HIGH)
-    p.add_argument('--full-scale', type = float, default = FULL_SCALE_DBM)
     p.add_argument('--extended-bw', action = 'store_true',
                    default = EXTENDED_BW)
     return p.parse_args(argv)
@@ -71,7 +71,7 @@ async def main(args):
     """
     crs = CRS(serial_number = args.serial, interface = args.iface)
     await crs.configure_system(
-        clock_source = args.clock, full_scale_dbm = args.full_scale,
+        clock_source = args.clock, full_scale_dbm = 7,
         analog_bank_high = args.bank_high, verbose = True)
     if args.extended_bw:
         await crs.set_extended_bw(True)

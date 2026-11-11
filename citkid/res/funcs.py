@@ -186,9 +186,10 @@ def product_s21(f, fr, Qr, amp, phi, a = None, downward = True):
     product of the single-resonator transmissions (no gain, no reflections
     between resonators).
 
-    Linear resonators use ``linear_iq_nogain``. Resonators with a > 0 use
-    ``nonlinear_iq_nogain`` within 50 linewidths of fr (the nonlinear
-    correction falls off as a / y^2 away from resonance) and the linear
+    Linear resonators use ``linear_iq_nogain``. Resonators with
+    nonlinearity parameter a_nl > 0 (``a``) use ``nonlinear_iq_nogain``
+    within 50 linewidths of fr (the nonlinear correction falls off as
+    a_nl / y^2 away from resonance) and the linear
     model outside.
 
     Parameters:
@@ -198,11 +199,11 @@ def product_s21(f, fr, Qr, amp, phi, a = None, downward = True):
     Qr (array-like): total quality factors, shape (N,).
     amp (array-like): Qr / Qc, shape (N,).
     phi (array-like): impedance-mismatch rotations in radians, shape (N,).
-    a (array-like or None): nonlinearity parameters, shape (N,). Default
+    a (array-like or None): nonlinearity parameters a_nl, shape (N,). Default
         None (all linear).
     downward (bool): If True (default), uses the solution for a downward
         sweep (decreasing frequency); if False, for an upward sweep. Only
-        matters for a > 0.
+        matters for a_nl > 0.
 
     Returns:
     s21 (np.array): complex transmission.

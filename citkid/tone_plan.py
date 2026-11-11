@@ -1,7 +1,7 @@
 """
 Plan the tones of a tuning: which resonators get a tone, and how the
 tones are split into tone sets when they don't all fit in the modules'
-bandwidth at once (see ``documents/daq_layout.md``, section 7).
+bandwidth at once (see ``documents/procedures/tuning_timestreams.pdf``).
 
 Analysis code: these functions only compute; saving the plan is done by
 the procedures (``citkid.crs.procedures``, ``citkid.daq_layout``).

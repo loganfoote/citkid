@@ -11,8 +11,8 @@ Steps, in a tuning ``tune{k}`` of the device store:
 2. power_sweep: a target sweep at each power in ``POWERS``, stitched over
    the tone sets (``power_sweep/set{i}``);
 3. power_fits: fit the IQ loops of every power in the IQ series window,
-   with a fit of a vs power per resonator; the window marks the power
-   where a reaches ``ANL``, and Shift+click (or dragging the line) picks
+   with a fit of a_nl vs power per resonator; the window marks the power
+   where a_nl reaches ``ANL``, and Shift+click (or dragging the line) picks
    another one. The chosen powers, with the median of the others where
    there is none, and then clipped to ``ARES_LIMITS``, are saved in
    ``power_choice``;
@@ -66,48 +66,62 @@ DATA_DIR = '~/data'         # stores are in DATA_DIR/COOLDOWN/DEVICE.zarr
 COOLDOWN = 'cooldown'       # cooldown name
 DEVICE = 'device'           # device name
 MODULES = [1]               # modules connected to this device
-FULL_SCALE_DBM = 7          # DAC full scale of these modules, 0-7 dBm
 # Tones
 RESONATORS = None           # resonator list index (None: the latest)
-MIN_SEP_LW = 5.             # drop tones closer than this many linewidths
-PAIRS = 'drop_both'         # close pairs: 'drop_both' or 'keep_stronger'
-EDGE_MARGIN = 10e6          # smallest distance of a tone from a window edge
-# Fastest decimation stage the tuning will stream at. Tone sets get at most
-# as many tones per module as can stream at once there (128 at stages 0-1,
-# 1024 at 2-6 with the current limits), so streaming never changes NCOs
+MIN_SEP_LW = 5.             # remove tones within this many linewidths of
+                            # another resonance
+# For close pairs: 'drop_both' removes both tones; 'keep_stronger' keeps
+# the tone of the deeper resonance (dip depth measured by 02)
+PAIRS = 'drop_both'
+EDGE_MARGIN = 10e6          # minimum distance from a tone to the edge of
+                            # its NCO window, Hz
+# Fastest decimation stage that will be used for streaming. Each module
+# gets at most as many tones per tone set as can be streamed at once at
+# this stage (currently 128 at stages 0-1 and 1024 at stages 2-6), so the
+# NCO frequencies never change during streaming
 STREAM_DEC = 6
-# Calibration tones (off resonance, res_idxs < 0) per NCO window, at the
-# middles of the widest gaps between resonances, at least CAL_MIN_SEP_LW
-# linewidths from any; streams of them are calibrated with 'ts_offres'
+# Number of off-resonance calibration tones (res_idxs < 0) per NCO window.
+# They are placed in the middles of the widest gaps between resonances,
+# and their timestreams are calibrated with the 'ts_offres' path
 N_CAL_TONES = 0
-# NCO windows to use (indices in frequency order, as --list-windows prints
-# them), to look at part of the array; None: all. E.g. STREAM_DEC = 0 and
-# WINDOWS = [2] gives the up-to-128 tones of one window
+CAL_MIN_SEP_LW = 10.        # minimum distance from a calibration tone to
+                            # any resonance, in linewidths
+# NCO windows to use (indices in frequency order, as printed by
+# --list-windows), to measure only part of the array. None: all windows.
+# For example, STREAM_DEC = 0 and WINDOWS = [2] gives the (up to 128)
+# tones of one window
 WINDOWS = None
-CAL_MIN_SEP_LW = 10.
 # Sweeps
 POWERS = np.arange(-60., -35., 3)   # power sweep, dBm
-SHUFFLE = False             # shuffle each tone's powers across the sets
-SEED = 0                    # shuffle seed
+SHUFFLE = False             # randomize the order of each tone's powers
+SEED = 0                    # random seed for SHUFFLE
 NPOINTS_FINE = 1000         # fine sweep points per tone
 NPOINTS_GAIN = 50           # gain sweep points per tone
-NPOINTS_ROUGH = None        # rough sweep points per tone (None: none)
+NPOINTS_ROUGH = None        # rough sweep points per tone (None: no rough
+                            # sweep)
 GAIN_SPAN_FACTOR = 10       # gain sweep span = 10 x fine sweep span
 NSAMPS = 200                # samples averaged per point
 # Power choice
-F_AVG = 4                   # average this many fine sweep points in fits
-A_FIT_RANGE = (0.05, 0.8)   # a range used in the a vs power fits
-ANL = 0.5                   # target nonlinearity a
-# Chosen powers: where no fit reaches ANL, the median of the others; then
-# every power is clipped to ARES_LIMITS, dBm
+F_AVG = 4                   # number of fine sweep points averaged together
+                            # in the fits
+A_FIT_RANGE = (0.05, 0.8)   # a_nl range used in the a_nl vs power fits
+ANL = 0.5                   # target nonlinearity parameter a_nl
+# Resonators whose fit never reaches ANL get the median of the other chosen
+# powers. All chosen powers are then clipped to ARES_LIMITS (dBm)
 ARES_LIMITS = (-55., -35.)
 # fq_finder
 FRES_UPDATE_METHOD = 'spacing'  # 'none', 'spacing', 'minS21', 'distance'
-RMV_GAIN_SIMPLE = True      # remove the gain simply for display
+RMV_GAIN_SIMPLE = True      # apply a simple gain correction to the
+                            # displayed data
 
 STEPS = ('plan', 'power_sweep', 'power_fits', 'fq_sweep', 'fq_finder',
          'tones')
 REDOABLE = ('power_fits', 'fq_finder', 'tones')
+
+# Notes saved with the data this script makes (attribute 'notes'), e.g.
+# the filters and attenuators on the DAC and ADC lines. Multi-line is fine.
+NOTES = """
+"""
 
 ################################################################################
 ################################### Script #####################################
@@ -131,12 +145,11 @@ def parse_args(argv = None):
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device)')
     p.add_argument('--modules', type = int, nargs = '+', default = MODULES)
-    p.add_argument('--full-scale', type = float, default = FULL_SCALE_DBM)
     p.add_argument('--resonators', type = int, default = RESONATORS,
                    help = 'resonator list index (default: the latest)')
     p.add_argument('--tune', type = int, default = None,
                    help = 'tuning to continue (default: the latest)')
-    p.add_argument('--new', action = 'store_true', help = 'start a tuning')
+    p.add_argument('--new', action = 'store_true', help = 'start a new tuning')
     p.add_argument('--redo', default = None, choices = REDOABLE,
                    help = 'repeat this step and the ones after it')
     p.add_argument('--simulate', action = 'store_true',
@@ -145,7 +158,20 @@ def parse_args(argv = None):
                    help = 'NCO windows to use (default: all)')
     p.add_argument('--list-windows', action = 'store_true',
                    help = 'print the NCO windows of a new tuning and stop')
+    p.add_argument('--notes', default = NOTES,
+                   help = 'notes saved with the data (quote multi-line text)')
     return p.parse_args(argv)
+
+def save_notes(grp, notes):
+    """
+    Save notes with a group the script made (attribute 'notes'), if any.
+
+    Parameters:
+    grp (zarr.Group): the group.
+    notes (str): the notes (``--notes`` or ``NOTES``); blank is not saved.
+    """
+    if notes and notes.strip():
+        grp.attrs['notes'] = notes.strip()
 
 def store_path(args):
     """
@@ -191,7 +217,7 @@ async def connect(args, path, offset = 0):
         crs = CRS(serial_number = args.serial, interface = args.iface,
                   module_idxs = args.modules, global_control = False)
     # Attaching sets the other module settings to their defaults
-    await crs.attach(full_scale_dbm = args.full_scale)
+    await crs.attach(full_scale_dbm = 7)
     return crs
 
 def done(tune, step):
@@ -240,9 +266,18 @@ def plan(root, args, path):
         if args.resonators is None else args.resonators
     name = dl.set_name(rk, dl.RESONATORS_PREFIX)
     res = dl.load_resonators(root, rk)
+    strength = None
+    if PAIRS == 'keep_stronger':
+        strength = res['depth_all']
+        if not np.isfinite(strength).any():
+            raise ValueError(
+                f"{name} has no dip depths for PAIRS = 'keep_stronger' "
+                '(it was saved before they were); rerun 02_find_resonances.py'
+                " --redo resonators, or use PAIRS = 'drop_both'")
     keep, _ = select_isolated(res['fres_all'],
                               res['fres_all'] / res['Qr_all'],
-                              min_sep_lw = MIN_SEP_LW, pairs = PAIRS)
+                              min_sep_lw = MIN_SEP_LW, pairs = PAIRS,
+                              strength = strength)
     crs = asyncio.run(connect(args, path))
     dl.check_crs_identity(root, crs)
     fres = res['fres_all'][keep]
@@ -268,6 +303,7 @@ def plan(root, args, path):
     tone_set, tone_module = tplan['tone_set'], tplan['tone_module']
     fcal, scal, mcal = cal_tones(res, tplan, max_tones)
     tune, k = dl.new_tuning(root, name)
+    save_notes(tune, args.notes)
     dl.write_tune_config(tune, dl.tuning_config(crs, tplan))
     init = dl.create_group(tune, 'tones_init', 'decision', attrs = dict(
         source = name, min_sep_lw = MIN_SEP_LW, pairs = PAIRS,
@@ -381,6 +417,7 @@ def sweep(root, tune, args, path, step):
         dl.check_tune_config(tune, crs)
         if step == 'power_sweep':
             grp = dl.require_group(tune, 'power_sweep', 'raw')
+            save_notes(grp, args.notes)
             grp.attrs.update(dict(powers = [float(p) for p in POWERS],
                                   shuffle = SHUFFLE, seed = SEED))
             await stitched_power_sweep(
@@ -392,6 +429,7 @@ def sweep(root, tune, args, path, step):
         if 'fq_sweep' in tune:
             del tune['fq_sweep']    # an empty group left by a failed pass
         grp = dl.create_group(tune, 'fq_sweep', 'raw', attrs = dict(
+            notes = (args.notes or '').strip(),
             ares_source = f'{tune.basename}/power_choice/ares'))
         await stitched_target_sweep(
             crs, t['fres'], tune['power_choice/ares'][:], t['qres'],
@@ -401,7 +439,7 @@ def sweep(root, tune, args, path, step):
     asyncio.run(run())
     print(f'{step}: done')
 
-def power_fits(tune):
+def power_fits(tune, args):
     """
     Fit the power sweep in the IQ series window, then save the chosen
     powers (``power_choice``).
@@ -439,6 +477,7 @@ def power_fits(tune):
     unclipped = np.where(fallback, median, chosen)
     ares = np.clip(unclipped, *ARES_LIMITS)
     grp = dl.create_group(tune, 'power_choice', 'decision', attrs = dict(
+        notes = (args.notes or '').strip(),
         source = f'{tune.basename}/power_fits/xy_fit/x_chosen', anl = ANL,
         a_fit_range = list(A_FIT_RANGE), fallback = median,
         limits = list(ARES_LIMITS)), overwrite = True)
@@ -465,7 +504,7 @@ def fq_finder(tune):
         fres_update_method = FRES_UPDATE_METHOD,
         rmv_gain_simple = RMV_GAIN_SIMPLE)
 
-def tones(tune):
+def tones(tune, args):
     """
     Save the final tone list (``tones``): the tones not rejected in
     fq_finder, at the chosen powers.
@@ -488,6 +527,7 @@ def tones(tune):
             raise ValueError(f'tone at {f / 1e6:.3f} MHz moved outside tone '
                              f'set {s} (NCO {nco / 1e6:.3f} MHz)')
     grp = dl.create_group(tune, 'tones', 'decision', overwrite = True)
+    save_notes(grp, args.notes)
     dl.save_tones(
         grp, fres, fq['qres_opt'][:][keep],
         tune['power_choice/ares'][:][keep], fq['res_idxs'][:][keep],
@@ -535,14 +575,14 @@ def main(args):
         if step in ('power_sweep', 'fq_sweep'):
             sweep(root, tune, args, path, step)
         elif step == 'power_fits':
-            power_fits(tune)
+            power_fits(tune, args)
         elif step == 'fq_finder':
             fq_finder(tune)
             if not done(tune, 'fq_finder'):
                 print('fq_finder: not finished; run again to continue')
                 break
         else:
-            tones(tune)
+            tones(tune, args)
     return int(tune.basename[4:])
 
 if __name__ == '__main__':

@@ -35,7 +35,9 @@ import argparse
 import os
 import numpy as np
 from citkid import daq_layout as dl
-from citkid.vna.full_sweep import resonator_list, run_full_sweep_fit
+from citkid.vna.full_sweep import (
+    measured_depths, resonator_list, run_full_sweep_fit
+)
 
 ################################################################################
 ################################### Settings ###################################
@@ -44,9 +46,14 @@ DATA_DIR = '~/data'         # stores are in DATA_DIR/COOLDOWN/DEVICE.zarr
 COOLDOWN = 'cooldown'       # cooldown name
 DEVICE = 'device'           # device name
 FINDER = 'cnn'              # 'cnn' (automatic) or 'auto' (interactive)
-SPAN_LW = 5.                # target sweep spans, in linewidths (qres = Qr/5)
+SPAN_LW = 5.                # target sweep span, linewidths (qres = Qr/SPAN_LW)
 
 STEPS = ('find', 'manual', 'fit', 'resonators')
+
+# Notes saved with the data this script makes (attribute 'notes'), e.g.
+# the filters and attenuators on the DAC and ADC lines. Multi-line is fine.
+NOTES = """
+"""
 
 ################################################################################
 ################################### Script #####################################
@@ -73,10 +80,23 @@ def parse_args(argv = None):
     p.add_argument('--redo', default = None, choices = STEPS,
                    help = 'repeat this step and the ones after it')
     p.add_argument('--no-manual', action = 'store_true',
-                   help = 'skip the manual check (use the finder list '
-                   'as it is; for simulations and quick looks)')
+                   help = "skip the manual check and use the finder's "
+                   'list as it is (for simulations and quick looks)')
     p.add_argument('--span-lw', type = float, default = SPAN_LW)
+    p.add_argument('--notes', default = NOTES,
+                   help = 'notes saved with the data (quote multi-line text)')
     return p.parse_args(argv)
+
+def save_notes(grp, notes):
+    """
+    Save notes with a group the script made (attribute 'notes'), if any.
+
+    Parameters:
+    grp (zarr.Group): the group.
+    notes (str): the notes (``--notes`` or ``NOTES``); blank is not saved.
+    """
+    if notes and notes.strip():
+        grp.attrs['notes'] = notes.strip()
 
 def store_path(args):
     """
@@ -170,12 +190,37 @@ def fit(f, z, grp, args):
         grp.attrs.get('downward', True)), overwrite = True)
     out = grp['full_sweep_fit']
     out.attrs['kind'] = 'analysis'
+    # The fit's own 'notes' are its data-quality notes
+    if args.notes and args.notes.strip():
+        out.attrs['user_notes'] = args.notes.strip()
     n = len(res)
     counts = {name: int(np.sum(out[name][:])) for name in
               ('valid_fr', 'valid_Qi', 'valid_Qc', 'valid_phi')}
     print(f'fit: {n} resonances; reliable: ' + ', '.join(
         f'{k[6:]} {v}' for k, v in counts.items()) +
         ' (Qr and amp as Qc)')
+
+def resonator_depths(root, k, fit_grp, fres, Qr):
+    """
+    Measure the resonator list's dip depths on the gain-removed sweep
+    (``full_sweep.measured_depths``). They rank close pairs for
+    ``PAIRS = 'keep_stronger'`` in 03_tune.py.
+
+    Parameters:
+    root (zarr.Group): the store root.
+    k (int): the sweep index.
+    fit_grp (zarr.Group): its ``full_sweep_fit`` group.
+    fres (np.array): the list's frequencies in Hz (``resonator_list``).
+    Qr (np.array): its Qr (NaN where unreliable: the median linewidth is
+        used there).
+
+    Returns:
+    depth (np.array): depths, in the order of ``fres``.
+    """
+    f, z = dl.load_vna_sweep(root, k)
+    gf, gz = fit_grp['gain/f'][:], fit_grp['gain/gain'][:]
+    gain = np.interp(f, gf, gz.real) + 1j * np.interp(f, gf, gz.imag)
+    return measured_depths(f, z / gain, fres, fres / Qr)
 
 def resonators(root, grp, k, args):
     """
@@ -192,6 +237,7 @@ def resonators(root, grp, k, args):
     """
     fres, qres, Qr = resonator_list(grp['full_sweep_fit'],
                                     span_lw = args.span_lw)
+    depth = resonator_depths(root, k, grp['full_sweep_fit'], fres, Qr)
     name = f'resonators{k}'
     users = dl.tunings_using(root, name)
     if users:
@@ -199,8 +245,9 @@ def resonators(root, grp, k, args):
               'take a new VNA sweep for a new list')
         return False
     dl.save_resonators(root, k, fres, qres, f'vna{k}/full_sweep_fit',
-                       Qr = Qr, overwrite = True)
+                       Qr = Qr, depth = depth, overwrite = True)
     root[name].attrs['span_lw'] = float(args.span_lw)
+    save_notes(root[name], args.notes)
     print(f'resonators: saved {len(fres)} as {name} '
           f'({int(np.isfinite(Qr).sum())} with a reliable Qr)')
     return True

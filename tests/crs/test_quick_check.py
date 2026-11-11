@@ -58,25 +58,31 @@ def close(win):
     return worker
 
 
-def connector(crs, error = None):
+def connector(crs, error = None, calls = None):
     """
     Return a connect coroutine function for the window.
 
     Parameters:
     crs (FakeVnaCRS): the fake to return.
     error (Exception or None): raise this instead. Default None.
+    calls (list or None): filled with the modules of each call.
 
     Returns:
-    connect (callable): coroutine function.
+    connect (callable): coroutine function taking the modules.
     """
-    async def connect():
+    async def connect(modules):
         """
         Return the fake, or raise.
+
+        Parameters:
+        modules (list of int): the modules asked for.
 
         Returns:
         crs (FakeVnaCRS): the fake.
         """
         await asyncio.sleep(0)
+        if calls is not None:
+            calls.append(list(modules))
         if error is not None:
             raise error
         return crs
@@ -161,8 +167,10 @@ def test_window_sweeps_on_connect(qapp, tmp_path):
     assert len(win._band_lines) == 2 * (len(bands['chunk_ncos']) - 1)
     assert len(win.markers.data) == 3
     assert win.sweep_btn.isEnabled() and win.save_btn.isEnabled()
-    assert win.save_plot(tmp_path / 'p.png')
-    assert (tmp_path / 'p.png').stat().st_size > 0
+    assert win.save_csv(tmp_path / 'p.csv')
+    saved = np.genfromtxt(tmp_path / 'p.csv', delimiter = ',', names = True)
+    assert np.allclose(saved['f'], f, rtol = 0, atol = 1e-6)
+    assert np.allclose(saved['i'] + 1j * saved['q'], z, rtol = 1e-8)
     assert not close(win).running
 
 
@@ -243,4 +251,47 @@ def test_window_connect_and_sweep_errors(qapp):
     assert win.progress.isHidden()
     # Zones are restored after the failure
     assert crs.module_cfg[1]['nyquist_zone'] == 1
+    close(win)
+
+
+def test_window_modules_and_count(qapp):
+    calls = []
+    crs = FakeVnaCRS(modules = (1, 2), fres = (1.0e9, 1.6e9))
+    win = QuickCheckWindow(connector(crs, calls = calls), [1], count = False,
+                           pts_per_lw = 1.)
+    wait_for(lambda: win.crs is not None)
+    assert calls == [[1]] and win.modules.text() == '1'
+    # Other modules: reconnect
+    win.modules.setText('1, 2')
+    win._on_connect_clicked()
+    wait_for(lambda: len(calls) == 2 and win.sweep_btn.isEnabled())
+    assert calls[1] == [1, 2]
+    for bad in ('', '9', '1 1', 'a'):
+        win.modules.setText(bad)
+        win._on_connect_clicked()
+        assert 'Modules must be' in win.status.text() and len(calls) == 2
+    # Sweep without counting, then count without new data
+    assert not win.count_btn.isEnabled()
+    win.sweep()
+    wait_for(lambda: win.result is not None and not win.worker.busy)
+    assert win.result[3] is None and win.count_btn.isEnabled()
+    n_sweeps = len(crs.sweep_calls)
+    win.count_resonances()
+    wait_for(lambda: win.result[3] is not None and not win.worker.busy)
+    assert len(win.result[3]) == 2 and len(crs.sweep_calls) == n_sweeps
+    assert 'About 2 resonances' in win.status.text()
+    close(win)
+
+
+def test_window_modules_outside_bank(qapp):
+    """
+    Modules outside the board's active bank are named in the status (the
+    session keeps only the bank's modules).
+    """
+    crs = FakeVnaCRS(modules = (5, 6))
+    crs.analog_bank_high = True
+    win = QuickCheckWindow(connector(crs), [4, 5])
+    wait_for(lambda: 'Connected' in win.status.text())
+    assert 'Modules [4] are not in the active analog bank (modules 5-8)' \
+        in win.status.text()
     close(win)

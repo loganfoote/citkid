@@ -519,24 +519,27 @@ async def stream_tone_sets(
     calibration sweep, then the stream, in chunks if the decimation stage
     needs them (``plan_stream_chunks``).
 
-    For tone set s, the calibration is the next ``tune/sweep{j}``
-    (``stitched_target_sweep`` of the set's tones; attrs ``tone_set``,
-    ``run``). Each chunk is a ``sweep{j}/write{w}`` (``write_stream_chunk``,
-    plus ``sweep_rows``: each tone's row in the calibration sweep,
-    ``res_idxs``, ``qres``) holding one stream ``ts0`` (``CRS.stream``;
-    attrs ``name``, ``notes``, ``dec_stage``, ``duration_s``, ``run``). An
+    The run is saved as the next ``ts{n}`` at the store root (raw; attrs
+    ``name``, ``notes``, ``dec_stage``, ``duration_s``, ``tone_sets``,
+    ``tuning``, ``tones`` and ``resonators`` (where the tones came from),
+    and ``complete`` once every tone set is done). For tone set s,
+    ``ts{n}/set{s}`` is the calibration sweep (``stitched_target_sweep`` of
+    the set's tones). Each chunk is a ``set{s}/write{w}``
+    (``write_stream_chunk``: the tones written, plus ``sweep_rows``, each
+    tone's row in the calibration sweep, ``res_idxs``, and ``qres``)
+    holding its stream in ``write{w}/stream`` (``CRS.stream``). An
     unchunked write lists the set's tones in the sweep's order. The run is
-    added to ``tune/streams``' ``attrs['runs']`` (name, notes, stage,
-    duration, time, and the stream paths).
+    self-contained: it holds every tone it actually used.
 
     Parameters:
     crs (CRS): configured CRS instrument (with global control to stream at
         another decimation stage than the board's).
-    tune (zarr.Group): the tuning, with ``tones`` and ``crs_config``.
+    tune (zarr.Group): the tuning, with ``tones`` and ``crs_config``,
+        in a writable store.
     name (str): timestream name, e.g. 'dark_dec6'. Names may repeat.
     duration_s (float): stream length in seconds.
     dec_stage (int): decimation stage.
-    notes (str): free-form notes saved with the streams. Default ''.
+    notes (str): free-form notes saved with the run. Default ''.
     set_idxs (list of int or None): tone sets to stream. None (default):
         all.
     status (callable or None): called with a progress message before
@@ -546,7 +549,7 @@ async def stream_tone_sets(
 
     Returns:
     paths (list of str): the streams' group paths, e.g.
-        'tune0/sweep3/write0/ts0'.
+        'ts3/set0/write0/stream'.
 
     Raises:
     ValueError: if ``name`` is empty.
@@ -558,14 +561,18 @@ async def stream_tone_sets(
     ncos = tune['crs_config'].attrs['config']['tone_sets']
     sets = sorted(set(t['tone_set'].tolist())) if set_idxs is None else \
         [int(s) for s in set_idxs]
-    streams = dl.require_group(tune, 'streams', 'decision')
-    run = len(streams.attrs.get('runs', []))
+    root = dl.store_root(tune, mode = 'r+')
+    run, n = dl.new_indexed_group(root, dl.TS_PREFIX, 'raw', attrs = dict(
+        name = str(name), notes = str(notes), dec_stage = int(dec_stage),
+        duration_s = float(duration_s), tone_sets = sets,
+        tuning = tune.basename, tones = tune['tones'].path,
+        resonators = tune.attrs.get('resonators'), complete = False))
     paths = []
     for s in sets:
         idx = np.flatnonzero(t['tone_set'] == s)
         say(f'Tone set {s}: calibration sweep')
-        cal, j = dl.new_indexed_group(tune, 'sweep', 'raw', attrs = dict(
-            tone_set = int(s), run = run, name = str(name)))
+        cal = dl.create_group(run, set_name(s), 'raw',
+                              attrs = dict(tone_set = int(s)))
         await stitched_target_sweep(
             crs, t['fres'][idx], t['ares'][idx], t['qres'][idx],
             t['res_idxs'][idx], t['tone_set'][idx], t['tone_module'][idx],
@@ -583,21 +590,12 @@ async def stream_tone_sets(
                                ('res_idxs', cal['res_idxs'][:][rows]),
                                ('qres', cal['qres'][:][rows])):
                 write.create_array(name = key, data = np.asarray(value))
-            ts = dl.create_group(write, 'ts0', 'raw', attrs = dict(
-                name = str(name), notes = str(notes),
-                dec_stage = int(dec_stage), duration_s = float(duration_s),
-                run = run))
-            await crs.stream(duration_s, dec_stage, ts, verbose = verbose)
-            paths.append(ts.path)
+            grp = dl.create_group(write, dl.STREAM_NAME, 'raw')
+            await crs.stream(duration_s, dec_stage, grp, verbose = verbose)
+            paths.append(grp.path)
         await crs.clear_tones()
-    runs = list(streams.attrs.get('runs', []))
-    runs.append(dict(name = str(name), notes = str(notes),
-                     dec_stage = int(dec_stage),
-                     duration_s = float(duration_s),
-                     time = time.strftime('%Y-%m-%d %H:%M:%S'),
-                     paths = paths))
-    streams.attrs['runs'] = runs
-    say(f'{name}: done ({len(paths)} streams)')
+    run.attrs['complete'] = True
+    say(f'{name}: done as ts{n} ({len(paths)} streams)')
     return paths
 
 ################################################################################

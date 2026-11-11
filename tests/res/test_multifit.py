@@ -110,7 +110,7 @@ def test_fit_resonators_nonlinear(a_true):
     assert abs(res['fr'][0] - 1e9) < 0.05 * 1e9 / 5e4
 
 def test_fit_resonators_bifurcated():
-    # Above bifurcation (~0.77) the fitted a is above it too
+    # Above bifurcation (~0.77) the fitted a_nl is above it too
     rng = np.random.default_rng(6)
     f, z = _window(rng, [1e9], [5e4], [0.6], [0.1], 1e-3, a = [0.9],
                    span = 2e5)

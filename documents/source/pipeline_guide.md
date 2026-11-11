@@ -661,7 +661,7 @@ temperature, bath temperature, ...), each series point has its own
 - `sweep_series.a_vs_power_fit` and `responsivity_fit` are ready-made
   `SeriesXYFit`s; `pick_optimal_ares` and `save_popt` pick and save each
   resonator's optimal tone power.
-- With `y_target` (e.g. the nonlinearity a to tune to), `run_iq_series`
+- With `y_target` (e.g. the nonlinearity parameter $a_\mathrm{nl}$ to tune to), `run_iq_series`
   marks the x at which each resonator's fit reaches the target with a
   vertical line; Shift+click the plot (or drag the line) to choose a
   different x for that resonator, and Reset to return to the fit's. The

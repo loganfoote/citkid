@@ -82,9 +82,9 @@ def test_vna_quick_check_no_gui(monkeypatch, tmp_path):
     m = load_script('vna_quick_check.py')
     fake = FakeVnaCRS(modules = (1, 2), fres = (1.0e9, 1.6e9, 2.1e9))
     made = fake_factory(monkeypatch, m, fake)
-    png = tmp_path / 'q.png'
+    csv = tmp_path / 'q.csv'
     f, z, n = m.main(m.parse_args(
-        ['--modules', '1', '2', '--png', str(png), '--no-gui']))
+        ['--modules', '1', '2', '--csv', str(csv), '--no-gui']))
     assert made[0]['module_idxs'] == [1, 2]
     assert made[0]['global_control'] is False
     assert fake.calls[0][0] == 'attach'
@@ -94,7 +94,10 @@ def test_vna_quick_check_no_gui(monkeypatch, tmp_path):
     assert 100e6 - 50 <= f[0] < 100e6 + 50 and f[-1] < 2.5e9
     d = np.diff(np.log(f)) / np.log1p(step)
     assert 0.9 < d.min() and d.max() < 1.1
-    assert png.exists()
+    saved = np.genfromtxt(csv, delimiter = ',', names = True)
+    assert saved.dtype.names == ('f', 'i', 'q')
+    assert np.allclose(saved['f'], f, rtol = 0, atol = 1e-6)
+    assert np.allclose(saved['i'] + 1j * saved['q'], z, rtol = 1e-8)
     assert n == 3
     # Nothing is saved to zarr
     assert not any(p.suffix == '.zarr' for p in tmp_path.iterdir())
@@ -151,7 +154,8 @@ def test_vna_quick_check_gui(monkeypatch):
         result (str): a marker.
         """
         seen.update(kwargs, module_idxs = module_idxs,
-                    crs = asyncio.run(connect()))
+                    crs = asyncio.run(connect(module_idxs)))
+        asyncio.run(connect([1, 3]))
         return 'closed'
 
     monkeypatch.setattr(m, 'run_quick_check', fake_run)
@@ -163,7 +167,9 @@ def test_vna_quick_check_gui(monkeypatch):
     assert seen['qr_median'] == m.QR_MEDIAN
     assert seen['pts_per_lw'] == m.PTS_PER_LW
     assert made[0]['global_control'] is False
-    assert fake.calls == [('attach', dict(full_scale_dbm = 7.))]
+    # The window can reconnect to other modules
+    assert [mk['module_idxs'] for mk in made] == [[2], [1, 3]]
+    assert fake.calls[0] == ('attach', dict(full_scale_dbm = 7.))
 
 
 @pytest.mark.asyncio
@@ -173,11 +179,12 @@ async def test_01_vna_sweep(monkeypatch, tmp_path):
     made = fake_factory(monkeypatch, m, fake)
     argv = ['--data-dir', str(tmp_path), '--cooldown', 'cd1', '--device',
             'devA', '--modules', '3', '--nsamps', '7', '--qr-median', '1e4',
-            '--pts-per-lw', '5', '--full-scale', '5']
+            '--pts-per-lw', '5', '--notes',
+            '\n20 dB on the DAC line\nLPF on the ADC\n']
     k = await m.main(m.parse_args(argv))
     assert k == 0
     assert made[0]['module_idxs'] == [3] and not made[0]['global_control']
-    assert fake.calls == [('attach', dict(full_scale_dbm = 5.))]
+    assert fake.calls == [('attach', dict(full_scale_dbm = 7.))]
     path = tmp_path / 'cd1' / 'devA.zarr'
     root = dl.open_store(path)
     assert root.attrs['device'] == 'devA' and root.attrs['setup'] == \
@@ -186,6 +193,7 @@ async def test_01_vna_sweep(monkeypatch, tmp_path):
     assert grp.attrs['nsamps'] == 7 and grp.attrs['amplitude'] == \
         m.AMPLITUDE
     assert grp.attrs['step'] == pytest.approx(2e-5)
+    assert grp.attrs['notes'] == '20 dB on the DAC line\nLPF on the ADC'
     f, z = dl.load_vna_sweep(path)
     d = np.diff(np.log(f)) / np.log1p(2e-5)
     assert 0.9 < d.min() and d.max() < 1.1
@@ -236,6 +244,13 @@ def test_02_find_resonances(tmp_path, capsys):
     assert np.isfinite(res['Qr_all']).all()
     np.testing.assert_allclose(res['qres_all'], res['Qr_all'] / m.SPAN_LW)
     assert root['resonators0'].attrs['source'] == 'vna0/full_sweep_fit'
+    # Dip depths measured on the sweep: close to the fitted Qr/Qc for
+    # these isolated resonators
+    fit = grp['full_sweep_fit']
+    order = np.argsort(fit['fr'][:])
+    np.testing.assert_allclose(res['depth_all'], fit['amp'][:][order],
+                               atol = 0.05)
+    assert ((res['depth_all'] > 0) & (res['depth_all'] < 1)).all()
     # Everything done: a rerun skips all steps
     assert m.main(m.parse_args(argv)) == 0
     assert capsys.readouterr().out.count('done already') == 4
@@ -290,8 +305,8 @@ def test_03_tune(tmp_path, monkeypatch, capsys, n_cal):
         Parameters:
         datasets (list of DataSet): one per power.
         root (zarr.Group): the power_fits group.
-        xy_fit (SeriesXYFit): the a vs power fit.
-        y_target (float): target a.
+        xy_fit (SeriesXYFit): the a_nl vs power fit.
+        y_target (float): target a_nl.
         **kwargs: other window arguments.
         """
         calls.append('iq')
@@ -404,15 +419,23 @@ def test_04_stream(tmp_path, monkeypatch):
         Returns:
         runs (list): none.
         """
+        from citkid.crs import board_lock
         seen.update(kwargs, tune = tune.basename,
-                    crs = asyncio.run(connect()))
+                    crs = asyncio.run(connect()),
+                    holder = board_lock.holder(0))
         return []
 
     monkeypatch.setattr(m, 'run_stream_gui', fake_gui)
     assert m.main(m.parse_args(['--store', str(path), '--simulate'])) == []
     # tune1 has no tones, so the latest with tones is tune0
     assert seen['tune'] == 'tune0'
-    assert seen['crs'].global_control is m.GLOBAL_CONTROL
+    assert seen['crs'].global_control is True
+    # The board was this script's while the window was open, and is free
+    # after
+    from citkid.crs import board_lock
+    assert seen['holder']['pid'] == os.getpid()
+    assert '04_stream.py' in seen['holder']['owner']
+    assert board_lock.holder(0) is None
     assert seen['presets'] == m.PRESETS
     assert seen['sweep_kwargs']['npoints_fine'] == m.NPOINTS_FINE
     with pytest.raises(KeyError, match = 'no tones'):
@@ -474,7 +497,7 @@ def test_05_calibrate_streams(tmp_path, monkeypatch, capsys):
     ds = m.main(m.parse_args(argv))
     assert len(ds) == 2
     root = dl.open_store(tmp_path / 's.zarr')
-    cal = root['tune0/cal0']
+    cal = root['ts_cal0']
     assert cal.attrs['kind'] == 'analysis' and cal.attrs['selection'] == sel
     n_set1 = int((root['tune0/tones/tone_set'][:] == 1).sum())
     sizes = sorted(len(d.res_idxs[:]) for d in ds.values())
@@ -484,18 +507,50 @@ def test_05_calibrate_streams(tmp_path, monkeypatch, capsys):
         assert np.isfinite(np.asarray(x)).all()
     # Same choice: same cal group; a new one otherwise
     m.main(m.parse_args(argv))
-    assert dl.list_indices(dl.open_store(tmp_path / 's.zarr')['tune0'],
-                           'cal') == [0]
+    assert dl.list_indices(dl.open_store(tmp_path / 's.zarr'),
+                           'ts_cal') == [0]
     monkeypatch.setattr(m, 'CALIBRATE', sel[:1])
     m.main(m.parse_args(argv))
-    assert dl.list_indices(dl.open_store(tmp_path / 's.zarr')['tune0'],
-                           'cal') == [0, 1]
+    assert dl.list_indices(dl.open_store(tmp_path / 's.zarr'),
+                           'ts_cal') == [0, 1]
     # The window is opened unless --no-gui
     opened = []
     monkeypatch.setattr(m, 'run_ts_analysis',
                         lambda AR, title = '': opened.append(title))
     m.main(m.parse_args(argv[:2]))
-    assert len(opened) == 1 and 'cal1' in opened[0]
+    assert len(opened) == 1 and 'ts_cal1' in opened[0]
+
+
+def test_03_tune_keep_stronger(tmp_path, monkeypatch):
+    """
+    With PAIRS = 'keep_stronger', of two close resonators the deeper one
+    keeps its tone; a list without dip depths can't be used.
+    """
+    from citkid.crs.sim import simulate_vna_store
+    path = tmp_path / 'sim.zarr'
+    small = dict(f_lo = 1.0e9, f_hi = 1.1e9, n_banks = 1, n_per_bank = 6,
+                 pair_frac = 0.)
+    root, truth = asyncio.run(simulate_vna_store(
+        path, device_kwargs = small, verbose = False))
+    fres = np.array([1.00e9, 1.02e9, 1.02e9 + 1e3, 1.05e9])
+    Qr = np.full(4, 2e4)
+    m = load_script('03_tune.py')
+    monkeypatch.setattr(m, 'PAIRS', 'keep_stronger')
+    argv = m.parse_args(['--store', str(path), '--simulate'])
+    # The second of the close pair (index 2) is deeper
+    dl.save_resonators(root, 0, fres, Qr / 5, 'test', Qr = Qr,
+                       depth = [0.5, 0.2, 0.6, 0.4])
+    tune = m.plan(dl.open_store(path, mode = 'a'), argv, str(path))
+    t = dl.load_tones(tune['tones_init'])
+    assert sorted(t['res_idxs'].tolist()) == [0, 2, 3]
+    assert tune['tones_init'].attrs['n_dropped'] == 1
+    # No depths: an error that says what to do
+    dl.save_resonators(dl.open_store(path, mode = 'a'), 1, fres, Qr / 5,
+                       'test', Qr = Qr)
+    with pytest.raises(ValueError, match = 'redo resonators'):
+        m.plan(dl.open_store(path, mode = 'a'),
+               m.parse_args(['--store', str(path), '--simulate',
+                             '--resonators', '1']), str(path))
 
 
 def test_03_tune_windows(tmp_path, monkeypatch, capsys):
@@ -529,3 +584,42 @@ def test_03_tune_windows(tmp_path, monkeypatch, capsys):
     assert t['fres'].min() > np.sort(truth.fr.values)[100]
     with pytest.raises(ValueError, match = 'no windows'):
         m.plan(root, m.parse_args(argv + ['--windows', '7']), str(path))
+
+
+def test_vna_report(tmp_path):
+    """
+    Export a screened simulated sweep: plot, info text, and resonator CSV,
+    with res_idx matching the store's resonator list.
+    """
+    import pandas as pd
+    from citkid.crs.sim import simulate_vna_store
+    path = tmp_path / 'sim.zarr'
+    small = dict(f_lo = 1.0e9, f_hi = 1.1e9, n_banks = 1, n_per_bank = 10,
+                 pair_frac = 0.)
+    root, truth = asyncio.run(simulate_vna_store(
+        path, device_kwargs = small, verbose = False))
+    m = load_script('vna_report.py')
+    out = tmp_path / 'reports'
+    with pytest.raises(KeyError, match = 'full sweep fit'):
+        m.main(m.parse_args(['--store', str(path), '--out', str(out)]))
+    dl.write_array(root['vna0'], 'fres_auto', truth.fr.values[::-1])
+    m2 = load_script('02_find_resonances.py')
+    m2.main(m2.parse_args(['--store', str(path), '--no-manual', '--notes',
+                           'LPF on the ADC']))
+    paths = m.main(m.parse_args(['--store', str(path), '--out', str(out)]))
+    assert paths['plot'].endswith('simdevice_vna0.png')
+    assert os.path.getsize(paths['plot']) > 10000
+    info = open(paths['info'], encoding = 'utf-8').read()
+    assert 'Device: simdevice' in info and 'Tone power: -55.0 dBm' in info
+    assert f'Resonances: {len(truth)}' in info and 'Modules: 1' in info
+    assert 'checked by hand: False' in info
+    assert 'Notes (fit)' in info and 'LPF on the ADC' in info
+    assert isinstance(dl.open_store(path)['vna0/full_sweep_fit'].attrs[
+        'notes'], list)
+    table = pd.read_csv(paths['csv'])
+    res = dl.load_resonators(path, 0)
+    assert list(table.res_idx) == list(range(len(truth)))
+    np.testing.assert_allclose(table.fr, res['fres_all'])
+    np.testing.assert_allclose(table.fr, np.sort(truth.fr_d.values),
+                               atol = 0.2 * (truth.fr / truth.Qr).max())
+    assert {'Qi', 'Qc', 'phi', 'flags', 'valid_Qc'} <= set(table.columns)

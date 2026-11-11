@@ -9,7 +9,8 @@ if the range is wider than the modules cover at once, on a geometric grid
 there by default; every channel sweeps downward), and saves the stitched
 sweep as the next ``vna{k}`` of the device store
 ``<DATA_DIR>/<COOLDOWN>/<DEVICE>.zarr`` (created if needed; see
-``documents/daq_layout.md``). The next step finds the resonances on it.
+``documents/procedures/vna_screening.pdf``). The next step finds the
+resonances on it.
 
 Needs the board configured by crs_init.py. This session attaches to
 its modules only, so several of these can run at once, one per device.
@@ -44,13 +45,18 @@ DEVICE = 'device'           # device name
 SETUP = dict(fridge_ch = None, dac_attenuation = None, dac_filters = None,
              adc_filters = None)
 MODULES = [1]               # modules connected to this device
-FULL_SCALE_DBM = 7          # DAC full scale of these modules, 0-7 dBm
 NYQUIST = '1'               # '1' (100-2500 MHz), '2' (2500-5000), 'both'
 AMPLITUDE = -55.            # tone power, dBm
 QR_MEDIAN = 2e4             # expected median Qr
-PTS_PER_LW = 25.            # points per linewidth at QR_MEDIAN (df/f 2e-6)
+# Points per linewidth at QR_MEDIAN (25 gives df/f = 2e-6); more than 10
+# is best for fitting
+PTS_PER_LW = 25.
 NSAMPS = 100                # samples averaged per point
-# > 10 PTS_PER_LW ideal for fitting
+
+# Notes saved with the data this script makes (attribute 'notes'), e.g.
+# the filters and attenuators on the DAC and ADC lines. Multi-line is fine.
+NOTES = """
+"""
 
 ################################################################################
 ################################### Script #####################################
@@ -65,14 +71,13 @@ def parse_args(argv = None):
     Returns:
     args (argparse.Namespace): the options.
     """
-    p = argparse.ArgumentParser(description = 'Full VNA sweep to a store.')
+    p = argparse.ArgumentParser(description = 'Take a full VNA sweep.')
     p.add_argument('--serial', type = int, default = SERIAL_NUMBER)
     p.add_argument('--iface', default = INTERFACE)
     p.add_argument('--data-dir', default = DATA_DIR)
     p.add_argument('--cooldown', default = COOLDOWN)
     p.add_argument('--device', default = DEVICE)
     p.add_argument('--modules', type = int, nargs = '+', default = MODULES)
-    p.add_argument('--full-scale', type = float, default = FULL_SCALE_DBM)
     p.add_argument('--nyquist', default = NYQUIST,
                    choices = ['1', '2', 'both'])
     p.add_argument('--fmin', type = float, default = None,
@@ -85,7 +90,20 @@ def parse_args(argv = None):
     p.add_argument('--npoints', type = int, default = None,
                    help = 'points per channel (default: fastest)')
     p.add_argument('--nsamps', type = int, default = NSAMPS)
+    p.add_argument('--notes', default = NOTES,
+                   help = 'notes saved with the data (quote multi-line text)')
     return p.parse_args(argv)
+
+def save_notes(grp, notes):
+    """
+    Save notes with a group the script made (attribute 'notes'), if any.
+
+    Parameters:
+    grp (zarr.Group): the group.
+    notes (str): the notes (``--notes`` or ``NOTES``); blank is not saved.
+    """
+    if notes and notes.strip():
+        grp.attrs['notes'] = notes.strip()
 
 def store_path(args):
     """
@@ -115,12 +133,13 @@ async def main(args):
     crs = CRS(serial_number = args.serial, interface = args.iface,
               module_idxs = args.modules, global_control = False)
     # Attaching sets the other module settings to their defaults
-    await crs.attach(full_scale_dbm = args.full_scale)
+    await crs.attach(full_scale_dbm = 7)
     fmin, fmax = vna_range(args.nyquist, args.fmin, args.fmax)
     k, f, _ = await vna_sweep_to_store(
         crs, root, fmin, fmax, args.amplitude, args.nsamps,
         step = vna_step(args.qr_median, args.pts_per_lw),
         npoints_per_ch = args.npoints)
+    save_notes(root[f'vna{k}'], args.notes)
     print(f'Saved {len(f)} points as vna{k} in {path}')
     print(dl.tree(root, max_depth = 2))
     return k

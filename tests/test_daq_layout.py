@@ -320,12 +320,27 @@ def test_save_resonators_sorts_by_frequency(store):
     factors and Qr sorted along with it.
     """
     dl.save_resonators(store, 3, [2e9, 1e9, 3e9], [2e4, 1e4, 3e4], 'x',
-                       Qr = [2e5, 1e5, np.nan])
+                       Qr = [2e5, 1e5, np.nan], depth = [0.2, 0.1, np.nan])
     res = dl.load_resonators(store, 3)
     np.testing.assert_array_equal(res['res_idxs_all'], [0, 1, 2])
     np.testing.assert_array_equal(res['fres_all'], [1e9, 2e9, 3e9])
     np.testing.assert_array_equal(res['qres_all'], [1e4, 2e4, 3e4])
     np.testing.assert_array_equal(res['Qr_all'], [1e5, 2e5, np.nan])
+    np.testing.assert_array_equal(res['depth_all'], [0.1, 0.2, np.nan])
+
+
+def test_resonators_without_depths_load_as_nan(store):
+    """
+    Lists without depths (none given, or saved before ``depth_all``
+    existed) load with NaN depths.
+    """
+    dl.save_resonators(store, 0, [1e9, 2e9], 2e4, 'x')
+    np.testing.assert_array_equal(dl.load_resonators(store, 0)['depth_all'],
+                                  [np.nan, np.nan])
+    del store['resonators0/depth_all']
+    res = dl.load_resonators(store, 0)
+    np.testing.assert_array_equal(res['depth_all'], [np.nan, np.nan])
+    np.testing.assert_array_equal(res['fres_all'], [1e9, 2e9])
 
 
 def test_tones_round_trip(store):

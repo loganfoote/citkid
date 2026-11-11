@@ -5,8 +5,9 @@ Interactive quick check of a device with VNA sweeps.
 zone, range, power, resolution, averaging), connects to the CRS, and waits
 for the Sweep button (Ctrl+R). The settings can be changed and the sweep
 run again; it shows |S21| and phase with the band edges and a rough count
-of the resonances (matched filter). Nothing is saved to zarr; the plot can be
-saved as a PNG. ``procedures/vna_quick_check.py`` is the script.
+of the resonances (matched filter). Nothing is saved to zarr; the sweep can
+be saved as a CSV of frequency, I, and Q (``save_sweep_csv``).
+``procedures/vna_quick_check.py`` is the script.
 
 The CRS lives on a background thread with its own asyncio event loop
 (``AsyncWorker``), so the window stays responsive while sweeping. The
@@ -36,6 +37,19 @@ ZONES = (('1', '1: 100-2500 MHz'), ('2', '2: 2500-5000 MHz'),
 ################################################################################
 ################################### Helpers ####################################
 ################################################################################
+def save_sweep_csv(path, f, z):
+    """
+    Save a sweep as a CSV file with columns ``f`` (Hz), ``i``, and ``q``.
+
+    Parameters:
+    path (str): file path.
+    f (np.array): frequencies in Hz.
+    z (np.array): complex S21 (i + 1j * q).
+    """
+    data = np.column_stack([f, np.real(z), np.imag(z)])
+    np.savetxt(str(path), data, delimiter = ',', header = 'f,i,q',
+               comments = '', fmt = ['%.6f', '%.9e', '%.9e'])
+
 def rough_resonances(f, z, threshold = 12.):
     """
     Find resonances roughly with the matched filter, for a quick count.
@@ -237,10 +251,12 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         Build the window and start connecting.
 
         Parameters:
-        connect (callable): coroutine function with no arguments that
-            returns an attached CRS (run on the background loop).
-        module_idxs (list of int): the session's modules (for the plan
-            shown before connecting).
+        connect (callable): coroutine function taking a list of modules
+            and returning a CRS attached to them (run on the background
+            loop). It is called again when the modules are changed in the
+            window.
+        module_idxs (list of int): the starting modules (the ones connected
+            to the device; several if it is split between modules).
         nyquist (str): starting zone: '1' (default), '2', or 'both'.
         fmin, fmax (float or None): starting range in Hz. None (default):
             the zone's.
@@ -264,6 +280,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         self._plan_ok = False
         self.worker = AsyncWorker(self)
         self._module_idxs = [int(m) for m in module_idxs]
+        self._connect = connect
         self._sweep_on_start = sweep_on_start
         self._band_lines = []
         self._build_controls(nyquist, fmin, fmax, amplitude, qr_median,
@@ -275,10 +292,8 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         lay.addWidget(self._panel)
         lay.addWidget(self.plots, stretch = 1)
         self.setCentralWidget(central)
-        self._set_busy(True)
-        self._set_status('Connecting to the CRS...')
         self._update_plan()
-        self.worker.submit(connect(), self._on_connected)
+        self.reconnect(self._module_idxs)
 
     ############################################################################
     def _build_controls(
@@ -318,6 +333,16 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
 
         self._panel = QtWidgets.QWidget()
         form = QtWidgets.QFormLayout(self._panel)
+        self.modules = QtWidgets.QLineEdit(
+            ' '.join(str(m) for m in self._module_idxs))
+        self.modules.setToolTip('Modules connected to the device, e.g. 1 or '
+                                '1 2 3 4; press Connect to use them')
+        self.connect_btn = QtWidgets.QPushButton('Connect')
+        self.connect_btn.clicked.connect(self._on_connect_clicked)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(self.modules)
+        row.addWidget(self.connect_btn)
+        form.addRow('Modules', row)
         self.zone = QtWidgets.QComboBox()
         for value, label in ZONES:
             self.zone.addItem(label, value)
@@ -335,8 +360,12 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         self.nsamps.setValue(int(nsamps))
         self.nsamps.setKeyboardTracking(False)
         self.nsamps.valueChanged.connect(self._update_plan)
-        self.count = QtWidgets.QCheckBox('Count resonances')
+        self.count = QtWidgets.QCheckBox('Count resonances after sweeping')
         self.count.setChecked(bool(count))
+        self.count_btn = QtWidgets.QPushButton('Count now')
+        self.count_btn.setToolTip('Count the resonances of the last sweep '
+                                  '(no new data)')
+        self.count_btn.clicked.connect(self.count_resonances)
         form.addRow('Nyquist zone', self.zone)
         form.addRow('From', self.fmin)
         form.addRow('To', self.fmax)
@@ -353,9 +382,10 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         self.sweep_btn = QtWidgets.QPushButton('Sweep (Ctrl+R)')
         self.sweep_btn.clicked.connect(self.sweep)
         QtWidgets.QShortcut(QtGui.QKeySequence('Ctrl+R'), self, self.sweep)
-        self.save_btn = QtWidgets.QPushButton('Save plot...')
-        self.save_btn.clicked.connect(self._ask_save_plot)
+        self.save_btn = QtWidgets.QPushButton('Save data (CSV)...')
+        self.save_btn.clicked.connect(self._ask_save_csv)
         form.addRow(self.sweep_btn)
+        form.addRow(self.count_btn)
         form.addRow(self.save_btn)
         self.progress = QtWidgets.QProgressBar()
         self.progress.setTextVisible(True)
@@ -364,7 +394,8 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         self.status = QtWidgets.QLabel()
         self.status.setWordWrap(True)
         form.addRow(self.status)
-        self._inputs = (self.zone, self.fmin, self.fmax, self.amplitude,
+        self._inputs = (self.modules, self.connect_btn, self.zone,
+                        self.fmin, self.fmax, self.amplitude,
                         self.qr_median, self.pts_per_lw, self.nsamps,
                         self.count)
         self._panel.setFixedWidth(width)
@@ -409,6 +440,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         for w in self._inputs:
             w.setEnabled(not busy)
         self.save_btn.setEnabled(not busy and self.result is not None)
+        self.count_btn.setEnabled(not busy and self.result is not None)
         self._update_sweep_button()
 
     def _show_progress(self, show):
@@ -481,6 +513,8 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         bw = self.crs.bw if self.crs is not None else 500e6
         modules = self.crs.active_module_idxs if self.crs is not None \
             else self._module_idxs
+        if not len(modules):
+            modules = [1]
         try:
             text = sweep_plan_text(s['fmin'], s['fmax'], bw, modules,
                                    s['step'], s['nsamps'])
@@ -492,6 +526,49 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         self._update_sweep_button()
 
     ############################################################################
+    def parse_modules(self):
+        """
+        Read the modules typed in the window.
+
+        Returns:
+        modules (list of int or None): the modules (1-8, no repeats), or
+            None if the text isn't valid.
+        """
+        try:
+            mods = [int(m) for m in self.modules.text().replace(',', ' ')
+                    .split()]
+        except ValueError:
+            return None
+        if not mods or len(set(mods)) != len(mods) or \
+                not all(1 <= m <= 8 for m in mods):
+            return None
+        return mods
+
+    def _on_connect_clicked(self):
+        """
+        Connect to the modules typed in the window.
+        """
+        mods = self.parse_modules()
+        if mods is None:
+            self._set_status('Modules must be numbers 1-8, e.g. "1" or '
+                             '"1 2 3 4".')
+            return
+        self.reconnect(mods)
+
+    def reconnect(self, module_idxs):
+        """
+        Connect to a list of modules (on the background loop), replacing
+        the current connection when it succeeds.
+
+        Parameters:
+        module_idxs (list of int): the modules.
+        """
+        self._module_idxs = [int(m) for m in module_idxs]
+        self.worker.submit(self._connect(list(self._module_idxs)),
+                           self._on_connected)
+        self._set_busy(True)
+        self._set_status(f'Connecting to modules {self._module_idxs}...')
+
     def _on_connected(self, crs, error):
         """
         Keep the CRS and sweep once (GUI thread).
@@ -503,13 +580,20 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         if error is not None:
             self._set_status(f'Could not connect: {error!r}')
             self._set_busy(False)
-            self.sweep_btn.setEnabled(False)
             return
         self.crs = crs
         self._set_busy(False)
         self._update_plan()
         text = (f'Connected: modules {list(crs.active_module_idxs)}, '
                 f'{crs.bw / 1e6:.0f} MHz per module.')
+        # attach keeps only the modules of the board's active analog bank
+        dropped = [m for m in self._module_idxs
+                   if m not in crs.active_module_idxs]
+        if dropped:
+            bank = '5-8' if getattr(crs, 'analog_bank_high', False) \
+                else '1-4'
+            text += (f' Modules {dropped} are not in the active analog bank '
+                     f'(modules {bank}); crs_init.py sets the bank.')
         if self._sweep_on_start:
             self._set_status(text)
             self.sweep()
@@ -560,11 +644,33 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         self.result = result
         f, z, bands, fr = result
         self._plot(f, z, bands, fr)
-        text = f'Swept {len(f):,} points.'
+        text = f'{len(f):,} points.'
         if fr is not None:
             text += f' About {len(fr)} resonances (rough count).'
         self._set_status(text)
         self._set_busy(False)
+
+    def count_resonances(self):
+        """
+        Count the resonances of the last sweep (no new data), on the
+        background loop.
+        """
+        if self.result is None or self.worker.busy:
+            return
+        f, z, bands, _ = self.result
+
+        async def job():
+            """
+            Count.
+
+            Returns:
+            result (tuple): ``f``, ``z``, ``bands``, ``fr``.
+            """
+            return f, z, bands, rough_resonances(f, z)
+
+        self.worker.submit(job(), self._on_swept)
+        self._set_busy(True)
+        self._set_status('Counting resonances...')
 
     def _plot(self, f, z, bands, fr):
         """
@@ -594,26 +700,34 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         self.phase_plot.enableAutoRange()
 
     ############################################################################
-    def save_plot(self, path):
+    def save_csv(self, path):
         """
-        Save the plots as an image.
+        Save the last sweep as a CSV of frequency (Hz), I, and Q.
 
         Parameters:
-        path (str): file path (.png, .jpg, ...).
+        path (str): file path.
 
         Returns:
-        ok (bool): True if saved.
+        ok (bool): True if saved, False if there is no sweep or writing
+            failed.
         """
-        return bool(self.plots.grab().save(str(path)))
+        if self.result is None:
+            return False
+        f, z, _, _ = self.result
+        try:
+            save_sweep_csv(path, f, z)
+        except OSError:
+            return False
+        return True
 
-    def _ask_save_plot(self):
+    def _ask_save_csv(self):
         """
-        Ask for a file name and save the plots.
+        Ask for a file name and save the last sweep as a CSV.
         """
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, 'Save plot', 'quick_check.png', 'PNG (*.png)')
+            self, 'Save data', 'quick_check.csv', 'CSV (*.csv)')
         if path:
-            ok = self.save_plot(path)
+            ok = self.save_csv(path)
             self._set_status(f'Saved {path}' if ok else
                              f'Could not save {path}')
 
@@ -647,11 +761,13 @@ def run_quick_check(
     Open the quick-check window and wait until it is closed.
 
     Parameters:
-    connect (callable): coroutine function with no arguments that returns
-        an attached CRS, e.g. creating ``CRS(..., global_control = False)``
-        and awaiting ``attach``. It runs on the window's background event
-        loop, which every sweep then uses.
-    module_idxs (list of int): the session's modules.
+    connect (callable): coroutine function taking a list of modules and
+        returning a CRS attached to them, e.g. creating ``CRS(...,
+        module_idxs = modules, global_control = False)`` and awaiting
+        ``attach``. It runs on the window's background event loop, which
+        every sweep then uses, and again when the modules are changed in
+        the window.
+    module_idxs (list of int): the starting modules.
     nyquist, fmin, fmax, amplitude, qr_median, pts_per_lw, nsamps, count,
         sweep_on_start, title, ui_scale: starting settings (see
         ``QuickCheckWindow``). By default the window waits for the Sweep

@@ -32,7 +32,13 @@ AMPLITUDE = -55.            # tone power, dBm
 QR_MEDIAN = 2e4             # expected median Qr (sets the step)
 PTS_PER_LW = 25.            # points per linewidth at QR_MEDIAN
 NSAMPS = 100                # samples averaged per point
-SNR_DB = 40.                # S/N per quadrature at -55 dBm, 100 samples
+SNR_DB = 40.                # signal-to-noise ratio per quadrature at
+                            # -55 dBm with 100 samples averaged
+
+# Notes saved with the data this script makes (attribute 'notes'), e.g.
+# the filters and attenuators on the DAC and ADC lines. Multi-line is fine.
+NOTES = """
+"""
 
 ################################################################################
 ################################### Script #####################################
@@ -47,7 +53,8 @@ def parse_args(argv = None):
     Returns:
     args (argparse.Namespace): the options.
     """
-    p = argparse.ArgumentParser(description = 'Simulated device store.')
+    p = argparse.ArgumentParser(
+        description = 'Make a store with a simulated device.')
     p.add_argument('--store', default = STORE)
     p.add_argument('--seed', type = int, default = SEED)
     p.add_argument('--nyquist', default = NYQUIST,
@@ -57,7 +64,20 @@ def parse_args(argv = None):
     p.add_argument('--pts-per-lw', type = float, default = PTS_PER_LW)
     p.add_argument('--nsamps', type = int, default = NSAMPS)
     p.add_argument('--snr-db', type = float, default = SNR_DB)
+    p.add_argument('--notes', default = NOTES,
+                   help = 'notes saved with the data (quote multi-line text)')
     return p.parse_args(argv)
+
+def save_notes(grp, notes):
+    """
+    Save notes with a group the script made (attribute 'notes'), if any.
+
+    Parameters:
+    grp (zarr.Group): the group.
+    notes (str): the notes (``--notes`` or ``NOTES``); blank is not saved.
+    """
+    if notes and notes.strip():
+        grp.attrs['notes'] = notes.strip()
 
 async def main(args):
     """
@@ -75,6 +95,7 @@ async def main(args):
         amplitude = args.amplitude, nsamps = args.nsamps,
         step = vna_step(args.qr_median, args.pts_per_lw),
         snr_db = args.snr_db)
+    save_notes(root['vna0'], args.notes)
     print(f'Simulated {len(truth)} resonators; saved {path}')
     print(dl.tree(root, max_depth = 1))
     return truth

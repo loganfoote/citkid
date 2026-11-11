@@ -130,34 +130,40 @@ async def test_stream_tone_sets(tmp_path):
         await stream_tone_sets(crs, tune, ' ', 1., 6, **kw)
     paths = await stream_tone_sets(crs, tune, 'dark', 0.5, 6,
                                    notes = 'lights off', **kw)
-    # One calibration sweep and one stream per tone set
-    assert paths == ['tune0/sweep0/write0/ts0', 'tune0/sweep1/write0/ts0']
-    for j, s in enumerate((0, 1)):
-        cal = tune[f'sweep{j}']
+    # The run is ts0 at the store root: one calibration sweep and one
+    # stream per tone set
+    assert paths == ['ts0/set0/write0/stream', 'ts0/set1/write0/stream']
+    run = root['ts0']
+    assert run.attrs['name'] == 'dark' and run.attrs['notes'] == \
+        'lights off'
+    assert run.attrs['tuning'] == 'tune0' and run.attrs['tones'] == \
+        'tune0/tones' and run.attrs['resonators'] == 'resonators0'
+    assert run.attrs['tone_sets'] == [0, 1] and run.attrs['complete']
+    for s in (0, 1):
+        cal = run[f'set{s}']
         assert cal.attrs['tone_set'] == s and cal.attrs['complete']
         rows = np.flatnonzero(tune['tones/tone_set'][:] == s)
         w = cal['write0']
         np.testing.assert_array_equal(w['sweep_rows'][:],
                                       np.arange(len(rows)))
         np.testing.assert_array_equal(w['res_idxs'][:], rows)
-        ts = w['ts0']
-        assert ts.attrs['name'] == 'dark' and ts.attrs['notes'] == \
-            'lights off'
+        ts = w['stream']
         assert ts['z'].shape == (2, len(rows),
                                  round(0.5 * util.get_sample_freq(6)))
         zt = (ts['z'][0] + 1j * ts['z'][1]) * ts['counts_to_s21'][:][:, None]
         assert np.all(np.isfinite(zt))
-    runs = tune['streams'].attrs['runs']
+    runs = dl.stream_runs(root)
     assert len(runs) == 1 and runs[0]['paths'] == paths
+    assert dl.stream_runs(root, 'tune1') == []
     assert any('calibration' in m for m in said)
     # Stage 0 needs chunks: one module at a time in set 1
     paths = await stream_tone_sets(crs, tune, 'fast', 0.02, 0, **kw)
-    assert len(paths) == 3 and paths[0] == 'tune0/sweep2/write0/ts0'
+    assert len(paths) == 3 and paths[0] == 'ts1/set0/write0/stream'
     w = [root[p.rsplit('/', 1)[0]] for p in paths[1:]]
     mods = tune['tones/tone_module'][:][tune['tones/tone_set'][:] == 1]
     for g in w:
         assert len(set(mods[g['sweep_rows'][:]].tolist())) == 1
-    assert len(tune['streams'].attrs['runs']) == 2
+    assert [r['name'] for r in dl.stream_runs(root)] == ['dark', 'fast']
     assert n == tune['tones/fres'].shape[0]
 
 
@@ -233,10 +239,18 @@ def test_stream_window(qapp, tmp_path):
     win.mode_box.setCurrentIndex(0)
     x = win.ts_plot.listDataItems()[0].yData
     assert abs(np.mean(x)) < 1e-6
+    # Run on tone set 1 only; with no tone set checked, Run is off
+    win.set_run_sets([])
+    assert not win.run_btn.isEnabled()
+    win.set_run_sets([1])
+    assert win.run_set_idxs() == [1] and win.run_btn.isEnabled()
     win.run()
     wait_for(lambda: len(win.runs) == 1 and not win.worker.busy)
+    sweep = win.runs[0][0].rsplit('/', 2)[0]
+    assert len(win.runs[0]) == 1 and root[sweep].attrs['tone_set'] == 1
     assert win.runs_list.count() == 1
-    assert tune['streams'].attrs['runs'][0]['name'] == 'dark_dec6'
+    assert root['ts0'].attrs['name'] == 'dark_dec6'
+    assert 'ts0: dark_dec6' in win.runs_list.item(0).text()
     worker = win.worker
     win.close()
     win.deleteLater()
@@ -259,19 +273,19 @@ async def test_chunked_streams_load_in_sweep_order(tmp_path):
     kw = dict(npoints_fine = 20, npoints_gain = 10, verbose = False)
     await stream_tone_sets(crs, tune, 'slow', 0.2, 6, **kw)
     await stream_tone_sets(crs, tune, 'fast', 0.02, 0, **kw)
-    # Tone set 1 at stage 0: sweep3, two writes (one per module)
-    cal = tune['sweep3']
+    # Tone set 1 at stage 0: ts1/set1, two writes (one per module)
+    cal = root['ts1/set1']
     n = cal['fres'].shape[0]
     rows = np.arange(n)
-    for w, sweep_store in (('write0', 'sweep1'), ('write0', 'sweep3'),
-                           ('write1', 'sweep3')):
+    for w, sweep_store in (('write0', 'ts0/set1'), ('write0', 'ts1/set1'),
+                           ('write1', 'ts1/set1')):
         steps = {s.name: s for s in target_sweep_steps(
-            store = root, group = f'tune0/{sweep_store}', ts = w,
-            ts_stream = 'ts0')}
+            store = root, group = sweep_store, ts = w,
+            ts_stream = 'stream')}
         ft = steps['load_ft'].func(rows)
         zt = steps['load_zt'].func(rows)
-        grp = tune[f'{sweep_store}/{w}']
-        if 'sweep_rows' in grp and sweep_store == 'sweep3':
+        grp = root[f'{sweep_store}/{w}']
+        if 'sweep_rows' in grp and sweep_store == 'ts1/set1':
             streamed = grp['sweep_rows'][:]
         else:
             streamed = rows
@@ -282,8 +296,8 @@ async def test_chunked_streams_load_in_sweep_order(tmp_path):
         # One row on its own
         assert np.isfinite(steps['load_ft'].func(streamed[:1])).all()
     # The two writes of tone set 1 cover it once
-    a = tune['sweep3/write0/sweep_rows'][:]
-    b = tune['sweep3/write1/sweep_rows'][:]
+    a = root['ts1/set1/write0/sweep_rows'][:]
+    b = root['ts1/set1/write1/sweep_rows'][:]
     np.testing.assert_array_equal(np.sort(np.concatenate((a, b))), rows)
 
 

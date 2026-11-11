@@ -14,9 +14,14 @@ Collection of Kinetic Inductance Detector (KID) data acquisition and analysis co
 </ul>
 
 Example notebooks are in `notebooks/` (the newer ones run on synthetic
-data). Documents are in `documents/`: `pipeline_guide.md`,
-`xcal_derivations.md`, and `crs_streaming_format.md`. Derivations for resonator fitting and
-optimal filtering are in `res_fitting.pdf` and `optimal_filtering.pdf`.
+data). Measurement procedure scripts are in `procedures/`, with guides in
+`documents/procedures/` (`vna_screening.pdf`: VNA sweeps and resonance
+finding; `tuning_timestreams.pdf`: tuning and timestreams). Other documents in
+`documents/`: `pipeline_guide.pdf`, `xcal_derivations.pdf`,
+`crs_streaming_format.pdf`, and the derivations for resonator fitting and
+optimal filtering, `res_fitting.pdf` and `optimal_filtering.pdf`. The PDFs
+are built from the Markdown sources in `documents/source/` with
+`uv run python documents/build_pdfs.py` (needs pandoc and xelatex).
 
 ## Installation with uv (recommended)
 The development environment is managed with [uv](https://docs.astral.sh/uv/)

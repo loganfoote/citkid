@@ -3291,8 +3291,9 @@ def run_iq_series(
         tones (``res_idxs < 0``). Reset Mask returns to this default. If
         False (default), the default mask is the whole sweep.
     y_target (float or None): Target value of ``y_param_name``, e.g. the
-        nonlinearity a to tune each resonator to. Needs ``xy_fit``. For each
-        resonator, the x at which its fit reaches the target (e.g. the tone
+        nonlinearity parameter a_nl to tune each resonator to. Needs
+        ``xy_fit``. For each resonator, the x at which its fit reaches the
+        target (e.g. the tone
         power, for ``a_vs_power_fit``) is marked by a dashed vertical line
         on the series plot, with its value shown below the plot. Shift+click
         on the plot, or drag the line, to choose a different x for that

@@ -43,26 +43,26 @@ def streamed(tmp_path_factory):
     return asyncio.run(take())
 
 
-def sources_of(tune, run, start, stop):
+def sources_of(root, run, start, stop):
     """
     Make the sources of one run: each tone set's sweep with all its writes.
 
     Parameters:
-    tune (zarr.Group): the tuning.
-    run (int): run index.
+    root (zarr.Group): the store root.
+    run (int): run index (ts{run}).
     start, stop (int): sample window.
 
     Returns:
     sources (list of dict): the sources.
     """
     out = []
-    for path in tune['streams'].attrs['runs'][run]['paths']:
+    for path in dl.stream_runs(root)[run]['paths']:
         sweep = path.rsplit('/', 2)[0]
         if out and out[-1]['group'] == sweep:
             out[-1]['writes'].append(path.split('/')[-2])
             continue
         out.append(dict(group = sweep, writes = [path.split('/')[-2]],
-                        start = start, stop = stop))
+                        start = start, stop = stop, stream = 'stream'))
     return out
 
 
@@ -70,7 +70,7 @@ def test_rows_follow_sources_and_writes(streamed):
     root, tune = streamed
     n = tune['tones/fres'].shape[0]
     # Stage 0: tone set 1 streamed in two writes (one per module)
-    src = sources_of(tune, 1, 10, 30)
+    src = sources_of(root, 1, 10, 30)
     assert [len(s['writes']) for s in src] == [1, 2]
     steps = {s.name: s for s in stream_sources_steps(
         root, src, 'resonators0/fres_all', 'resonators0/qres_all',
@@ -107,7 +107,7 @@ def test_rows_follow_sources_and_writes(streamed):
 
 def test_mixed_stages_refused(streamed):
     root, tune = streamed
-    src = sources_of(tune, 0, 0, 20) + sources_of(tune, 1, 0, 20)
+    src = sources_of(root, 0, 0, 20) + sources_of(root, 1, 0, 20)
     steps = {s.name: s for s in stream_sources_steps(
         root, src, 'resonators0/fres_all', 'resonators0/qres_all')}
     with pytest.raises(ValueError, match = 'decimation stage'):
@@ -118,8 +118,8 @@ def test_mixed_stages_refused(streamed):
 
 def test_dataset_calibrates(streamed):
     root, tune = streamed
-    src = sources_of(tune, 0, 0, 1000)
-    out = dl.require_group(tune, 'cal0', 'analysis')
+    src = sources_of(root, 0, 0, 1000)
+    out = dl.require_group(tune, 'ts_cal0', 'analysis')
     DS = open_stream_dataset(out.require_group('dec6'), src,
                              'resonators0/fres_all', 'resonators0/qres_all')
     assert len(np.asarray(DS.res_idxs)) == tune['tones/fres'].shape[0]
@@ -142,25 +142,25 @@ def test_dataset_calibrates(streamed):
 
 def test_select_streams(streamed):
     root, tune = streamed
-    runs = dl.stream_runs(tune)
+    runs = dl.stream_runs(root)
     assert [r['name'] for r in runs] == ['slow', 'fast']
     assert runs[0]['nsamples'] == round(2 * 596.046) and \
         runs[0]['n_chunks'] >= 1
-    text = dl.describe_stream_runs(tune)
+    text = dl.describe_stream_runs(root)
     assert 'slow' in text and 'chunks of' in text
-    src, run = dl.select_streams(tune, 'fast')
+    src, run = dl.select_streams(root, 'fast')
     assert run['run'] == 1 and len(src) == 2 and src[1]['writes'] == \
         ['write0', 'write1']
     assert (src[0]['start'], src[0]['stop']) == (0, runs[1]['nsamples'])
-    src, run = dl.select_streams(tune, run = 0, chunks = 1, tone_sets = [1])
+    src, run = dl.select_streams(root, run = 0, chunks = 1, tone_sets = [1])
     assert len(src) == 1 and src[0]['stop'] == min(
         runs[0]['chunk_samples'], runs[0]['nsamples'])
     with pytest.raises(KeyError, match = 'no run named'):
-        dl.select_streams(tune, 'nope')
+        dl.select_streams(root, 'nope')
     with pytest.raises(KeyError, match = 'not'):
-        dl.select_streams(tune, 'fast', run = 0)
+        dl.select_streams(root, 'fast', run = 0)
     with pytest.raises(ValueError, match = 'no samples'):
-        dl.select_streams(tune, 'slow', chunks = (5, 6))
+        dl.select_streams(root, 'slow', chunks = (5, 6))
 
 
 def test_execute_remaining(streamed):
@@ -169,7 +169,7 @@ def test_execute_remaining(streamed):
     global step, and does nothing when all are done.
     """
     root, tune = streamed
-    src = sources_of(tune, 0, 0, 500)
+    src = sources_of(root, 0, 0, 500)
     out = dl.require_group(tune, 'cal_rem', 'analysis')
     DS = open_stream_dataset(out.require_group('dec6'), src,
                              'resonators0/fres_all', 'resonators0/qres_all')
