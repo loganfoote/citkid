@@ -22,7 +22,9 @@ window is open: it won't start while another script is sweeping or
 streaming, and while it is open every other script fails to connect,
 sweep, or stream (with a message saying who has the board). It also has
 global control, to set the decimation. Run crs_init.py first. ``--simulate``
-streams the simulated device of a store made by simulate_store.py.
+streams the simulated device of a store made by simulate_store.py; with
+``SIM_PULSES`` (or ``--sim-pulses``), its streams also hold photon pulses
+and cosmic rays (``SIM_PULSE_SETTINGS``), for trying 06_find_photons.py.
 
 Usage:
     python 04_stream.py --device deviceA --modules 1
@@ -64,6 +66,19 @@ NPOINTS_FINE = 1000         # fine sweep points per tone
 NPOINTS_GAIN = 50           # gain sweep points per tone
 GAIN_SPAN_FACTOR = 10       # gain sweep span = 10 x fine sweep span
 NSAMPS = 200                # samples averaged per point
+# Simulation (--simulate only): add photon pulses and cosmic rays to the
+# streams. Photons arrive on each tone independently (rate in Hz, size x
+# as a fractional frequency shift, decay time tau in s); cosmic rays hit
+# every streamed tone at once (cosmic_rate in Hz, size cosmic_x, varying
+# between tones by a log-normal factor of width cosmic_spread)
+SIM_PULSES = False
+SIM_PULSE_SETTINGS = dict(rate = 20., x = 2e-6, tau = 150e-6,
+                          cosmic_rate = 1., cosmic_x = 1e-5,
+                          cosmic_spread = 0.5)
+# Signal-to-noise ratio of the simulated board while SIM_PULSES is on, dB
+# (as simulate_store.py's SNR_DB). The stores' default, 40, buries
+# photon-sized pulses at decimation stages 0-1. None: the store's value
+SIM_SNR_DB = 80.
 
 ################################################################################
 ################################### Script #####################################
@@ -91,6 +106,10 @@ def parse_args(argv = None):
                    help = 'tuning (default: the latest with tuned tones)')
     p.add_argument('--simulate', action = 'store_true',
                    help = "stream the store's simulated device")
+    p.add_argument('--sim-pulses', action = 'store_true',
+                   default = SIM_PULSES,
+                   help = 'with --simulate: add photon pulses and cosmic '
+                   'rays to the streams')
     return p.parse_args(argv)
 
 def store_path(args):
@@ -157,8 +176,11 @@ def main(args):
         crs (CRS or SimulatedCRS): the attached instrument.
         """
         if args.simulate:
+            pulses = SIM_PULSE_SETTINGS if args.sim_pulses else None
             crs = simulated_crs(path, args.modules, seed = 200,
-                                global_control = True)
+                                global_control = True, pulses = pulses)
+            if args.sim_pulses and SIM_SNR_DB is not None:
+                crs.snr_db = float(SIM_SNR_DB)
         else:
             crs = CRS(serial_number = args.serial, interface = args.iface,
                       module_idxs = args.modules,

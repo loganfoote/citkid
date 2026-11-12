@@ -9,7 +9,9 @@ Detection on one tone (``run_detection``):
    x with slow drift removed (``detection_timestream``). A photon moves the
    resonance down, so pulses are negative (``pulse_sign = -1``).
 2. Initial events: peaks of a 3-sample boxcar of sign * d above
-   ``init_nsigma`` robust (MAD) sigma.
+   ``init_nsigma`` robust (MAD) sigma, and at most ``init_hmax`` times the
+   median initial peak height (a loose cut that keeps large pulses such as
+   cosmic rays out of the first template).
 3. Repeat ``of_iterations`` times: average the events into a template,
    estimate the noise PSD from segments without pulses, build the optimal
    filter, filter, and take the filter peaks with heights in [hmin, hmax]
@@ -20,13 +22,20 @@ Detection on one tone (``run_detection``):
    has noise but no pulses) are at most ``hmin_false_frac`` of the
    accepted events.
 4. The result keeps every filter peak at or above hmin with its height
-   (the noise threshold only), and the events in [hmin, hmax].
+   (the noise threshold only), and the events in [hmin, hmax]. It also
+   keeps the coincidence candidates: the filter peaks above the lower
+   ``coinc_nsigma`` threshold, with their heights and raw peak values, so
+   that small pulses of a cosmic ray still count as coincident.
 
-Across the tones streamed together, ``coincidence_multiplicity`` counts
-how many tones have a pulse near each pulse; ``average_pulse`` averages
-the pulses inside the height window that are not coincident, and the
-coincident ones are kept for separate study. ``fit_tau`` fits the decay of
-an averaged pulse.
+Across the tones streamed together (one tone write, which share sample
+times), a pulse is coincident when another tone has a coincidence
+candidate within +-``win`` samples of it (``candidate_multiplicity``).
+``average_pulse`` averages the pulses inside the height window that are
+not coincident. ``cosmic_events`` groups the coincidence candidates of all
+tones into events (each starting at its earliest pulse and spanning
+2 ``win`` samples) and returns the events seen by at least ``min_mult``
+tones, with each tone's pulse height. ``fit_tau`` fits the decay of an
+averaged pulse.
 
 Adapted from the crosstalk analysis's detection (iteration, thresholds,
 noise PSD, filter, coincidence clusters).
@@ -56,6 +65,9 @@ class DetectionSettings:
         about 1 / highpass_hz). Default 10.
     init_nsigma (float): first-pass threshold, MAD sigma of the 3-sample
         boxcar. Default 6.
+    init_hmax (float or None): first-pass upper cut, in units of the median
+        first-pass peak height. Default 3 (loose: it only keeps large
+        pulses out of the first template). None: no cut.
     of_iterations (int): optimal-filter iterations. Default 5.
     hmin, hmax (float): accepted height window, in units of the mean
         single-photon amplitude. Default 0.5, 1.6.
@@ -64,6 +76,11 @@ class DetectionSettings:
         most this fraction of expected noise events among the accepted
         ones. Default None (fixed hmin).
     hmin_auto_max (float): largest automatic hmin. Default 0.8.
+    coinc_nsigma (float): threshold of the coincidence candidates, in
+        sigma of the filter output. Default 4. The threshold is never above
+        hmin, so every pulse candidate is also a coincidence candidate.
+    raw_half_width (int): the raw peak of a pulse is the largest sign * d
+        within this many samples of it. Default 2.
     psd_max_segments (int): most segments in the noise PSD. Default 4000.
     baseline_gap (int): the template's baseline ends this many samples
         before its pre-maximum part ends. Default 3.
@@ -74,11 +91,14 @@ class DetectionSettings:
     template_post_s: float = 2.5e-3
     highpass_hz: float = 10.
     init_nsigma: float = 6.
+    init_hmax: Optional[float] = 3.
     of_iterations: int = 5
     hmin: float = 0.5
     hmax: float = 1.6
     hmin_false_frac: Optional[float] = None
     hmin_auto_max: float = 0.8
+    coinc_nsigma: float = 4.
+    raw_half_width: int = 2
     psd_max_segments: int = 4000
     baseline_gap: int = 3
     block: int = 2 ** 22
@@ -516,7 +536,15 @@ def run_detection(d, dt, settings = None, hmin = None, hmax = None,
         ``psd``, ``nfft``, ``filter`` (centered), ``history`` (template
             of each iteration);
         ``neg_h``, ``clean_frac`` (noise peaks, for the false fraction);
-        ``n_vetoed``; ``log`` (one line per iteration).
+        ``coinc_idx``, ``coinc_h``, ``coinc_raw``: the coincidence
+            candidates (filter peaks above ``coinc_nsigma`` sigma or hmin,
+            whichever is lower; they include every ``cand_idx``), their
+            heights in units of the mean photon, and their raw peaks
+            (``raw_peaks``, in units of d, sign-corrected);
+        ``init_idx``, ``init_h``: the first-pass peaks and their heights
+            (boxcar, units of d), before the ``init_hmax`` cut;
+            ``init_hmax_abs``: that cut in units of d (inf without it);
+        ``n_vetoed``; ``dt``; ``log`` (one line per iteration).
 
     Raises:
     DetectionError: if there are no events to build a template from.
@@ -537,13 +565,19 @@ def run_detection(d, dt, settings = None, hmin = None, hmax = None,
         np.sort(np.asarray(veto, dtype = np.int64))
     sd = _boxcar3(d, sign)
     sig0 = mad_sigma(sd[_sub(n)])
-    events, _ = _find_peaks_blocked(sd, s.init_nsigma * sig0, post)
+    init_idx, init_h = _find_peaks_blocked(sd, s.init_nsigma * sig0, post)
     del sd
-    events = events[~near(events, veto, post, post)]
-    peaks_all = np.union1d(events, veto)
+    init_hmax_abs = np.inf
+    if s.init_hmax is not None and init_h.size:
+        init_hmax_abs = float(s.init_hmax * np.median(init_h))
+    events = init_idx[(init_h <= init_hmax_abs) &
+                      ~near(init_idx, veto, post, post)]
+    # The noise PSD avoids every first-pass peak, the large ones included
+    peaks_all = np.union1d(init_idx, veto)
     history = []
-    log = [f'initial: {events.size} peaks above {s.init_nsigma:g} sigma '
-           'of the boxcar']
+    log = [f'initial: {init_idx.size} peaks above {s.init_nsigma:g} sigma '
+           f'of the boxcar, {events.size} at most {s.init_hmax} x their '
+           'median height']
     for it in range(s.of_iterations):
         if events.size == 0:
             raise DetectionError('no events to build the template from; '
@@ -579,12 +613,20 @@ def run_detection(d, dt, settings = None, hmin = None, hmax = None,
     if events.size == 0:
         raise DetectionError('no events after the last iteration; '
                              + '; '.join(log))
+    # Coincidence candidates: the lower threshold, never above hmin
+    floor = min(s.coinc_nsigma * sigma_y, hmin)
+    coinc_idx, coinc_h = candidates(y, sigma_y, distance = post,
+                                    floor = floor, nsig = 0.)
+    del y
     avg, p = build_template(d, events, pre, post, sign, s.baseline_gap)
     if p != pre:
         shift = p - pre
         events, cidx = events + shift, cidx + shift
+        coinc_idx = coinc_idx + shift
         avg, p = build_template(d, events, pre, post, sign, s.baseline_gap)
     above = ch >= hmin
+    coinc_idx = np.clip(coinc_idx, 0, n - 1)
+    coinc_raw = raw_peaks(d, coinc_idx, sign, s.raw_half_width)
     return dict(
         cand_idx = cidx[above], cand_h = ch[above], events = events,
         template = avg, p = p, pre = pre, post = post, amp_ph = avg[p],
@@ -592,11 +634,119 @@ def run_detection(d, dt, settings = None, hmin = None, hmax = None,
         hmin = hmin, hmax = hmax, sigma_y = sigma_y,
         rate = events.size / (n * dt), psd = psd, nfft = nfft,
         filter = of.gc, history = np.array(history), neg_h = neg_h,
-        clean_frac = clean, n_vetoed = int(np.sum(vetoed)), log = log)
+        clean_frac = clean, coinc_idx = coinc_idx, coinc_h = coinc_h,
+        coinc_raw = coinc_raw, init_idx = init_idx,
+        init_h = init_h.astype(np.float32), init_hmax_abs = init_hmax_abs,
+        n_vetoed = int(np.sum(vetoed)), dt = dt, log = log)
+
+def detect_with_filter(d, dt, ref, settings = None, hmin = None, hmax = None):
+    """
+    Find the photon pulses of one tone with a given optimal filter (e.g.
+    the one ``run_detection`` built on another timestream of the same
+    tone), without iterating.
+
+    The filter is the reference's template and noise PSD. Heights are in
+    units of the reference's mean photon, so the reference's thresholds
+    apply. The result has the keys of ``run_detection``; ``template``,
+    ``p`` and ``amp_ph_own`` describe this timestream's own mean pulse
+    (of the events), while ``amp_ph`` stays the reference's (the height
+    unit).
+
+    Parameters:
+    d (np.array): detection timestream (``detection_timestream``).
+    dt (float): sample period, s.
+    ref (dict): ``run_detection`` result to take the filter from
+        (``template``, ``p``, ``pre``, ``post``, ``sign``, ``amp_ph``,
+        ``psd``, ``nfft``, ``hmin``, ``hmax``, and ``dt``, if present).
+    settings (DetectionSettings or None): settings for ``coinc_nsigma``,
+        ``raw_half_width``, ``baseline_gap`` and ``block``. None: the
+        defaults.
+    hmin, hmax (float or None): height window. None (default): the
+        reference's.
+
+    Returns:
+    res (dict): as ``run_detection``, plus ``amp_ph_own``; ``history``,
+        ``init_idx`` and ``init_h`` are empty and ``init_hmax_abs`` NaN.
+
+    Raises:
+    ValueError: if the sample period differs from the reference's.
+    DetectionError: if no pulse is in the height window.
+    """
+    s = DetectionSettings() if settings is None else settings
+    if 'dt' in ref and not np.isclose(float(ref['dt']), dt, rtol = 1e-9):
+        raise ValueError(f"the reference filter is for dt = {ref['dt']}, "
+                         f'not {dt}')
+    hmin = float(ref['hmin']) if hmin is None else float(hmin)
+    hmax = float(ref['hmax']) if hmax is None else float(hmax)
+    sign, pre, post = int(ref['sign']), int(ref['pre']), int(ref['post'])
+    nfft, amp_ph = int(ref['nfft']), float(ref['amp_ph'])
+    M = pre + post
+    n = d.shape[0]
+    of = OptimalFilter(np.asarray(ref['template']) / amp_ph, int(ref['p']),
+                       np.asarray(ref['psd']), nfft)
+    y = of.apply(d, sign, s.block) / amp_ph
+    sub = _sub(n)
+    # Filter noise away from pulses (found with a first estimate)
+    sigma_y = mad_sigma(y[sub])
+    cidx, ch = candidates(y, sigma_y, distance = post)
+    excl = exclusion_mask(n, cidx[ch >= hmin], pre, post)
+    sigma_y = mad_sigma(y[sub][~excl[sub]])
+    del excl
+    cidx, ch = candidates(y, sigma_y, distance = post)
+    neg_h, clean = inverted_candidates(y, sigma_y, post, cidx[ch >= hmin],
+                                       M, nfft)
+    events = cidx[(ch >= hmin) & (ch <= hmax)]
+    log = [f'reference filter: sigma_y {sigma_y:.3g}, {cidx.size} '
+           f'candidates, {events.size} in [{hmin:g}, {hmax:g}]']
+    if events.size == 0:
+        raise DetectionError('no events with the reference filter; '
+                             + '; '.join(log))
+    floor = min(s.coinc_nsigma * sigma_y, hmin)
+    coinc_idx, coinc_h = candidates(y, sigma_y, distance = post,
+                                    floor = floor, nsig = 0.)
+    del y
+    avg, p = build_template(d, events, pre, post, sign, s.baseline_gap)
+    above = ch >= hmin
+    return dict(
+        cand_idx = cidx[above], cand_h = ch[above], events = events,
+        template = avg, p = p, pre = pre, post = post, amp_ph = amp_ph,
+        amp_ph_own = float(avg[p]), sign = sign, dt = dt,
+        hmin = hmin, hmax = hmax, sigma_y = sigma_y,
+        rate = events.size / (n * dt), psd = np.asarray(ref['psd']),
+        nfft = nfft, filter = of.gc, history = np.zeros((0, M)),
+        neg_h = neg_h, clean_frac = clean, coinc_idx = coinc_idx,
+        coinc_h = coinc_h,
+        coinc_raw = raw_peaks(d, coinc_idx, sign, s.raw_half_width),
+        init_idx = np.zeros(0, dtype = np.int64),
+        init_h = np.zeros(0, dtype = np.float32), init_hmax_abs = np.nan,
+        n_vetoed = 0, log = log)
 
 ################################################################################
 ################################# Coincidences #################################
 ################################################################################
+def raw_peaks(d, idx, sign, half_width = 2):
+    """
+    Return the raw peak of each pulse: the largest sign * d within
+    ``half_width`` samples of it. Unlike the filter height, this doesn't
+    assume the photon pulse shape (e.g. for cosmic rays).
+
+    Parameters:
+    d (np.array): detection timestream.
+    idx (np.array, int): pulse indices.
+    sign (int): pulse sign.
+    half_width (int): samples on each side. Default 2.
+
+    Returns:
+    raw (np.array, float32): raw peaks, in units of d, sign-corrected.
+    """
+    idx = np.asarray(idx, dtype = np.int64)
+    n = d.shape[0]
+    if idx.size == 0:
+        return np.zeros(0, dtype = np.float32)
+    offs = np.arange(-int(half_width), int(half_width) + 1)
+    win = np.clip(idx[:, None] + offs[None, :], 0, n - 1)
+    return (sign * d[win]).max(axis = 1).astype(np.float32)
+
 def triggers(d, nsigma, distance, sign = None):
     """
     Find the peaks of a 3-sample boxcar of d above ``nsigma`` MAD sigma,
@@ -673,6 +823,112 @@ def coincidence_multiplicity(events, win):
         out.append(m)
     return out
 
+def candidate_multiplicity(results, win):
+    """
+    Count, for each pulse candidate of each tone (``cand_idx``), the tones
+    (itself included) with a coincidence candidate (``coinc_idx``) within
+    +-``win`` samples of it. Use the tones of one tone write.
+
+    Parameters:
+    results (list of dict): ``run_detection`` results, one per tone.
+    win (int): coincidence window, samples: a pulse at t is coincident
+        with pulses in [t - win, t + win].
+
+    Returns:
+    mult (list of np.array, int): per tone, aligned with ``cand_idx`` (1:
+        only this tone).
+    """
+    coinc = [np.sort(np.asarray(r['coinc_idx'], dtype = np.int64))
+             for r in results]
+    out = []
+    for i, r in enumerate(results):
+        e = np.asarray(r['cand_idx'], dtype = np.int64)
+        m = np.ones(len(e), dtype = int)
+        for j, other in enumerate(coinc):
+            if j == i or not len(other):
+                continue
+            k = np.searchsorted(other, e - win)
+            m += (k < len(other)) & \
+                (other[np.clip(k, 0, len(other) - 1)] <= e + win)
+        out.append(m)
+    return out
+
+def cosmic_events(results, win, min_mult = 3):
+    """
+    Group the coincidence candidates of the tones of one tone write into
+    events, and return those seen by at least ``min_mult`` tones (cosmic
+    rays).
+
+    The candidates of all tones are sorted by time. An event starts at the
+    earliest candidate not yet in an event, t0, and takes every candidate
+    in [t0, t0 + 2 win] (the same width as the +-``win`` coincidence
+    window). If a tone has more than one candidate in an event, the one
+    with the largest filter height is kept.
+
+    Parameters:
+    results (list of dict): ``run_detection`` results, one per tone.
+    win (int): coincidence window, samples.
+    min_mult (int): fewest tones in a returned event. Default 3.
+
+    Returns:
+    events (dict): one entry per event: ``t0`` (sample of its first pulse,
+        int64), ``mult`` (number of tones).
+    hits (dict): one entry per tone of each event, in event order:
+        ``event`` (index into ``events``), ``tone`` (index into
+        ``results``), ``idx`` (pulse sample), ``h`` (filter height, units
+        of the tone's mean photon), ``x`` (filter height in units of d: h
+        times the tone's ``amp_ph``), ``raw`` (raw peak, units of d,
+        sign-corrected).
+    """
+    def column(key, dtype):
+        """
+        Concatenate one per-candidate quantity over the tones.
+
+        Parameters:
+        key (str or callable): result key, or a function of (i, result).
+        dtype (type): output dtype.
+
+        Returns:
+        values (np.array): the concatenated values.
+        """
+        parts = [np.asarray(key(i, r) if callable(key) else r[key],
+                            dtype = dtype) for i, r in enumerate(results)]
+        return np.concatenate(parts) if parts else np.zeros(0, dtype)
+
+    t = column('coinc_idx', np.int64)
+    tone = column(lambda i, r: np.full(len(r['coinc_idx']), i), np.int64)
+    h = column('coinc_h', np.float64)
+    raw = column('coinc_raw', np.float64)
+    amp = column(lambda i, r: np.full(len(r['coinc_idx']), r['amp_ph']),
+                 np.float64)
+    o = np.argsort(t, kind = 'stable')
+    t, tone, h, raw, amp = t[o], tone[o], h[o], raw[o], amp[o]
+    ev_t0, ev_mult, ev_rows = [], [], []
+    i = 0
+    while i < len(t):
+        j = int(np.searchsorted(t, t[i] + 2 * win, side = 'right'))
+        # The largest candidate of each tone in the event
+        rows = np.arange(i, j)
+        rows = rows[np.argsort(-h[rows], kind = 'stable')]
+        _, first = np.unique(tone[rows], return_index = True)
+        rows = np.sort(rows[first])
+        if len(rows) >= min_mult:
+            ev_t0.append(int(t[i]))
+            ev_mult.append(len(rows))
+            ev_rows.append(rows)
+        i = j
+    events = dict(t0 = np.asarray(ev_t0, dtype = np.int64),
+                  mult = np.asarray(ev_mult, dtype = int))
+    if ev_rows:
+        rows = np.concatenate(ev_rows)
+        event = np.concatenate([np.full(len(r), e, dtype = np.int64)
+                                for e, r in enumerate(ev_rows)])
+    else:
+        rows, event = np.zeros(0, np.int64), np.zeros(0, np.int64)
+    hits = dict(event = event, tone = tone[rows], idx = t[rows],
+                h = h[rows], x = h[rows] * amp[rows], raw = raw[rows])
+    return events, hits
+
 def average_pulse(d, res, mult = None, max_mult = 1, gap = 3):
     """
     Average the photon pulses of one tone: the events in the height window
@@ -682,8 +938,8 @@ def average_pulse(d, res, mult = None, max_mult = 1, gap = 3):
     d (np.array): detection timestream.
     res (dict): ``run_detection`` result.
     mult (np.array or None): multiplicity of each candidate
-        (``coincidence_multiplicity`` of ``res['cand_idx']``). None: no
-        coincidence cut.
+        (``candidate_multiplicity``, aligned with ``res['cand_idx']``).
+        None: no coincidence cut.
     max_mult (int): largest multiplicity kept. Default 1 (no other tone).
     gap (int): baseline gap (``build_template``). Default 3.
 

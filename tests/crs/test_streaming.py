@@ -12,7 +12,7 @@ from citkid.crs import util
 from citkid.crs.procedures import (
     plan_stream_chunks, stream_tone_sets, write_stream_chunk
 )
-from citkid.crs.sim import SimulatedCRS
+from citkid.crs.sim import DEFAULT_PULSES, SimulatedCRS
 from citkid.crs.stream_gui import MODES, StreamWindow
 from citkid.vna import simulate as sim
 
@@ -115,6 +115,38 @@ async def test_simulated_streams():
                              {'1': 1.05e9})
     with pytest.raises(ValueError):
         await crs.stream_to_memory(0.05, 0)
+
+
+@pytest.mark.asyncio
+async def test_simulated_pulses():
+    """
+    With ``pulses``, streams hold photon pulses on each tone and cosmic rays
+    on every tone at once, at the logged samples; without, none are logged.
+    """
+    crs = make_crs(global_control = True)
+    crs.snr_db = 120.
+    fres = crs.truth.fr.values[:4]
+    await write_stream_chunk(crs, fres, -55., [1] * 4, {'1': 1.05e9})
+    await crs.stream_to_memory(0.05, 0)
+    assert crs.pulse_log == []
+    crs.pulses = dict(DEFAULT_PULSES, rate = 100., cosmic_rate = 50.)
+    zt = await crs.stream_to_memory(0.2, 0)
+    log = crs.pulse_log[-1]
+    assert log['n'] == zt.shape[1] and list(log['rows']) == [0, 1, 2, 3]
+    assert len(log['cosmic']) > 0
+    assert log['cosmic_x'].shape == (4, len(log['cosmic']))
+    for k in range(4):
+        dev = np.abs(zt[k] - np.median(zt[k]))
+        jump = np.diff(dev)
+        noise = np.median(np.abs(jump))
+        # Pulses rise in one sample: |z - z0| jumps up at every logged
+        # pulse start (photons of this tone, cosmic rays of all tones)
+        true = np.union1d(log['photons'][k], log['cosmic'])
+        true = true[true > 0]
+        assert np.all(jump[true - 1] > 20 * noise)
+        # and almost nowhere else
+        assert np.sum(jump > 20 * noise) < 1.1 * len(true) + 2
+    crs.pulses = None
 
 
 @pytest.mark.asyncio

@@ -13,7 +13,8 @@ drawn readout chain, with:
   ``p_ref`` dBm and 100 samples per point, scaling with power and
   sqrt(nsamps);
 - a small random complex gain step each time a module's NCO is set (the
-  seams between bands).
+  seams between bands);
+- optionally, photon pulses and cosmic rays in streams (``pulses``).
 
 ``simulate_vna_store`` makes a device store with one VNA sweep of a
 simulated device (``crs.procedures.vna_sweep_to_store``) and saves the
@@ -22,6 +23,7 @@ device's true parameters in its ``simulation`` group (``load_truth``).
 from types import SimpleNamespace
 import numpy as np
 import pandas as pd
+from scipy.signal import lfilter
 from .. import __version__ as citkid_version
 from .. import daq_layout as dl
 from . import util
@@ -34,6 +36,11 @@ DEFAULT_MODULE_CFG = dict(full_scale_dbm = 7.0, adc_attenuation_db = 0.0,
                           adc_calibration_mode = 'AUTO', adc_autocal = True)
 # Serial number of simulated boards
 SIM_SERIAL = 0
+# Default photon and cosmic-ray pulses (``SimulatedCRS.pulses``): rates in
+# Hz (photons per tone, cosmic rays on every streamed tone at once),
+# amplitudes as fractional frequency shifts, decay time in s
+DEFAULT_PULSES = dict(rate = 20., x = 2e-6, tau = 150e-6, cosmic_rate = 1.,
+                      cosmic_x = 1e-5, cosmic_spread = 0.5)
 
 class SimulatedCRS:
     """
@@ -45,12 +52,19 @@ class SimulatedCRS:
     snr_db (float): S/N per quadrature at ``p_ref`` and 100 samples.
     p_ref (float): reference power in dBm.
     seam_db, seam_deg (float): std of the gain step at each NCO setting.
+    pulses (dict or None): pulses added to streams (``DEFAULT_PULSES``
+        keys), or None for none.
+    pulse_log (list of dict): one entry per stream with pulses: ``n``
+        (samples), ``dt``, ``photons`` (per streamed tone, the sample of
+        each photon's maximum), ``cosmic`` (samples of the cosmic rays),
+        ``cosmic_x`` (per tone and cosmic ray, the amplitude), ``rows``
+        (the streamed tones' rows of the stream).
     """
 
     def __init__(
         self, truth, gain, module_idxs = (1,), snr_db = 40., p_ref = -55.,
         seam_db = 0.05, seam_deg = 0.5, seed = 0, serial_number = SIM_SERIAL,
-        global_control = False
+        global_control = False, pulses = None
     ):
         """
         Set up the simulated board.
@@ -69,8 +83,16 @@ class SimulatedCRS:
             ``SIM_SERIAL`` (0).
         global_control (bool): If True, the session may change the
             decimation. Default False.
+        pulses (dict, bool, or None): photon pulses and cosmic rays in
+            streams. True: ``DEFAULT_PULSES``; a dict overrides some of
+            its keys. None or False (default): no pulses.
         """
         self.truth, self.gain = truth, gain
+        if pulses is True:
+            pulses = {}
+        self.pulses = None if pulses is None or pulses is False else \
+            dict(DEFAULT_PULSES, **pulses)
+        self.pulse_log = []
         self.snr_db, self.p_ref = float(snr_db), float(p_ref)
         self.seam_db, self.seam_deg = float(seam_db), float(seam_deg)
         self.rng = np.random.default_rng(seed)
@@ -391,7 +413,53 @@ class SimulatedCRS:
             np.sqrt(fs / util.get_sample_freq(6))
         noise = self.rng.standard_normal((2, ok.sum(), n))
         zt[ok] = z0[:, None] + sigma[:, None] * (noise[0] + 1j * noise[1])
+        if self.pulses is not None:
+            # dz/dx: a shift x of the resonance acts as f -> f (1 - x)
+            eps = 1e-8
+            zp = g * sim.device_s21(f * (1 + eps), self.truth,
+                                    power_dbm = ares[ok], p_ref = self.p_ref)
+            dzdx = -(zp - z0) / eps
+            x = self._pulse_x(ok.sum(), n, 1 / fs)
+            x['rows'] = np.flatnonzero(ok)
+            zt[ok] += dzdx[:, None] * x.pop('x')
+            self.pulse_log.append(x)
         return zt
+
+    def _pulse_x(self, ntones, n, dt):
+        """
+        Draw the resonance shift x(t) of photon pulses and cosmic rays.
+
+        Photons arrive on each tone independently (Poisson, ``rate``);
+        cosmic rays hit every tone at once (``cosmic_rate``), with an
+        amplitude ``cosmic_x`` times a log-normal factor per tone
+        (``cosmic_spread``). Pulses rise in one sample and decay with
+        ``tau``; x is negative (the resonance moves down).
+
+        Parameters:
+        ntones (int): streamed tones.
+        n (int): samples.
+        dt (float): sample period, s.
+
+        Returns:
+        out (dict): ``x`` (ntones, n), and the ``pulse_log`` entries
+            ``n``, ``dt``, ``photons``, ``cosmic``, ``cosmic_x``.
+        """
+        p = self.pulses
+        impulses = np.zeros((ntones, n))
+        photons = []
+        for k in range(ntones):
+            t = np.flatnonzero(self.rng.random(n) < p['rate'] * dt)
+            impulses[k, t] += p['x']
+            photons.append(t)
+        cosmic = np.flatnonzero(self.rng.random(n) < p['cosmic_rate'] * dt)
+        cx = p['cosmic_x'] * np.exp(
+            p['cosmic_spread'] * self.rng.standard_normal((ntones,
+                                                           len(cosmic))))
+        impulses[:, cosmic] += cx
+        a = np.exp(-dt / p['tau'])
+        x = -lfilter([1.], [1., -a], impulses, axis = 1)
+        return dict(x = x, n = n, dt = dt, photons = photons, cosmic = cosmic,
+                    cosmic_x = cx)
 
     @uses_board
     async def stream(
@@ -512,7 +580,8 @@ async def simulate_vna_store(
     return root, truth
 
 def simulated_crs(
-    root, module_idxs = (1,), seed = None, global_control = False
+    root, module_idxs = (1,), seed = None, global_control = False,
+    pulses = None
 ):
     """
     Make a simulated CRS measuring the device of a simulated store, for
@@ -525,6 +594,8 @@ def simulated_crs(
     seed (int or None): noise seed. None (default): the store's seed + 2.
     global_control (bool): If True, the session may change the decimation.
         Default False.
+    pulses (dict, bool, or None): photon pulses and cosmic rays in streams
+        (``SimulatedCRS``). Default None (none).
 
     Returns:
     crs (SimulatedCRS): the board, not yet attached.
@@ -539,4 +610,4 @@ def simulated_crs(
     return SimulatedCRS(
         load_truth(root), gain, module_idxs, snr_db = attrs['snr_db'],
         seed = attrs['seed'] + 2 if seed is None else seed,
-        global_control = global_control)
+        global_control = global_control, pulses = pulses)
