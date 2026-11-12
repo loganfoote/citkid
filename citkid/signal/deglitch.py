@@ -78,6 +78,8 @@ def find_glitch_idxs(ts, dt, dtbin, nstd, distance, width, nrounds, i0, i1):
             thisi0 = max(0, idx-i0)
             thisi1 = min(len(ts), idx+i1)
             ts_clean[thisi0:thisi1] = 0
+    
+    idxs = np.sort(idxs)
         
     return idxs, ts_bin_interp
 
