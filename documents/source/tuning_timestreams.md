@@ -1,19 +1,21 @@
 ---
 title: "Tuning and timestreams"
-subtitle: "03_tune, 04_stream, 05_calibrate_streams"
+subtitle: "03_tune, 04_stream, 05_calibrate_streams, 06_find_photons"
 ---
 
 # Overview
 
 After VNA screening (see the VNA screening document), the tuning procedure
 finds the optimal tone power and frequency for each resonator.
-Timestreams are then taken with the tuned tones and calibrated.
+Timestreams are then taken with the tuned tones and calibrated, and the
+photon pulses in them are found.
 
 | Script | What it does | Saves |
 |---|---|---|
 | `03_tune.py` | Plans the tones, sweeps the tone power, and finds each tone's optimal power and frequency (with two interactive windows) | `tune{k}` |
 | `04_stream.py` | Opens a window for previewing timestreams and taking named timestream runs | `ts{n}` |
 | `05_calibrate_streams.py` | Calibrates selected timestreams, first in an interactive window, then in batch | `ts_cal{c}` |
+| `06_find_photons.py` | Finds the photon pulses and cosmic rays in calibrated timestreams, with a window for choosing the thresholds | `ts_photons{p}` |
 
 As with the VNA screening scripts, each script has a settings block at the
 top, and command-line options override the settings for one run. Text in
@@ -36,6 +38,8 @@ the tones it used, so it can be analyzed without the tuning group.
                         set, or part of it)
         stream/         timestream data
   ts_cal{c}/            calibrated timestreams (05)
+  ts_photons{p}/        photons and cosmic rays found in calibrated
+                        timestreams (06)
 ```
 
 ## Tone sets
@@ -167,6 +171,15 @@ While its window is open, any other script that tries to use the board
 running `04_stream.py` session. Close the window to release the board. If
 a session crashes, its lock is ignored.
 
+With `--simulate`, the script streams the simulated device of a store made
+by `simulate_store.py`. With `SIM_PULSES = True` (or `--sim-pulses`), the
+simulated streams also contain photon pulses on each tone and cosmic rays
+on all tones at once, set by `SIM_PULSE_SETTINGS`, so that
+`06_find_photons.py` can be tried on them. While pulses are on, the
+simulated board uses the signal-to-noise ratio `SIM_SNR_DB` (80 dB by
+default), because the stores' default noise level hides photon-sized
+pulses at decimation stages 0 and 1.
+
 ## Settings
 
 {{settings:04_stream.py}}
@@ -210,3 +223,132 @@ different `CALIBRATE`, or `--new`, starts a new group.
 ## Command line
 
 {{help:05_calibrate_streams.py}}
+
+# 06_find_photons.py: find photons
+
+The script uses a stream calibration made by `05_calibrate_streams.py`
+(by default the latest `ts_cal{c}`; choose another with `--cal c`). In
+this script, a timestream is one tone set of one run, over the whole run.
+Any run can be searched if the calibration covers its tone set; it doesn't
+have to be one of the runs the calibration was fit on. The first time a
+run is searched, the calibration is applied to all of its samples and the
+calibrated x is saved in the calibration group (`ts_cal{c}/applied`), so
+later searches of the same run start faster.
+
+If `TIMESTREAMS` is empty, the script lists the timestreams it can search
+(run, name, tone set, duration, number of tones) and stops. Otherwise,
+list the timestreams to search in `TIMESTREAMS`, by index (as listed) or
+by run name. A run name selects every tone set of the latest run with
+that name.
+
+The detection timestreams are kept in memory up to `MEMORY_GB`, so the
+threshold window can rerun tones quickly. Beyond that, they are read from
+the saved calibrated x again when needed.
+
+## Photon detection
+
+Each tone is searched with an optimal filter that is built iteratively:
+
+1. **First pass**: the peaks of the timestream (smoothed over 3 samples)
+   above `INIT_NSIGMA` times the noise are found. Peaks higher than
+   `INIT_HMAX` times the median peak height are left out. This cut is
+   loose on purpose: it only keeps large pulses, such as cosmic rays, out
+   of the first template, so that as many photons as possible are kept.
+2. **Optimal filter**: the selected pulses are averaged into a template,
+   the noise spectrum is measured away from the pulses, and the optimal
+   filter is built from the two. The filtered timestream gives each pulse
+   a height in units of the mean photon pulse, so the thresholds don't
+   depend on the tone's responsivity. The pulses with heights between
+   `HMIN` and `HMAX` are used for the next template. This is repeated
+   `OF_ITERATIONS` times. Optionally, `HMIN` is chosen automatically
+   (`HMIN_FALSE_FRAC`) as the lowest height at which few of the accepted
+   pulses are expected to be noise.
+
+## Choosing the thresholds
+
+For the first run, a window opens after the detection of each of its
+tone sets (skip it with `INTERACTIVE = False` or `--no-gui`). The left side lists the tones
+with their number of pulses and their rate. The plots show, for the
+selected tone or for all tones together:
+
+- the first-pass peak heights, in units of their median, with the
+  `INIT_HMAX` cut;
+- the heights of the filtered pulses in units of the mean photon, with the
+  expected number of noise peaks overlaid (measured from the filter output
+  with the sign flipped, which contains noise but no pulses), and the
+  `HMIN` and `HMAX` lines;
+- the mean pulse of the selected tone.
+
+Drag the lines or type the values, then press Rerun (Ctrl+R). With "Apply
+to all tones", the values become the global thresholds, and every tone
+without its own thresholds is run again. With "Apply to this tone", the
+selected tone gets its own thresholds (marked with `*` in the list). "Use
+the global thresholds" removes them. Close the window (or press Done) to
+continue.
+
+## Several timestreams
+
+When timestreams of several runs are listed, the timestreams of the
+first run are processed as above. `REUSE` (or `--reuse`) sets what the
+later runs reuse from it, tone set by tone set:
+
+- `'settings'` (default): the first run's thresholds for the same tone
+  set, including the ones set for single tones. The full detection is run
+  on each later timestream, without the window.
+- `'filter'`: the first run's optimal filter for each tone (matched by
+  resonator index) and its thresholds. The filter is applied without
+  iterating, and the pulse heights stay in units of the first run's mean
+  photon. Tones that the first run has no filter for are detected from
+  scratch. All timestreams must have the same decimation stage.
+- `'none'`: each timestream is processed from scratch, with the window.
+
+## Coincidences and cosmic rays
+
+After the detection, the tones of each tone write (the tones streamed
+together) are compared. A pulse is coincident if another tone in the same
+write has a pulse within `COINC_WIN` samples before or after it (2 samples
+by default: 52 µs at decimation stage 0). For this comparison, pulses down
+to `COINC_NSIGMA` times the filter noise count, so that small pulses of a
+cosmic ray on other tones are also found.
+
+- **Photons**: each tone's mean photon pulse averages the pulses with
+  heights between `HMIN` and `HMAX` that are not coincident with any
+  other tone. Its decay time is fit.
+- **Cosmic rays**: the pulses of all tones in a write are grouped into
+  events. An event starts at the earliest pulse not yet in an event and
+  includes every pulse up to 2 × `COINC_WIN` samples later. Events seen by
+  at least `COSMIC_MIN_MULT` tones (3 by default) are saved as cosmic
+  rays, with the time, the number of tones, and for each tone its pulse
+  height (from the filter, and the raw peak of the timestream, since the
+  filter height is biased for pulses longer than a photon pulse).
+
+## What is saved
+
+Each run of the script makes a new `ts_photons{p}` group at the store
+root, with the calibration it used (attribute `source`) and one
+`timestream{j}` group per listed timestream:
+
+```text
+ts_photons{p}/          attributes: source (ts_cal{c}), timestreams, reuse
+  timestream{j}/        attributes: run, tone set, calibration sweep and
+                        writes, samples, sample period, how it was
+                        detected, thresholds, settings
+                        per tone: res_idxs, status (empty if detected),
+                        hmin, hmax, sigma_y, amp_ph (the mean photon
+                        height, in x), rate, n_used, tau, template,
+                        avg_pulse (mean photon pulse), psd, filter
+    pulses/             every pulse found: tone, sample, height, raw peak,
+                        candidate (at least hmin), in_window, mult
+                        (number of tones), used (in the mean photon pulse)
+    cosmic/events/      t0 (sample), time_s, mult, tone write
+    cosmic/hits/        one row per tone of each event: tone, sample,
+                        height (photons and x), raw peak
+```
+
+## Settings
+
+{{settings:06_find_photons.py}}
+
+## Command line
+
+{{help:06_find_photons.py}}

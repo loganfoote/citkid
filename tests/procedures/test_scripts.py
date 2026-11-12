@@ -441,6 +441,13 @@ def test_04_stream(tmp_path, monkeypatch):
     with pytest.raises(KeyError, match = 'no tones'):
         m.main(m.parse_args(['--store', str(path), '--simulate', '--tune',
                              '1']))
+    # Simulated photons and cosmic rays, on a quieter board
+    assert seen['crs'].pulses is None
+    snr = seen['crs'].snr_db
+    m.main(m.parse_args(['--store', str(path), '--simulate',
+                         '--sim-pulses']))
+    assert seen['crs'].pulses == m.SIM_PULSE_SETTINGS
+    assert seen['crs'].snr_db == m.SIM_SNR_DB != snr
 
 
 def test_archive_store_script(tmp_path, capsys):
@@ -627,3 +634,158 @@ def test_vna_report(tmp_path):
     np.testing.assert_allclose(table.fr, np.sort(truth.fr_d.values),
                                atol = 0.2 * (truth.fr / truth.Qr).max())
     assert {'Qi', 'Qc', 'phi', 'flags', 'valid_Qc'} <= set(table.columns)
+
+
+@pytest.fixture(scope = 'module')
+def photon_store(tmp_path_factory):
+    """
+    Make a store with two calibrated stage-0 runs of a simulated device with
+    photon pulses and cosmic rays.
+
+    Returns:
+    path (pathlib.Path): the store.
+    log (list of dict): the simulated pulses of each stream, in order:
+        run 0's tone set 0 (one write), its tone set 1 (two writes), then
+        run 1's the same way.
+    """
+    from citkid.crs.procedures import stream_tone_sets
+    from citkid.crs.sim import DEFAULT_PULSES
+    from ..crs.test_streaming import make_crs, make_tuning
+    tmp = tmp_path_factory.mktemp('photons')
+    crs = make_crs()
+    crs.snr_db = 80.
+    crs.pulses = dict(DEFAULT_PULSES, rate = 30., cosmic_rate = 5.)
+
+    async def take():
+        """
+        Take two runs.
+        """
+        await crs.attach()
+        _, tune = make_tuning(tmp, crs)
+        kw = dict(npoints_fine = 100, npoints_gain = 20, verbose = False)
+        await stream_tone_sets(crs, tune, 'dark0', 1.5, 0, **kw)
+        await stream_tone_sets(crs, tune, 'dark0b', 1.5, 0, **kw)
+
+    asyncio.run(take())
+    m5 = load_script('05_calibrate_streams.py')
+    m5.CALIBRATE = [dict(name = 'dark0'), dict(name = 'dark0b')]
+    m5.main(m5.parse_args(['--store', str(tmp / 's.zarr'), '--no-gui']))
+    return tmp / 's.zarr', crs.pulse_log
+
+
+def check_photons(grp, log, dt):
+    """
+    Check one saved timestream's photons against the simulation.
+
+    Parameters:
+    grp (zarr.Group): the ``timestream{j}`` group.
+    log (list of dict): the simulated pulses of its tone writes.
+    dt (float): sample period, s.
+    """
+    status = grp['status'][:]
+    assert all(s == '' for s in status)
+    assert grp['template'].shape == (len(status), grp.attrs['pre'] +
+                                     grp.attrs['post'])
+    np.testing.assert_allclose(grp['amp_ph'][:], 2e-6, rtol = 0.1)
+    np.testing.assert_allclose(grp['tau'][:], 150e-6, rtol = 0.15)
+    # About 30 photons/s per tone are averaged (minus coincidences and
+    # pile-up; each tone's count is Poisson)
+    n_used = grp['n_used'][:]
+    expected = 30 * 1.5 * len(n_used)
+    assert 0.8 * expected < n_used.sum() < 1.1 * expected
+    assert np.all(n_used > 0.4 * 30 * 1.5)
+    p = grp['pulses']
+    used, win = p['used'][:], p['in_window'][:]
+    assert np.all(win[used]) and np.all(p['mult'][:][used] == 1)
+    assert np.all(p['candidate'][:][win])
+    # Cosmic rays: the simulated ones, each on every tone of its write
+    ev, hits = grp['cosmic/events'], grp['cosmic/hits']
+    n_true = sum(len(entry['cosmic']) for entry in log)
+    assert 0.85 * n_true <= len(ev['t0'][:]) <= n_true
+    np.testing.assert_allclose(ev['time_s'][:], ev['t0'][:] * dt)
+    assert len(hits['event'][:]) == ev['mult'][:].sum()
+    # Their heights: mostly above the photon height window
+    assert np.median(hits['h'][:]) > 2
+
+
+def test_06_find_photons(photon_store, monkeypatch, capsys):
+    """
+    List the timestreams (one per run and tone set), then find photons in
+    run 0's tone set 0 and both tone sets of run 1, with each way of
+    reusing run 0: its thresholds (after the window changes them), its
+    filters, or nothing (the window opens for each).
+    """
+    import citkid.pipeline.interactive.photon_thresholds as pt
+    path, log = photon_store
+    m = load_script('06_find_photons.py')
+    argv = ['--store', str(path)]
+    monkeypatch.setattr(m, 'TIMESTREAMS', [])
+    assert m.main(m.parse_args(argv)) is None
+    out = capsys.readouterr().out
+    assert "0: ts0, 'dark0', set 0" in out and \
+        "3: ts1, 'dark0b', set 1" in out
+    monkeypatch.setattr(m, 'TIMESTREAMS', [0, 'dark0b'])
+    windows = []
+
+    def fake_window(ts, results, thresholds, rerun, title = ''):
+        """
+        Stand in for the threshold window: widen hmax for all tones, give
+        one tone its own hmin, and rerun them all (as the window does).
+
+        Parameters:
+        ts (dict): the timestream.
+        results (dict): its results.
+        thresholds (Thresholds): its thresholds.
+        rerun (callable): reruns tones.
+        title (str): window title.
+
+        Returns:
+        thresholds, results: as the window.
+        """
+        windows.append(ts['run'])
+        thresholds.hmax = 2.
+        r0 = int(ts['rows'][0])
+        thresholds.overrides[int(ts['res_idxs'][0])] = dict(hmin = 0.6)
+        results = {**results, **rerun(ts['rows'], thresholds)}
+        assert results[r0]['hmin'] == 0.6 and results[r0]['hmax'] == 2.
+        return thresholds, results
+
+    monkeypatch.setattr(pt, 'run_photon_thresholds', fake_window)
+    out = m.main(m.parse_args(argv + ['--reuse', 'settings']))
+    assert windows == ['ts0']
+    root = dl.open_store(path)
+    grp = root['ts_photons0']
+    assert grp.attrs['source'] == 'ts_cal0' and grp.attrs['kind'] == \
+        'analysis'
+    dt = grp['timestream0'].attrs['dt']
+    # Simulated streams of each timestream (see photon_store)
+    logs = (log[:1], log[3:4], log[4:6])
+    for j, entries in enumerate(logs):
+        g = grp[f'timestream{j}']
+        check_photons(g, entries, dt)
+        th = g.attrs['thresholds']
+        assert th['hmax'] == 2. and list(th['overrides'].values()) == \
+            [dict(hmin = 0.6)]
+        # The override is for one resonator of tone set 0
+        r0 = int(next(iter(th['overrides'])))
+        hmin = np.where(g['res_idxs'][:] == r0, 0.6, 0.5)
+        np.testing.assert_allclose(g['hmin'][:], hmin)
+        np.testing.assert_allclose(g['hmax'][:], 2.)
+    assert grp['timestream1'].attrs['mode'] == 'settings from timestream0'
+    assert [grp[f'timestream{j}'].attrs['tone_set'] for j in range(3)] == \
+        [0, 0, 1]
+    # The calibrated x of whole runs is kept with the calibration
+    assert 'ts1_set1' in root['ts_cal0/applied']
+    # Filters of the first timestream, no window
+    m.main(m.parse_args(argv + ['--reuse', 'filter', '--no-gui']))
+    g = dl.open_store(path)['ts_photons1']
+    assert g['timestream1'].attrs['mode'] == 'filter from timestream0'
+    check_photons(g['timestream1'], logs[1], dt)
+    np.testing.assert_allclose(g['timestream1/filter'][:],
+                               g['timestream0/filter'][:])
+    # From scratch: the window opens for each timestream
+    windows.clear()
+    m.main(m.parse_args(argv + ['--reuse', 'none']))
+    assert windows == ['ts0', 'ts1', 'ts1']
+    g = dl.open_store(path)['ts_photons2']
+    assert g['timestream1'].attrs['mode'] == 'full'

@@ -143,3 +143,170 @@ def test_helpers():
     assert np.isnan(tau)
     with pytest.raises(ValueError, match = 'no events'):
         ph.build_template(np.zeros(10), [0], 5, 5, 1)
+
+
+def test_init_hmax_keeps_large_pulses_out_of_first_template():
+    """
+    Large pulses (e.g. cosmic rays at 20 photons) are found in the first
+    pass but cut by ``init_hmax``, and the PSD still avoids them.
+    """
+    rng = np.random.default_rng(3)
+    n = int(10 / DT)
+    times = np.arange(500, n - 500, 400)
+    big = rng.random(len(times)) < 0.05
+    x = synth(rng, n, times, height = np.where(big, 20., 1.))
+    d = ph.detection_timestream(x, DT)
+    res = ph.run_detection(d, DT, ph.DetectionSettings(of_iterations = 1))
+    assert np.isfinite(res['init_hmax_abs'])
+    at_big = ph.near(res['init_idx'], times[big], 2, 3)
+    assert at_big.sum() == big.sum()
+    assert np.all(res['init_h'][at_big] > res['init_hmax_abs'])
+    assert res['amp_ph'] == pytest.approx(1e-6, rel = 0.05)
+    # Without the cut, the big pulses get into the first template, which
+    # one iteration can't fully undo
+    loose = ph.run_detection(d, DT, ph.DetectionSettings(
+        of_iterations = 1, init_hmax = None))
+    assert np.isinf(loose['init_hmax_abs'])
+
+
+def test_coincidence_candidates_and_cosmic_events():
+    """
+    Cosmic rays: large pulses on tones 0 and 1, a pulse below hmin (0.4,
+    about 7 sigma of the filter output) on tone 2. The lower coincidence
+    threshold still counts tone 2, so every cosmic ray has multiplicity 3
+    and is masked from the averages, and ``cosmic_events`` returns each
+    one with the three tones' heights.
+    """
+    rng = np.random.default_rng(4)
+    n = int(10 / DT)
+    cosmic = np.arange(1000, n - 1000, 7919)
+    heights = (4., 3., 0.4)
+    # Arrival offsets in samples (within the +-2 sample window)
+    offset = (0, 1, 1)
+    ds, results = [], []
+    for k in range(3):
+        own = 500 + np.cumsum(rng.integers(250, 1000, 600))
+        own = own[own < n - 500]
+        own = own[~ph.near(own, cosmic, 300, 300)]
+        times = np.concatenate((own, cosmic + offset[k]))
+        height = np.concatenate((np.ones(len(own)),
+                                 np.full(len(cosmic), heights[k])))
+        o = np.argsort(times)
+        x = synth(rng, n, times[o], height = height[o])
+        ds.append(ph.detection_timestream(x, DT))
+        results.append(ph.run_detection(ds[-1], DT))
+    for r in results:
+        # Every pulse candidate is a coincidence candidate
+        assert set(r['cand_idx'].tolist()) <= set(r['coinc_idx'].tolist())
+    # Tone 2's cosmic-ray pulses are mostly below hmin (noise lifts a few
+    # above it), but all are coincidence candidates
+    r2, t2 = results[2], cosmic + offset[2]
+    assert ph.near(r2['cand_idx'], t2, 2, 3).sum() < 0.2 * len(cosmic)
+    assert ph.near(r2['coinc_idx'], t2, 2, 3).sum() == len(cosmic)
+    mult = ph.candidate_multiplicity(results, win = 2)
+    for k in (0, 1):
+        r, m = results[k], mult[k]
+        at = ph.near(r['cand_idx'], cosmic + offset[k], 2, 3)
+        assert at.sum() == len(cosmic) and np.all(m[at] == 3)
+        avg, p, used, coinc = ph.average_pulse(ds[k], r, m)
+        assert not ph.near(used, cosmic + offset[k], 2, 3).any()
+        assert avg[p] == pytest.approx(1e-6, rel = 0.05)
+    events, hits = ph.cosmic_events(results, win = 2, min_mult = 3)
+    assert len(events['t0']) == len(cosmic)
+    assert np.all(events['mult'] == 3)
+    assert np.all(np.abs(events['t0'] - cosmic) <= 2)
+    assert len(hits['event']) == 3 * len(cosmic)
+    for k, hk in enumerate(heights):
+        sel = hits['tone'] == k
+        assert np.median(hits['h'][sel]) == pytest.approx(hk, rel = 0.15)
+        assert np.median(hits['x'][sel]) == pytest.approx(hk * 1e-6,
+                                                          rel = 0.15)
+        assert np.median(hits['raw'][sel]) == pytest.approx(hk * 1e-6,
+                                                            rel = 0.3)
+
+
+def fake_result(idx, h, amp = 1e-6):
+    """
+    Make a minimal ``run_detection`` result for the coincidence functions.
+
+    Parameters:
+    idx (list of int): coincidence candidate samples.
+    h (list of float): their heights.
+    amp (float): mean photon amplitude. Default 1e-6.
+
+    Returns:
+    res (dict): the result.
+    """
+    idx = np.asarray(idx, dtype = np.int64)
+    return dict(coinc_idx = idx, coinc_h = np.asarray(h, float),
+                coinc_raw = np.asarray(h, float) * amp, amp_ph = amp,
+                cand_idx = idx)
+
+
+def test_cosmic_event_grouping():
+    """
+    Events start at the earliest pulse and span 2 win samples; a tone's
+    largest pulse is kept; events with too few tones are dropped.
+    """
+    results = [fake_result([100, 102, 500], [1., 2., 1.]),
+               fake_result([104, 503], [3., 1.]),
+               fake_result([105, 505], [1., 1.]),
+               fake_result([900], [1.])]
+    events, hits = ph.cosmic_events(results, win = 2, min_mult = 2)
+    # 100..104: tones 0 (largest: 102) and 1; 105 starts a new event alone
+    # (dropped); 500..504: tones 0 and 1; 505 alone; 900 alone
+    np.testing.assert_array_equal(events['t0'], [100, 500])
+    np.testing.assert_array_equal(events['mult'], [2, 2])
+    np.testing.assert_array_equal(hits['event'], [0, 0, 1, 1])
+    np.testing.assert_array_equal(hits['tone'], [0, 1, 0, 1])
+    np.testing.assert_array_equal(hits['idx'], [102, 104, 500, 503])
+    np.testing.assert_allclose(hits['h'], [2., 3., 1., 1.])
+    np.testing.assert_allclose(hits['x'], [2e-6, 3e-6, 1e-6, 1e-6])
+    events, hits = ph.cosmic_events(results, win = 3, min_mult = 3)
+    np.testing.assert_array_equal(events['t0'], [100, 500])
+    np.testing.assert_array_equal(events['mult'], [3, 3])
+    events, hits = ph.cosmic_events([], win = 2)
+    assert len(events['t0']) == 0 and len(hits['idx']) == 0
+    # Multiplicity: +-win around each candidate, inclusive
+    m = ph.candidate_multiplicity(
+        [fake_result([10, 100], [1, 1]), fake_result([12], [1]),
+         fake_result([8, 103], [1, 1])], win = 2)
+    np.testing.assert_array_equal(m[0], [3, 1])
+    np.testing.assert_array_equal(m[1], [2])
+    np.testing.assert_array_equal(m[2], [2, 1])
+    np.testing.assert_allclose(
+        ph.raw_peaks(np.array([0., -1., -3., -2., 0.]), [2, 0], -1, 1),
+        [3., 1.])
+
+
+def test_detect_with_filter():
+    """
+    The optimal filter of one timestream finds the pulses of another
+    timestream of the same tone without iterating, with heights in the
+    first one's photon units; a different sample period is refused.
+    """
+    rng = np.random.default_rng(5)
+    n = int(10 / DT)
+    t1 = np.arange(500, n - 500, 400)
+    ref = ph.run_detection(ph.detection_timestream(synth(rng, n, t1), DT),
+                           DT)
+    assert ref['dt'] == DT
+    # Second timestream: other pulse times, 10% larger responsivity
+    t2 = np.arange(700, n - 700, 450)
+    d2 = ph.detection_timestream(synth(rng, n, t2, amp = 1.1e-6), DT)
+    res = ph.detect_with_filter(d2, DT, ref)
+    hit = np.isin(t2, res['events']) | np.isin(t2, res['events'] - 1) | \
+        np.isin(t2, res['events'] + 1)
+    assert hit.mean() > 0.98 and len(res['events']) < 1.02 * len(t2)
+    assert res['amp_ph'] == ref['amp_ph']
+    assert res['amp_ph_own'] == pytest.approx(1.1e-6, rel = 0.05)
+    assert np.median(res['cand_h']) == pytest.approx(1.1, abs = 0.05)
+    assert set(res['cand_idx'].tolist()) <= set(res['coinc_idx'].tolist())
+    assert len(res['history']) == 0 and np.isnan(res['init_hmax_abs'])
+    # Thresholds can be changed; another sample period is refused
+    narrow = ph.detect_with_filter(d2, DT, ref, hmin = 1.2, hmax = 2.)
+    assert len(narrow['events']) < 0.6 * len(res['events'])
+    with pytest.raises(ValueError, match = 'dt'):
+        ph.detect_with_filter(d2, 2 * DT, ref)
+    with pytest.raises(ph.DetectionError):
+        ph.detect_with_filter(d2, DT, ref, hmin = 5., hmax = 6.)

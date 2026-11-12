@@ -29,6 +29,7 @@ import warnings
 import numpy as np
 import zarr
 
+from .. import daq_layout as dl
 from .dataset import DataSet
 from .framework import plStep
 
@@ -520,3 +521,78 @@ def apply_stream_calibration(
                   for k, v in source.items()},
         outputs = outputs, dataset = DS.root.path, complete = True))
     return out_grp
+
+def plan_stream_datasets(root, selection):
+    """
+    Resolve a choice of streams and group them into DataSets: one per tone
+    set (and resonator list), with the chosen runs' windows of that set
+    one after another, in the order of ``selection``.
+
+    Parameters:
+    root (zarr.Group): the store root.
+    selection (list of dict): choices of streams, each the keyword
+        arguments of ``daq_layout.select_streams`` (e.g. 05's
+        ``CALIBRATE``).
+
+    Returns:
+    groups (dict): DataSet name (e.g. 'set0'): dict(``sources``,
+        ``entries``, ``resonators``, ``tone_set``), in order of first use.
+        ``entries`` has one dict per source: ``entry`` (its index in
+        ``selection``), ``run`` ('ts{n}'), ``name``, ``start``, ``stop``
+        (samples), ``source`` (its calibration sweep's group).
+
+    Raises:
+    ValueError: if an entry selects no tone sets.
+    """
+    groups = {}
+    for i, entry in enumerate(selection):
+        sources, run = dl.select_streams(root, **entry)
+        if not sources:
+            raise ValueError(f'entry {i} ({entry}) selects no tone sets')
+        res = run.get('resonators')
+        for src in sources:
+            s = int(root[src['group']].attrs['tone_set'])
+            name = f'set{s}'
+            if any(g['resonators'] != res for g in groups.values()) or \
+                    name in groups and groups[name]['resonators'] != res:
+                name = f'{name}_{res}'
+            g = groups.setdefault(name, dict(sources = [], entries = [],
+                                             resonators = res, tone_set = s))
+            g['sources'].append(src)
+            g['entries'].append(dict(
+                entry = i, run = run['group'], name = run.get('name'),
+                start = run['start'], stop = run['stop'],
+                source = src['group']))
+    return groups
+
+def open_calibration(root, cal):
+    """
+    Reopen the DataSets of a stream calibration (``ts_cal{c}``, made by
+    05_calibrate_streams.py), e.g. to apply them to whole runs
+    (``apply_stream_calibration``).
+
+    Parameters:
+    root (zarr.Group): the store root.
+    cal (zarr.Group or str): the calibration group, or its name.
+
+    Returns:
+    datasets (dict): DataSet name: dict(``DS`` (the DataSet), ``entries``,
+        ``resonators``, ``tone_set`` (``plan_stream_datasets``)).
+        Calibration-tone DataSets are not included.
+
+    Raises:
+    KeyError: if the group records no selection of streams.
+    """
+    cal = root[cal] if isinstance(cal, str) else cal
+    if 'selection' not in cal.attrs:
+        raise KeyError(f'{cal.path} records no selection of streams')
+    out = {}
+    for name, g in plan_stream_datasets(root, cal.attrs['selection']).items():
+        res = g['resonators']
+        grp = cal.require_group(name)
+        DS = open_stream_dataset(
+            grp, g['sources'], f'{res}/fres_all', f'{res}/qres_all',
+            f_avg = int(grp.attrs.get('f_avg', 1)))
+        out[name] = dict(DS = DS, entries = g['entries'], resonators = res,
+                         tone_set = g['tone_set'])
+    return out

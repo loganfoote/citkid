@@ -45,7 +45,9 @@ import os
 from citkid import daq_layout as dl
 from citkid.pipeline.analysis import AnalysisRunner
 from citkid.pipeline.interactive import run_ts_analysis
-from citkid.pipeline.stream_sources import open_stream_dataset
+from citkid.pipeline.stream_sources import (
+    open_stream_dataset, plan_stream_datasets
+)
 from citkid.zarr_util import to_jsonable
 
 ################################################################################
@@ -151,41 +153,6 @@ def cal_group(root, selection, new, notes = None):
     print(f'Calibrating into {cal.path}')
     return cal
 
-def plan_datasets(root, selection):
-    """
-    Resolve the chosen streams and group them into DataSets: one per tone
-    set (and resonator list), with the chosen runs' windows of that set
-    one after another, in the order of ``selection``.
-
-    Parameters:
-    root (zarr.Group): the store root.
-    selection (list of dict): ``CALIBRATE``.
-
-    Returns:
-    groups (dict): name: dict(sources, entries, resonators, tone_set), in
-        order of first use.
-    """
-    groups = {}
-    for i, entry in enumerate(selection):
-        sources, run = dl.select_streams(root, **entry)
-        if not sources:
-            raise ValueError(f'entry {i} ({entry}) selects no tone sets')
-        res = run.get('resonators')
-        for src in sources:
-            s = int(root[src['group']].attrs['tone_set'])
-            name = f'set{s}'
-            if any(g['resonators'] != res for g in groups.values()) or \
-                    name in groups and groups[name]['resonators'] != res:
-                name = f'{name}_{res}'
-            g = groups.setdefault(name, dict(sources = [], entries = [],
-                                             resonators = res, tone_set = s))
-            g['sources'].append(src)
-            g['entries'].append(dict(
-                entry = i, run = run['group'], name = run.get('name'),
-                start = run['start'], stop = run['stop'],
-                source = src['group']))
-    return groups
-
 def main(args):
     """
     Calibrate the chosen streams, or list the runs.
@@ -203,14 +170,15 @@ def main(args):
     if not CALIBRATE:
         print('Set CALIBRATE at the top of the script to choose streams.')
         return None
-    groups = plan_datasets(root, CALIBRATE)
+    groups = plan_stream_datasets(root, CALIBRATE)
     cal = cal_group(root, CALIBRATE, args.new, args.notes)
     datasets = {}
     for name, g in groups.items():
         res = g['resonators']
         fres_all, qres_all = f'{res}/fres_all', f'{res}/qres_all'
         grp = cal.require_group(name)
-        grp.attrs['entries'] = to_jsonable(g['entries'])
+        grp.attrs.update(entries = to_jsonable(g['entries']),
+                         resonators = res, f_avg = F_AVG)
         DS = open_stream_dataset(grp, g['sources'], fres_all, qres_all,
                                  f_avg = F_AVG)
         datasets[name] = DS
