@@ -4,17 +4,27 @@
 Opens ``crs.stream_gui`` on a tuning (``tune{k}`` with ``tones``, from
 03_tune.py; the latest by default):
 
-- Preview: calibrate one tone set (a target sweep, kept in memory),
-  capture a few seconds (``PREVIEW_S``) at a decimation stage, and look at
-  one tone's timestream as x (projected onto the IQ loop's tangent at the
-  tone), along/across the loop, or I and Q. Nothing is saved.
+- Calibration: calibrate a tone set once (a target sweep with the
+  settings below, which the window lets you change), saved as the
+  tuning's ``cal{j}``; pick which saved calibration to use when there are
+  several. A calibration takes long (minutes per set at ``NSAMPS``
+  samples per point), so it is never repeated by a run.
+- Preview: capture a few seconds (``PREVIEW_S``) of the chosen
+  calibration's tones at a decimation stage, and look at one tone's
+  timestream as x (projected onto the IQ loop's tangent at the tone),
+  along/across the loop, or I and Q. Nothing is saved.
 - Run: name a timestream (with notes), choose its stage and length (or a
-  preset from ``PRESETS``), and run it on every tone set (or the checked
-  ones): the run is saved as the next ``ts{n}`` at the store root; each
-  tone set gets a new calibration sweep (``ts{n}/set{s}``), then its
-  stream (``set{s}/write{w}/stream``), in chunks at fast stages where the
-  tones don't all stream at once.
-  Repeat for the next timestream.
+  preset from ``PRESETS``), and run it on the selected tone set: the
+  stream is saved under the calibration it belongs to and the tone write
+  that put its tones on the board (``tune{k}/cal{j}/write{w}/ts{n}``),
+  in chunks at fast stages where the tones don't all stream at once, and
+  the run (``ts{n}``) is listed in the tuning's run list
+  (``tune{k}/streams``). Repeat for the next timestream. Tones stay
+  written on the board between captures and runs, so streams of the same
+  tones don't write them again; Write tones writes the set again on
+  purpose. For another tone set, select and calibrate it: setting its
+  NCO starts a new phase frame, so the sets calibrated before need a new
+  calibration when you come back to them.
 
 Streaming needs the board's whole network bandwidth, so this script
 takes the board for itself (``citkid.crs.board_lock``) for as long as its
@@ -51,8 +61,7 @@ MODULES = [1]               # modules connected to this device
 # Preview
 PREVIEW_DEC = 6             # preview decimation stage
 PREVIEW_S = 5.              # preview duration, s
-# Runs offered as presets (name, decimation stage, duration in s, notes,
-# and optionally tone_sets)
+# Runs offered as presets (name, decimation stage, duration in s, notes)
 PRESETS = [
     dict(name = 'dark_dec6', dec_stage = 6, duration_s = 600.,
          notes = 'dark, long'),

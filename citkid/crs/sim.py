@@ -19,6 +19,7 @@ drawn readout chain, with:
 simulated device (``crs.procedures.vna_sweep_to_store``) and saves the
 device's true parameters in its ``simulation`` group (``load_truth``).
 """
+import uuid
 from types import SimpleNamespace
 import numpy as np
 import pandas as pd
@@ -91,7 +92,7 @@ class SimulatedCRS:
         self.ntones, self._stream_tones = 0, None
         self.sample_freq = 625e6 / (256 * 64 * 2 ** 6)
         self.module_cfg = {m: dict(DEFAULT_MODULE_CFG) for m in module_idxs}
-        self.nco_freqs, self._seam = {}, {}
+        self.nco_freqs, self.nco_ids, self._seam = {}, {}, {}
 
     @uses_board
     async def configure_system(
@@ -157,18 +158,30 @@ class SimulatedCRS:
                 adc_calibration_mode = str(adc_calibration_mode),
                 adc_autocal = bool(adc_autocal))
 
-    async def set_nco(self, nco_freqs, verbose = True):
+    async def set_nco(self, nco_freqs, verbose = True, force = False):
         """
-        Set NCO frequencies; each setting gets a new small gain step.
+        Set NCO frequencies not there already, as the CRS; each setting
+        gets a new small gain step (and a new id in ``nco_ids``).
 
         Parameters:
         nco_freqs (dict): module: NCO frequency in Hz.
         verbose (bool): ignored.
+        force (bool): If True, set every module's NCO. Default False.
+
+        Returns:
+        changed (list of int): the modules whose NCO was set.
         """
+        changed = []
         for m, nco in nco_freqs.items():
+            if not force and m in self.nco_freqs and \
+                    np.isclose(self.nco_freqs[m], nco, atol = 1., rtol = 0.):
+                continue
             self.nco_freqs[m] = float(nco)
+            self.nco_ids[m] = uuid.uuid4().hex[:12]
             self._seam[m] = 10 ** (self.rng.normal(0, self.seam_db) / 20) * \
                 np.exp(1j * np.radians(self.rng.normal(0, self.seam_deg)))
+            changed.append(m)
+        return changed
 
     @uses_board
     async def sweep(
@@ -241,7 +254,7 @@ class SimulatedCRS:
     async def sweep_qres(
         self, fres, ares, qres, npoints, nsamps, ch_map = None,
         allow_missing = False, acq_cfg_grp = None, verbose = True,
-        pbar_description = 'Sweeping'
+        pbar_description = 'Sweeping', progress = None
     ):
         """
         Sweep downward over fres / qres around each tone, as the CRS.
@@ -252,8 +265,8 @@ class SimulatedCRS:
         qres (array-like): span factors (spans are fres / qres).
         npoints (int): points per tone.
         nsamps (int): samples per point.
-        ch_map, allow_missing, acq_cfg_grp, verbose, pbar_description: see
-            ``sweep``.
+        ch_map, allow_missing, acq_cfg_grp, verbose, pbar_description,
+            progress: see ``sweep``.
 
         Returns:
         f, z (np.array): (M, npoints) frequencies in Hz and S21.
@@ -264,7 +277,7 @@ class SimulatedCRS:
         return await self.sweep(
             freqs, np.asarray(ares, dtype = np.float64), nsamps,
             ch_map = ch_map, allow_missing = allow_missing,
-            acq_cfg_grp = acq_cfg_grp)
+            acq_cfg_grp = acq_cfg_grp, progress = progress)
 
     async def set_decimation(
         self, dec_stage, short = None, module_idxs = None, verbose = True
@@ -348,7 +361,9 @@ class SimulatedCRS:
         self.ch_map, self.ntones, self._stream_tones = {}, 0, None
 
     @uses_board
-    async def stream_to_memory(self, ts_duration_s, dec_stage, verbose = True):
+    async def stream_to_memory(
+        self, ts_duration_s, dec_stage, verbose = True, progress = None
+    ):
         """
         Stream the written tones into memory, as S21.
 
@@ -361,6 +376,9 @@ class SimulatedCRS:
         ts_duration_s (float): length in seconds.
         dec_stage (int): decimation stage (``set_decimation``).
         verbose (bool): ignored.
+        progress (callable or None): called as ``progress(0, nsamples)``
+            and ``progress(nsamples, nsamples)``, as the CRS reports a
+            stream's progress in samples. Default None.
 
         Returns:
         zt (np.array): (ntones, nsamples) complex S21; NaN rows for tones
@@ -380,6 +398,8 @@ class SimulatedCRS:
         util.check_stream_write_rate(dec_stage, self.ntones)
         fs = util.get_sample_freq(dec_stage)
         n = int(round(ts_duration_s * fs))
+        if progress is not None:
+            progress(0, n)
         ok = np.isfinite(fres)
         zt = np.full((len(fres), n), np.nan + 1j * np.nan)
         f = fres[ok]
@@ -391,12 +411,14 @@ class SimulatedCRS:
             np.sqrt(fs / util.get_sample_freq(6))
         noise = self.rng.standard_normal((2, ok.sum(), n))
         zt[ok] = z0[:, None] + sigma[:, None] * (noise[0] + 1j * noise[1])
+        if progress is not None:
+            progress(n, n)
         return zt
 
     @uses_board
     async def stream(
         self, ts_duration_s, dec_stage, grp, tmp_directory = None,
-        verbose = True
+        verbose = True, progress = None
     ):
         """
         Stream the written tones to a zarr group, in the CRS's format
@@ -410,10 +432,12 @@ class SimulatedCRS:
         grp (zarr.Group): group to save to.
         tmp_directory: ignored.
         verbose (bool): ignored.
+        progress (callable or None): see ``stream_to_memory``.
         """
         from datetime import datetime
         grp.attrs['timestamp'] = datetime.now().strftime('%Y%m%d,%H:%M:%S')
-        zt = await self.stream_to_memory(ts_duration_s, dec_stage)
+        zt = await self.stream_to_memory(ts_duration_s, dec_stage,
+                                         progress = progress)
         scale = np.where(np.isfinite(zt[:, 0]),
                          np.nanmax(np.abs(zt), axis = 1) / 2 ** 30, np.nan)
         counts = np.zeros((2,) + zt.shape, dtype = np.int32)

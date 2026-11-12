@@ -6,11 +6,12 @@ import asyncio
 import time
 import numpy as np
 import pytest
-from pyqtgraph.Qt import QtCore, QtWidgets
+from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 from citkid import daq_layout as dl
 from citkid.crs import util
 from citkid.crs.procedures import (
-    plan_stream_chunks, stream_tone_sets, write_stream_chunk
+    calibrate_tone_set, calibration_in_frame, plan_stream_chunks,
+    stream_tone_sets, tones_written, write_set_tones, write_stream_chunk
 )
 from citkid.crs.sim import SimulatedCRS
 from citkid.crs.stream_gui import MODES, StreamWindow
@@ -128,43 +129,176 @@ async def test_stream_tone_sets(tmp_path):
               status = said.append)
     with pytest.raises(ValueError, match = 'name'):
         await stream_tone_sets(crs, tune, ' ', 1., 6, **kw)
+    reports = []
     paths = await stream_tone_sets(crs, tune, 'dark', 0.5, 6,
-                                   notes = 'lights off', **kw)
-    # The run is ts0 at the store root: one calibration sweep and one
-    # stream per tone set
-    assert paths == ['ts0/set0/write0/stream', 'ts0/set1/write0/stream']
-    run = root['ts0']
-    assert run.attrs['name'] == 'dark' and run.attrs['notes'] == \
-        'lights off'
-    assert run.attrs['tuning'] == 'tune0' and run.attrs['tones'] == \
-        'tune0/tones' and run.attrs['resonators'] == 'resonators0'
-    assert run.attrs['tone_sets'] == [0, 1] and run.attrs['complete']
+                                   notes = 'lights off',
+                                   progress = lambda d, t: reports.append(
+                                       (d, t)), **kw)
+    # The run is ts0 of the tuning: a calibration sweep per tone set (taken
+    # and saved as cal0 and cal1, since none was given), each with a write
+    # of its tones holding the stream
+    assert paths == ['tune0/cal0/write0/ts0', 'tune0/cal1/write0/ts0']
+    assert [c['name'] for c in dl.calibrations(tune)] == ['cal0', 'cal1']
+    assert [c['tone_set'] for c in dl.calibrations(tune)] == [0, 1]
+    runs = dl.stream_runs(root)
+    assert len(runs) == 1 and runs[0]['paths'] == paths
+    run = runs[0]
+    assert run['name'] == 'dark' and run['notes'] == 'lights off'
+    assert run['tuning'] == 'tune0' and run['group'] == 'ts0'
+    assert run['tone_sets'] == [0, 1] and run['complete']
+    assert run['calibrations'] == {'0': 'tune0/cal0', '1': 'tune0/cal1'}
+    assert run['nsamples'] == round(0.5 * util.get_sample_freq(6))
     for s in (0, 1):
-        cal = run[f'set{s}']
+        cal = tune[f'cal{s}']
         assert cal.attrs['tone_set'] == s and cal.attrs['complete']
         rows = np.flatnonzero(tune['tones/tone_set'][:] == s)
         w = cal['write0']
+        assert w.attrs['tones_reused'] is False
         np.testing.assert_array_equal(w['sweep_rows'][:],
                                       np.arange(len(rows)))
         np.testing.assert_array_equal(w['res_idxs'][:], rows)
-        ts = w['stream']
+        ts = w['ts0']
+        assert ts.attrs['name'] == 'dark' and ts.attrs['run'] == 0
         assert ts['z'].shape == (2, len(rows),
                                  round(0.5 * util.get_sample_freq(6)))
         zt = (ts['z'][0] + 1j * ts['z'][1]) * ts['counts_to_s21'][:][:, None]
         assert np.all(np.isfinite(zt))
-    runs = dl.stream_runs(root)
-    assert len(runs) == 1 and runs[0]['paths'] == paths
     assert dl.stream_runs(root, 'tune1') == []
     assert any('calibration' in m for m in said)
-    # Stage 0 needs chunks: one module at a time in set 1
-    paths = await stream_tone_sets(crs, tune, 'fast', 0.02, 0, **kw)
-    assert len(paths) == 3 and paths[0] == 'ts1/set0/write0/stream'
+    # Progress: sweeps in points, streams in samples, each ending complete
+    assert reports and all(d <= t for d, t in reports)
+    n0 = int(np.sum(tune['tones/tone_set'][:] == 0))
+    assert (n0 * 50, n0 * 50) in reports
+    ns = round(0.5 * util.get_sample_freq(6))
+    assert (ns, ns) in reports and reports[-1] == (ns, ns)
+    # Stage 0 needs chunks: one module at a time in set 1. Set 1's NCOs
+    # were set last, so cal1 is in frame and used; cal0 (set 0, whose
+    # module 1 was set again for set 1) is out of frame and set 0 is
+    # calibrated again (cal2), which puts set 1 out of frame in turn
+    # (cal3): one tone set at a time
+    cals = {0: 'tune0/cal0', 1: tune['cal1']}
+    assert not calibration_in_frame(crs, tune['cal0'])
+    assert calibration_in_frame(crs, tune['cal1'])
+    said.clear()
+    paths = await stream_tone_sets(crs, tune, 'fast', 0.02, 0,
+                                   calibrations = cals, **kw)
+    assert paths == ['tune0/cal2/write0/ts1', 'tune0/cal3/write0/ts1',
+                     'tune0/cal3/write1/ts1']
+    assert [c['name'] for c in dl.calibrations(tune)] == \
+        ['cal0', 'cal1', 'cal2', 'cal3']
+    assert dl.stream_runs(root)[1]['calibrations'] == {'0': 'tune0/cal2',
+                                                       '1': 'tune0/cal3'}
+    assert sum('out of frame' in m for m in said) == 2
     w = [root[p.rsplit('/', 1)[0]] for p in paths[1:]]
     mods = tune['tones/tone_module'][:][tune['tones/tone_set'][:] == 1]
     for g in w:
         assert len(set(mods[g['sweep_rows'][:]].tolist())) == 1
     assert [r['name'] for r in dl.stream_runs(root)] == ['dark', 'fast']
     assert n == tune['tones/fres'].shape[0]
+    # Tones left on the board are not written again by the next run of
+    # the same tones from the same calibration (set 1 is current): the
+    # next stream goes under the same write
+    n1 = int(np.sum(tune['tones/tone_set'][:] == 1))
+    cals = {1: 'tune0/cal3'}
+    written = {}
+    paths = await stream_tone_sets(crs, tune, 'a', 0.1, 6, set_idxs = [1],
+                                   calibrations = cals, written = written,
+                                   keep_tones = True, **kw)
+    assert paths == ['tune0/cal3/write2/ts2']
+    assert written['tone_set'] == 1 and written['calibration'] == \
+        'tune0/cal3' and len(written['rows']) == n1
+    assert written['write'] == 'tune0/cal3/write2'
+    assert root['tune0/cal3/write2'].attrs['tones_reused'] is False
+    assert len(dl.calibrations(tune)) == 4
+    said.clear()
+    paths = await stream_tone_sets(crs, tune, 'b', 0.1, 6, set_idxs = [1],
+                                   calibrations = cals, written = written,
+                                   keep_tones = True, **kw)
+    assert paths == ['tune0/cal3/write2/ts3']
+    assert any('already written' in m for m in said)
+    assert sorted(k for k in root['tune0/cal3/write2'].keys()
+                  if k.startswith('ts')) == ['ts2', 'ts3']
+    assert dl.stream_runs(root)[3]['calibration'] == 'tune0/cal3'
+    # Another set means a calibration and a write; not keeping the tones
+    # clears them
+    paths = await stream_tone_sets(crs, tune, 'c', 0.1, 6, set_idxs = [0],
+                                   written = written, **kw)
+    assert paths == ['tune0/cal4/write0/ts4']
+    assert dl.stream_runs(root)[4]['calibration'] == 'tune0/cal4'
+    assert written == {}
+    # A stream still being written (no 'dt' yet) is left out of the runs
+    g = dl.create_group(root['tune0/cal4/write0'], 'ts9', 'raw')
+    g.create_array('z', data = np.zeros((2, 1, 10), dtype = np.int32))
+    dl.update_stream_run(tune, 4, paths = paths + ['tune0/cal4/write0/ts9'])
+    assert dl.stream_runs(root)[-1]['paths'] == ['tune0/cal4/write0/ts4']
+    text = dl.describe_stream_runs(root)
+    assert 'ts4: c, tune0, tune0/cal4' in text
+
+@pytest.mark.asyncio
+async def test_calibrate_and_write_set_tones(tmp_path):
+    crs = make_crs()
+    await crs.attach()
+    root, tune = make_tuning(tmp_path, crs)
+    kw = dict(npoints_fine = 40, npoints_gain = 10, verbose = False)
+    with pytest.raises(ValueError, match = 'tone set 5'):
+        await calibrate_tone_set(crs, tune, 5, **kw)
+    said = []
+    cal = await calibrate_tone_set(crs, tune, 1, status = said.append, **kw)
+    assert cal.path == 'tune0/cal0' and cal.attrs['tone_set'] == 1
+    assert cal.attrs['tones'] == 'tune0/tones' and cal.attrs['complete']
+    n1 = int(np.sum(tune['tones/tone_set'][:] == 1))
+    assert cal['fine_sweep/z'].shape == (n1, 40)
+    assert any('cal0' in m for m in said)
+    c = dl.calibrations(tune)
+    assert len(c) == 1 and c[0]['ntones'] == n1 and \
+        c[0]['npoints_fine'] == 40 and c[0]['nsamps'] == 100
+    # write_set_tones writes once, then reuses; a write group gets the
+    # tones either way
+    written = {}
+    rows = np.arange(n1)
+    assert not tones_written(written, 1, rows, cal.path)
+    fres = await write_set_tones(crs, cal, rows, written)
+    assert tones_written(written, 1, rows, cal.path)
+    assert not tones_written(written, 1, rows[:2], cal.path)
+    assert not tones_written(written, 0, rows, cal.path)
+    assert not tones_written(written, 1, rows, 'tune0/cal9')
+    g = dl.create_group(tune, 'w', 'raw')
+    fres2 = await write_set_tones(crs, cal, rows, written, grp = g)
+    np.testing.assert_array_equal(fres, fres2)
+    assert g.attrs['tones_reused'] is True
+    np.testing.assert_array_equal(g['fres'][:], fres)
+    np.testing.assert_array_equal(g['fres_requested'][:], cal['fres'][:])
+    assert 'crs_config' in g
+    # A failed sweep leaves no calibration behind
+    with pytest.raises(Exception):
+        await calibrate_tone_set(crs, tune, 1, npoints_fine = 0, **{
+            k: v for k, v in kw.items() if k != 'npoints_fine'})
+    assert [c['name'] for c in dl.calibrations(tune)] == ['cal0']
+    # The calibration is in frame while its modules' NCOs stay: setting
+    # them again to the same values is a no-op; another value (another
+    # tone set) starts a new frame, and setting them back doesn't restore
+    # it
+    assert cal.attrs['nco_ids'] == {str(m): crs.nco_ids[m]
+                                    for m in (1, 2)}
+    assert calibration_in_frame(crs, cal)
+    ncos = tune['crs_config'].attrs['config']['tone_sets'][1]
+    assert await crs.set_nco({int(m): f for m, f in ncos.items()}) == []
+    assert calibration_in_frame(crs, cal)
+    assert await crs.set_nco({1: ncos['1'] + 5e6}) == [1]
+    assert not calibration_in_frame(crs, cal)
+    with pytest.raises(ValueError, match = 'calibrate tone set 1 again'):
+        await write_set_tones(crs, cal, rows, {})
+    assert await crs.set_nco({1: ncos['1']}) == [1]
+    assert not calibration_in_frame(crs, cal)
+    assert await crs.set_nco({2: ncos['2']}, force = True) == [2]
+    # A run with a stale calibration takes a new one
+    said.clear()
+    await stream_tone_sets(crs, tune, 'x', 0.05, 6, set_idxs = [1],
+                           calibrations = {1: cal}, status = said.append,
+                           **kw)
+    assert any('out of frame' in m for m in said)
+    assert dl.stream_runs(root)[0]['calibration'] == 'tune0/cal1'
+    assert calibration_in_frame(crs, tune['cal1'])
 
 
 @pytest.fixture(scope = 'module')
@@ -214,43 +348,119 @@ def test_stream_window(qapp, tmp_path):
                  notes = 'dark')],
         sweep_kwargs = dict(npoints_fine = 60, npoints_gain = 10))
     wait_for(lambda: win.crs is not None)
-    assert win.name_edit.text() == 'dark_dec6' and win.run_btn.isEnabled()
-    assert not win.capture_btn.isEnabled()
+    assert win.name_edit.text() == 'dark_dec6'
+    # Nothing runs before the selected set has a usable calibration
+    assert not win.run_btn.isEnabled() and not win.capture_btn.isEnabled()
+    assert not win.write_btn.isEnabled()
+    assert win.cal_box.count() == 0 and win.cal is None
+    # The sweep settings start from sweep_kwargs and go to the sweep
+    assert win.cal_params['npoints_fine'].value() == 60
+    win.cal_params['npoints_fine'].setValue(50)
+    assert win.cal_kwargs()['npoints_fine'] == 50 and \
+        win.cal_kwargs()['npoints_gain'] == 10
     win.set_box.setCurrentIndex(1)
     win.calibrate()
+    assert win.progress.isVisible() or win.worker.busy
     wait_for(lambda: win.cal is not None and not win.worker.busy)
-    assert win.cal['set'] == 1 and win.capture_btn.isEnabled()
+    assert win.cal['set'] == 1 and win.cal['name'] == 'cal0'
+    assert tune['cal0'].attrs['tone_set'] == 1
+    assert tune['cal0/fine_sweep/z'].shape[1] == 50
+    assert win.cal_box.count() == 1 and win.cal_box.currentData() == 'cal0'
+    assert win.capture_btn.isEnabled() and win.write_btn.isEnabled()
+    assert win.run_btn.isEnabled()
+    assert not win.progress.isVisible() and win.written == {}
     win.tone_box.setCurrentIndex(2)
     win.preview_dec.setValue(0)
     win.preview_s.setValue(0.05)
     win.capture()
     wait_for(lambda: win.preview is not None and not win.worker.busy)
-    # Stage 0: only the selected tone's module is captured
+    # Stage 0: only the selected tone's module is captured, and its tones
+    # stay on the board
     r = win.tone_box.currentData()
     mods = tune['tones/tone_module'][:]
     assert r in win.preview['rows']
     assert set(mods[win.preview['rows']].tolist()) == {mods[r]}
+    assert win.written['tone_set'] == 1 and \
+        win.written['calibration'] == 'tune0/cal0'
+    assert 'Tones on the board: ' in win.written_label.text()
     for i, n_ts in zip(range(len(MODES)), (1, 2, 2)):
         win.mode_box.setCurrentIndex(i)
         assert len(win.ts_plot.listDataItems()) == n_ts
-        # Loop, stream points, and the tone's point (not for I and Q)
-        assert len(win.iq_plot.listDataItems()) == (2 if i == 2 else 3)
+        # Loop, stream points, and the tone's point
+        assert len(win.iq_plot.listDataItems()) == 3
     # The x preview is near zero (no photons in the simulation)
     win.mode_box.setCurrentIndex(0)
     x = win.ts_plot.listDataItems()[0].yData
     assert abs(np.mean(x)) < 1e-6
-    # Run on tone set 1 only; with no tone set checked, Run is off
-    win.set_run_sets([])
+    # R (outside a text box) fits the plots to the data again
+    vb = win.ts_plot.getViewBox()
+    vb.enableAutoRange(y = False)
+    vb.setYRange(-1., 1.)
+    assert not vb.autoRangeEnabled()[1]
+    win.name_edit.clearFocus()
+    win.notes_edit.clearFocus()
+    win.keyPressEvent(QtGui.QKeyEvent(QtCore.QEvent.KeyPress,
+                                      QtCore.Qt.Key_R, QtCore.Qt.NoModifier))
+    assert vb.autoRangeEnabled()[1]
+    # Run: the selected tone set (1) with its calibration; no name, no run
+    win.name_edit.setText('')
     assert not win.run_btn.isEnabled()
-    win.set_run_sets([1])
-    assert win.run_set_idxs() == [1] and win.run_btn.isEnabled()
+    win.name_edit.setText('dark_dec6')
+    assert win.run_btn.isEnabled()
     win.run()
     wait_for(lambda: len(win.runs) == 1 and not win.worker.busy)
-    sweep = win.runs[0][0].rsplit('/', 2)[0]
-    assert len(win.runs[0]) == 1 and root[sweep].attrs['tone_set'] == 1
+    assert win.runs[0] == ['tune0/cal0/write0/ts0']
     assert win.runs_list.count() == 1
-    assert root['ts0'].attrs['name'] == 'dark_dec6'
+    runs = dl.stream_runs(root)
+    assert runs[0]['name'] == 'dark_dec6' and runs[0]['tone_set'] == 1
     assert 'ts0: dark_dec6' in win.runs_list.item(0).text()
+    # The run used the saved calibration (no new one), wrote the whole set
+    # (the capture had written one module's chunk, saved nowhere), and
+    # left the tones on
+    assert runs[0]['calibration'] == 'tune0/cal0'
+    assert [c['name'] for c in dl.calibrations(tune)] == ['cal0']
+    assert root['tune0/cal0/write0'].attrs['tones_reused'] is False
+    n1 = int(np.sum(tune['tones/tone_set'][:] == 1))
+    assert len(win.written['rows']) == n1
+    # The same run again streams without writing: under the same write
+    win.run()
+    wait_for(lambda: len(win.runs) == 2 and not win.worker.busy)
+    assert win.runs[1] == ['tune0/cal0/write0/ts1']
+    # Write tones writes the set again on purpose
+    win.write_tones()
+    wait_for(lambda: 'written;' in win.status.text() and not win.worker.busy)
+    assert len(win.written['rows']) == n1
+    # A second calibration of the set is listed and chosen; the first can
+    # be picked again, and a run then uses it
+    win.calibrate()
+    wait_for(lambda: win.cal['name'] == 'cal1' and not win.worker.busy)
+    assert win.cal_box.count() == 2 and win.written == {}
+    win.cal_box.setCurrentIndex(0)
+    assert win.cal['name'] == 'cal0' and win.chosen[1] == 'cal0'
+    assert win.run_btn.isEnabled()
+    win.run()
+    wait_for(lambda: len(win.runs) == 3 and not win.worker.busy)
+    assert dl.stream_runs(root)[2]['calibration'] == 'tune0/cal0'
+    # Another tone set: nothing until it is calibrated; its calibration
+    # sets its NCO, which puts set 1's calibrations out of frame
+    win.set_box.setCurrentIndex(0)
+    assert win.cal is None and win.cal_box.count() == 0
+    assert not win.run_btn.isEnabled() and not win.capture_btn.isEnabled()
+    win.calibrate()
+    wait_for(lambda: win.cal is not None and not win.worker.busy)
+    assert win.cal['name'] == 'cal2' and win.run_btn.isEnabled()
+    win.run()
+    wait_for(lambda: len(win.runs) == 4 and not win.worker.busy)
+    assert dl.stream_runs(root)[3]['calibration'] == 'tune0/cal2'
+    assert win.runs[3] == ['tune0/cal2/write0/ts3']
+    assert [c['tone_set'] for c in dl.calibrations(tune)] == [1, 1, 0]
+    assert [c['in_frame'] for c in win.cals] == [False, False, True]
+    win.set_box.setCurrentIndex(1)
+    assert win.cal is not None and not win.cal['in_frame']
+    assert 'stale' in win.cal_box.currentText() and 'stale' in \
+        win.status.text()
+    assert not win.run_btn.isEnabled() and not win.capture_btn.isEnabled()
+    assert not win.write_btn.isEnabled()
     worker = win.worker
     win.close()
     win.deleteLater()
@@ -273,22 +483,20 @@ async def test_chunked_streams_load_in_sweep_order(tmp_path):
     kw = dict(npoints_fine = 20, npoints_gain = 10, verbose = False)
     await stream_tone_sets(crs, tune, 'slow', 0.2, 6, **kw)
     await stream_tone_sets(crs, tune, 'fast', 0.02, 0, **kw)
-    # Tone set 1 at stage 0: ts1/set1, two writes (one per module)
-    cal = root['ts1/set1']
+    # Tone set 1: calibrated as cal1 for the stage-6 run (one write),
+    # and again as cal3 for the stage-0 run, in two writes (one per
+    # module); the streams are ts0 and ts1 under the writes
+    cal = root['tune0/cal3']
     n = cal['fres'].shape[0]
     rows = np.arange(n)
-    for w, sweep_store in (('write0', 'ts0/set1'), ('write0', 'ts1/set1'),
-                           ('write1', 'ts1/set1')):
+    for sweep_store, w, stream in (('tune0/cal1', 'write0', 'ts0'),
+                                   ('tune0/cal3', 'write0', 'ts1'),
+                                   ('tune0/cal3', 'write1', 'ts1')):
         steps = {s.name: s for s in target_sweep_steps(
-            store = root, group = sweep_store, ts = w,
-            ts_stream = 'stream')}
+            store = root, group = sweep_store, ts = w, ts_stream = stream)}
         ft = steps['load_ft'].func(rows)
         zt = steps['load_zt'].func(rows)
-        grp = root[f'{sweep_store}/{w}']
-        if 'sweep_rows' in grp and sweep_store == 'ts1/set1':
-            streamed = grp['sweep_rows'][:]
-        else:
-            streamed = rows
+        streamed = root[f'{sweep_store}/{w}/sweep_rows'][:]
         ok = np.isin(rows, streamed)
         assert np.all(np.isfinite(ft[ok])) and np.all(np.isnan(ft[~ok]))
         assert np.all(np.isfinite(zt[ok])) and np.all(np.isnan(zt[~ok]))
@@ -296,8 +504,8 @@ async def test_chunked_streams_load_in_sweep_order(tmp_path):
         # One row on its own
         assert np.isfinite(steps['load_ft'].func(streamed[:1])).all()
     # The two writes of tone set 1 cover it once
-    a = root['ts1/set1/write0/sweep_rows'][:]
-    b = root['ts1/set1/write1/sweep_rows'][:]
+    a = root['tune0/cal3/write0/sweep_rows'][:]
+    b = root['tune0/cal3/write1/sweep_rows'][:]
     np.testing.assert_array_equal(np.sort(np.concatenate((a, b))), rows)
 
 

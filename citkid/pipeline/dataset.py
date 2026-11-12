@@ -18,6 +18,7 @@ from .migrate import RENAMED_STEPS, RENAMED_TEMPLATE_STEPS
 
 _CAL_YAML_ALIASES = {
     "ts": "cal_ts.yaml",
+    "ts_cal": "cal_ts_cal.yaml",
     "iq": "cal_iq.yaml",
     "ts_offres": "cal_ts_offres.yaml",
     "ts_fixed_theta": "cal_ts.yaml",

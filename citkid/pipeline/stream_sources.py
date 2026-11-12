@@ -1,23 +1,33 @@
 """
-Load timestreams from several sources, one after another, into one
-DataSet, for the 'ts' (and 'ts_offres') calibrations of a
-``citkid.daq_layout`` store.
+Load the timestreams of one tone set from several runs, one after another,
+into one DataSet, for the 'ts' (and 'ts_offres') calibrations of a
+``citkid.daq_layout`` store; then apply the calibration to whole runs.
 
-A source is one calibration sweep of a timestream run (``ts{n}/set{s}``,
-one tone set of one run, see ``crs.procedures.stream_tone_sets``) with its
-streams: every write under it (``write{w}/stream``; at fast decimation stages
-a tone set streams in several writes, each with some of its tones) and a
-window of samples. The DataSet's rows are the sources' tones in order:
-source 0's tones, then source 1's, and so on. Each row loads its sweep
-from its source and its timestream from the write that streamed it, and
-the per-row ``source_idx`` and ``write_idx`` say which (tones streamed in
-the same write were taken together, e.g. for common-mode removal).
+A source is one calibration sweep (``tune{k}/cal{j}``, one tone set, see
+``crs.procedures.stream_tone_sets``) with one run's streams under it:
+every write of the run (``write{w}``; at fast decimation stages a tone
+set streams in several writes, each with some of its tones), the stream's
+name under them (``ts{n}``), and a window of samples
+(``daq_layout.select_streams`` makes them). Every source must hold the
+same tones (the same ``res_idxs``: one tone set of one tuning). The DataSet's rows are those
+tones; each row's sweep is the first source's, and its timestream is its
+windows from every source, one after another in source order (the global
+``source_bounds`` gives each source's samples in it). So the calibration
+is done once, on everything supplied, and ``apply_stream_calibration``
+then applies it to each whole run. The per-row ``write_idx`` says which
+tones were streamed together in the first source (e.g. for common-mode
+removal).
 
-Every source of a DataSet must have the same sample period and window
-length. Paths are inside the store (same-store mode), so a DataSet keeps
-working when the store moves or is zipped.
+The sources may be from different decimation stages: ``dt`` is their
+common sample period, or NaN if they differ. The calibration takes no
+spectra (the 'ts_cal' path): a run's come from its applied x
+(``apply_stream_calibration``) and its own ``dt``. Paths are inside the
+store (same-store mode), so a DataSet keeps working when the store moves
+or is zipped.
 """
+import warnings
 import numpy as np
+import zarr
 
 from .dataset import DataSet
 from .framework import plStep
@@ -29,22 +39,24 @@ def stream_sources_steps(
     store, sources, fres_all, qres_all, rows = 'resonators', f_avg = 1
 ):
     """
-    Return the calibration steps that load the tones of several sources.
+    Return the calibration steps that load one tone set's streams from
+    several sources, concatenated.
 
     The steps are load_global_data (``fres_all``, ``qres_all``, ``dt``,
-    ``nrows``), load_global_res_data (``fres``, ``qres``, ``ares``,
-    ``res_idxs``, ``source_idx``, ``write_idx``), load_sweep_f and
-    load_sweep_g (each row's sweep, from its source), and load_ft and
-    load_zt (each row's tone frequency and timestream, from the write that
-    streamed it). The data is opened on first use.
+    ``nrows``, ``source_bounds``), load_global_res_data (``fres``,
+    ``qres``, ``ares``, ``res_idxs``, ``write_idx``), load_sweep_f and
+    load_sweep_g (each row's sweep, from the first source), and load_ft
+    and load_zt (each row's tone frequency, and its windows from every
+    source one after another). The data is opened on first use.
 
     Parameters:
     store (zarr.Group): root of the store.
-    sources (list of dict): one per source: ``group`` (the calibration
-        sweep, e.g. 'ts3/set0'), ``writes`` (write names under it, e.g.
-        ['write0', 'write1']), ``start`` and ``stop`` (sample window of the
-        streams), and optionally ``stream`` (stream name, default
-        'stream').
+    sources (list of dict): one per source, in the order their windows
+        are concatenated: ``group`` (the calibration sweep, e.g.
+        'ts3/set0'), ``writes`` (write names under it, e.g. ['write0',
+        'write1']), ``start`` and ``stop`` (sample window of the streams),
+        and optionally ``stream`` (stream name, default 'stream'). Every
+        source must hold the same tones (``res_idxs``).
     fres_all, qres_all (str): keys of every resonance's frequency and span
         factor in the store (e.g. 'resonators0/fres_all'), for cutting
         neighbors out of the fits.
@@ -75,59 +87,88 @@ def stream_sources_steps(
 
     def table():
         """
-        Map the rows to their sources and writes (once).
+        Map the rows to their sweep rows and, per source, to their
+        writes (once).
 
         Returns:
-        table (dict): per row: ``source``, ``sweep_row``, ``write`` (index
-            into the source's writes), ``ts_row`` (row in that write); and
-            the sample period ``dt``.
+        table (dict): ``sweep_row`` (row in the sweeps, per row);
+            ``write`` and ``ts_row`` (per source and row: index into the
+            source's writes, and row in that write); ``dt`` (the common
+            sample period, NaN if the sources differ); ``source_bounds``
+            ((n_sources, 2) start and stop of each source's samples in
+            the concatenated streams); ``nsamples`` (their total).
 
         Raises:
-        ValueError: if the sources' sample periods or window lengths
-            differ, or a row is in no write.
+        ValueError: if the sources hold different tones, a source's
+            writes have different sample periods, or a row is in no
+            write of a source.
         """
         if 'rows' in cache:
             return cache['rows']
-        out = {k: [] for k in ('source', 'sweep_row', 'write', 'ts_row')}
-        dts, lengths = set(), set()
+        sweep0 = store[sources[0]['group']]
+        res_idxs0 = np.asarray(sweep0['res_idxs'][...])
+        keep = np.ones(len(res_idxs0), bool) if rows == 'all' else \
+            (res_idxs0 >= 0 if rows == 'resonators' else res_idxs0 < 0)
+        sweep_rows = np.flatnonzero(keep)
+        write = np.full((len(sources), len(sweep_rows)), -1, dtype = np.int64)
+        ts_row = np.full_like(write, -1)
+        dts, bounds, offset, ft0 = [], [], 0, None
         for i, s in enumerate(sources):
             sweep = store[s['group']]
             res_idxs = np.asarray(sweep['res_idxs'][...])
-            keep = np.ones(len(res_idxs), bool) if rows == 'all' else \
-                (res_idxs >= 0 if rows == 'resonators' else res_idxs < 0)
+            if not np.array_equal(res_idxs, res_idxs0):
+                raise ValueError(
+                    f"{s['group']} holds other tones than "
+                    f"{sources[0]['group']}: every source must be the same "
+                    'tone set of the same tuning')
+            cal0 = sweep0.attrs.get('calibration', sources[0]['group'])
+            cal = sweep.attrs.get('calibration', s['group'])
+            if cal != cal0:
+                warnings.warn(
+                    f"{s['group']}'s streams were taken with calibration "
+                    f"{cal}, {sources[0]['group']}'s with {cal0}: the first "
+                    "source's sweep calibrates every stream")
             where = np.full((len(res_idxs), 2), -1)
+            ft = np.full(len(res_idxs), np.nan)
             stream = s.get('stream', 'stream')
+            src_dts = set()
             for w, name in enumerate(s['writes']):
-                write = sweep[name]
-                held = np.asarray(write['sweep_rows'][...]) \
-                    if 'sweep_rows' in write else np.arange(len(res_idxs))
+                wg = sweep[name]
+                held = np.asarray(wg['sweep_rows'][...]) \
+                    if 'sweep_rows' in wg else np.arange(len(res_idxs))
                 where[held, 0] = w
                 where[held, 1] = np.arange(len(held))
-                dts.add(round(float(write[f'{stream}/dt'][...]), 15))
-            lengths.add(int(s['stop']) - int(s['start']))
-            for r in np.flatnonzero(keep):
-                if where[r, 0] < 0:
-                    raise ValueError(f"{s['group']}: tone {r} is in none of "
-                                     f"the writes {s['writes']}")
-                out['source'].append(i)
-                out['sweep_row'].append(r)
-                out['write'].append(where[r, 0])
-                out['ts_row'].append(where[r, 1])
-        if len(dts) != 1:
-            raise ValueError(f'the sources have different sample periods '
-                             f'{sorted(dts)}: use one DataSet per '
-                             'decimation stage')
-        if len(lengths) != 1:
-            raise ValueError(f'the sources have different window lengths '
-                             f'{sorted(lengths)}')
-        cache['rows'] = {k: np.asarray(v, dtype = np.int64)
-                         for k, v in out.items()}
-        cache['rows']['dt'] = dts.pop()
+                ft[held] = np.asarray(wg['fres'][...])
+                src_dts.add(round(float(wg[f'{stream}/dt'][...]), 15))
+            if len(src_dts) != 1:
+                raise ValueError(f"{s['group']}: its writes have different "
+                                 f'sample periods {sorted(src_dts)}')
+            dts.append(src_dts.pop())
+            missing = sweep_rows[where[sweep_rows, 0] < 0]
+            if len(missing):
+                raise ValueError(f"{s['group']}: tones {missing.tolist()} "
+                                 f"are in none of the writes {s['writes']}")
+            write[i] = where[sweep_rows, 0]
+            ts_row[i] = where[sweep_rows, 1]
+            if ft0 is None:
+                ft0 = ft[sweep_rows]
+            elif not np.allclose(ft[sweep_rows], ft0, atol = 1., rtol = 0):
+                warnings.warn(f"{s['group']} streamed other tone "
+                              f"frequencies than {sources[0]['group']}: "
+                              "the first source's are used")
+            n = int(s['stop']) - int(s['start'])
+            bounds.append((offset, offset + n))
+            offset += n
+        cache['rows'] = dict(
+            sweep_row = sweep_rows, write = write, ts_row = ts_row,
+            dt = dts[0] if len(set(dts)) == 1 else float('nan'),
+            source_bounds = np.asarray(bounds, dtype = np.int64),
+            nsamples = offset)
         return cache['rows']
 
     def sweep_of(row):
         """
-        Return a row's sweep group and its row in it.
+        Return a row's sweep group (the first source's) and its row in it.
 
         Parameters:
         row (int): DataSet row.
@@ -137,45 +178,55 @@ def stream_sources_steps(
         r (int): the tone's row in it.
         """
         t = table()
-        return store[sources[t['source'][row]]['group']], \
-            int(t['sweep_row'][row])
+        return store[sources[0]['group']], int(t['sweep_row'][row])
+
+    def read_all(key):
+        """
+        Read a store array as floats, sorted by frequency.
+
+        Parameters:
+        key (str): the array's key.
+
+        Returns:
+        f, q (np.ndarray): see ``load_global_data``.
+        """
+        return np.asarray(store[key][...], dtype = float)
 
     def load_global_data():
         """
-        Load the band's resonances, the sample period, and nrows.
+        Load the band's resonances, the sample period, nrows, and the
+        sources' bounds.
 
         Returns:
         fres_all (np.ndarray): every resonance frequency.
         qres_all (np.ndarray): their span factors.
-        dt (float): timestream sample period.
+        dt (float): timestream sample period (NaN if the sources differ).
         nrows (int): number of rows.
+        source_bounds (np.ndarray): (n_sources, 2) start and stop of each
+            source's samples in the concatenated streams.
         """
         t = table()
-        f = np.asarray(store[fres_all][...], dtype = float)
-        q = np.asarray(store[qres_all][...], dtype = float)
+        f, q = read_all(fres_all), read_all(qres_all)
         # Gain cuts need the resonances in frequency order
         order = np.argsort(f, kind = 'stable')
-        return f[order], q[order], t['dt'], len(t['source'])
+        return (f[order], q[order], t['dt'], len(t['sweep_row']),
+                t['source_bounds'].copy())
 
     def load_global_res_data():
         """
-        Load every row's tone data.
+        Load every row's tone data (from the first source's sweep).
 
         Returns:
         fres, qres, ares, res_idxs (np.ndarray): tone frequencies, span
             factors, powers and resonator indices.
-        source_idx, write_idx (np.ndarray): each row's source (index into
-            the sources) and write (index into its source's writes).
+        write_idx (np.ndarray): each row's write in the first source
+            (index into its writes).
         """
         t = table()
-        cols = {k: [] for k in ('fres', 'qres', 'ares', 'res_idxs')}
-        for i, s in enumerate(sources):
-            sel = t['source'] == i
-            sweep = store[s['group']]
-            for k in cols:
-                cols[k].append(np.asarray(sweep[k][...])[t['sweep_row'][sel]])
-        return (*(np.concatenate(cols[k]) for k in cols), t['source'].copy(),
-                t['write'].copy())
+        sweep = store[sources[0]['group']]
+        return (*(np.asarray(sweep[k][...])[t['sweep_row']]
+                  for k in ('fres', 'qres', 'ares', 'res_idxs')),
+                t['write'][0].copy())
 
     def load_sweep_f(data_idx):
         """
@@ -215,30 +266,30 @@ def stream_sources_steps(
         idx = np.argsort(fg)
         return fg[idx], zg[idx]
 
-    def by_write(data_idx):
+    def by_write(data_idx, i):
         """
-        Group rows by the write that streamed them.
+        Group rows by the write that streamed them in a source.
 
         Parameters:
         data_idx (np.ndarray): rows.
+        i (int): the source.
 
         Yields:
         positions (np.ndarray): positions in ``data_idx``.
         write (zarr.Group): the write group.
         ts_rows (np.ndarray): the rows in the write.
-        source (dict): the source.
         """
         t = table()
-        key = t['source'][data_idx] * 100000 + t['write'][data_idx]
-        for k in np.unique(key):
-            pos = np.flatnonzero(key == k)
-            s = sources[int(k // 100000)]
-            write = store[s['group']][s['writes'][int(k % 100000)]]
-            yield pos, write, t['ts_row'][data_idx][pos], s
+        s = sources[i]
+        writes = t['write'][i][data_idx]
+        for w in np.unique(writes):
+            pos = np.flatnonzero(writes == w)
+            write = store[s['group']][s['writes'][int(w)]]
+            yield pos, write, t['ts_row'][i][data_idx][pos]
 
     def load_ft(data_idx):
         """
-        Load the rows' tone frequencies as streamed.
+        Load the rows' tone frequencies as streamed (in the first source).
 
         Parameters:
         data_idx (np.ndarray): rows.
@@ -248,38 +299,41 @@ def stream_sources_steps(
         """
         idx = np.atleast_1d(np.asarray(data_idx, dtype = np.int64))
         ft = np.empty(len(idx))
-        for pos, write, ts_rows, _ in by_write(idx):
+        for pos, write, ts_rows in by_write(idx, 0):
             ft[pos] = np.asarray(write['fres'][...])[ts_rows]
         return ft if np.ndim(data_idx) else ft[0]
 
     def load_zt(data_idx):
         """
-        Load the rows' timestreams in their sources' windows, as S21.
+        Load the rows' timestreams: their windows from every source, one
+        after another, as S21.
 
         Parameters:
         data_idx (np.ndarray): rows.
 
         Returns:
-        zt (np.ndarray): complex S21, shape (len(data_idx), window).
+        zt (np.ndarray): complex S21, shape (len(data_idx), nsamples).
         """
+        t = table()
         idx = np.atleast_1d(np.asarray(data_idx, dtype = np.int64))
-        s0 = sources[0]
-        zt = np.empty((len(idx), int(s0['stop']) - int(s0['start'])),
-                      dtype = np.complex128)
-        for pos, write, ts_rows, s in by_write(idx):
-            stream = write[s.get('stream', 'stream')]
-            o = np.argsort(ts_rows)
-            z = stream['z'][:, ts_rows[o], int(s['start']):int(s['stop'])]
-            scale = np.asarray(stream['counts_to_s21'][...])[ts_rows[o]]
-            zt[pos[o]] = (z[0] + 1j * z[1]) * scale[:, None]
+        zt = np.empty((len(idx), t['nsamples']), dtype = np.complex128)
+        for i, s in enumerate(sources):
+            a, b = t['source_bounds'][i]
+            for pos, write, ts_rows in by_write(idx, i):
+                stream = write[s.get('stream', 'stream')]
+                o = np.argsort(ts_rows)
+                z = stream['z'][:, ts_rows[o], int(s['start']):int(s['stop'])]
+                scale = np.asarray(stream['counts_to_s21'][...])[ts_rows[o]]
+                zt[pos[o], a:b] = (z[0] + 1j * z[1]) * scale[:, None]
         return zt if np.ndim(data_idx) else zt[0]
 
     return [
         plStep('load_global_data', load_global_data, [],
-               ['fres_all', 'qres_all', 'dt', 'nrows'], 'global'),
+               ['fres_all', 'qres_all', 'dt', 'nrows', 'source_bounds'],
+               'global'),
         plStep('load_global_res_data', load_global_res_data, [],
-               ['fres', 'qres', 'ares', 'res_idxs', 'source_idx',
-                'write_idx'], 'global-res'),
+               ['fres', 'qres', 'ares', 'res_idxs', 'write_idx'],
+               'global-res'),
         plStep('load_sweep_f', load_sweep_f, ['data_idx'], ['ff', 'zf'],
                'per-row'),
         plStep('load_sweep_g', load_sweep_g, ['data_idx'], ['fg', 'zg'],
@@ -346,16 +400,123 @@ def open_stream_dataset(
         sources.
     sources, fres_all, qres_all, rows, f_avg: see ``stream_sources_steps``.
     cal_yaml_path (str or None): calibration YAML path or alias. None
-        (default): 'ts_offres' for calibration tones, else 'ts'.
+        (default): 'ts_offres' for calibration tones, else 'ts_cal' (the
+        'ts' calibration without its spectra, which the concatenated
+        streams don't have; a run's come from
+        ``apply_stream_calibration`` and its own ``dt``).
     write_buffer (bool): passed to DataSet. Default False.
 
     Returns:
     DS (DataSet): the DataSet.
     """
     if cal_yaml_path is None:
-        cal_yaml_path = 'ts_offres' if rows == 'calibration' else 'ts'
+        cal_yaml_path = 'ts_offres' if rows == 'calibration' else 'ts_cal'
     return DataSet(
         zarr_path = out_grp, cal_yaml_path = cal_yaml_path,
         custom_source = stream_sources_source(sources, fres_all, qres_all,
                                               rows = rows, f_avg = f_avg),
         write_buffer = write_buffer)
+
+def apply_stream_calibration(
+    DS, store, source, out_grp, outputs = ('xt',), overwrite = False,
+    verbose = True
+):
+    """
+    Apply a calibrated DataSet to a whole stream of its tones, chunk by
+    chunk: every row's calibration outputs (e.g. ``xt``) over the
+    source's window, with the source's sample period.
+
+    Parameters:
+    DS (DataSet): the tone set's DataSet (``open_stream_dataset``), with
+        its analysis done for the rows (``AnalysisRunner`` on the 'ts'
+        path: gain, circle and x calibration).
+    store (zarr.Group): the store root.
+    source (dict): the run's tone set, as ``daq_layout.select_streams``
+        makes it (``group``, ``writes``, ``start``, ``stop``, ``stream``),
+        e.g. ``select_streams(root, name)[0][0]`` for a whole run. Its
+        tones must be the DataSet's.
+    out_grp (zarr.Group): group to save in: per output an array (nrows,
+        nsamples) chunked along time as the stream, plus ``dt``,
+        ``res_idxs`` (per row), and attrs ``source``, ``outputs``,
+        ``dataset`` (the DataSet's path) and ``complete``.
+    outputs (sequence of str): calibration outputs, one value per sample
+        (``xt``, ``thetat``, ``At``, ...). Default ('xt',).
+    overwrite (bool): If True, redo a group already complete. Default
+        False: it is returned as is.
+    verbose (bool): If True (default), show a progress bar.
+
+    Returns:
+    out_grp (zarr.Group): the group.
+
+    Raises:
+    ValueError: if the source holds other tones than the DataSet, or an
+        output isn't one value per sample.
+    """
+    from tqdm.auto import tqdm
+    outputs = [str(o) for o in outputs]
+    if out_grp.attrs.get('complete') and not overwrite:
+        return out_grp
+    for name in list(out_grp.keys()):
+        del out_grp[name]
+    sweep = store[source['group']]
+    res_idxs = np.asarray(sweep['res_idxs'][...])
+    ds_res = np.asarray(DS.res_idxs[:])
+    pos = {int(r): i for i, r in enumerate(res_idxs)}
+    try:
+        sweep_rows = np.array([pos[int(r)] for r in ds_res], dtype = np.int64)
+    except KeyError as e:
+        raise ValueError(f"{source['group']} has no tone {e}: it must hold "
+                         "the DataSet's tones") from None
+    start, stop = int(source['start']), int(source['stop'])
+    nsamples, stream_name = stop - start, source.get('stream', 'stream')
+    arrays, dt = {}, None
+    writes = []
+    for name in source['writes']:
+        wg = sweep[name]
+        held = np.asarray(wg['sweep_rows'][...]) if 'sweep_rows' in wg \
+            else np.arange(len(res_idxs))
+        where = {int(r): k for k, r in enumerate(held)}
+        ds_rows = np.array([i for i, r in enumerate(sweep_rows)
+                            if int(r) in where], dtype = np.int64)
+        if not len(ds_rows):
+            continue
+        ts_rows = np.array([where[int(sweep_rows[i])] for i in ds_rows])
+        stream = wg[stream_name]
+        this_dt = float(stream['dt'][...])
+        if dt is None:
+            dt = this_dt
+            chunk = int(stream['z'].chunks[2])
+            for o in outputs:
+                arrays[o] = out_grp.create_array(
+                    o, shape = (len(ds_res), nsamples), dtype = np.float64,
+                    chunks = (len(ds_res), chunk), fill_value = np.nan)
+        writes.append((wg, stream, ds_rows, ts_rows))
+    if dt is None:
+        raise ValueError(f"{source['group']} has no stream of the DataSet's "
+                         'tones')
+    steps = [(wg, stream, ds_rows, ts_rows, a, min(a + chunk, stop))
+             for wg, stream, ds_rows, ts_rows in writes
+             for a in range(start, stop, chunk)]
+    for wg, stream, ds_rows, ts_rows, a, b in tqdm(
+            steps, desc = 'Applying', leave = False, disable = not verbose):
+        o = np.argsort(ts_rows)
+        z = stream['z'][:, ts_rows[o], a:b]
+        scale = np.asarray(stream['counts_to_s21'][...])[ts_rows[o]]
+        zt = np.empty((len(ds_rows), b - a), dtype = np.complex128)
+        zt[o] = (z[0] + 1j * z[1]) * scale[:, None]
+        ft = np.asarray(wg['fres'][...])[ts_rows]
+        out = DS.apply_cal(ds_rows, outputs, replacements = dict(
+            zt = zt, ft = ft, dt = dt))
+        for name in outputs:
+            value = np.atleast_2d(np.asarray(out[name], dtype = np.float64))
+            if value.shape != (len(ds_rows), b - a):
+                raise ValueError(f'{name} is not one value per sample '
+                                 f'(shape {value.shape})')
+            arrays[name][ds_rows, a - start:b - start] = value
+    out_grp.create_array('dt', data = np.array(dt))
+    out_grp.create_array('res_idxs', data = ds_res)
+    out_grp.attrs.update(dict(
+        source = {k: (list(v) if isinstance(v, (list, tuple)) else v)
+                  for k, v in source.items()},
+        outputs = outputs, dataset = DS.root.path, complete = True))
+    return out_grp

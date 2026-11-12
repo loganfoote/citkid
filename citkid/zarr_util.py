@@ -1,5 +1,6 @@
 import numpy as np
 import re
+import zarr
 
 # Sweep series (power sweeps, blackbody sweeps, ...) save one target sweep per
 # series point in groups named f'{SET_PREFIX}{idx}'
@@ -143,6 +144,38 @@ def write_single_array(root, name, value, dtype = None):
         return
  
     root.create_array(name, data = value) # no chunking
+
+def copy_group(src, dst, exclude = ()):
+    """
+    Copy a group's attributes, arrays, and subgroups into another group.
+
+    Parameters:
+    src (zarr.Group): source group.
+    dst (zarr.Group): destination group. Its attributes are updated with
+        ``src``'s (so the caller can set its own afterwards).
+    exclude (sequence of str): name prefixes of members, at any level, not
+        to copy, e.g. ('write',) to leave out a sweep's write groups.
+        Default none.
+
+    Returns:
+    dst (zarr.Group): the destination.
+    """
+    dst.attrs.update(dict(src.attrs))
+    for name, node in sorted(src.members(), key = lambda kv: kv[0]):
+        if any(name.startswith(e) for e in exclude):
+            continue
+        if isinstance(node, zarr.Group):
+            copy_group(node, dst.require_group(name), exclude)
+            continue
+        data = node[...]
+        if data.dtype.kind in 'OUS':
+            arr = dst.create_array(name, shape = data.shape, dtype = str,
+                                   fill_value = '')
+            if data.size:
+                arr[...] = data.astype(str)
+        else:
+            dst.create_array(name, data = data, chunks = node.chunks)
+    return dst
 
 def to_jsonable(v):
     """

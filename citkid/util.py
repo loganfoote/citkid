@@ -240,4 +240,50 @@ def run_with_time_bar(fn, duration_s, desc, *args, **kwargs):
         stop.set()
         t.join()
 
+def run_with_time_progress(fn, duration_s, progress, total, *args,
+                           interval = 0.2, **kwargs):
+    """
+    Run a function that takes a known time while reporting its progress
+    from the elapsed time, e.g. a stream of a known length.
 
+    Parameters:
+    fn (callable): function to run (in this thread).
+    duration_s (float): how long it takes, in seconds.
+    progress (callable): called as ``progress(done, total)`` from a
+        helper thread every ``interval`` seconds, with ``done`` the
+        elapsed fraction of ``total``, and once with ``(total, total)``
+        when ``fn`` returns.
+    total (int): the total to report, e.g. samples.
+    *args: positional arguments to pass to fn.
+    interval (float): seconds between reports. Default 0.2.
+    **kwargs: keyword arguments to pass to fn.
+
+    Returns:
+    result: the return value of fn.
+    """
+    if not callable(fn) or not callable(progress):
+        raise TypeError('fn and progress must be callable')
+    if duration_s < 0:
+        raise ValueError('duration_s must be non-negative')
+    total, stop = int(total), threading.Event()
+
+    def report():
+        """
+        Report the elapsed time as progress until ``stop`` is set.
+        """
+        start = time.monotonic()
+        while not stop.wait(interval):
+            elapsed = time.monotonic() - start
+            done = total if duration_s <= 0 else \
+                min(total, int(elapsed / duration_s * total))
+            progress(done, total)
+
+    progress(0, total)
+    thread = threading.Thread(target = report, daemon = True)
+    thread.start()
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        stop.set()
+        thread.join()
+        progress(total, total)

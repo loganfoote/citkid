@@ -1,3 +1,4 @@
+import inspect
 import time
 import numpy as np
 import zarr
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
 async def target_sweep(
     crs, fres, ares, qres, res_idxs, grp, ch_map = None, gain_span_factor = 10,
     npoints_fine = 500, npoints_gain = 50, npoints_rough = None, nsamps = 100,
-    fres_update_method = 'spacing', verbose = True,
+    fres_update_method = 'spacing', verbose = True, progress = None,
 ):
     """
     Execute a target sweep procedure on the CRS instrument, consisting of
@@ -60,6 +61,10 @@ async def target_sweep(
         (default), 'distance', or 'minS21'. See
         ``citkid.res.fres.update_fres``.
     verbose (bool): If True, displays progress bars while taking data.
+    progress (callable or None): if given, called as ``progress(done,
+        total)`` with the points taken so far and the total over the
+        rough, gain, and fine sweeps (``ntones`` times the points per
+        tone), from (0, total) to (total, total). Default None.
 
     Returns:
     fres (np.ndarray, float64): updated resonant frequencies after rough sweep.
@@ -70,6 +75,38 @@ async def target_sweep(
         crs, fres, ares, qres, res_idxs, grp, gain_span_factor, npoints_fine, 
         npoints_gain, npoints_rough, nsamps, fres_update_method, verbose
     )
+    if progress is not None and not callable(progress):
+        raise TypeError('progress must be callable or None')
+    # Progress over the three sweeps: each reports its own (done, total);
+    # offset them by the points of the sweeps before it
+    total = len(fres) * sum(n for n in (npoints_rough, npoints_gain,
+                                        npoints_fine) if n is not None)
+    before = [0]
+
+    def stage_progress(done, stage_total):
+        """
+        Report one sweep's progress as progress over all three.
+
+        Parameters:
+        done (int): points taken in this sweep.
+        stage_total (int): points in this sweep.
+        """
+        progress(min(before[0] + done, total), total)
+
+    def stage_done(npoints):
+        """
+        Count a finished sweep's points.
+
+        Parameters:
+        npoints (int): its points per tone.
+        """
+        before[0] += len(fres) * npoints
+
+    # Only given to the sweeps when asked for, so a sweep method without
+    # it (e.g. a test double) still works
+    report = {} if progress is None else dict(progress = stage_progress)
+    if progress is not None:
+        progress(0, total)
 
     # Save input data. System configuration is written first, since it
     # checks its own attribute conflicts
@@ -94,7 +131,9 @@ async def target_sweep(
                 acq_cfg_grp = grpr,
                 verbose = verbose,
                 pbar_description = 'Rough sweep',
+                **report,
             )
+        stage_done(npoints_rough)
         
         # Save sweep data and fres_rough
         _save_sweep_data(grpr, '', f_rough, z_rough)
@@ -136,7 +175,9 @@ async def target_sweep(
                 acq_cfg_grp = grpg,
                 verbose = verbose,
                 pbar_description = 'Gain sweep',
+                **report,
             )
+        stage_done(npoints_gain)
         _save_sweep_data(grpg, '', f_gain, z_gain)
         # If ch_map was determined within the gain sweep, 
         # # save here so fine sweep is consistent
@@ -156,7 +197,9 @@ async def target_sweep(
                 acq_cfg_grp = grpf,
                 verbose = verbose,
                 pbar_description = 'Fine sweep',
+                **report,
             )
+        stage_done(npoints_fine)
         _save_sweep_data(grpf, '', f_fine, z_fine)
         # If ch_map was determined within the fine sweep, return it so later
         # sweeps (e.g. power_sweep sets) use the same channels
@@ -280,9 +323,28 @@ def _merge_passes(dst, parts, n):
         _merge_passes(dst.require_group(name),
                       [(idx, g[name]) for idx, g in parts], n)
 
+def points_per_tone(target_sweep_kwargs):
+    """
+    Return the points per tone of a target sweep with these settings (the
+    rough, gain, and fine sweeps together), for progress reports.
+
+    Parameters:
+    target_sweep_kwargs (dict): ``target_sweep`` keyword arguments.
+
+    Returns:
+    npoints (int): points per tone.
+    """
+    defaults = inspect.signature(target_sweep).parameters
+    total = 0
+    for key in ('npoints_rough', 'npoints_gain', 'npoints_fine'):
+        n = target_sweep_kwargs.get(key, defaults[key].default)
+        if n is not None:
+            total += int(n)
+    return total
+
 async def stitched_target_sweep(
     crs, fres, ares, qres, res_idxs, tone_set, tone_module, ncos, grp,
-    verbose = True, **target_sweep_kwargs
+    verbose = True, progress = None, **target_sweep_kwargs
 ):
     """
     Take a target sweep of tones split into tone sets, one pass per set,
@@ -312,6 +374,9 @@ async def stitched_target_sweep(
         strings, as saved in JSON).
     grp (zarr.Group): destination group, empty.
     verbose (bool): If True (default), show progress bars.
+    progress (callable or None): if given, called as ``progress(done,
+        total)`` with the points taken so far over every pass (see
+        ``target_sweep``). Default None.
     **target_sweep_kwargs: other ``target_sweep`` parameters
         (``npoints_fine``, ``npoints_gain``, ``npoints_rough``, ``nsamps``,
         ``gain_span_factor``, ``fres_update_method``).
@@ -340,6 +405,12 @@ async def stitched_target_sweep(
     sets = np.unique(tone_set)
     if len(sets) and (sets[0] < 0 or sets[-1] >= len(ncos)):
         raise ValueError('tone_set must index ncos')
+    if progress is not None and not callable(progress):
+        raise TypeError('progress must be callable or None')
+    per_tone = points_per_tone(target_sweep_kwargs)
+    total, before = n * per_tone, 0
+    if progress is not None:
+        progress(0, total)
     fres_out = fres.copy()
     tone_channel = np.zeros(n, dtype = np.int32)
     parts, pass_ncos, pass_times = [], [], []
@@ -361,9 +432,23 @@ async def stitched_target_sweep(
         pass_ncos.append({str(m): f for m, f in set_ncos.items()})
         if verbose and len(sets) > 1:
             print(f'Tone set {s} ({p + 1}/{len(sets)}): {len(idx)} tones')
+        pass_progress = None
+        if progress is not None:
+            def pass_progress(done, pass_total, offset = before):
+                """
+                Report this pass's progress as progress over every pass.
+
+                Parameters:
+                done (int): points taken in this pass.
+                pass_total (int): points in this pass.
+                offset (int): points of the passes before it.
+                """
+                progress(min(offset + done, total), total)
         fres_out[idx], _ = await target_sweep(
             crs, fres[idx], ares[idx], qres[idx], res_idxs[idx], tmp,
-            ch_map = ch_map, verbose = verbose, **target_sweep_kwargs)
+            ch_map = ch_map, verbose = verbose, progress = pass_progress,
+            **target_sweep_kwargs)
+        before += len(idx) * per_tone
         parts.append((idx, tmp))
     _merge_passes(grp, parts, n)
     for name, value in (('tone_set', tone_set), ('tone_module', tone_module),
@@ -487,7 +572,10 @@ async def write_stream_chunk(
 ):
     """
     Write a chunk of one tone set's tones for streaming, each on its
-    module, with the set's NCOs (``CRS.write_tones_for_stream``).
+    module, with the set's NCOs (``CRS.write_tones_for_stream``). An NCO
+    already at its value is left alone (``CRS.set_nco``), so that tones
+    written after the set's calibration sweep measure in the sweep's
+    phase frame.
 
     Parameters:
     crs (CRS): configured CRS instrument.
@@ -505,31 +593,196 @@ async def write_stream_chunk(
     tone_module = np.asarray(tone_module, dtype = np.int32)
     set_ncos = {int(m): float(f) for m, f in set_ncos.items()}
     mods = sorted(set(tone_module.tolist()))
+    # An NCO already there is left alone (CRS.set_nco): setting one starts
+    # a new phase frame, and the stream must stay in its calibration's
     await crs.set_nco({m: set_ncos[m] for m in mods}, verbose = False)
     ch_map = {m: np.flatnonzero(tone_module == m).tolist() for m in mods}
     return await crs.write_tones_for_stream(fres, ares, grp = grp,
                                             ch_map = ch_map)
 
-async def stream_tone_sets(
-    crs, tune, name, duration_s, dec_stage, notes = '', set_idxs = None,
-    status = None, verbose = True, **target_sweep_kwargs
+async def calibrate_tone_set(
+    crs, tune, tone_set, status = None, verbose = True, progress = None,
+    **target_sweep_kwargs
 ):
     """
-    Take a named timestream of a tuning's tones: for each tone set, a new
-    calibration sweep, then the stream, in chunks if the decimation stage
-    needs them (``plan_stream_chunks``).
+    Take a calibration sweep of one tone set of a tuning and save it as
+    the tuning's next ``cal{j}`` (raw; attrs ``tone_set`` and ``tones``,
+    plus the sweep's own, e.g. ``nsamps`` and ``complete``).
 
-    The run is saved as the next ``ts{n}`` at the store root (raw; attrs
-    ``name``, ``notes``, ``dec_stage``, ``duration_s``, ``tone_sets``,
-    ``tuning``, ``tones`` and ``resonators`` (where the tones came from),
-    and ``complete`` once every tone set is done). For tone set s,
-    ``ts{n}/set{s}`` is the calibration sweep (``stitched_target_sweep`` of
-    the set's tones). Each chunk is a ``set{s}/write{w}``
-    (``write_stream_chunk``: the tones written, plus ``sweep_rows``, each
-    tone's row in the calibration sweep, ``res_idxs``, and ``qres``)
-    holding its stream in ``write{w}/stream`` (``CRS.stream``). An
-    unchunked write lists the set's tones in the sweep's order. The run is
-    self-contained: it holds every tone it actually used.
+    A set is calibrated once, and every timestream of it after that uses
+    the calibration (``stream_tone_sets`` copies it into the run), so a
+    long sweep is never repeated. The sweep clears the board's tones.
+
+    The calibration is only in frame while its modules' NCOs stay as
+    they were for the sweep (``CRS.set_nco``): the ids of those settings
+    are saved as attr ``nco_ids`` ({module: id}), and
+    ``calibration_in_frame`` compares them with the board's. Another
+    tone set's NCO, or another session, puts it out of frame, and a new
+    sweep is needed.
+
+    Parameters:
+    crs (CRS): configured CRS instrument.
+    tune (zarr.Group): the tuning, with ``tones`` and ``crs_config``, in a
+        writable store.
+    tone_set (int): the tone set.
+    status (callable or None): called with a progress message. Default
+        None.
+    verbose (bool): If True (default), show progress bars.
+    progress (callable or None): ``progress(done, total)`` in points (see
+        ``stitched_target_sweep``). Default None.
+    **target_sweep_kwargs: sweep settings (``target_sweep``:
+        ``npoints_fine``, ``npoints_gain``, ``nsamps``, ...).
+
+    Returns:
+    grp (zarr.Group): the calibration, ``tune{k}/cal{j}``.
+
+    Raises:
+    ValueError: if the tuning has no such tone set.
+    """
+    say = status or (lambda message: None)
+    t = dl.load_tones(tune['tones'])
+    ncos = tune['crs_config'].attrs['config']['tone_sets']
+    s = int(tone_set)
+    idx = np.flatnonzero(t['tone_set'] == s)
+    if not len(idx):
+        raise ValueError(f'{tune.basename} has no tone set {s}')
+    grp, j = dl.new_indexed_group(tune, dl.CAL_PREFIX, 'raw', attrs = dict(
+        tone_set = s, tones = tune['tones'].path))
+    say(f'Tone set {s}: calibration sweep of {len(idx)} tones, saved as '
+        f'{grp.basename}')
+    try:
+        await stitched_target_sweep(
+            crs, t['fres'][idx], t['ares'][idx], t['qres'][idx],
+            t['res_idxs'][idx], t['tone_set'][idx], t['tone_module'][idx],
+            ncos, grp, verbose = verbose, progress = progress,
+            **target_sweep_kwargs)
+    except BaseException:
+        del tune[grp.basename]
+        raise
+    grp.attrs['nco_ids'] = {str(int(m)): crs.nco_ids.get(int(m))
+                            for m in np.unique(t['tone_module'][idx])}
+    return grp
+
+def calibration_in_frame(crs, cal):
+    """
+    Decide whether a calibration sweep is in the board's current phase
+    frame: none of its modules' NCOs was set since it was taken.
+
+    Parameters:
+    crs (CRS): the instrument (``nco_ids``).
+    cal (zarr.Group): the calibration (``calibrate_tone_set``).
+
+    Returns:
+    in_frame (bool): True if it is; False if an NCO was set since, or
+        the calibration records no NCO ids (taken by older code, or by
+        another session).
+    """
+    ids = cal.attrs.get('nco_ids') or {}
+    return bool(ids) and all(
+        v is not None and crs.nco_ids.get(int(m)) == v for m, v in ids.items())
+
+def tones_written(written, tone_set, rows, calibration):
+    """
+    Decide whether the board's tones are these (see ``write_set_tones``).
+
+    Parameters:
+    written (dict): the board's tones.
+    tone_set (int): tone set.
+    rows (array-like int): rows of the calibration sweep.
+    calibration (str): path of the calibration sweep.
+
+    Returns:
+    same (bool): True if ``written`` describes exactly these tones.
+    """
+    return bool(written) and written.get('tone_set') == int(tone_set) and \
+        written.get('calibration') == str(calibration) and \
+        np.array_equal(written.get('rows', []), np.asarray(rows))
+
+async def write_set_tones(crs, cal, rows, written, grp = None):
+    """
+    Write some tones of a tone set, from its calibration sweep, unless
+    they are on the board already.
+
+    ``written`` records the board's tones: empty if unknown (or none),
+    else ``tone_set``, ``rows`` (rows of ``cal``), ``calibration`` (the
+    path of ``cal``), ``fres`` (the written frequencies),
+    ``fres_requested``, and ``ares``. Unless it describes exactly these
+    tones, they are written (``write_stream_chunk``, which clears the
+    others first) and it is updated. Tones stay on the board between
+    streams; a calibration sweep clears them, so clear ``written`` after
+    one taken elsewhere (``stream_tone_sets`` does).
+
+    Parameters:
+    crs (CRS): configured CRS instrument.
+    cal (zarr.Group): the set's calibration sweep
+        (``calibrate_tone_set``).
+    rows (array-like int): rows of ``cal`` to write: all of the set, or a
+        chunk (``plan_stream_chunks``).
+    written (dict): the board's tones, updated in place.
+    grp (zarr.Group or None): write group to save the tones in
+        (``CRS.write_tones_for_stream``'s ``fres``, ``fres_requested``,
+        ``ares``, and ``crs_config``; from ``written`` if nothing was
+        written), with attr ``tones_reused``. Default None.
+
+    Returns:
+    fres_written (np.array): the tones' written frequencies in Hz.
+
+    Raises:
+    ValueError: if the calibration is out of frame
+        (``calibration_in_frame``): a stream of its tones would be
+        rotated from it.
+    """
+    rows = np.asarray(rows, dtype = np.int64)
+    s = int(cal.attrs['tone_set'])
+    if not calibration_in_frame(crs, cal):
+        raise ValueError(f'{cal.path} is not in the board\'s phase frame '
+                         '(an NCO was set since it was taken): calibrate '
+                         f'tone set {s} again')
+    if tones_written(written, s, rows, cal.path):
+        if grp is not None:
+            util.write_system_cfg_to_zarr(crs, grp.require_group('crs_config'))
+            for key in ('fres', 'fres_requested', 'ares'):
+                grp.create_array(name = key, data = np.asarray(
+                    written[key], dtype = np.float64))
+            grp.attrs['tones_reused'] = True
+        return np.asarray(written['fres'], dtype = np.float64)
+    fres, ares = cal['fres'][:][rows], cal['ares'][:][rows]
+    fres_w = await write_stream_chunk(
+        crs, fres, ares, cal['tone_module'][:][rows],
+        cal.attrs['pass_ncos'][0], grp = grp)
+    written.clear()
+    written.update(tone_set = s, rows = rows, calibration = cal.path,
+                   fres = np.asarray(fres_w, dtype = np.float64),
+                   fres_requested = fres, ares = ares)
+    if grp is not None:
+        grp.attrs['tones_reused'] = False
+    return fres_w
+
+async def stream_tone_sets(
+    crs, tune, name, duration_s, dec_stage, notes = '', set_idxs = None,
+    calibrations = None, written = None, keep_tones = False, status = None,
+    verbose = True, progress = None, **target_sweep_kwargs
+):
+    """
+    Take a named timestream of a tuning's tones, one tone set after
+    another, each on its calibration sweep: its tones are written (unless
+    they are on the board already) and streamed, in chunks if the
+    decimation stage needs them (``plan_stream_chunks``).
+
+    The streams live with the calibration they belong to: a tone write
+    is ``tune{k}/cal{j}/write{w}`` (``write_set_tones``: the tones as
+    written, plus ``sweep_rows``, each tone's row in the sweep,
+    ``res_idxs``, and ``qres``), and each stream of those tones is a
+    ``write{w}/ts{n}`` under it (``CRS.stream``; attrs ``name``,
+    ``notes``, ``dec_stage``, ``duration_s``, ``run``). Tones already on
+    the board get no new write: the stream goes under the write that put
+    them there. The run is recorded in the tuning's run list
+    (``daq_layout.register_stream_run``: ``tune{k}/streams``) as
+    ``ts{n}``, with ``name``, ``notes``, ``dec_stage``, ``duration_s``,
+    ``tone_set`` (or ``tone_sets``), ``calibration`` (or
+    ``calibrations``), ``tuning``, ``tones`` and ``resonators`` (where
+    the tones came from), ``paths`` (its streams), and ``complete`` once
+    every stream is done.
 
     Parameters:
     crs (CRS): configured CRS instrument (with global control to stream at
@@ -542,14 +795,34 @@ async def stream_tone_sets(
     notes (str): free-form notes saved with the run. Default ''.
     set_idxs (list of int or None): tone sets to stream. None (default):
         all.
+    calibrations (dict or None): per tone set, the calibration sweep to
+        use: a ``cal{j}`` group of the tuning, or its path in the store
+        (e.g. 'tune0/cal2'). A set without one, or whose calibration is
+        out of frame (``calibration_in_frame``: its NCO was set since,
+        e.g. by another tone set's stream), gets a new sweep
+        (``calibrate_tone_set``, saved as the tuning's next ``cal{j}``).
+        So a run of several sets calibrates each set anew as it gets to
+        it, except the set whose NCOs are on the board already. Default
+        None.
+    written (dict or None): the board's tones (``write_set_tones``), kept
+        by the caller across runs so that tones already written are not
+        written again; updated in place (with ``write``, the path of the
+        write group holding them). Default None (unknown: every chunk is
+        written).
+    keep_tones (bool): If True, leave the last tones on the board (and in
+        ``written``) for the next stream. Default False: clear them.
     status (callable or None): called with a progress message before
         each step. Default None.
     verbose (bool): If True (default), show progress bars.
-    **target_sweep_kwargs: calibration sweep settings (``target_sweep``).
+    progress (callable or None): ``progress(done, total)`` of a
+        calibration sweep taken here (points) and of each stream
+        (samples, from the elapsed time: ``CRS.stream``). Default None.
+    **target_sweep_kwargs: settings of a calibration sweep taken here
+        (``target_sweep``).
 
     Returns:
     paths (list of str): the streams' group paths, e.g.
-        'ts3/set0/write0/stream'.
+        'tune0/cal0/write0/ts3'.
 
     Raises:
     ValueError: if ``name`` is empty.
@@ -558,43 +831,72 @@ async def stream_tone_sets(
         raise ValueError('the timestream needs a name')
     say = status or (lambda message: None)
     t = dl.load_tones(tune['tones'])
-    ncos = tune['crs_config'].attrs['config']['tone_sets']
     sets = sorted(set(t['tone_set'].tolist())) if set_idxs is None else \
         [int(s) for s in set_idxs]
+    cals = {int(s): c for s, c in (calibrations or {}).items()}
+    if written is None:
+        written = {}
     root = dl.store_root(tune, mode = 'r+')
-    run, n = dl.new_indexed_group(root, dl.TS_PREFIX, 'raw', attrs = dict(
-        name = str(name), notes = str(notes), dec_stage = int(dec_stage),
-        duration_s = float(duration_s), tone_sets = sets,
-        tuning = tune.basename, tones = tune['tones'].path,
-        resonators = tune.attrs.get('resonators'), complete = False))
-    paths = []
+    record = dict(name = str(name), notes = str(notes),
+                  dec_stage = int(dec_stage), duration_s = float(duration_s),
+                  tuning = tune.basename, tones = tune['tones'].path,
+                  resonators = tune.attrs.get('resonators'), paths = [],
+                  complete = False)
+    if len(sets) == 1:
+        record['tone_set'] = sets[0]
+    else:
+        record['tone_sets'] = sets
+    n = dl.register_stream_run(tune, record)
+    ts_name = set_name(n, dl.TS_PREFIX)
+    paths, used = [], {}
     for s in sets:
         idx = np.flatnonzero(t['tone_set'] == s)
-        say(f'Tone set {s}: calibration sweep')
-        cal = dl.create_group(run, set_name(s), 'raw',
-                              attrs = dict(tone_set = int(s)))
-        await stitched_target_sweep(
-            crs, t['fres'][idx], t['ares'][idx], t['qres'][idx],
-            t['res_idxs'][idx], t['tone_set'][idx], t['tone_module'][idx],
-            ncos, cal, verbose = verbose, **target_sweep_kwargs)
+        cal = cals.get(s)
+        if isinstance(cal, str):
+            cal = root[cal]
+        if cal is not None and not calibration_in_frame(crs, cal):
+            say(f'Tone set {s}: {cal.path} is out of frame (an NCO was set '
+                'since): calibrating again')
+            cal = None
+        if cal is None:
+            cal = await calibrate_tone_set(
+                crs, tune, s, status = status, verbose = verbose,
+                progress = progress, **target_sweep_kwargs)
+            written.clear()     # the sweep cleared the board's tones
+        used[str(s)] = cal.path
         chunks = plan_stream_chunks(t['tone_module'][idx], dec_stage)
         for c_i, rows in enumerate(chunks):
-            say(f'Tone set {s}: stream {c_i + 1}/{len(chunks)} '
-                f'({len(rows)} tones, {duration_s:g} s at stage '
-                f'{dec_stage})')
-            write, _ = dl.new_indexed_group(cal, 'write', 'raw')
-            await write_stream_chunk(
-                crs, cal['fres'][:][rows], cal['ares'][:][rows],
-                t['tone_module'][idx][rows], ncos[s], grp = write)
-            for key, value in (('sweep_rows', rows),
-                               ('res_idxs', cal['res_idxs'][:][rows]),
-                               ('qres', cal['qres'][:][rows])):
-                write.create_array(name = key, data = np.asarray(value))
-            grp = dl.create_group(write, dl.STREAM_NAME, 'raw')
-            await crs.stream(duration_s, dec_stage, grp, verbose = verbose)
+            part = f' {c_i + 1}/{len(chunks)}' if len(chunks) > 1 else ''
+            if tones_written(written, s, rows, cal.path) and \
+                    written.get('write') in root:
+                say(f'Tone set {s}: tones{part} already written')
+                write = root[written['write']]
+            else:
+                say(f'Tone set {s}: writing {len(rows)} tones{part}')
+                write, _ = dl.new_indexed_group(cal, 'write', 'raw')
+                await write_set_tones(crs, cal, rows, written, grp = write)
+                for key, value in (('sweep_rows', rows),
+                                   ('res_idxs', cal['res_idxs'][:][rows]),
+                                   ('qres', cal['qres'][:][rows])):
+                    write.create_array(name = key, data = np.asarray(value))
+                written['write'] = write.path
+            say(f'Tone set {s}: stream{part} ({len(rows)} tones, '
+                f'{duration_s:g} s at stage {dec_stage})')
+            grp = dl.create_group(write, ts_name, 'raw', attrs = dict(
+                name = str(name), notes = str(notes),
+                dec_stage = int(dec_stage), duration_s = float(duration_s),
+                run = n))
             paths.append(grp.path)
+            dl.update_stream_run(tune, n, paths = paths)
+            await crs.stream(duration_s, dec_stage, grp, verbose = verbose,
+                             **({} if progress is None else
+                                dict(progress = progress)))
+    if not keep_tones:
         await crs.clear_tones()
-    run.attrs['complete'] = True
+        written.clear()
+    more = dict(calibration = used[str(sets[0])]) if len(sets) == 1 \
+        else dict(calibrations = used)
+    dl.update_stream_run(tune, n, paths = paths, complete = True, **more)
     say(f'{name}: done as ts{n} ({len(paths)} streams)')
     return paths
 

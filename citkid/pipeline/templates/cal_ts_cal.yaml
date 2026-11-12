@@ -1,0 +1,44 @@
+### ----------------------------- ###
+###  x calibration of timestreams  ###
+### ----------------------------- ###
+# As cal_ts.yaml without the spectra (get_sparper, get_sfactor_reduced,
+# get_sxx, get_sxx_reduced): the stream calibration (pipeline.stream_sources)
+# works on several runs' windows one after another, possibly from different
+# decimation stages, whose spectra would mean nothing. Spectra of a whole
+# run come from its applied x (apply_stream_calibration) and its own dt.
+
+CAL_STEPS:
+  1 :
+    task: load_global_data
+  2 :
+    task: load_global_res_data
+    T_STEPS:
+      1:
+        task: load_ft
+      2:
+        task: load_zt
+      3:
+        task: rmv_gain_t
+      4:
+        task: center_t
+      5:
+        task: get_thetat
+        A_STEPS:
+          1:
+            task: get_At
+      6:
+        task: get_xt
+    F_STEPS:
+      1:
+        task: load_sweep_f # must be sorted on axis 1
+      2:
+        task: rmv_gain_f
+      3:
+        task: center_f
+      4:
+        task: get_thetaf
+      5:
+        task: get_xf
+    G_STEPS:
+      1:
+        task: load_sweep_g

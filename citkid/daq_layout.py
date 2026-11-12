@@ -45,6 +45,7 @@ TONE_ARRAYS = ('fres', 'qres', 'ares', 'res_idxs', 'tone_set',
 RESONATORS_PREFIX = 'resonators'
 # Timestream runs at the store root (ts{n}) and each executed stream
 TS_PREFIX = 'ts'
+CAL_PREFIX = 'cal'
 STREAM_NAME = 'stream'
 RESONATOR_ARRAYS = ('res_idxs_all', 'fres_all', 'qres_all', 'Qr_all',
                     'depth_all', 'source_all')
@@ -804,10 +805,104 @@ def store_root(grp, mode = 'r'):
     """
     return zarr.open_group(grp.store, path = '', mode = mode)
 
+def calibrations(tune):
+    """
+    Return a tuning's saved calibration sweeps (``cal{j}``, made by
+    ``crs.procedures.calibrate_tone_set``), oldest first.
+
+    Parameters:
+    tune (zarr.Group): the tuning.
+
+    Returns:
+    cals (list of dict): per sweep: ``name`` ('cal{j}'), ``path`` (in the
+        store), ``index`` (j), ``tone_set``, ``created``, ``complete``,
+        ``ntones``, ``npoints_fine`` (0 without a fine sweep), ``nsamps``,
+        and ``nco_ids`` (the NCO settings it was taken under, see
+        ``crs.procedures.calibration_in_frame``).
+    """
+    out = []
+    for j in list_indices(tune, CAL_PREFIX):
+        grp = tune[set_name(j, CAL_PREFIX)]
+        ntones = int(grp['fres'].shape[0]) if 'fres' in grp else 0
+        npoints = int(grp['fine_sweep/z'].shape[1]) \
+            if 'fine_sweep' in grp and 'z' in grp['fine_sweep'] else 0
+        out.append(dict(
+            name = grp.basename, path = grp.path, index = j,
+            tone_set = grp.attrs.get('tone_set'),
+            created = grp.attrs.get('created'),
+            complete = bool(grp.attrs.get('complete')), ntones = ntones,
+            npoints_fine = npoints, nsamps = grp.attrs.get('nsamps'),
+            nco_ids = grp.attrs.get('nco_ids')))
+    return out
+
+STREAMS_GROUP = 'streams'
+
+def register_stream_run(tune, record):
+    """
+    Add a timestream run to a tuning's run list (``tune{k}/streams``,
+    attr ``runs``), as the next ``ts{n}``.
+
+    Parameters:
+    tune (zarr.Group): the tuning, writable.
+    record (dict): the run: ``name``, ``notes``, ``dec_stage``,
+        ``duration_s``, ``tone_set``, ``calibration`` (the ``cal{j}``
+        its streams are under), ``paths`` (its stream groups, filled in
+        as they are taken), ``complete``, and anything else to keep.
+
+    Returns:
+    n (int): the run's index.
+    """
+    grp = require_group(tune, STREAMS_GROUP, 'raw')
+    runs = list(grp.attrs.get('runs', []))
+    n = len(runs)
+    runs.append(to_jsonable(dict(record, run = n, created = _now())))
+    grp.attrs['runs'] = runs
+    return n
+
+def update_stream_run(tune, n, **changes):
+    """
+    Change a run's record in the tuning's run list.
+
+    Parameters:
+    tune (zarr.Group): the tuning, writable.
+    n (int): the run's index.
+    **changes: fields to set, e.g. ``paths``, ``complete``.
+    """
+    grp = tune[STREAMS_GROUP]
+    runs = list(grp.attrs.get('runs', []))
+    runs[n] = to_jsonable(dict(runs[n], **changes))
+    grp.attrs['runs'] = runs
+
+def _stream_size(root, run):
+    """
+    Keep a run's finished streams and add its sample count and chunk
+    layout from the first of them, if any.
+
+    Parameters:
+    root (zarr.Group): the store root.
+    run (dict): the run, with ``paths``; changed in place.
+    """
+    paths = [p for p in run['paths']
+             if p in root and 'dt' in root[p] and 'z' in root[p]]
+    run['paths'] = paths
+    if paths:
+        st = root[paths[0]]
+        nsamp, chunk = int(st['z'].shape[2]), int(st['z'].chunks[2])
+        dt = float(st['dt'][...])
+        run.update(nsamples = nsamp, chunk_samples = chunk,
+                   n_chunks = -(-nsamp // chunk), chunk_s = chunk * dt)
+
 def stream_runs(root, tuning = None):
     """
-    Return the store's timestream runs (``ts{n}``, made by
-    ``crs.procedures.stream_tone_sets``), with each run's chunk layout.
+    Return the store's timestream runs, with each run's chunk layout.
+
+    A run is one named timestream of a tone set, taken by
+    ``crs.procedures.stream_tone_sets`` on its calibration sweep: its
+    streams are ``tune{k}/cal{j}/write{w}/ts{n}`` (one per write; a tone
+    set streams in several writes at fast decimation stages), and the
+    tuning's run list (``tune{k}/streams``) records it. Runs saved by
+    earlier versions as ``ts{n}`` at the store root, with the sweep
+    copied into them, are listed too.
 
     Parameters:
     root (zarr.Group): the store root.
@@ -815,15 +910,18 @@ def stream_runs(root, tuning = None):
         None (default): all.
 
     Returns:
-    runs (list of dict): per run, in order: its attributes (``name``,
-        ``notes``, ``dec_stage``, ``duration_s``, ``tone_sets``,
-        ``tuning``, ``tones``, ``resonators``, ``complete``, ``created``)
-        plus ``run`` (n), ``group`` ('ts{n}'), ``paths`` (its streams,
-        e.g. 'ts3/set0/write0/stream'), and, if it has streams,
-        ``nsamples``, ``chunk_samples`` (zarr chunk length along time),
-        ``n_chunks``, and ``chunk_s`` (chunk length in s).
+    runs (list of dict): per run, in order: its record (``name``,
+        ``notes``, ``dec_stage``, ``duration_s``, ``tone_set``,
+        ``calibration``, ``tuning``, ``complete``, ``created``) plus
+        ``run`` (n), ``group`` ('ts{n}', its label; the group of a root
+        run), ``paths`` (its finished streams, e.g.
+        'tune0/cal0/write0/ts3'; one still being written is left out),
+        and, if it has streams, ``nsamples``, ``chunk_samples`` (zarr
+        chunk length along time), ``n_chunks``, and ``chunk_s`` (chunk
+        length in s).
     """
     out = []
+    # Runs at the store root (earlier layout)
     for n in list_indices(root, TS_PREFIX):
         grp = root[set_name(n, TS_PREFIX)]
         run = dict(grp.attrs, run = n, group = grp.basename)
@@ -833,17 +931,26 @@ def stream_runs(root, tuning = None):
         for s in list_indices(grp, 'set'):
             sg = grp[set_name(s)]
             for w in list_indices(sg, 'write'):
-                if STREAM_NAME in sg[set_name(w, 'write')]:
+                wg = sg[set_name(w, 'write')]
+                if STREAM_NAME in wg:
                     paths.append(f'{grp.basename}/{set_name(s)}/'
                                  f'{set_name(w, "write")}/{STREAM_NAME}')
         run['paths'] = paths
-        if paths:
-            st = root[paths[0]]
-            nsamp, chunk = int(st['z'].shape[2]), int(st['z'].chunks[2])
-            dt = float(st['dt'][...])
-            run.update(nsamples = nsamp, chunk_samples = chunk,
-                       n_chunks = -(-nsamp // chunk), chunk_s = chunk * dt)
+        _stream_size(root, run)
         out.append(run)
+    # Runs on their calibrations
+    for k in list_indices(root, 'tune'):
+        tune = root[set_name(k, 'tune')]
+        if tuning is not None and tune.basename != tuning:
+            continue
+        if STREAMS_GROUP not in tune:
+            continue
+        for rec in tune[STREAMS_GROUP].attrs.get('runs', []):
+            run = dict(rec, tuning = tune.basename,
+                       group = set_name(int(rec['run']), TS_PREFIX))
+            run['paths'] = list(rec.get('paths', []))
+            _stream_size(root, run)
+            out.append(run)
     return out
 
 def describe_stream_runs(root, tuning = None):
@@ -858,28 +965,30 @@ def describe_stream_runs(root, tuning = None):
     Returns:
     text (str): the description.
     """
-    lines = ['Timestream runs (ts{n}: name, tuning, stage, length, tone '
-             'sets, zarr chunks, notes):']
+    lines = ['Timestream runs (ts{n}: name, tuning, calibration, stage, '
+             'length, tone set(s), zarr chunks, notes):']
     for r in stream_runs(root, tuning):
         chunks = (f"{r['n_chunks']} chunks of {r['chunk_s']:.3g} s"
                   if 'n_chunks' in r else 'no streams')
         done = '' if r.get('complete') else ', incomplete'
+        sets = r['tone_set'] if 'tone_set' in r else r.get('tone_sets')
         lines.append(
-            f"  {r['group']}: {r.get('name')}, {r.get('tuning')}, stage "
-            f"{r.get('dec_stage')}, {r.get('duration_s', 0):g} s, sets "
-            f"{r.get('tone_sets')}, {chunks}{done}"
+            f"  {r['group']}: {r.get('name')}, {r.get('tuning')}, "
+            f"{r.get('calibration', 'copied')}, stage {r.get('dec_stage')}, "
+            f"{r.get('duration_s', 0):g} s, set {sets}, {chunks}{done}"
             + (f", {r['notes']}" if r.get('notes') else ''))
     if len(lines) == 1:
         lines.append('  none')
     return '\n'.join(lines)
 
 def select_streams(
-    root, name = None, run = None, chunks = None, tone_sets = None
+    root, name = None, run = None, chunks = None, tone_sets = None,
+    tuning = None
 ):
     """
     Turn one choice of streams into sources for
-    ``pipeline.stream_sources``: one per tone set of the run (its
-    calibration sweep with all its writes), with a window of zarr chunks.
+    ``pipeline.stream_sources``: one per calibration sweep of the run
+    (with all its writes), with a window of zarr chunks.
 
     Parameters:
     root (zarr.Group): the store root.
@@ -891,10 +1000,13 @@ def select_streams(
         stop) for chunks first, ..., stop - 1.
     tone_sets (list of int or None): tone sets to keep. None (default):
         all.
+    tuning (str or None): only this tuning's runs (``ts{n}`` counts
+        per tuning). Default None: the latest tuning's for ``run``.
 
     Returns:
-    sources (list of dict): ``group``, ``writes``, ``start``, ``stop``,
-        ``stream``.
+    sources (list of dict): ``group`` (the calibration sweep),
+        ``writes``, ``start``, ``stop``, ``stream`` (the stream's name
+        under each write).
     run (dict): the run (``stream_runs``), plus ``start`` and ``stop``.
 
     Raises:
@@ -902,12 +1014,12 @@ def select_streams(
     ValueError: if the chunk window is empty, or the run's streams have
         different lengths.
     """
-    runs = stream_runs(root)
+    runs = stream_runs(root, tuning)
     if run is not None:
         match = [r for r in runs if r['run'] == int(run)]
         if not match:
             raise KeyError(f'the store has no ts{run}')
-        r = match[0]
+        r = match[-1]
         if name is not None and r.get('name') != name:
             raise KeyError(f"ts{run} is {r.get('name')!r}, not {name!r}")
     else:
@@ -930,7 +1042,7 @@ def select_streams(
                          f"{r['group']} ({r['n_chunks']} chunks)")
     sources = []
     for path in r['paths']:
-        sweep, write, _ = path.rsplit('/', 2)
+        sweep, write, stream = path.rsplit('/', 2)
         if root[path]['z'].shape[2] != r['nsamples']:
             raise ValueError(f'{path} has a different length')
         if tone_sets is not None and \
@@ -941,8 +1053,97 @@ def select_streams(
         else:
             sources.append(dict(group = sweep, writes = [write],
                                 start = int(start), stop = int(end),
-                                stream = STREAM_NAME))
+                                stream = stream))
     return sources, dict(r, start = int(start), stop = int(end))
+
+def migrate_root_runs(path, verbose = True):
+    """
+    Move a store's root-level timestream runs, the layout of earlier
+    versions (``ts{n}`` at the root, with the calibration sweep copied
+    into it and the streams in ``ts{n}/set{s}/write{w}/stream``), under
+    the calibrations they were taken with
+    (``tune{k}/cal{j}/write{w}/ts{n}``, see
+    ``crs.procedures.stream_tone_sets``), and list them in their tunings'
+    run lists; the copied sweeps are deleted. A run whose sets record no
+    calibration (attr ``calibration``), or whose calibration or tuning
+    is gone, is left where it is.
+
+    The store must be a local directory store: its groups are moved on
+    disk. Nothing else should have it open.
+
+    Parameters:
+    path (str or os.PathLike): the store's path.
+    verbose (bool): If True (default), say what is moved.
+
+    Returns:
+    moved (list of str): the runs moved, e.g. ['ts0', 'ts1'].
+    """
+    import shutil
+    path = os.path.expanduser(str(path))
+    root = open_store(path, mode = 'a')
+    moved = []
+    for n in list_indices(root, TS_PREFIX):
+        name = set_name(n, TS_PREFIX)
+        grp = root[name]
+        attrs = dict(grp.attrs)
+        tuning = attrs.get('tuning')
+        sets = list_indices(grp, 'set')
+        cals = {}
+        for s in sets:
+            cal = grp[set_name(s)].attrs.get('calibration') or \
+                (attrs.get('calibrations') or {}).get(str(s))
+            if cal and cal in root:
+                cals[s] = cal
+        if tuning not in root or len(cals) != len(sets) or not sets:
+            if verbose:
+                print(f'{name}: left as it is (no tuning or calibration '
+                      'to move it to)')
+            continue
+        tune = root[tuning]
+        record = dict(
+            name = attrs.get('name'), notes = attrs.get('notes', ''),
+            dec_stage = attrs.get('dec_stage'),
+            duration_s = attrs.get('duration_s'), tuning = tuning,
+            tones = attrs.get('tones'), resonators = attrs.get('resonators'),
+            complete = bool(attrs.get('complete')), paths = [],
+            moved_from = name)
+        if len(sets) == 1:
+            record.update(tone_set = sets[0], calibration = cals[sets[0]])
+        else:
+            record.update(tone_sets = sets,
+                          calibrations = {str(s): c for s, c in cals.items()})
+        new_n = register_stream_run(tune, record)
+        if attrs.get('created'):
+            update_stream_run(tune, new_n, created = attrs['created'])
+        ts_name = set_name(new_n, TS_PREFIX)
+        paths = []
+        for s in sets:
+            sg = grp[set_name(s)]
+            cal = root[cals[s]]
+            for w in list_indices(sg, 'write'):
+                wname = set_name(w, 'write')
+                new_w = set_name(next_index(cal, 'write'), 'write')
+                src = os.path.join(path, name, set_name(s), wname)
+                dst = os.path.join(path, *cal.path.split('/'), new_w)
+                shutil.move(src, dst)
+                stream_dir = os.path.join(dst, STREAM_NAME)
+                if os.path.isdir(stream_dir):
+                    os.rename(stream_dir, os.path.join(dst, ts_name))
+                    ts = root[f'{cal.path}/{new_w}/{ts_name}']
+                    ts.attrs.update(dict(
+                        name = record['name'], notes = record['notes'],
+                        dec_stage = record['dec_stage'],
+                        duration_s = record['duration_s'], run = new_n))
+                    paths.append(ts.path)
+                if verbose:
+                    print(f'{name}/{set_name(s)}/{wname} -> {cal.path}/{new_w}')
+        update_stream_run(tune, new_n, paths = paths)
+        shutil.rmtree(os.path.join(path, name))
+        moved.append(name)
+        if verbose:
+            print(f'{name}: now {tuning}/streams run {new_n} ({len(paths)} '
+                  'streams); the copied sweep deleted')
+    return moved
 
 ################################################################################
 ################################## Porting #####################################

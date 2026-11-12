@@ -26,6 +26,11 @@ def loop_tangent_shift(f, z, f_tone, zt, n_fit = 5):
     cable delay cancel, since the sweep and the stream pass through the
     same chain at the same tone.
 
+    The stream must be in the sweep's phase frame: measured with the
+    same NCO setting, since setting an NCO changes the frame (see
+    ``crs.procedures.calibrate_tone_set``); off the frame, the projection
+    is wrong and its sign can flip.
+
     Parameters:
     f (np.array): calibration sweep frequencies in Hz (any order).
     z (np.array): calibration sweep complex S21, same shape as ``f``.

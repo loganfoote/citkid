@@ -12,7 +12,7 @@ HAS_TORCH = importlib.util.find_spec('torch') is not None
 @pytest.mark.skipif(HAS_TORCH, reason = 'PyTorch is installed')
 def test_cnn_finder_without_torch(full_sweep):
     f, z, _, _ = full_sweep
-    with pytest.raises(ImportError, match = 'environment-cnn.yml'):
+    with pytest.raises(ImportError, match = 'uv sync --extra cnn'):
         find_resonances_cnn(f, z)
 
 def test_accept_candidates():

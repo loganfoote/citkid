@@ -2,23 +2,30 @@
 05: calibrate timestreams.
 
 Choose the streams in ``CALIBRATE`` (below): each entry is a timestream
-run of 04_stream.py (``ts{n}`` at the store root) by name (the latest run
-with that name) or index (``run = n``), a window of zarr chunks along time
+run of 04_stream.py (``ts{n}`` in a tuning's run list, its streams under
+the calibration sweep they belong to) by name (the latest run with that
+name) or index (``run = n``), a window of zarr chunks along time
 (``chunks``: all of it by default, n for the first n chunks, or (first,
 stop)), and optionally some tone sets. Loading only a few chunks keeps
 loading fast. With ``CALIBRATE`` empty, the script lists the runs (name,
 tuning, stage, length, tone sets, chunks, notes) and stops.
 
-The chosen streams are loaded one after another into one DataSet
-(``pipeline.stream_sources``) per decimation stage, window length, and
-resonator list:
-each row is one tone of one run, with ``source_idx`` (which entry and tone
-set) and ``write_idx`` (which tones were streamed together, for
-common-mode removal). The rows are calibrated with the 'ts' path (gain
-fit, IQ circle fit, x calibration): first in the interactive window, then
-in batch for the rows not done there. Calibration tones (res_idxs < 0), if
-the runs have any, get their own DataSet with the 'ts_offres' path, in
-batch.
+The chosen streams are loaded into one DataSet per tone set
+(``pipeline.stream_sources``): each row is one tone, and its timestream is
+its windows from every chosen run, one after another (``source_bounds``
+says where each run's samples are; ``write_idx`` says which tones were
+streamed together, for common-mode removal). So the calibration is done
+once, on everything chosen, whatever the runs' decimation stages: it
+takes no spectra (the 'ts_cal' path: gain fit, IQ circle fit, x
+calibration), first in the interactive window, then in batch for the
+rows not done there. Calibration tones (res_idxs < 0), if the runs have any,
+get their own DataSet with the 'ts_offres' path, in batch.
+
+The calibration is applied to whole runs by the scripts that come after
+this one (e.g. photon detection), with
+``pipeline.stream_sources.apply_stream_calibration``: every tone's x (or
+other outputs) over a run's whole length, chunk by chunk, with the run's
+own sample period.
 
 Everything goes in ``ts_cal{c}`` at the store root (an analysis group:
 delete it to start over). Running again with the same ``CALIBRATE``
@@ -146,17 +153,17 @@ def cal_group(root, selection, new, notes = None):
 
 def plan_datasets(root, selection):
     """
-    Resolve the chosen streams and group them into DataSets: one per
-    decimation stage, window length, and resonator list (the pipeline holds
-    one sample period and one list of neighbors per DataSet).
+    Resolve the chosen streams and group them into DataSets: one per tone
+    set (and resonator list), with the chosen runs' windows of that set
+    one after another, in the order of ``selection``.
 
     Parameters:
     root (zarr.Group): the store root.
     selection (list of dict): ``CALIBRATE``.
 
     Returns:
-    groups (dict): name: dict(sources, entries, resonators), in order of
-        first use.
+    groups (dict): name: dict(sources, entries, resonators, tone_set), in
+        order of first use.
     """
     groups = {}
     for i, entry in enumerate(selection):
@@ -164,17 +171,19 @@ def plan_datasets(root, selection):
         if not sources:
             raise ValueError(f'entry {i} ({entry}) selects no tone sets')
         res = run.get('resonators')
-        name = f"stage{run['dec_stage']}_n{run['stop'] - run['start']}"
-        if any(g['resonators'] != res for g in groups.values()) or \
-                name in groups and groups[name]['resonators'] != res:
-            name = f'{name}_{res}'
-        g = groups.setdefault(name, dict(sources = [], entries = [],
-                                         resonators = res))
-        g['sources'] += sources
-        g['entries'].append(dict(
-            entry = i, run = run['group'], name = run.get('name'),
-            start = run['start'], stop = run['stop'],
-            sources = [s['group'] for s in sources]))
+        for src in sources:
+            s = int(root[src['group']].attrs['tone_set'])
+            name = f'set{s}'
+            if any(g['resonators'] != res for g in groups.values()) or \
+                    name in groups and groups[name]['resonators'] != res:
+                name = f'{name}_{res}'
+            g = groups.setdefault(name, dict(sources = [], entries = [],
+                                             resonators = res, tone_set = s))
+            g['sources'].append(src)
+            g['entries'].append(dict(
+                entry = i, run = run['group'], name = run.get('name'),
+                start = run['start'], stop = run['stop'],
+                source = src['group']))
     return groups
 
 def main(args):

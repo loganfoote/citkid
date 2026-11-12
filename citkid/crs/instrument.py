@@ -1,3 +1,4 @@
+import uuid
 import os
 import asyncio
 import shutil
@@ -9,7 +10,7 @@ from tqdm.auto import tqdm
 import functools
 
 # citkid imports
-from ..util import run_with_time_bar
+from ..util import run_with_time_bar, run_with_time_progress
 from . import board_lock, util
 from .. import __version__ as citkid_version
 
@@ -114,6 +115,7 @@ class CRS:
         self.rfmux_version = '1.4.1'
         self.citkid_version = citkid_version
         self.nco_freqs = {}
+        self.nco_ids = {}
 
         # Initialize CRS object
         session_str = (
@@ -677,38 +679,57 @@ class CRS:
             msg += f'modules = {module_idxs}'
             print(msg)
 
-    async def set_nco(self, nco_freqs, verbose = True):
+    async def set_nco(self, nco_freqs, verbose = True, force = False):
         """
-        Set the NCO frequency.
+        Set the NCO frequency of modules whose NCO isn't there already.
+
+        Setting an NCO starts a new phase frame: what the board measures
+        afterwards is rotated by an arbitrary angle from what it measured
+        before. So a stream is only in its calibration sweep's frame if no
+        NCO of its modules was set between the two, and an NCO already at
+        its frequency (within 1 Hz) is left alone unless ``force``. Each
+        setting gets an id in ``nco_ids`` (module: str), recorded by
+        calibration sweeps to tell whether they are still in frame.
 
         Parameters:
         nco_freqs (dict): keys (int) are module indices and values (float)
             are NCO frequencies in Hz. Modules must be owned by this session
             and in the active analog bank.
         verbose (bool): If True, prints the NCO frequencies after confirming.
+        force (bool): If True, set every module's NCO, even one already at
+            its frequency. Default False.
 
         Returns:
-        None
+        changed (list of int): the modules whose NCO was set.
         """
         # Input validation
         self._require_configured()
         _validate_nco_freqs(nco_freqs, self.analog_bank_high)
         self._check_owned_modules(list(nco_freqs.keys()))
 
-        # Set NCO frequencies
-        nco_freqs = nco_freqs.copy()
-        modules = util.get_modules(self.d, list(nco_freqs.keys()))
+        # Set NCO frequencies, except those already there
+        nco_freqs = {m: f for m, f in nco_freqs.items() if force or
+                     m not in self.nco_freqs or
+                     not np.isclose(self.nco_freqs[m], f, atol = 1., rtol = 0.)}
+        changed = sorted(nco_freqs)
+        if not changed:
+            if verbose:
+                print('NCO frequencies already set')
+            return changed
+        modules = util.get_modules(self.d, changed)
         await modules._set_nco(nco_freqs)
         self.nco_freqs.update(nco_freqs)
-
+        for m in changed:
+            self.nco_ids[m] = uuid.uuid4().hex[:12]
         # Clear channels on modules with newly set NCO frequencies
-        await self._clear_channels(list(nco_freqs.keys()))
+        await self._clear_channels(changed)
 
         # Print NCO frequencies if verbose
         for module_idx, nco in nco_freqs.items():
             if verbose:
                 nco_str = f'{round(nco * 1e-6, 6)}'
                 print(f'Module {module_idx} NCO is {nco_str} MHz')
+        return changed
 
     async def disable_modules(self, module_idxs):
         """
@@ -1161,7 +1182,8 @@ class CRS:
     async def sweep_span(
         self, fres, ares, span, npoints, nsamps, ch_map = None,
         allow_missing = False, center_fres = True, downward = True, log = False,
-        acq_cfg_grp = None, verbose = True, pbar_description = 'Sweeping'
+        acq_cfg_grp = None, verbose = True, pbar_description = 'Sweeping',
+        progress = None
     ):
         """
         Perform a frequency sweep where each channel is swept over the same
@@ -1190,6 +1212,7 @@ class CRS:
             this zarr group.
         verbose (bool): If True, displays a progress bar while sweeping.
         pbar_description (str): description for the progress bar.
+        progress (callable or None): see ``CRS.sweep``. Default None.
 
 
         Returns:
@@ -1228,14 +1251,14 @@ class CRS:
         f, z = await self.sweep(
             freqs, ares, nsamps, ch_map = ch_map, allow_missing = allow_missing,
             acq_cfg_grp = acq_cfg_grp, verbose = verbose,
-            pbar_description = pbar_description
+            pbar_description = pbar_description, progress = progress
             )
         return f, z
 
     async def sweep_qres(
         self, fres, ares, qres, npoints, nsamps, ch_map = None,
         allow_missing = False, acq_cfg_grp = None, verbose = True,
-        pbar_description = 'Sweeping'
+        pbar_description = 'Sweeping', progress = None
     ):
         """
         Perform a downward frequency sweep where the span around each frequency
@@ -1259,6 +1282,7 @@ class CRS:
             this zarr group.
         verbose (bool): If True, displays a progress bar while sweeping.
         pbar_description (str): description for the progress bar.
+        progress (callable or None): see ``CRS.sweep``. Default None.
 
         Returns:
         f (M X N np.array): array of frequencies where M is the channel index
@@ -1286,7 +1310,7 @@ class CRS:
         f, z = await self.sweep(
             freqs, ares, nsamps, ch_map = ch_map, allow_missing = allow_missing,
             acq_cfg_grp = acq_cfg_grp, verbose = verbose,
-            pbar_description = pbar_description
+            pbar_description = pbar_description, progress = progress
             )
         return f, z
 
@@ -1487,7 +1511,7 @@ class CRS:
     @uses_board
     async def stream(
         self, ts_duration_s, dec_stage, grp, tmp_directory = None,
-        verbose = True
+        verbose = True, progress = None
     ):
         """
         Stream a timestream of the currently written tones to a Zarr group.
@@ -1530,6 +1554,9 @@ class CRS:
             store is deleted after a successful copy, and kept if streaming
             or copying fails.
         verbose (bool): If True, displays progress bars while taking data.
+        progress (callable or None): if given, called as ``progress(done,
+            total)`` in samples, from the elapsed time, every 0.2 s while
+            streaming (``util.run_with_time_progress``). Default None.
 
         Returns:
         None
@@ -1577,7 +1604,7 @@ class CRS:
             dec_stage, ts_duration_s, verbose, util.capture_to_zarr,
             self.interface, self.serial_number, module_idxs, max_ntones,
             nframes, z_dest, self.ch_map,
-            cfg_grp = grp.require_group('crs_config')
+            cfg_grp = grp.require_group('crs_config'), progress = progress
             )
         _warn_dropped(dropped)
 
@@ -1593,7 +1620,9 @@ class CRS:
             )
 
     @uses_board
-    async def stream_to_memory(self, ts_duration_s, dec_stage, verbose = True):
+    async def stream_to_memory(
+        self, ts_duration_s, dec_stage, verbose = True, progress = None
+    ):
         """
         Stream a timestream of the currently written tones into memory and
         return it as S21. Nothing is saved to disk. Does not change written
@@ -1612,6 +1641,7 @@ class CRS:
         dec_stage (int): dec_stage frequency downsampling factor.
             See self.set_decimation for details.
         verbose (bool): If True, displays a progress bar while taking data.
+        progress (callable or None): see ``stream``. Default None.
 
         Returns:
         zt (np.array complex128): timestream of shape (ntones, nsamples),
@@ -1636,7 +1666,7 @@ class CRS:
         buffers, dropped = await self._capture(
             dec_stage, ts_duration_s, verbose, util.capture_to_memory,
             self.interface, self.serial_number, module_idxs, max_ntones,
-            nframes
+            nframes, progress = progress
             )
         _warn_dropped(dropped)
 
@@ -1680,7 +1710,8 @@ class CRS:
         return max_ntones, module_idxs, nframes
 
     async def _capture(
-        self, dec_stage, ts_duration_s, verbose, capture, *args, cfg_grp = None
+        self, dec_stage, ts_duration_s, verbose, capture, *args,
+        cfg_grp = None, progress = None
     ):
         """
         Set the decimation stage, run a capture function, and restore the
@@ -1696,18 +1727,27 @@ class CRS:
         cfg_grp (zarr.Group or None): if not None, the acquisition
             configuration is saved to this group after setting the
             decimation.
+        progress (callable or None): ``progress(done, total)`` in samples,
+            from the elapsed time (see ``stream``). Default None.
 
         Returns:
         The return value of capture.
         """
+        if progress is not None and not callable(progress):
+            raise TypeError('progress must be callable or None')
         await self.set_decimation(dec_stage, verbose = verbose)
         try:
             if cfg_grp is not None:
                 util.write_acq_cfg_to_zarr(self, cfg_grp)
+            fn, fargs = capture, args
             if verbose:
-                return run_with_time_bar(capture, ts_duration_s, 'Streaming',
-                                         *args)
-            return capture(*args)
+                fn = run_with_time_bar
+                fargs = (capture, ts_duration_s, 'Streaming') + tuple(args)
+            if progress is None:
+                return fn(*fargs)
+            total = int(round(ts_duration_s * util.get_sample_freq(dec_stage)))
+            return run_with_time_progress(fn, ts_duration_s, progress, total,
+                                          *fargs)
         finally:
             # Restore the shared sweep stage so other sessions can sweep
             if self.shared and self.global_control and dec_stage != 6:

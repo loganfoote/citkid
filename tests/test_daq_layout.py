@@ -499,3 +499,92 @@ def test_tree(tmp_path):
     assert sweeps[:3] == ['sweep0/  [raw]', 'sweep2/  [raw]',
                           'sweep10/  [raw]']
     assert all(not s.startswith(' ') for s in dl.tree(root, 1).splitlines())
+
+
+def test_migrate_root_runs(tmp_path):
+    """
+    A root-level run of the earlier layout (the calibration sweep copied
+    into ts{n}, streams in set{s}/write{w}/stream) moves under its
+    calibration as cal{j}/write{w}/ts{n}, listed in the tuning's run list;
+    one without a calibration to go to stays.
+    """
+    path = tmp_path / 'old.zarr'
+    root = dl.create_store(path, 'devA', 'cd1')
+    dl.save_resonators(root, 0, [1e9, 1.1e9], 2e4, 'x')
+    tune, _ = dl.new_tuning(root, 0)
+    dl.save_tones(dl.create_group(tune, 'tones', 'decision'), [1e9, 1.1e9],
+                  3e4, -50., [0, 1], tone_set = [1, 1])
+    cal = dl.create_group(tune, 'cal0', 'raw', attrs = dict(
+        tone_set = 1, complete = True))
+    cal.create_array('fres', data = np.array([1e9, 1.1e9]))
+    cal.create_array('res_idxs', data = np.array([0, 1]))
+
+    def old_run(n, name, with_cal):
+        """
+        Make a root-level run of the earlier layout.
+
+        Parameters:
+        n (int): its index.
+        name (str): its name.
+        with_cal (bool): whether its set records the calibration.
+        """
+        attrs = dict(name = name, notes = 'n', dec_stage = 6,
+                     duration_s = 1., tone_sets = [1], tuning = 'tune0',
+                     tones = 'tune0/tones', resonators = 'resonators0',
+                     complete = True)
+        if with_cal:
+            attrs['calibrations'] = {'1': 'tune0/cal0'}
+        run = dl.create_group(root, f'ts{n}', 'raw', attrs = attrs)
+        sg = dl.create_group(run, 'set1', 'raw', attrs = dict(
+            tone_set = 1, **({'calibration': 'tune0/cal0'} if with_cal
+                             else {})))
+        sg.create_array('fres', data = np.array([1e9, 1.1e9]))
+        sg.create_group('fine_sweep').create_array('z', data = np.ones(4))
+        w = dl.create_group(sg, 'write0', 'raw', attrs = dict(
+            tones_reused = False))
+        w.create_array('fres', data = np.array([1e9, 1.1e9]))
+        w.create_array('sweep_rows', data = np.array([0, 1]))
+        st = dl.create_group(w, 'stream', 'raw', attrs = dict(
+            timestamp = 't'))
+        st.create_array('z', data = np.full((2, 2, 8), n, dtype = np.int32))
+        st.create_array('counts_to_s21', data = np.ones(2))
+        st.create_array('dt', data = np.array(0.01))
+
+    old_run(0, 'dark', True)
+    old_run(1, 'nocal', False)
+    old_run(2, 'led', True)
+    created = root['ts2'].attrs['created']
+    assert [r['group'] for r in dl.stream_runs(root)] == ['ts0', 'ts1',
+                                                          'ts2']
+    moved = dl.migrate_root_runs(path, verbose = False)
+    assert moved == ['ts0', 'ts2']
+    root = dl.open_store(path)
+    assert 'ts0' not in root and 'ts2' not in root and 'ts1' in root
+    assert sorted(k for k in root['tune0/cal0'].keys()
+                  if k.startswith('write')) == ['write0', 'write1']
+    for w, n, name in (('write0', 0, 'dark'), ('write1', 1, 'led')):
+        wg = root[f'tune0/cal0/{w}']
+        assert 'stream' not in wg and f'ts{n}' in wg
+        ts = wg[f'ts{n}']
+        assert ts.attrs['name'] == name and ts.attrs['run'] == n
+        assert ts.attrs['timestamp'] == 't'
+        np.testing.assert_array_equal(wg['sweep_rows'][:], [0, 1])
+    assert root['tune0/cal0/write1/ts1/z'][0, 0, 0] == 2
+    runs = dl.stream_runs(root)
+    # The old-layout run left, then the two moved (in the run list)
+    assert [r['group'] for r in runs] == ['ts1', 'ts0', 'ts1']
+    assert [r['name'] for r in runs] == ['nocal', 'dark', 'led']
+    moved_led = runs[2]
+    assert moved_led['calibration'] == 'tune0/cal0' and \
+        moved_led['tone_set'] == 1 and moved_led['moved_from'] == 'ts2'
+    assert moved_led['paths'] == ['tune0/cal0/write1/ts1']
+    assert moved_led['created'] == created and moved_led['complete']
+    assert moved_led['resonators'] == 'resonators0'
+    src, run = dl.select_streams(root, 'led')
+    assert src == [dict(group = 'tune0/cal0', writes = ['write1'], start = 0,
+                        stop = 8, stream = 'ts1')]
+    # The leftover old-layout run still selects as before
+    src, run = dl.select_streams(root, 'nocal')
+    assert src[0]['group'] == 'ts1/set1' and src[0]['stream'] == 'stream'
+    # Nothing left to move
+    assert dl.migrate_root_runs(path, verbose = False) == []

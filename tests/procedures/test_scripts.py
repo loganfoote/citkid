@@ -495,16 +495,19 @@ def test_05_calibrate_streams(tmp_path, monkeypatch, capsys):
     sel = [dict(name = 'dark6', chunks = 1), dict(run = 1, tone_sets = [1])]
     monkeypatch.setattr(m, 'CALIBRATE', sel)
     ds = m.main(m.parse_args(argv))
-    assert len(ds) == 2
+    # One DataSet per tone set: set 0 from the first entry, set 1 from
+    # both (its windows one after another)
+    assert sorted(ds) == ['set0', 'set1']
     root = dl.open_store(tmp_path / 's.zarr')
     cal = root['ts_cal0']
     assert cal.attrs['kind'] == 'analysis' and cal.attrs['selection'] == sel
-    n_set1 = int((root['tune0/tones/tone_set'][:] == 1).sum())
-    sizes = sorted(len(d.res_idxs[:]) for d in ds.values())
-    assert sizes == sorted([root['tune0/tones/fres'].shape[0], n_set1])
-    for d in ds.values():
-        x = d.xt[0]
-        assert np.isfinite(np.asarray(x)).all()
+    tone_set = root['tune0/tones/tone_set'][:]
+    for s in (0, 1):
+        d = ds[f'set{s}']
+        assert len(d.res_idxs[:]) == int((tone_set == s).sum())
+        assert np.isfinite(np.asarray(d.xt[0])).all()
+    assert len(np.asarray(ds['set1'].source_bounds)) == 2
+    assert len(np.asarray(ds['set0'].source_bounds)) == 1
     # Same choice: same cal group; a new one otherwise
     m.main(m.parse_args(argv))
     assert dl.list_indices(dl.open_store(tmp_path / 's.zarr'),
@@ -518,7 +521,8 @@ def test_05_calibrate_streams(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(m, 'run_ts_analysis',
                         lambda AR, title = '': opened.append(title))
     m.main(m.parse_args(argv[:2]))
-    assert len(opened) == 1 and 'ts_cal1' in opened[0]
+    # One window per tone set
+    assert len(opened) == 2 and all('ts_cal1' in t for t in opened)
 
 
 def test_03_tune_keep_stronger(tmp_path, monkeypatch):

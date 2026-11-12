@@ -5,6 +5,7 @@ import pytest
 import zarr
 
 from citkid.zarr_util import (
+    copy_group,
     create_zarr_param,
     write_zarr_row,
     write_zarr,
@@ -267,3 +268,26 @@ def test_write_single_array_accepts_list():
     write_single_array(root, 'arr', [1.0, 2.0, 3.0])
     np.testing.assert_array_equal(root['arr'][...], [1.0, 2.0, 3.0])
     assert root['arr'].dtype == np.float64
+
+
+def test_copy_group(tmp_path):
+    src = zarr.open_group(str(tmp_path / 'a.zarr'), mode = 'w')
+    src.attrs['kind'] = 'raw'
+    src.create_array('x', data = np.arange(5))
+    names = src.create_array('names', shape = (2,), dtype = str,
+                             fill_value = '')
+    names[:] = np.array(['a', 'b'])
+    sub = src.create_group('fine_sweep')
+    sub.attrs['timestamp'] = 't'
+    sub.create_array('z', data = np.ones((2, 3)) * 1j)
+    src.create_group('write0').create_array('fres', data = np.ones(2))
+    dst = zarr.open_group(str(tmp_path / 'b.zarr'), mode = 'w')
+    dst.attrs['created'] = 'now'
+    out = copy_group(src, dst, exclude = ('write',))
+    assert out is dst
+    assert dict(dst.attrs) == {'created': 'now', 'kind': 'raw'}
+    np.testing.assert_array_equal(dst['x'][:], np.arange(5))
+    assert list(dst['names'][:]) == ['a', 'b']
+    assert dst['fine_sweep'].attrs['timestamp'] == 't'
+    np.testing.assert_array_equal(dst['fine_sweep/z'][:], sub['z'][:])
+    assert 'write0' not in dst
