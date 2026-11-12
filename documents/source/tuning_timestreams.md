@@ -17,30 +17,40 @@ photon pulses in them are found.
 | `05_calibrate_streams.py` | Calibrates selected timestreams, first in an interactive window, then in batch | `ts_cal{c}` |
 | `06_find_photons.py` | Finds the photon pulses and cosmic rays in calibrated timestreams, with a window for choosing the thresholds | `ts_photons{p}` |
 
-As with the VNA screening scripts, each script has a settings block at the
-top, and command-line options override the settings for one run. Text in
-the `NOTES` setting (or `--notes`) is saved with the data. The scripts
-work on the device store `<DATA_DIR>/<COOLDOWN>/<DEVICE>.zarr`, or the
-store given with `--store`. With `--simulate`, the measurements are taken
-on the simulated device of a store made by `simulate_store.py`.
+Before running the measurement scripts, make sure the board is
+configured with `crs_init.py`. The "Getting started" document describes
+it, along with the environment, how the scripts are run (settings,
+command-line options, notes, `--simulate`), the device store, and the CRS
+terms used here (modules, NCOs, decimation stages, ...).
 
-A tuning group holds the tuning measurements and the tuned tones. Each
-timestream run is a separate group at the store root. It saves a copy of
-the tones it used, so it can be analyzed without the tuning group.
+A tuning group holds the tuning measurements, the tuned tones, and
+everything streamed with them. Before streaming a tone set, `04_stream.py`
+takes a calibration target sweep of it (`cal{j}`). The tones written to
+the board for streaming are saved under that sweep (`write{w}`), and each
+stream of those tones is saved under the write (`ts{n}`). A timestream
+run, `ts{n}`, is one named timestream, usually of one tone set; the
+tuning's run list (`streams`) records each run, with its streams.
 
 ```text
 <device>.zarr/
   tune{k}/              tuning (03)
-  ts{n}/                timestream run (04); attributes: name, notes,
-                        decimation stage, duration, tone sets, tuning
-    set{s}/             calibration target sweep of tone set s
-      write{w}/         tones written for one stream (the whole tone
-                        set, or part of it)
-        stream/         timestream data
-  ts_cal{c}/            calibrated timestreams (05)
-  ts_photons{p}/        photons and cosmic rays found in calibrated
-                        timestreams (06)
+    cal{j}/             calibration target sweep of one tone set (04)
+      write{w}/         tones written for streaming (the whole tone set,
+                        or part of it at fast decimation stages)
+        ts{n}/          stream of run n with these tones
+    streams/            run list (attribute runs): per run, its name,
+                        notes, decimation stage, duration, tone set,
+                        calibration, and streams
+  ts_cal{c}/            stream calibrations (05)
+  ts_photons{p}/        photon results (06)
 ```
+
+Calibrated timestreams are never saved. `05_calibrate_streams.py` saves
+calibrations, and the analysis scripts (such as `06_find_photons.py`)
+apply them to the raw streams they analyze, in memory, and save only
+their results. Stores made by earlier versions, with the runs at the
+store root (`ts{n}/set{s}/write{w}/stream`), can be converted with
+`citkid.daq_layout.migrate_root_runs`.
 
 ## Tone sets
 
@@ -140,25 +150,44 @@ sweeps.
 # 04_stream.py: take timestreams
 
 The script opens a window for one tuning (by default, the latest tuning
-that has tuned tones). The window has two parts:
+that has tuned tones). The window has three parts:
 
-- **Preview** (not saved): Choose a tone set and press Calibrate to take a
-  target sweep of it (kept in memory). Then press Capture to write the
-  tones and stream for a few seconds at the chosen decimation stage.
+- **Calibration** (saved): Choose a tone set and the sweep settings (fine
+  and gain sweep points, samples per point, gain sweep span; the defaults
+  are the settings below) and press Calibrate. This takes a target sweep
+  of the tone set and saves it as the tuning's next `cal{j}`. A
+  calibration takes minutes, so each tone set is calibrated once, and
+  every preview and run of the set after that uses the calibration. The
+  list shows the set's saved calibrations; the latest usable one is
+  chosen, and you can choose another.
+
+  A calibration is only valid while the NCO frequencies stay as they were
+  when it was taken. Calibrating or streaming another tone set sets other
+  NCO frequencies, after which the earlier calibrations are marked as
+  stale and can't be used. So work one tone set at a time: calibrate it,
+  then preview and run as often as needed, then go on to the next set.
+- **Preview** (not saved): Capture writes the calibration's tones and
+  streams for a few seconds (`PREVIEW_S`) at the chosen decimation stage.
   Select a tone to plot its timestream, either as the fractional
   frequency shift x (the projection onto the tangent of the IQ loop at
   the tone frequency), as the components along and across the loop, or as
   I and Q. The calibration loop and the timestream are also plotted in
   the IQ plane.
-- **Run** (saved): Enter a name, notes, a decimation stage, a duration,
-  and the tone sets to stream, or pick a preset from `PRESETS` (presets
-  can also choose tone sets). All tone sets are streamed by default;
-  choosing fewer saves time, for example for a long run on one tone set.
-  The run is saved as the next `ts{n}`. For each tone set, a new
-  calibration target sweep is taken (`set{s}`), followed by the stream
-  (`set{s}/write{w}/stream`). At fast decimation stages, a tone set with
-  too many tones to stream at once is streamed in several parts, with the
-  same NCO frequencies. The window lists the runs taken with this tuning.
+- **Run** (saved): Enter a name, notes, a decimation stage, and a
+  duration, or pick a preset from `PRESETS`, and run. The selected tone
+  set is streamed with its chosen calibration. The stream is saved under
+  the calibration and the tone write that put its tones on the board
+  (`cal{j}/write{w}/ts{n}`), and the run is added to the tuning's run
+  list. At fast decimation stages, a tone set with too many tones to
+  stream at once is streamed in several writes, with the same NCO
+  frequencies. The window lists the runs taken with this tuning.
+
+Tones stay written on the board between captures and runs. A capture or
+run of the same tones with the same calibration streams them without
+writing them again (the window shows "Tones on the board"). Write tones
+writes the selected set again on purpose. A different tone set, a
+different part of a set, or a new calibration sweep (which clears the
+board) means a new write.
 
 Streaming uses the board's full network bandwidth, so this script needs
 exclusive use of the board for as long as its window is open. It takes
@@ -195,22 +224,27 @@ List the timestreams to calibrate in `CALIBRATE`. Each entry selects:
 - a run of `04_stream.py`, by name (the latest run with that name) or by
   index (`run = n` for `ts{n}`);
 - the part of the run to load, in zarr chunks along time (`chunks`: all
-  chunks, the first n, or `(first, stop)`). Loading only a few chunks
-  keeps the calibration fast;
+  chunks, the first n, or `(first, stop)`). A few chunks are usually
+  enough, and loading only a few keeps the calibration fast;
 - optionally, a subset of the tone sets.
 
 If `CALIBRATE` is empty, the script lists the available runs with their
-names, decimation stages, durations, numbers and lengths of chunks, and
-notes.
+names, tunings, decimation stages, durations, tone sets, numbers and
+lengths of chunks, and notes.
 
-The selected timestreams are loaded into one DataSet for each
-combination of decimation stage, number of samples, and resonator list.
-Each row is one tone from one run. `source_idx` records which entry and
-tone set the row came from, and `write_idx` records which tones were
-streamed together (for common-mode removal). The rows are calibrated with
-the 'ts' path, first in the interactive window and then in batch for the
-remaining rows. Calibration tones get their own DataSet, calibrated with
-the 'ts_offres' path.
+The selected timestreams are loaded into one DataSet per tone set (and
+resonator list), named `set{s}`. Each row is one tone. Its timestream is
+the selected parts of every chosen run of that tone set, joined end to
+end, so the calibration is fit once on all of them, even if the runs
+have different decimation stages. `write_idx` records which tones were
+streamed together (for common-mode removal). The rows are calibrated
+(gain fit, IQ circle fit, and x calibration), first in the interactive
+window and then in batch for the remaining rows. Calibration tones get
+their own DataSet, calibrated with the 'ts_offres' path.
+
+The calibration is not applied to the runs here, and no calibrated
+timestream is saved. Later scripts apply the calibration to whichever raw
+timestreams they analyze, in memory (see `06_find_photons.py`).
 
 The results are saved in a `ts_cal{c}` group at the store root. Running
 the script again with the same `CALIBRATE` continues in the same group; a
@@ -226,24 +260,27 @@ different `CALIBRATE`, or `--new`, starts a new group.
 
 # 06_find_photons.py: find photons
 
-The script uses a stream calibration made by `05_calibrate_streams.py`
-(by default the latest `ts_cal{c}`; choose another with `--cal c`). In
-this script, a timestream is one tone set of one run, over the whole run.
-Any run can be searched if the calibration covers its tone set; it doesn't
-have to be one of the runs the calibration was fit on. The first time a
-run is searched, the calibration is applied to all of its samples and the
-calibrated x is saved in the calibration group (`ts_cal{c}/applied`), so
-later searches of the same run start faster.
+Choose a stream calibration made by `05_calibrate_streams.py`
+(`CALIBRATION`, or `--cal c`; by default the latest `ts_cal{c}`) and the
+timestreams to search (`TIMESTREAMS`). In this script, a timestream is
+one tone set of one run, over the whole run. Any run can be searched if
+the calibration covers its tone set; it doesn't have to be one of the
+runs the calibration was fit on. The calibration is applied to the raw
+streams in memory; the calibrated timestreams are not saved.
 
 If `TIMESTREAMS` is empty, the script lists the timestreams it can search
-(run, name, tone set, duration, number of tones) and stops. Otherwise,
-list the timestreams to search in `TIMESTREAMS`, by index (as listed) or
-by run name. A run name selects every tone set of the latest run with
-that name.
+(run, name, tone set, duration, number of tones) and the previous results
+of the script, and stops. Otherwise, list the timestreams to search in
+`TIMESTREAMS`, by index (as listed) or by run name. A run name selects
+every tone set of the latest run with that name.
+
+The script can be run as often as needed, with different settings or
+timestreams. Each run either searches from scratch, with the threshold
+window, or reuses a previous result (see "Reusing a previous result").
 
 The detection timestreams are kept in memory up to `MEMORY_GB`, so the
-threshold window can rerun tones quickly. Beyond that, they are read from
-the saved calibrated x again when needed.
+threshold window can rerun tones quickly. Beyond that, they are computed
+again from the raw streams when needed.
 
 ## Photon detection
 
@@ -266,8 +303,8 @@ Each tone is searched with an optimal filter that is built iteratively:
 
 ## Choosing the thresholds
 
-For the first run, a window opens after the detection of each of its
-tone sets (skip it with `INTERACTIVE = False` or `--no-gui`). The left side lists the tones
+When searching from scratch, a window opens after the detection of each
+timestream (skip it with `INTERACTIVE = False` or `--no-gui`). The left side lists the tones
 with their number of pulses and their rate. The plots show, for the
 selected tone or for all tones together:
 
@@ -286,21 +323,24 @@ selected tone gets its own thresholds (marked with `*` in the list). "Use
 the global thresholds" removes them. Close the window (or press Done) to
 continue.
 
-## Several timestreams
+## Reusing a previous result
 
-When timestreams of several runs are listed, the timestreams of the
-first run are processed as above. `REUSE` (or `--reuse`) sets what the
-later runs reuse from it, tone set by tone set:
+Set `REFERENCE` (or `--reference p`) to a previous result of the script,
+`ts_photons{p}`, to reuse its work instead of searching from scratch.
+For example, search one timestream from scratch and check its thresholds
+in the window, then search other timestreams with that result as the
+reference. Each timestream uses the reference's result for the same tone
+set (or, if it has none, its first one). The window doesn't open.
+`REUSE` (or `--reuse`) sets what is reused:
 
-- `'settings'` (default): the first run's thresholds for the same tone
-  set, including the ones set for single tones. The full detection is run
-  on each later timestream, without the window.
-- `'filter'`: the first run's optimal filter for each tone (matched by
-  resonator index) and its thresholds. The filter is applied without
-  iterating, and the pulse heights stay in units of the first run's mean
-  photon. Tones that the first run has no filter for are detected from
-  scratch. All timestreams must have the same decimation stage.
-- `'none'`: each timestream is processed from scratch, with the window.
+- `'settings'` (default): the reference's thresholds, including the ones
+  set for single tones. The full detection is run on each timestream.
+- `'filter'`: the reference's optimal filter for each tone (matched by
+  resonator index), built from its mean pulse and noise spectrum, and its
+  thresholds. The filter is applied without iterating, and the pulse
+  heights are in units of the reference's mean photon. Tones that the
+  reference has no filter for are detected from scratch. The timestreams
+  must have the reference's decimation stage.
 
 ## Coincidences and cosmic rays
 
@@ -329,13 +369,15 @@ root, with the calibration it used (attribute `source`) and one
 `timestream{j}` group per listed timestream:
 
 ```text
-ts_photons{p}/          attributes: source (ts_cal{c}), timestreams, reuse
+ts_photons{p}/          attributes: source (ts_cal{c}), timestreams,
+                        reference, reuse
   timestream{j}/        attributes: run, tone set, calibration sweep and
                         writes, samples, sample period, how it was
                         detected, thresholds, settings
                         per tone: res_idxs, status (empty if detected),
-                        hmin, hmax, sigma_y, amp_ph (the mean photon
-                        height, in x), rate, n_used, tau, template,
+                        hmin, hmax, sigma_y, amp_ph (the height unit,
+                        in x), amp_ph_own (this timestream's mean photon
+                        height), rate, n_used, tau, template,
                         avg_pulse (mean photon pulse), psd, filter
     pulses/             every pulse found: tone, sample, height, raw peak,
                         candidate (at least hmin), in_window, mult

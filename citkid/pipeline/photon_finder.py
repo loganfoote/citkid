@@ -1,22 +1,22 @@
 """
-Find photons in timestreams calibrated by a stream calibration
-(``ts_cal{c}``, made by 05_calibrate_streams.py): the multi-tone
-bookkeeping around ``signal.photons``.
+Find photons in raw timestreams with a stream calibration (``ts_cal{c}``,
+made by 05_calibrate_streams.py): the multi-tone bookkeeping around
+``signal.photons``.
 
 A timestream here is one tone set of one run (``ts{n}``), over the whole
 run, whose tone set the calibration has a DataSet for (the run need not
 be one the calibration was fit on). ``list_timestreams`` lists them.
-Its calibrated x comes from ``stream_sources.apply_stream_calibration``,
-saved once in ``ts_cal{c}/applied/<run>_<DataSet>`` and reused
-(``applied_timestream``); ``TimestreamData`` reads it tone by tone, keeping
-the detection timestreams in memory up to a size limit.
+Its x is computed from the raw streams with
+``stream_sources.apply_stream_calibration``, in memory only
+(``TimestreamData``, which keeps the detection timestreams up to a size
+limit): calibrated timestreams are never saved, only the photon results.
 
 For one timestream:
 
-1. ``detect_timestream`` runs the detection on every tone, in one of three
-   ways: ``run_detection`` from scratch (thresholds given per tone), the
-   same with another timestream's thresholds, or ``detect_with_filter``
-   with another timestream's optimal filters (matched by ``res_idx``).
+1. ``detect_timestream`` runs the detection on every tone, either with
+   ``run_detection`` (thresholds given per tone, e.g. a previous result's,
+   ``load_reference``) or with ``detect_with_filter`` and a previous
+   result's optimal filters (matched by ``res_idx``).
 2. The thresholds can then be reviewed in the photon threshold window
    (``pipeline.interactive.photon_thresholds``), which calls
    ``detect_timestream`` again for the tones it changes.
@@ -25,7 +25,8 @@ For one timestream:
    the cosmic rays (``cosmic_events``), and per tone the mean photon pulse
    of the pulses in the height window with multiplicity 1
    (``average_pulse``) and its decay time (``fit_tau``).
-4. ``save_timestream`` saves it all in one group.
+4. ``save_timestream`` saves the results in one group, from which
+   ``load_reference`` reads a later run's thresholds or filters.
 """
 import dataclasses
 import numpy as np
@@ -34,10 +35,8 @@ from .. import daq_layout as dl
 from ..signal import photons as ph
 from .stream_sources import apply_stream_calibration
 
-# How a later timestream reuses the first one's work
-REUSE_OPTIONS = ('none', 'settings', 'filter')
-# Group of a calibration holding its calibration applied to whole runs
-APPLIED_GROUP = 'applied'
+# What a run takes from a previous result (``load_reference``)
+REUSE_OPTIONS = ('settings', 'filter')
 
 ################################################################################
 ################################## Timestreams #################################
@@ -136,53 +135,35 @@ def select_timestreams(timestreams, choice):
         out += match
     return out
 
-def applied_timestream(root, cal, ts, DS, verbose = True):
-    """
-    Return a timestream's calibrated x over the whole run, applying the
-    calibration (``apply_stream_calibration``) the first time and saving
-    it in the calibration (``ts_cal{c}/applied/<run>_<DataSet>``).
-
-    Parameters:
-    root (zarr.Group): the store root.
-    cal (zarr.Group): the calibration group.
-    ts (dict): the timestream.
-    DS (DataSet): its DataSet.
-    verbose (bool): If True (default), show a progress bar.
-
-    Returns:
-    grp (zarr.Group): the applied group (``xt`` (nrows, nsamples), ``dt``,
-        ``res_idxs``).
-    """
-    applied = dl.require_group(cal, APPLIED_GROUP, 'analysis')
-    grp = applied.require_group(f"{ts['run']}_{ts['dataset']}")
-    return apply_stream_calibration(DS, root, ts['source'], grp,
-                                    verbose = verbose)
-
 class TimestreamData:
     """
-    Detection timestreams of one timestream's tones, read from its applied
-    calibration. They are kept in memory while their total size is under
-    ``max_bytes``; others are read again when asked for (in blocks of
-    tones, since a chunk of the applied array holds every tone).
+    Detection timestreams of one timestream's tones, computed from its raw
+    streams with the calibration (``apply_stream_calibration``), in memory
+    only. They are kept while their total size is under ``max_bytes``;
+    others are computed again when asked for, in blocks of tones that fit
+    the memory (reading only those tones' chunks of the raw stream).
 
     Attributes:
-    xt (zarr.Array): calibrated x, (nrows, nsamples).
     dt (float): sample period, s.
+    nsamples (int): samples per tone.
     settings (DetectionSettings): for ``highpass_hz``.
-    max_bytes (float): memory limit of the kept timestreams.
+    max_bytes (float): memory limit.
     """
 
-    def __init__(self, grp, settings, max_bytes = 4e9):
+    def __init__(self, root, ts, DS, settings, max_bytes = 4e9):
         """
-        Open the applied calibration.
+        Set up the timestream's data.
 
         Parameters:
-        grp (zarr.Group): ``applied_timestream`` output.
+        root (zarr.Group): the store root.
+        ts (dict): the timestream (``list_timestreams``).
+        DS (DataSet): its calibration DataSet.
         settings (DetectionSettings): detection settings.
         max_bytes (float): memory limit, bytes. Default 4e9.
         """
-        self.xt = grp['xt']
-        self.dt = float(np.asarray(grp['dt'][...]))
+        self._root, self._ts, self._DS = root, ts, DS
+        self.dt = float(ts['dt'])
+        self.nsamples = int(ts['stop'] - ts['start'])
         self.settings = settings
         self.max_bytes = float(max_bytes)
         self._kept = {}
@@ -195,19 +176,20 @@ class TimestreamData:
         rows (list of int): DataSet rows.
 
         Yields:
-        row (int), d (np.array, float32): each tone's detection timestream,
-            or the error message (str) if its x is not finite.
+        row (int), d (np.array, float32 or str): each tone's detection
+            timestream, or an error message if its x is not finite.
         """
         rows = [int(r) for r in rows]
-        nsamp = self.xt.shape[1]
-        block = max(1, int(self.max_bytes // max(nsamp * 8, 1)) // 2)
+        # x (float64) and the detection timestreams (float32) of a block
+        block = max(1, int(self.max_bytes // max(self.nsamples * 12, 1)))
         for i in range(0, len(rows), block):
             part = rows[i:i + block]
             need = [r for r in part if r not in self._kept]
             fresh = {}
             if need:
-                x = self.xt.get_orthogonal_selection((np.array(need),
-                                                      slice(None)))
+                x = apply_stream_calibration(self._DS, self._root,
+                                             self._ts['source'],
+                                             rows = need)['xt']
                 for r, xr in zip(need, x):
                     fresh[r] = self._detection(xr)
                     self._keep(r, fresh[r])
@@ -477,10 +459,12 @@ def save_timestream(
     Layout of ``grp``: attrs describe the timestream and settings; per tone
     (in the order of ``ts['rows']``): ``rows``, ``res_idxs``, ``status``
     ('' if detected, else the error), ``hmin``, ``hmax``, ``init_hmax``,
-    ``sigma_y``, ``amp_ph`` (the height unit, in x), ``rate`` (pulses in
+    ``sigma_y``, ``amp_ph`` (the height unit, in x), ``amp_ph_own`` (this
+    timestream's mean photon amplitude, x), ``rate`` (pulses in
     the height window per second), ``n_used`` (pulses averaged), ``tau``,
-    ``p`` (index of the maximum of ``template`` and ``avg_pulse``),
-    ``template`` (mean pulse of the pulses in the height window, x),
+    ``p`` (index of the maximum of ``avg_pulse``), ``template_p`` (of
+    ``template``), ``template`` (mean pulse of the pulses in the height
+    window, x),
     ``avg_pulse`` (mean photon pulse: height window and multiplicity 1, x),
     ``psd``, ``filter``; ``pulses/`` (every coincidence candidate: ``row``,
     ``idx`` (sample in the window), ``h`` (height, units of ``amp_ph``),
@@ -558,6 +542,8 @@ def save_timestream(
          for r, g in zip(rows, ok)]))
     for key in ('hmin', 'hmax', 'sigma_y', 'amp_ph', 'rate'):
         dl.write_array(grp, key, per_tone(key))
+    dl.write_array(grp, 'amp_ph_own', per_tone(
+        lambda r, res: res.get('amp_ph_own', res['amp_ph'])))
     dl.write_array(grp, 'init_hmax', np.array(
         [thresholds.for_tone(ri)['init_hmax'] or np.nan
          for ri in ts['res_idxs']], dtype = float))
@@ -567,6 +553,7 @@ def save_timestream(
         lambda r, res: summary['tau'].get(r, np.nan)))
     dl.write_array(grp, 'p', per_tone(
         lambda r, res: summary['p'].get(r, res['p'])))
+    dl.write_array(grp, 'template_p', per_tone(lambda r, res: res['p']))
     dl.write_array(grp, 'template', per_tone_arr(
         lambda r, res: res['template'], M))
     dl.write_array(grp, 'avg_pulse', per_tone_arr(
@@ -608,3 +595,47 @@ def save_timestream(
         g = dl.create_group(cosmic, part, 'analysis')
         for k, v in summary['cosmic'][part].items():
             dl.write_array(g, k, v)
+
+def load_reference(grp, settings = None):
+    """
+    Read a saved photon result (``save_timestream``) as a reference for
+    another timestream: its thresholds, and per tone the optimal filter it
+    found (its mean pulse in the height window and its noise PSD).
+
+    Parameters:
+    grp (zarr.Group): a ``ts_photons{p}/timestream{j}`` group.
+    settings (DetectionSettings or None): for the pulse sign. None: the
+        saved settings' sign.
+
+    Returns:
+    thresholds (Thresholds): its thresholds (with the per-tone ones).
+    reference (dict): res_idx: dict for ``detect_with_filter``
+        (``template``, ``p``, ``pre``, ``post``, ``sign``, ``amp_ph``,
+        ``psd``, ``nfft``, ``hmin``, ``hmax``, ``dt``), for the tones it
+        detected. The filter is normalized to that timestream's own mean
+        photon, which becomes the height unit.
+    """
+    a = dict(grp.attrs)
+    th = a['thresholds']
+    thresholds = Thresholds(
+        hmin = th['hmin'], hmax = th['hmax'], init_hmax = th['init_hmax'],
+        overrides = {int(k): dict(v) for k, v in th['overrides'].items()})
+    sign = int(a['settings']['pulse_sign']) if settings is None else \
+        int(settings.pulse_sign)
+    status = grp['status'][:]
+    res_idxs = grp['res_idxs'][:]
+    p = grp['template_p'][:] if 'template_p' in grp else grp['p'][:]
+    template, psd = grp['template'][:], grp['psd'][:]
+    nfft = int(grp['filter'].shape[1])
+    amp = grp['amp_ph_own'][:] if 'amp_ph_own' in grp else grp['amp_ph'][:]
+    hmin, hmax = grp['hmin'][:], grp['hmax'][:]
+    reference = {}
+    for i, r in enumerate(res_idxs):
+        if str(status[i]) != '' or not np.isfinite(amp[i]):
+            continue
+        reference[int(r)] = dict(
+            template = template[i], p = int(p[i]), pre = int(a['pre']),
+            post = int(a['post']), sign = sign, amp_ph = float(amp[i]),
+            psd = psd[i], nfft = nfft, hmin = float(hmin[i]),
+            hmax = float(hmax[i]), dt = float(a['dt']))
+    return thresholds, reference

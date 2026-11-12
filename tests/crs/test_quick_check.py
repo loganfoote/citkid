@@ -191,12 +191,15 @@ def test_window_progress_bar(qapp):
     assert reports[0] == (0, len(f)) and reports[-1] == (len(f), len(f))
     # Hidden again when the sweep is done
     assert win.progress.isHidden()
-    # The bar shows points and a percentage while a sweep runs
+    # The bar shows the percentage and the time left while a sweep runs
+    now = [0.]
+    win._clock.clock = lambda: now[0]
     win._show_progress(True)
+    win._on_progress(0, 10000)
+    now[0] = 30.
     win._on_progress(2500, 10000)
     assert win.progress.maximum() == 10000 and win.progress.value() == 2500
-    assert win.progress.format() == '2,500 / 10,000 points (%p%)'
-    assert win.progress.text() == '2,500 / 10,000 points (25%)'
+    assert win.progress.format() == '25%, about 1 min 30 s left'
     win._on_progress(0, 0)
     assert win.progress.maximum() == 0
     win._show_progress(False)
@@ -295,3 +298,29 @@ def test_window_modules_outside_bank(qapp):
     assert 'Modules [4] are not in the active analog bank (modules 5-8)' \
         in win.status.text()
     close(win)
+
+
+def test_progress_clock():
+    """
+    The time left follows the rate since the step's first report; a new
+    total or less done starts a new step.
+    """
+    from citkid.crs.quick_check import ProgressClock, format_duration
+    now = [0.]
+    clock = ProgressClock(clock = lambda: now[0])
+    assert clock.text(0, 100) == '0%, estimating time left'
+    now[0] = 10.
+    assert clock.text(25, 100) == '25%, about 30 s left'
+    now[0] = 20.
+    assert clock.text(50, 100) == '50%, about 20 s left'
+    assert clock.text(100, 100) == '100%, finishing'
+    # Next step (another stream): measured from its own start
+    now[0] = 100.
+    assert clock.text(0, 4000) == '0%, estimating time left'
+    now[0] = 160.
+    assert clock.text(1000, 4000) == '25%, about 3 min 00 s left'
+    clock.reset()
+    assert clock.text(1000, 4000).endswith('estimating time left')
+    assert format_duration(59.6) == '1 min 00 s'
+    assert format_duration(3725) == '1 h 02 min'
+    assert format_duration(-1) == '0 s'

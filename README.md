@@ -15,8 +15,10 @@ Collection of Kinetic Inductance Detector (KID) data acquisition and analysis co
 
 Example notebooks are in `notebooks/` (the newer ones run on synthetic
 data). Measurement procedure scripts are in `procedures/`, with guides in
-`documents/procedures/` (`vna_screening.pdf`: VNA sweeps and resonance
-finding; `tuning_timestreams.pdf`: tuning and timestreams). Other documents in
+`documents/procedures/` (`getting_started.pdf`: the environment, CRS
+basics, and configuring the board, read first; `vna_screening.pdf`: VNA
+sweeps and resonance finding; `tuning_timestreams.pdf`: tuning,
+timestreams, and photons). Other documents in
 `documents/`: `pipeline_guide.pdf`, `xcal_derivations.pdf`,
 `crs_streaming_format.pdf`, and the derivations for resonator fitting and
 optimal filtering, `res_fitting.pdf` and `optimal_filtering.pdf`. The PDFs

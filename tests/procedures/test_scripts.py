@@ -6,6 +6,7 @@ import importlib.util
 import os
 import numpy as np
 import pytest
+import zarr
 from citkid import daq_layout as dl
 from ..crs.fake_crs import FakeVnaCRS
 
@@ -708,12 +709,29 @@ def check_photons(grp, log, dt):
     assert np.median(hits['h'][:]) > 2
 
 
+def check_override(g):
+    """
+    Check the thresholds made in the stand-in window: hmax 2 for every tone,
+    hmin 0.6 for one resonator of tone set 0.
+
+    Parameters:
+    g (zarr.Group): a ``timestream{j}`` group.
+    """
+    th = g.attrs['thresholds']
+    assert th['hmax'] == 2. and list(th['overrides'].values()) == \
+        [dict(hmin = 0.6)]
+    r0 = int(next(iter(th['overrides'])))
+    np.testing.assert_allclose(g['hmin'][:], np.where(
+        g['res_idxs'][:] == r0, 0.6, 0.5))
+    np.testing.assert_allclose(g['hmax'][:], 2.)
+
+
 def test_06_find_photons(photon_store, monkeypatch, capsys):
     """
-    List the timestreams (one per run and tone set), then find photons in
-    run 0's tone set 0 and both tone sets of run 1, with each way of
-    reusing run 0: its thresholds (after the window changes them), its
-    filters, or nothing (the window opens for each).
+    List the timestreams (one per run and tone set); search run 0's tone
+    set 0 from scratch (the window changes its thresholds); then search
+    other timestreams with that result as the reference: its thresholds,
+    or its filters; and another from scratch. No timestream is saved.
     """
     import citkid.pipeline.interactive.photon_thresholds as pt
     path, log = photon_store
@@ -723,8 +741,7 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
     assert m.main(m.parse_args(argv)) is None
     out = capsys.readouterr().out
     assert "0: ts0, 'dark0', set 0" in out and \
-        "3: ts1, 'dark0b', set 1" in out
-    monkeypatch.setattr(m, 'TIMESTREAMS', [0, 'dark0b'])
+        "3: ts1, 'dark0b', set 1" in out and 'Previous results' in out
     windows = []
 
     def fake_window(ts, results, thresholds, rerun, title = ''):
@@ -751,41 +768,53 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
         return thresholds, results
 
     monkeypatch.setattr(pt, 'run_photon_thresholds', fake_window)
-    out = m.main(m.parse_args(argv + ['--reuse', 'settings']))
+    # Simulated streams of each timestream (see photon_store): ts0 set 0,
+    # ts0 set 1, ts1 set 0, ts1 set 1
+    logs = (log[:1], log[1:3], log[3:4], log[4:6])
+    # From scratch, with the window
+    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    m.main(m.parse_args(argv))
     assert windows == ['ts0']
     root = dl.open_store(path)
-    grp = root['ts_photons0']
-    assert grp.attrs['source'] == 'ts_cal0' and grp.attrs['kind'] == \
-        'analysis'
-    dt = grp['timestream0'].attrs['dt']
-    # Simulated streams of each timestream (see photon_store)
-    logs = (log[:1], log[3:4], log[4:6])
-    for j, entries in enumerate(logs):
-        g = grp[f'timestream{j}']
+    g0 = root['ts_photons0']
+    assert g0.attrs['source'] == 'ts_cal0' and g0.attrs['kind'] == \
+        'analysis' and g0.attrs['reference'] is None
+    dt = g0['timestream0'].attrs['dt']
+    check_photons(g0['timestream0'], logs[0], dt)
+    check_override(g0['timestream0'])
+    assert g0['timestream0'].attrs['mode'] == 'full'
+    # Its thresholds for both tone sets of run 1, no window
+    monkeypatch.setattr(m, 'TIMESTREAMS', ['dark0b'])
+    m.main(m.parse_args(argv + ['--reference', '0']))
+    assert windows == ['ts0']
+    g1 = dl.open_store(path)['ts_photons1']
+    assert g1.attrs['reference'] == 'ts_photons0' and \
+        g1.attrs['reuse'] == 'settings'
+    for j, entries in ((0, logs[2]), (1, logs[3])):
+        g = g1[f'timestream{j}']
+        assert g.attrs['mode'] == 'settings from ts_photons0/timestream0'
+        assert g.attrs['tone_set'] == j
         check_photons(g, entries, dt)
-        th = g.attrs['thresholds']
-        assert th['hmax'] == 2. and list(th['overrides'].values()) == \
-            [dict(hmin = 0.6)]
-        # The override is for one resonator of tone set 0
-        r0 = int(next(iter(th['overrides'])))
-        hmin = np.where(g['res_idxs'][:] == r0, 0.6, 0.5)
-        np.testing.assert_allclose(g['hmin'][:], hmin)
-        np.testing.assert_allclose(g['hmax'][:], 2.)
-    assert grp['timestream1'].attrs['mode'] == 'settings from timestream0'
-    assert [grp[f'timestream{j}'].attrs['tone_set'] for j in range(3)] == \
-        [0, 0, 1]
-    # The calibrated x of whole runs is kept with the calibration
-    assert 'ts1_set1' in root['ts_cal0/applied']
-    # Filters of the first timestream, no window
-    m.main(m.parse_args(argv + ['--reuse', 'filter', '--no-gui']))
-    g = dl.open_store(path)['ts_photons1']
-    assert g['timestream1'].attrs['mode'] == 'filter from timestream0'
-    check_photons(g['timestream1'], logs[1], dt)
-    np.testing.assert_allclose(g['timestream1/filter'][:],
-                               g['timestream0/filter'][:])
-    # From scratch: the window opens for each timestream
-    windows.clear()
-    m.main(m.parse_args(argv + ['--reuse', 'none']))
-    assert windows == ['ts0', 'ts1', 'ts1']
-    g = dl.open_store(path)['ts_photons2']
-    assert g['timestream1'].attrs['mode'] == 'full'
+        check_override(g)
+    # Its filters for run 1's tone set 0: heights in its photon units
+    monkeypatch.setattr(m, 'TIMESTREAMS', [2])
+    m.main(m.parse_args(argv + ['--reference', '0', '--reuse', 'filter']))
+    g2 = dl.open_store(path)['ts_photons2/timestream0']
+    assert g2.attrs['mode'] == 'filter from ts_photons0/timestream0'
+    check_photons(g2, logs[2], dt)
+    np.testing.assert_allclose(g2['amp_ph'][:],
+                               g0['timestream0/amp_ph_own'][:])
+    # Another timestream from scratch: the window opens again
+    monkeypatch.setattr(m, 'TIMESTREAMS', [1])
+    m.main(m.parse_args(argv))
+    assert windows == ['ts0', 'ts0']
+    check_photons(dl.open_store(path)['ts_photons3/timestream0'], logs[1],
+                  dt)
+    # No timestream is saved: every saved array is far shorter than one
+    root = dl.open_store(path)
+    nsamples = g0['timestream0'].attrs['stop']
+    sizes = [max(v.shape)
+             for grp in ['ts_cal0'] + [f'ts_photons{q}' for q in range(4)]
+             for _, v in root[grp].members(max_depth = None)
+             if isinstance(v, zarr.Array) and v.shape]
+    assert max(sizes) < nsamples / 10

@@ -1,38 +1,26 @@
 ---
 title: "VNA screening"
-subtitle: "crs_init, vna_quick_check, 01_vna_sweep, 02_find_resonances, vna_report"
+subtitle: "vna_quick_check, 01_vna_sweep, 02_find_resonances, vna_report"
 ---
 
 # Overview
 
 The VNA screening scripts in the procedures folder take full VNA sweeps of
-a device with the CRS, then find and fit its resonances. Each script is a
-short file with a settings block at the top. Copy the script, edit the
-settings for your setup, and run it. Command-line options override the
-settings for one run.
+a device with the CRS, then find and fit its resonances.
+
+Before running them, make sure the board is configured with
+`crs_init.py`. The "Getting started" document describes it, along with
+the environment, how the scripts are run, the device store, and the CRS
+terms used here.
 
 | Script | When to run it | What it does | Saves |
 |---|---|---|---|
-| `crs_init.py` | After a power cycle, or to change board-wide settings | Configures the board | Nothing |
 | `vna_quick_check.py` | Any time | Takes quick VNA sweeps of one device in an interactive window | Optionally, a CSV of f, I, Q |
 | `01_vna_sweep.py` | Once per device, or after a change to the setup | Takes a full VNA sweep | `vna{k}` |
 | `02_find_resonances.py` | After each VNA sweep | Finds, checks, and fits the resonances | `full_sweep_fit`, `resonators{k}` |
 | `vna_report.py` | After `02_find_resonances.py` | Writes a plot, a text summary, and a table of the results | Files in a folder |
 
-Run the scripts in citkid's environment, for example:
-
-```text
-uv run python procedures/01_vna_sweep.py --device deviceA --modules 1
-```
-
-The CNN resonance finder used by `02_find_resonances.py` needs PyTorch,
-which is installed once with `uv sync --extra cnn`.
-
-## The device store
-
-Each device has one zarr store per cooldown,
-`<DATA_DIR>/<COOLDOWN>/<DEVICE>.zarr`, which holds all of the data
-measured and analyzed for that device:
+These scripts save these groups in the device store:
 
 ```text
 <device>.zarr/
@@ -42,60 +30,7 @@ measured and analyzed for that device:
     fres_auto, res_finder_auto/, fres_manual   resonance frequencies found
     full_sweep_fit/    fits of every resonance (analysis)
   resonators{k}/     resonator list from vna{k}, used for tuning
-  tune{k}/           tunings (see the tuning and timestreams document)
 ```
-
-Indices are not zero-padded (`vna0`, `vna1`, ...). Raw data is never
-overwritten: repeating a measurement saves it under the next index. The
-store records which CRS it was measured with (serial number, firmware
-version, and rfmux version). A different board or firmware version needs
-a new store.
-
-## Notes with the data
-
-Every script that saves data has a `NOTES` setting (or `--notes`). Its
-text, which can span several lines, is saved with the data in the
-attribute `notes`. Use it to record, for example, the filters and
-attenuators on the DAC and ADC lines.
-
-## Measuring several devices at once
-
-`crs_init.py` takes global control of the board to configure it. The
-other scripts only attach to their own modules (`--modules`), so several
-of them can run at the same time on different devices.
-
-Timestreams are the exception. Streaming uses the board's full network
-bandwidth, so `04_stream.py` needs exclusive use of the board for as long
-as its window is open. During that time, any other script that tries to
-use the board, including the scripts in this document, stops immediately
-with an error that names the running `04_stream.py` session. Run the
-script again after that window is closed. The lock is a file on the DAQ
-computer (`~/.citkid/locks/crs<serial>.lock`), so it only applies to
-scripts run on that computer. If a session crashes, its lock is ignored.
-
-# crs_init.py: configure the board
-
-Run this script before any of the others, and again whenever the board
-loses its configuration (for example, after a power cycle). It is the
-only script that changes board-wide settings:
-
-- the clock source;
-- the analog bank (modules 1-4, or 5-8);
-- the DAC full scale (always 7 dBm);
-- the module bandwidth (500 MHz, or 600 MHz with `--extended-bw`);
-- the decimation stage used for sweeps (stage 6).
-
-The script exits when it is done, and the board keeps these settings.
-Running it while other scripts are measuring resets the board in the
-middle of their measurements.
-
-## Settings
-
-{{settings:crs_init.py}}
-
-## Command line
-
-{{help:crs_init.py}}
 
 # vna_quick_check.py: quick look at a device
 
@@ -104,9 +39,9 @@ and for checking that the resonances are there before the full sweep.
 Nothing is saved to the store. The last sweep can be saved as a CSV file
 with columns `f` (Hz), `i`, and `q` (Save data).
 
-The script does not configure the board, so run `crs_init.py` first. It
-connects to the board given by the serial number and network interface
-settings, and attaches to its modules without changing the board-wide
+The script does not configure the board (see `crs_init.py` in the
+"Getting started" document). It connects to the board given by the
+serial number and network interface settings, and attaches to its modules without changing the board-wide
 settings, so it can run alongside the other scripts. The modules must be
 in the analog bank chosen by `crs_init.py` (1-4, or 5-8 with
 `--bank-high`). Modules in the other bank are listed in the status line

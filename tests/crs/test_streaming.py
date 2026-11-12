@@ -109,7 +109,8 @@ async def test_simulated_streams():
         await crs.stream_to_memory(0.05, 0)
     await write_stream_chunk(crs, fres, -55., [1] * 4, {'1': 1.05e9})
     z0 = await crs.stream_to_memory(0.05, 0)
-    assert crs.dec_stage == 0
+    # A shared session (modules 1 and 2) puts the board back at stage 6
+    assert crs.shared and crs.dec_stage == 6
     assert np.std(z0.real, axis = 1)[0] / g[0] > 7 * sigma[0]
     # Too many tones per module for stage 0
     await write_stream_chunk(crs, np.full(130, 1.05e9), -55., [1] * 130,
@@ -411,6 +412,13 @@ def test_stream_window(qapp, tmp_path):
     r = win.tone_box.currentData()
     mods = tune['tones/tone_module'][:]
     assert r in win.preview['rows']
+    # Stage 0's sample period, though the board is back at stage 6, and
+    # the time axis covers the capture's length
+    assert win.crs.dec_stage == 6
+    assert win.preview['dt'] == pytest.approx(1 / util.get_sample_freq(0))
+    win.mode_box.setCurrentIndex(0)
+    t = win.ts_plot.listDataItems()[0].xData
+    assert t[-1] == pytest.approx(win.preview_s.value(), rel = 0.01)
     assert set(mods[win.preview['rows']].tolist()) == {mods[r]}
     assert win.written['tone_set'] == 1 and \
         win.written['calibration'] == 'tune0/cal0'

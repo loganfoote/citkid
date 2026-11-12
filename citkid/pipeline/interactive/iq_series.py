@@ -696,6 +696,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             if self._mask_nearby_tones and hasattr(panel, 'default_iq_mask'):
                 panel.default_iq_mask = self._default_iq_mask
             panel.downstream_rerun.connect(self._on_panel_rerun)
+            panel.marked_bad.connect(self._on_panel_marked_bad)
             panel.run_from_here.connect(
                 lambda p=panel: self._run_through_panel(p.panel_index)
             )
@@ -1857,6 +1858,23 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             else:
                 break
         self._update_series_point(self._series_idx)
+
+    def _on_panel_marked_bad(self, source_panel):
+        """
+        Mark every panel after ``source_panel`` bad for the shown series
+        point, then refresh it on the series plot.
+
+        Parameters:
+        source_panel (StepPanel): Panel the user marked bad.
+        """
+        try:
+            src_idx = self.panels.index(source_panel)
+        except ValueError:
+            return
+        for panel in self.panels[src_idx + 1:]:
+            panel.mark_bad_after(source_panel)
+        if self._series_idx is not None:
+            self._update_series_point(self._series_idx)
 
     def _on_panel_rerun(self, source_panel):
         """

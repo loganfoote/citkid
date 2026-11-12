@@ -1,19 +1,18 @@
 """
-06: find photons in calibrated timestreams.
+06: find photons in timestreams, with a stream calibration.
 
-Works with a stream calibration made by 05_calibrate_streams.py
-(``ts_cal{c}``, the latest by default, or ``--cal c``). A timestream is
-one tone set of one run (``ts{n}``), over the whole run, whose tone set
-the calibration has a DataSet for; the run need not be one the
-calibration was fit on. Its calibrated x is computed once
-(``stream_sources.apply_stream_calibration``) and saved in the
-calibration (``ts_cal{c}/applied``), so later runs of this script reuse
-it. With ``TIMESTREAMS`` empty, the script lists the timestreams and
-stops; otherwise it finds the photons of each chosen timestream in turn
-(a run name chooses every tone set of the latest run with that name).
+Choose a stream calibration made by 05_calibrate_streams.py
+(``ts_cal{c}``: ``CALIBRATION``, or ``--cal c``; the latest by default)
+and the timestreams to search (``TIMESTREAMS``). A timestream is one tone
+set of one run (``ts{n}``), over the whole run; any run can be searched
+if the calibration covers its tone set (it need not be one the
+calibration was fit on). Its x is computed from the raw streams in memory
+(``stream_sources.apply_stream_calibration``); calibrated timestreams are
+never saved, only the photon results. With ``TIMESTREAMS`` empty, the
+script lists the timestreams and the previous results and stops.
 
-For the first run (and for every run with ``REUSE = 'none'``), each tone
-set:
+Without a reference (``REFERENCE = None``), each tone set is searched from
+scratch:
 
 1. Every tone is run through the iterative optimal filter
    (``signal.photons.run_detection``): first-pass peaks above
@@ -26,15 +25,17 @@ set:
    tones they change (skipped with ``INTERACTIVE = False`` or
    ``--no-gui``).
 
-The later runs reuse the first run's work, tone set by tone set, as
-``REUSE`` says:
+With a reference, a previous result of this script (``ts_photons{p}``:
+``REFERENCE = p``, or ``--reference p``), the search reuses its work,
+without the window, as ``REUSE`` says; each tone set uses the reference's
+result for the same tone set (or its first one):
 
-- 'settings' (default): the first run's thresholds for the same tone set
-  (per-tone ones included), with the full detection but no window;
-- 'filter': the first run's optimal filter of each tone (matched by
-  resonator index) and its thresholds, applied without iterating; tones
-  without one are detected from scratch. The decimation stage must match;
-- 'none': each run from scratch, with the window.
+- 'settings' (default): its thresholds (per-tone ones included), with the
+  full detection;
+- 'filter': its optimal filter of each tone (matched by resonator index:
+  its mean pulse and noise spectrum) and its thresholds, applied without
+  iterating; tones without one are detected from scratch. The decimation
+  stage must match.
 
 Then, per tone write (the tones streamed together), a pulse is coincident
 when another tone has a pulse within +-``COINC_WIN`` samples of it (pulses
@@ -44,15 +45,15 @@ in the height window that are not coincident, and its decay time is fit.
 Events seen by at least ``COSMIC_MIN_MULT`` tones are saved as cosmic rays,
 with each tone's pulse height.
 
-Everything goes in ``ts_photons{p}`` at the store root (an analysis group,
-attrs ``source`` = the calibration), one ``timestream{j}`` group per
-chosen timestream (``pipeline.photon_finder.save_timestream`` describes
-the arrays). Each run of the script makes a new ``ts_photons{p}``.
+Each run of the script saves a new ``ts_photons{p}`` at the store root (an
+analysis group; attrs ``source`` = the calibration, ``reference``), with
+one ``timestream{j}`` group per chosen timestream
+(``pipeline.photon_finder.save_timestream`` describes the arrays).
 No CRS is needed.
 
 Usage:
     python 06_find_photons.py --device deviceA
-    python 06_find_photons.py --device deviceA --cal 1 --no-gui
+    python 06_find_photons.py --device deviceA --reference 0 --reuse filter
 
 Edit the settings below; the command-line options override them for one
 run.
@@ -73,15 +74,16 @@ COOLDOWN = 'cooldown'       # cooldown name
 DEVICE = 'device'           # device name
 CALIBRATION = None          # ts_cal index (None: the latest)
 # Timestreams to search, by index (as listed) or run name (every tone set
-# of the latest run with that name). The first run sets the thresholds;
-# leave the list empty to list the timestreams.
+# of the latest run with that name). Leave empty to list the timestreams.
 TIMESTREAMS = [
     # 0,
     # 'dark_dec0',
 ]
-# How the timestreams after the first reuse its work: 'settings' (its
-# thresholds, full detection, no window), 'filter' (its optimal filters
-# and thresholds, no iterations), or 'none' (from scratch, with the window)
+# A previous result to reuse (p of ts_photons{p}); None: from scratch, with
+# the threshold window
+REFERENCE = None
+# What to take from REFERENCE: 'settings' (its thresholds, full detection)
+# or 'filter' (its optimal filters and thresholds, no iterations)
 REUSE = 'settings'
 INTERACTIVE = True          # check the thresholds in the window
 # First pass
@@ -124,7 +126,7 @@ def parse_args(argv = None):
     args (argparse.Namespace): the options.
     """
     p = argparse.ArgumentParser(
-        description = 'Find photons in calibrated timestreams.')
+        description = 'Find photons in timestreams.')
     p.add_argument('--data-dir', default = DATA_DIR)
     p.add_argument('--cooldown', default = COOLDOWN)
     p.add_argument('--device', default = DEVICE)
@@ -132,8 +134,10 @@ def parse_args(argv = None):
                    help = 'store path (instead of data dir/cooldown/device)')
     p.add_argument('--cal', type = int, default = CALIBRATION,
                    help = 'ts_cal index (default: the latest)')
+    p.add_argument('--reference', type = int, default = REFERENCE,
+                   help = 'previous result to reuse (p of ts_photons{p})')
     p.add_argument('--reuse', choices = pf.REUSE_OPTIONS, default = REUSE,
-                   help = 'how later timestreams reuse the first one')
+                   help = 'what to take from the reference')
     p.add_argument('--no-gui', action = 'store_true',
                    help = 'skip the threshold window')
     p.add_argument('--notes', default = NOTES,
@@ -247,6 +251,56 @@ def report(ts, results, summary):
         if not isinstance(res, dict):
             print(f"  res {ts['res_idxs'][int(r)]}: failed: {res}")
 
+def describe_results(root):
+    """
+    Describe the previous results of this script, one line each.
+
+    Parameters:
+    root (zarr.Group): the store root.
+
+    Returns:
+    text (str): the description.
+    """
+    lines = ['Previous results (ts_photons{p}: calibration, timestreams):']
+    for p in dl.list_indices(root, 'ts_photons'):
+        g = root[dl.set_name(p, 'ts_photons')]
+        parts = [f"{g[t].attrs['run']} set {g[t].attrs['tone_set']}"
+                 for t in sorted(g.group_keys())
+                 if t.startswith('timestream')]
+        lines.append(f"  ts_photons{p}: {g.attrs.get('source')}, "
+                     + ', '.join(parts))
+    return '\n'.join(lines)
+
+def reference_for(ref_grp, ts, settings):
+    """
+    Pick the reference result for one timestream: the reference's
+    timestream of the same tone set, or its first one.
+
+    Parameters:
+    ref_grp (zarr.Group): the reference ``ts_photons{p}``.
+    ts (dict): the timestream.
+    settings (DetectionSettings): detection settings.
+
+    Returns:
+    name (str): the reference timestream's path.
+    thresholds (Thresholds): its thresholds.
+    filters (dict): res_idx: its filter, from every timestream of the
+        reference (``photon_finder.load_reference``).
+    """
+    names = sorted((t for t in ref_grp.group_keys()
+                    if t.startswith('timestream')),
+                   key = lambda t: int(t[len('timestream'):]))
+    if not names:
+        raise KeyError(f'{ref_grp.path} has no timestreams')
+    same = [t for t in names
+            if ref_grp[t].attrs.get('tone_set') == ts['tone_set']]
+    name = (same or names)[0]
+    thresholds, _ = pf.load_reference(ref_grp[name], settings)
+    filters = {}
+    for t in names:
+        filters.update(pf.load_reference(ref_grp[t], settings)[1])
+    return f'{ref_grp.path}/{name}', thresholds, filters
+
 def main(args):
     """
     Find the photons of the chosen timestreams, or list them.
@@ -271,62 +325,58 @@ def main(args):
     print(f'{cal.path}:')
     print(pf.describe_timestreams(timestreams))
     if not TIMESTREAMS:
+        print(describe_results(root))
         print('Set TIMESTREAMS at the top of the script to choose '
               'timestreams.')
         return None
     chosen = pf.select_timestreams(timestreams, TIMESTREAMS)
-    if args.reuse == 'filter' and len({t['dt'] for t in chosen}) > 1:
-        raise ValueError("REUSE = 'filter' needs timestreams of one "
-                         'decimation stage')
     settings = detection_settings()
-    out_grp, _ = dl.new_indexed_group(root, 'ts_photons', 'analysis',
-                                      attrs = dict(
-                                          source = cal.path,
-                                          timestreams = list(TIMESTREAMS),
-                                          reuse = args.reuse))
+    ref_grp = None
+    if args.reference is not None:
+        ref_grp = root[dl.set_name(int(args.reference), 'ts_photons')]
+    out_grp, _ = dl.new_indexed_group(
+        root, 'ts_photons', 'analysis', attrs = dict(
+            source = cal.path, timestreams = list(TIMESTREAMS),
+            reference = None if ref_grp is None else ref_grp.path,
+            reuse = None if ref_grp is None else args.reuse))
     save_notes(out_grp, args.notes)
     print(f'Saving to {out_grp.path}')
     interactive = INTERACTIVE and not args.no_gui
-    first_run = chosen[0]['run']
-    # The first run's work, per tone set
-    first = {}
     out = {}
     for j, ts in enumerate(chosen):
         DS = datasets[ts['dataset']]['DS']
-        data = pf.TimestreamData(pf.applied_timestream(root, cal, ts, DS),
-                                 settings, max_bytes = MEMORY_GB * 1e9)
-        name = f'timestream{j}'
-        ref = first.get(ts['tone_set']) or next(iter(first.values()), None)
-        if ts['run'] == first_run or args.reuse == 'none' or ref is None:
+        data = pf.TimestreamData(root, ts, DS, settings,
+                                 max_bytes = MEMORY_GB * 1e9)
+        if ref_grp is None:
             thresholds = pf.Thresholds(hmin = HMIN, hmax = HMAX,
                                        init_hmax = INIT_HMAX)
             results, thresholds = find_photons(ts, data, settings,
                                                thresholds, interactive)
             mode = 'full'
         else:
-            thresholds = dataclasses.replace(
-                ref['thresholds'], overrides = dict(
-                    ref['thresholds'].overrides))
+            ref_name, thresholds, filters = reference_for(ref_grp, ts,
+                                                          settings)
             reference = None
             if args.reuse == 'filter':
-                reference = {res['res_idx']: res
-                             for f in first.values()
-                             for res in f['results'].values()
-                             if isinstance(res, dict)}
+                reference = filters
+                if any(abs(f['dt'] - ts['dt']) > 1e-12 * ts['dt']
+                       for f in filters.values()):
+                    raise ValueError(
+                        f"the reference's filters are for another sample "
+                        f"period than {ts['run']}'s: use REUSE = 'settings'")
             results, _ = find_photons(ts, data, settings, thresholds, False,
                                       reference = reference)
-            mode = f"{args.reuse} from {ref['name']}"
+            mode = f'{args.reuse} from {ref_name}'
         summary = pf.finish_timestream(root, ts, data, results, settings,
                                        coinc_win = COINC_WIN,
                                        cosmic_min_mult = COSMIC_MIN_MULT)
+        name = f'timestream{j}'
         pf.save_timestream(dl.create_group(out_grp, name, 'analysis'), ts,
                            results, summary, thresholds, settings, mode,
                            COINC_WIN, COSMIC_MIN_MULT)
         report(ts, results, summary)
         out[name] = dict(results = results, summary = summary,
                          thresholds = thresholds)
-        if ts['run'] == first_run:
-            first[ts['tone_set']] = dict(out[name], name = name)
         del data
     print(f'Done: {out_grp.path}')
     return out

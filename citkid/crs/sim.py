@@ -103,6 +103,9 @@ class SimulatedCRS:
         self.module_idxs = list(module_idxs)
         self.active_module_idxs = list(module_idxs)
         self.global_control = bool(global_control)
+        # As the CRS: shared if other sessions may use the other modules
+        self.shared = sorted(self.module_idxs) != [1, 2, 3, 4] or \
+            not self.global_control
         self.analog_bank_high = False
         self.extended_bw = False
         self.bw = 500e6
@@ -445,6 +448,10 @@ class SimulatedCRS:
             self.pulse_log.append(x)
         if progress is not None:
             progress(n, n)
+        # As the CRS: a shared session puts the board back at the sweep
+        # stage, so other sessions can sweep
+        if self.shared and self.global_control and dec_stage != 6:
+            await self.set_decimation(6)
         return zt
 
     def _pulse_x(self, ntones, n, dt):
@@ -521,7 +528,8 @@ class SimulatedCRS:
                 zt.shape[0], len(self.ch_map), max_ntones, zt.shape[1]))
         z[...] = counts
         grp.create_array(name = 'counts_to_s21', data = scale)
-        grp.create_array(name = 'dt', data = np.array(1 / self.sample_freq))
+        grp.create_array(name = 'dt', data = np.array(
+            1 / util.get_sample_freq(dec_stage)))
         util.write_acq_cfg_to_zarr(self, grp.require_group('crs_config'))
 
 ################################################################################

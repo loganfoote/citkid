@@ -334,6 +334,9 @@ class StepPanel(QtWidgets.QWidget):
 
     #: Emitted when downstream panels should re-run.  Payload is *self*.
     downstream_rerun = QtCore.pyqtSignal(object)
+    #: Emitted when the user marks this panel's row bad, so the window marks
+    #: the later panels bad too.  Payload is *self*.
+    marked_bad = QtCore.pyqtSignal(object)
     #: Emitted when the user clicks "Run +" to run this panel and all following.
     run_from_here = QtCore.pyqtSignal()
 
@@ -1074,16 +1077,34 @@ class StepPanel(QtWidgets.QWidget):
 
     def _on_bad_data_clicked(self):
         """
-        Mark the current row's outputs bad (NaN) and mark later panels stale.
+        Mark the current row's outputs bad (NaN), and ask the window to mark
+        the later panels bad too (``marked_bad``).
         """
         self._status_label.setText("Marking bad…")
         QtWidgets.QApplication.processEvents()
         ok = self._write_nan_outputs()
         if ok:
             self._status_label.setText("Bad data marked ✓")
-            self.trigger_downstream()
+            self.marked_bad.emit(self)
         else:
             self._status_label.setText("Bad data failed ✗")
+
+    def mark_bad_after(self, source_panel):
+        """
+        Mark this panel's current row bad because an earlier panel's row was
+        marked bad: NaN outputs and blank plots, or stale if the panel has
+        no bad outputs.
+
+        Parameters:
+        source_panel (StepPanel): The panel marked bad by the user.
+        """
+        if self._write_nan_outputs(redraw=False):
+            self.blank_plots()
+            if hasattr(self, "_status_label"):
+                self._status_label.setText(
+                    "Bad data marked (earlier panel) ✓")
+        else:
+            self.mark_stale()
 
 
 ################################################################################
@@ -1348,6 +1369,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
                         ui_scale=ui_scale, plot_scale=plot_scale, parent=self)
             panel.panel_index = i
             panel.downstream_rerun.connect(self._on_panel_rerun)
+            panel.marked_bad.connect(self._on_panel_marked_bad)
             self._add_panel(panel)
 
         # Keyboard shortcuts: navigate resonator index
@@ -1718,6 +1740,20 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             return
         for panel in self.panels[src_idx + 1:]:
             panel.mark_stale()
+
+    def _on_panel_marked_bad(self, source_panel: StepPanel):
+        """
+        Mark every panel after ``source_panel`` bad for the current row.
+
+        Parameters:
+        source_panel (StepPanel): Panel the user marked bad.
+        """
+        try:
+            src_idx = self.panels.index(source_panel)
+        except ValueError:
+            return
+        for panel in self.panels[src_idx + 1:]:
+            panel.mark_bad_after(source_panel)
 
     def _auto_initialize_all(self):
         """Initialise every panel in order so upstream data is always ready."""

@@ -22,10 +22,10 @@ rows not done there. Calibration tones (res_idxs < 0), if the runs have any,
 get their own DataSet with the 'ts_offres' path, in batch.
 
 The calibration is applied to whole runs by the scripts that come after
-this one (e.g. photon detection), with
+this one (e.g. 06_find_photons.py), with
 ``pipeline.stream_sources.apply_stream_calibration``: every tone's x (or
 other outputs) over a run's whole length, chunk by chunk, with the run's
-own sample period.
+own sample period, in memory. Calibrated timestreams are never saved.
 
 Everything goes in ``ts_cal{c}`` at the store root (an analysis group:
 delete it to start over). Running again with the same ``CALIBRATE``

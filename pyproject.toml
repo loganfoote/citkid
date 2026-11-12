@@ -51,6 +51,8 @@ dependencies = [
   "zarr>=3.1.5",
   "pyyaml>=6.0.3",
   "psutil>=7.2.2",
+  # zarr's Group.tree()
+  "rich>=15.0.0",
 
   # Instruments (paramiko is used by citkid.primecam)
   "paramiko>=4.0.0",
@@ -92,6 +94,7 @@ constraint-dependencies = [
   "zarr==3.1.5",
   "pyyaml==6.0.3",
   "psutil==7.2.2",
+  "rich==15.0.0",
   "paramiko==4.0.0",
   "rfmux==1.4.1",
   "jupyterlab==4.5.0",

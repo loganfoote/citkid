@@ -20,8 +20,9 @@ removal).
 
 The sources may be from different decimation stages: ``dt`` is their
 common sample period, or NaN if they differ. The calibration takes no
-spectra (the 'ts_cal' path): a run's come from its applied x
-(``apply_stream_calibration``) and its own ``dt``. Paths are inside the
+spectra (the 'ts_cal' path): a run's come from its x, computed in memory
+by ``apply_stream_calibration`` from the run's raw streams, with its own
+``dt``. Calibrated timestreams are never saved. Paths are inside the
 store (same-store mode), so a DataSet keeps working when the store moves
 or is zipped.
 """
@@ -419,13 +420,15 @@ def open_stream_dataset(
         write_buffer = write_buffer)
 
 def apply_stream_calibration(
-    DS, store, source, out_grp, outputs = ('xt',), overwrite = False,
-    verbose = True
+    DS, store, source, rows = None, outputs = ('xt',), verbose = False
 ):
     """
-    Apply a calibrated DataSet to a whole stream of its tones, chunk by
-    chunk: every row's calibration outputs (e.g. ``xt``) over the
-    source's window, with the source's sample period.
+    Apply a calibrated DataSet to a whole stream of some of its tones, in
+    memory: every chosen row's calibration outputs (e.g. ``xt``) over the
+    source's window, with the source's sample period, computed chunk by
+    chunk from the raw stream. Nothing is saved: calibrated timestreams
+    live only in memory during an analysis, which saves its reduced
+    results.
 
     Parameters:
     DS (DataSet): the tone set's DataSet (``open_stream_dataset``), with
@@ -436,91 +439,80 @@ def apply_stream_calibration(
         makes it (``group``, ``writes``, ``start``, ``stop``, ``stream``),
         e.g. ``select_streams(root, name)[0][0]`` for a whole run. Its
         tones must be the DataSet's.
-    out_grp (zarr.Group): group to save in: per output an array (nrows,
-        nsamples) chunked along time as the stream, plus ``dt``,
-        ``res_idxs`` (per row), and attrs ``source``, ``outputs``,
-        ``dataset`` (the DataSet's path) and ``complete``.
+    rows (list of int or None): DataSet rows to apply. None (default):
+        all. Only these tones' chunks are read (a stream's chunks are per
+        tone; its shards group every tone, and zarr reads the chunks out
+        of them).
     outputs (sequence of str): calibration outputs, one value per sample
         (``xt``, ``thetat``, ``At``, ...). Default ('xt',).
-    overwrite (bool): If True, redo a group already complete. Default
-        False: it is returned as is.
-    verbose (bool): If True (default), show a progress bar.
+    verbose (bool): If True, show a progress bar. Default False.
 
     Returns:
-    out_grp (zarr.Group): the group.
+    out (dict): per output, an array (len(rows), nsamples) (NaN for rows
+        not streamed in the source); ``dt`` (the source's sample period,
+        s); ``rows`` (the DataSet rows, np.array).
 
     Raises:
-    ValueError: if the source holds other tones than the DataSet, or an
-        output isn't one value per sample.
+    ValueError: if the source holds other tones than the DataSet, has no
+        stream of them, or an output isn't one value per sample.
     """
     from tqdm.auto import tqdm
     outputs = [str(o) for o in outputs]
-    if out_grp.attrs.get('complete') and not overwrite:
-        return out_grp
-    for name in list(out_grp.keys()):
-        del out_grp[name]
     sweep = store[source['group']]
     res_idxs = np.asarray(sweep['res_idxs'][...])
     ds_res = np.asarray(DS.res_idxs[:])
+    rows = np.arange(len(ds_res)) if rows is None else \
+        np.asarray(rows, dtype = np.int64)
     pos = {int(r): i for i, r in enumerate(res_idxs)}
     try:
-        sweep_rows = np.array([pos[int(r)] for r in ds_res], dtype = np.int64)
+        sweep_rows = np.array([pos[int(r)] for r in ds_res[rows]],
+                              dtype = np.int64)
     except KeyError as e:
         raise ValueError(f"{source['group']} has no tone {e}: it must hold "
                          "the DataSet's tones") from None
     start, stop = int(source['start']), int(source['stop'])
     nsamples, stream_name = stop - start, source.get('stream', 'stream')
-    arrays, dt = {}, None
-    writes = []
+    out = {o: np.full((len(rows), nsamples), np.nan) for o in outputs}
+    dt, writes = None, []
     for name in source['writes']:
         wg = sweep[name]
         held = np.asarray(wg['sweep_rows'][...]) if 'sweep_rows' in wg \
             else np.arange(len(res_idxs))
         where = {int(r): k for k, r in enumerate(held)}
-        ds_rows = np.array([i for i, r in enumerate(sweep_rows)
-                            if int(r) in where], dtype = np.int64)
-        if not len(ds_rows):
+        # Positions in ``rows`` of the tones this write streamed
+        sel = np.array([i for i, r in enumerate(sweep_rows)
+                        if int(r) in where], dtype = np.int64)
+        if not len(sel):
             continue
-        ts_rows = np.array([where[int(sweep_rows[i])] for i in ds_rows])
+        ts_rows = np.array([where[int(sweep_rows[i])] for i in sel])
         stream = wg[stream_name]
-        this_dt = float(stream['dt'][...])
-        if dt is None:
-            dt = this_dt
-            chunk = int(stream['z'].chunks[2])
-            for o in outputs:
-                arrays[o] = out_grp.create_array(
-                    o, shape = (len(ds_res), nsamples), dtype = np.float64,
-                    chunks = (len(ds_res), chunk), fill_value = np.nan)
-        writes.append((wg, stream, ds_rows, ts_rows))
+        dt = float(stream['dt'][...]) if dt is None else dt
+        writes.append((wg, stream, sel, ts_rows,
+                       int(stream['z'].chunks[2])))
     if dt is None:
         raise ValueError(f"{source['group']} has no stream of the DataSet's "
                          'tones')
-    steps = [(wg, stream, ds_rows, ts_rows, a, min(a + chunk, stop))
-             for wg, stream, ds_rows, ts_rows in writes
+    steps = [(wg, stream, sel, ts_rows, a, min(a + chunk, stop))
+             for wg, stream, sel, ts_rows, chunk in writes
              for a in range(start, stop, chunk)]
-    for wg, stream, ds_rows, ts_rows, a, b in tqdm(
+    for wg, stream, sel, ts_rows, a, b in tqdm(
             steps, desc = 'Applying', leave = False, disable = not verbose):
         o = np.argsort(ts_rows)
         z = stream['z'][:, ts_rows[o], a:b]
         scale = np.asarray(stream['counts_to_s21'][...])[ts_rows[o]]
-        zt = np.empty((len(ds_rows), b - a), dtype = np.complex128)
+        zt = np.empty((len(sel), b - a), dtype = np.complex128)
         zt[o] = (z[0] + 1j * z[1]) * scale[:, None]
         ft = np.asarray(wg['fres'][...])[ts_rows]
-        out = DS.apply_cal(ds_rows, outputs, replacements = dict(
+        res = DS.apply_cal(rows[sel], outputs, replacements = dict(
             zt = zt, ft = ft, dt = dt))
         for name in outputs:
-            value = np.atleast_2d(np.asarray(out[name], dtype = np.float64))
-            if value.shape != (len(ds_rows), b - a):
+            value = np.atleast_2d(np.asarray(res[name], dtype = np.float64))
+            if value.shape != (len(sel), b - a):
                 raise ValueError(f'{name} is not one value per sample '
                                  f'(shape {value.shape})')
-            arrays[name][ds_rows, a - start:b - start] = value
-    out_grp.create_array('dt', data = np.array(dt))
-    out_grp.create_array('res_idxs', data = ds_res)
-    out_grp.attrs.update(dict(
-        source = {k: (list(v) if isinstance(v, (list, tuple)) else v)
-                  for k, v in source.items()},
-        outputs = outputs, dataset = DS.root.path, complete = True))
-    return out_grp
+            out[name][sel, a - start:b - start] = value
+    out.update(dt = dt, rows = rows)
+    return out
 
 def plan_stream_datasets(root, selection):
     """

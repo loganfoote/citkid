@@ -9,7 +9,8 @@ from ``procedures/03_tune.py``):
   points, samples per point, gain span) and press Calibrate: a target
   sweep of the set, saved as the tuning's next ``cal{j}``
   (``crs.procedures.calibrate_tone_set``). A progress bar follows every
-  sweep and stream (streams by their elapsed time). The
+  sweep and stream (streams by their elapsed time), with the estimated
+  time left. The
   calibration list shows the set's saved sweeps, the latest usable one
   chosen; pick another to use it instead. A calibration takes long, so
   one is taken per set and every preview and run after that uses it,
@@ -25,10 +26,11 @@ from ``procedures/03_tune.py``):
   the IQ loop, with its calibration loop and the stream in the IQ plane.
   R fits the plots to their data again. Nothing is saved.
 - Run: enter a name (and notes), a decimation stage, and a length, and
-  run: the selected tone set, with its chosen calibration copied into the
-  run, gets its tones written (unless they are on the board) and its
-  stream, saved as the next ``ts{n}`` at the store root
-  (``crs.procedures.stream_tone_sets``). Presets fill in the usual runs.
+  run: the selected tone set gets its tones written (unless they are on
+  the board) and its stream, saved under its chosen calibration and the
+  tone write (``tune{k}/cal{j}/write{w}/ts{n}``), and the run is added
+  to the tuning's run list (``crs.procedures.stream_tone_sets``).
+  Presets fill in the usual runs.
   Repeat for the next timestream. For another tone set, select it and
   calibrate it (its NCO is set, so the sets calibrated before go stale).
 
@@ -58,7 +60,8 @@ from .procedures import (
     calibrate_tone_set, calibration_in_frame, plan_stream_chunks,
     stream_tone_sets, target_sweep, tones_written, write_set_tones
 )
-from .quick_check import AsyncWorker
+from .quick_check import AsyncWorker, ProgressClock
+from .util import get_sample_freq
 
 # Preview display modes
 MODES = ('Frequency shift x', 'Along / across loop (Hz)', 'I and Q')
@@ -135,6 +138,7 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.crs, self.cal, self.preview, self.runs = None, None, None, []
         self.chosen, self.written = {}, {}
         self.worker = AsyncWorker(self)
+        self._clock = ProgressClock()
         self._message.connect(self._set_status)
         self._progress.connect(self._on_progress)
         self._build_panel(preview_dec, preview_s)
@@ -350,7 +354,7 @@ class StreamWindow(QtWidgets.QMainWindow):
 
     def tuning_runs(self):
         """
-        Return this tuning's timestream runs (``ts{n}`` at the store root).
+        Return this tuning's timestream runs (its run list's ``ts{n}``).
 
         Returns:
         runs (list of dict): ``daq_layout.stream_runs`` of the tuning.
@@ -390,6 +394,7 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.progress.setRange(0, 0)
         self.progress.setFormat('')
         self.progress.setVisible(show)
+        self._clock.reset()
 
     def _on_progress(self, done, total):
         """
@@ -406,7 +411,7 @@ class StreamWindow(QtWidgets.QMainWindow):
             return
         self.progress.setRange(0, total)
         self.progress.setValue(min(done, total))
-        self.progress.setFormat(f'{done:,} / {total:,} (%p%)')
+        self.progress.setFormat(self._clock.text(done, total))
 
     def _run_chunks(self):
         """
@@ -674,8 +679,9 @@ class StreamWindow(QtWidgets.QMainWindow):
             fres = await write_set_tones(crs, grp, chunk, written)
             zt = await crs.stream_to_memory(secs, dec, verbose = False,
                                             progress = report)
+            # The stream's stage: the CRS may be back at stage 6 by now
             return dict(rows = cal['rows'][chunk], pos = chunk, fres = fres,
-                        zt = zt, dt = 1 / crs.sample_freq)
+                        zt = zt, dt = 1 / get_sample_freq(dec))
 
         self._submit(job(), self._on_captured,
                      ('Streaming' if reuse else 'Writing and streaming')

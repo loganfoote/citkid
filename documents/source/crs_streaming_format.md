@@ -610,10 +610,11 @@ drive when `grp` is on a slow or network drive.
   drops has gaps that are invisible in the data and `t = arange(n) * dt` is
   wrong after the first drop. Keep the warnings (e.g. log them) if this
   matters.
-- **Packet timestamps / sequence numbers.** Not saved. Modules are not
-  aligned to each other by timestamp; each module's samples start with the
-  first packet received after the socket opens. How closely sample `k` of
-  different modules lines up in time is not pinned down by the code.
+- **Packet timestamps / sequence numbers.** Not saved. They aren't
+  needed: the CRS streams all modules synchronously, so sample `k` of
+  every module is taken at the same time, and the streaming rate limits
+  (`MAX_FRAME_RATE`, `MAX_STREAM_WRITE_RATE`) keep dropped packets very
+  unlikely.
 - **Exact start time.** `timestamp` has 1 s resolution, local time with no
   time zone, and is taken before the decimation is set and before the first
   packet, so it precedes the first sample by an unspecified amount.

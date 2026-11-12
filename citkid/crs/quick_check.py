@@ -16,6 +16,7 @@ drives the window's progress bar.
 """
 import asyncio
 import threading
+import time
 import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
@@ -94,6 +95,79 @@ def sweep_plan_text(fmin, fmax, bw, module_idxs, step, nsamps):
             f'in {npass} passes of {npc} points per channel. Sampling '
             f'takes {t}, plus overheads.')
 
+def format_duration(seconds):
+    """
+    Format a duration for a progress bar.
+
+    Parameters:
+    seconds (float): the duration, s.
+
+    Returns:
+    text (str): e.g. '45 s', '3 min 20 s', '1 h 05 min'.
+    """
+    s = int(round(max(seconds, 0)))
+    if s < 60:
+        return f'{s} s'
+    if s < 3600:
+        return f'{s // 60} min {s % 60:02d} s'
+    return f'{s // 3600} h {(s % 3600) // 60:02d} min'
+
+class ProgressClock:
+    """
+    Estimate the time left of a job from its progress reports.
+
+    The rate is measured from the first report of the current step: a
+    report with another total, or with less done than the last one, starts
+    a new step (e.g. the next stream of a run).
+
+    Attributes:
+    clock (callable): time source, s. Default ``time.monotonic``.
+    """
+
+    def __init__(self, clock = time.monotonic):
+        """
+        Start with no step.
+
+        Parameters:
+        clock (callable): time source, s. Default ``time.monotonic``.
+        """
+        self.clock = clock
+        self.reset()
+
+    def reset(self):
+        """
+        Forget the current step.
+        """
+        self._start = None
+        self._last = (None, None)
+
+    def text(self, done, total):
+        """
+        Record a report and describe the progress.
+
+        Parameters:
+        done (int): units done in this step.
+        total (int): units in this step.
+
+        Returns:
+        text (str): percentage and estimated time left, e.g. '45%, about
+            2 min 10 s left' ('estimating time left' until it can tell).
+        """
+        now = self.clock()
+        last_done, last_total = self._last
+        if self._start is None or total != last_total or \
+                (last_done is not None and done < last_done):
+            self._start = (now, done)
+        self._last = (done, total)
+        pct = 100 * done / total if total > 0 else 0
+        t0, d0 = self._start
+        if done >= total:
+            return f'{pct:.0f}%, finishing'
+        if done <= d0 or now <= t0:
+            return f'{pct:.0f}%, estimating time left'
+        left = (total - done) * (now - t0) / (done - d0)
+        return f'{pct:.0f}%, about {format_duration(left)} left'
+
 class AsyncWorker(QtCore.QObject):
     """
     Run coroutines on a background thread's asyncio event loop and report
@@ -117,7 +191,10 @@ class AsyncWorker(QtCore.QObject):
         self.future = None
         self._thread = threading.Thread(target = self._run, daemon = True)
         self._thread.start()
-        self._done.connect(self._dispatch)
+        # Queued: a job that ends before ``submit`` returns (its done
+        # callback then runs on the GUI thread) still reports from the
+        # event loop, after the caller has set up its status
+        self._done.connect(self._dispatch, Qt.QueuedConnection)
 
     def _run(self):
         """
@@ -283,6 +360,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         self._connect = connect
         self._sweep_on_start = sweep_on_start
         self._band_lines = []
+        self._clock = ProgressClock()
         self._build_controls(nyquist, fmin, fmax, amplitude, qr_median,
                              pts_per_lw, nsamps, count)
         self._build_plots()
@@ -454,6 +532,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         self.progress.setRange(0, 0)
         self.progress.setFormat('')
         self.progress.setVisible(show)
+        self._clock.reset()
 
     def _on_progress(self, done, total):
         """
@@ -470,7 +549,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
             return
         self.progress.setRange(0, total)
         self.progress.setValue(min(done, total))
-        self.progress.setFormat(f'{done:,} / {total:,} points (%p%)')
+        self.progress.setFormat(self._clock.text(done, total))
 
     def _update_sweep_button(self):
         """

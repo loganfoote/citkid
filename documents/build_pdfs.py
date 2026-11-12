@@ -28,6 +28,8 @@ SOURCE = os.path.join(HERE, 'source')
 PROCEDURES = os.path.join(os.path.dirname(HERE), 'procedures')
 # (source file, output PDF relative to documents/, title)
 DOCUMENTS = [
+    ('getting_started.md', 'procedures/getting_started.pdf',
+     'Getting started with the procedures'),
     ('vna_screening.md', 'procedures/vna_screening.pdf', 'VNA screening'),
     ('tuning_timestreams.md', 'procedures/tuning_timestreams.pdf',
      'Tuning and timestreams'),

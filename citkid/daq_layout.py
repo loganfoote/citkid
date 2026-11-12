@@ -8,11 +8,19 @@ procedure guides in ``documents/procedures/``).
 ├── vna{k}/                raw VNA sweeps (stitched over bands)
 ├── resonators{k}/         resonators found on vna{k} (res_idxs_all, ...)
 ├── tune{k}/               tunings: crs_config/, tones_init/, tones/, ...
-│                          (attrs['resonators']: the list they use)
-├── ts{n}/                 timestream runs (attrs: name, tuning, ...)
-│   └── set{s}/write{w}/stream/
-└── ts_cal{c}/             stream calibrations
+│   │                      (attrs['resonators']: the list they use)
+│   ├── cal{j}/            calibration sweep of one tone set (04)
+│   │   └── write{w}/      tones written for streaming
+│   │       └── ts{n}/     stream of run n
+│   └── streams/           run list (attrs['runs'])
+├── ts_cal{c}/             stream calibrations (05)
+└── ts_photons{p}/         photon results (06)
 ```
+
+Calibrated timestreams are never saved: analyses apply a calibration to
+the raw streams in memory and save their reduced results. Runs saved by
+earlier versions at the store root (``ts{n}/set{s}/write{w}/stream``) are
+still read, and ``migrate_root_runs`` moves them into their tunings.
 
 Every group has ``attrs['kind']``: 'raw' (write-once), 'decision', or
 'analysis'. References between groups are paths inside the store, so the
@@ -43,7 +51,9 @@ VNA_BAND_ARRAYS = ('chunk_edges', 'chunk_ncos', 'chunk_modules',
 TONE_ARRAYS = ('fres', 'qres', 'ares', 'res_idxs', 'tone_set',
                'tone_module')
 RESONATORS_PREFIX = 'resonators'
-# Timestream runs at the store root (ts{n}) and each executed stream
+# Timestream runs (ts{n}: each run's streams under its calibration's tone
+# writes, and runs at the store root in the earlier layout), calibration
+# sweeps (cal{j}), and the earlier layout's stream name
 TS_PREFIX = 'ts'
 CAL_PREFIX = 'cal'
 STREAM_NAME = 'stream'

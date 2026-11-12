@@ -610,8 +610,8 @@ async def calibrate_tone_set(
     plus the sweep's own, e.g. ``nsamps`` and ``complete``).
 
     A set is calibrated once, and every timestream of it after that uses
-    the calibration (``stream_tone_sets`` copies it into the run), so a
-    long sweep is never repeated. The sweep clears the board's tones.
+    the calibration (``stream_tone_sets`` saves the streams under it), so
+    a long sweep is never repeated. The sweep clears the board's tones.
 
     The calibration is only in frame while its modules' NCOs stay as
     they were for the sweep (``CRS.set_nco``): the ids of those settings

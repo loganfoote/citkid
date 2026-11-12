@@ -185,39 +185,35 @@ def test_dataset_calibrates_and_applies(streamed):
                               'resonators0/fres_all', 'resonators0/qres_all')
     np.testing.assert_allclose(np.asarray(DS2.xt[rows[0]]),
                                np.asarray(AR.DS.xt[rows[0]]))
-    # Applied to the whole stage-6 run: x of every tone over all of it,
-    # equal to the DataSet's on the window it loaded
+    # Applied to the whole stage-6 run, in memory: x of every tone over all
+    # of it, equal to the DataSet's on the window it loaded
     AR.execute_remaining(verbose = False)
+    before = sorted(out.group_keys())
     whole, run = dl.select_streams(root, run = 2, tone_sets = [1])
-    g = dl.require_group(out, 'set1_apply', 'analysis')
     ap = apply_stream_calibration(DS, root, whole[0],
-                                  dl.require_group(g, 'ts2', 'analysis'),
-                                  outputs = ['xt', 'thetat'], verbose = False)
+                                  outputs = ['xt', 'thetat'])
     n = run['nsamples']
     assert ap['xt'].shape == (n1, n) and ap['thetat'].shape == (n1, n)
-    assert ap.attrs['complete'] and ap.attrs['outputs'] == ['xt', 'thetat']
-    assert ap.attrs['dataset'] == DS.root.path
-    assert np.isclose(float(ap['dt'][...]), 1 / 596.046, rtol = 1e-3)
-    xt = ap['xt'][:]
-    assert np.isfinite(xt).all()
+    np.testing.assert_array_equal(ap['rows'], np.arange(n1))
+    assert np.isclose(ap['dt'], 1 / 596.046, rtol = 1e-3)
+    assert np.isfinite(ap['xt']).all()
     for r in rows:
-        np.testing.assert_allclose(xt[r, :1000], np.asarray(DS.xt[r])[:1000])
+        np.testing.assert_allclose(ap['xt'][r, :1000],
+                                   np.asarray(DS.xt[r])[:1000])
+    # Some rows only: the same values
+    some = apply_stream_calibration(DS, root, whole[0], rows = rows[::-1])
+    np.testing.assert_allclose(some['xt'], ap['xt'][rows[::-1]])
     # The chunked stage-0 run (two writes) too; its own sample period
     whole, run = dl.select_streams(root, run = 1, tone_sets = [1])
-    ap1 = apply_stream_calibration(DS, root, whole[0],
-                                   dl.require_group(g, 'ts1', 'analysis'),
-                                   verbose = False)
+    ap1 = apply_stream_calibration(DS, root, whole[0])
     assert ap1['xt'].shape == (n1, run['nsamples'])
-    assert np.isfinite(ap1['xt'][:]).all()
-    assert np.isclose(float(ap1['dt'][...]), 1 / 38147.0, rtol = 1e-3)
-    # Done once unless overwritten; other tones are refused
-    assert apply_stream_calibration(DS, root, whole[0], ap1,
-                                    verbose = False) is ap1
+    assert np.isfinite(ap1['xt']).all()
+    assert np.isclose(ap1['dt'], 1 / 38147.0, rtol = 1e-3)
+    # Nothing is saved; other tones are refused
+    assert sorted(out.group_keys()) == before
     other = dl.select_streams(root, run = 0, tone_sets = [0])[0][0]
     with pytest.raises(ValueError, match = "DataSet's tones"):
-        apply_stream_calibration(DS, root, other,
-                                 dl.require_group(g, 'bad', 'analysis'),
-                                 verbose = False)
+        apply_stream_calibration(DS, root, other)
 
 
 def test_select_streams(streamed):

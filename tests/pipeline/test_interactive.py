@@ -2870,18 +2870,52 @@ def test_gain_panel_span_mult_follows_the_row(qt_app):
 
 def test_bad_data_button_reports_and_marks_downstream(qt_app):
     panel = _gain_panel(_gain_ds())
-    emitted = []
-    panel.downstream_rerun.connect(emitted.append)
+    emitted, stale = [], []
+    panel.marked_bad.connect(emitted.append)
+    panel.downstream_rerun.connect(stale.append)
 
     panel._write_nan_outputs = MagicMock(return_value=True)
     panel._bad_btn.click()
     assert panel._status_label.text() == 'Bad data marked ✓'
-    assert emitted == [panel]
+    # The window is asked to mark the later panels bad (not just stale)
+    assert emitted == [panel] and stale == []
 
     panel._write_nan_outputs = MagicMock(return_value=False)
     panel._bad_btn.click()
     assert panel._status_label.text() == 'Bad data failed ✗'
     assert emitted == [panel]
+
+
+def test_bad_mark_reaches_later_panels(qt_app):
+    """
+    Marking a panel bad marks every later panel bad (NaN outputs, blank
+    plots) in both windows; a later panel without bad outputs goes stale;
+    earlier panels are untouched.
+    """
+    from types import SimpleNamespace
+    from citkid.pipeline.interactive.core import InteractiveAnalysisWindow
+    from citkid.pipeline.interactive.iq_series import IQSeriesWindow
+    panels = [_gain_panel(_gain_ds()) for _ in range(4)]
+    for i, panel in enumerate(panels):
+        panel._write_nan_outputs = MagicMock(return_value=i != 3)
+        panel.blank_plots = MagicMock()
+        panel.mark_stale = MagicMock()
+    win = SimpleNamespace(panels=panels, _series_idx=None)
+    InteractiveAnalysisWindow._on_panel_marked_bad(win, panels[1])
+    panels[0]._write_nan_outputs.assert_not_called()
+    panels[1]._write_nan_outputs.assert_not_called()
+    panels[2]._write_nan_outputs.assert_called_once_with(redraw=False)
+    panels[2].blank_plots.assert_called_once()
+    assert 'earlier panel' in panels[2]._status_label.text()
+    panels[3].blank_plots.assert_not_called()
+    panels[3].mark_stale.assert_called_once()
+    # The series window does the same, then refreshes the series point
+    win._series_idx = 0
+    win._update_series_point = MagicMock()
+    IQSeriesWindow._on_panel_marked_bad(win, panels[2])
+    assert panels[2]._write_nan_outputs.call_count == 1
+    assert panels[3]._write_nan_outputs.call_count == 2
+    win._update_series_point.assert_called_once_with(0)
 
 
 def _circle_ds(circ_mask=None):
