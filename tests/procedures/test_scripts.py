@@ -173,6 +173,73 @@ def test_vna_quick_check_gui(monkeypatch):
     assert fake.calls[0] == ('attach', dict(full_scale_dbm = 7.))
 
 
+def test_vna_view_script(monkeypatch, tmp_path):
+    """
+    The script opens the window on the store and sweep it is given.
+    """
+    m = load_script('vna_view.py')
+    seen = []
+
+    def fake_view(path, k):
+        """
+        Record the arguments.
+
+        Parameters:
+        path (str): store path.
+        k (int or None): sweep index.
+
+        Returns:
+        k (int): a sweep index.
+        """
+        seen.append((path, k))
+        return 2 if k is None else k
+
+    monkeypatch.setattr(m, 'run_vna_view', fake_view)
+    assert m.main(m.parse_args(['--data-dir', str(tmp_path), '--cooldown',
+                                'cd1', '--device', 'devA'])) == 2
+    assert seen[-1] == (str(tmp_path / 'cd1' / 'devA.zarr'), None)
+    assert m.main(m.parse_args(['--store', '~/x.zarr', '--vna', '1'])) == 1
+    assert seen[-1] == (os.path.expanduser('~/x.zarr'), 1)
+
+
+@pytest.mark.parametrize('script', [
+    '01_vna_sweep.py', '02_find_resonances.py', '03_tune.py', '04_stream.py',
+    '05_calibrate_streams.py', '06_find_photons.py', 'archive_store.py',
+    'vna_view.py', 'vna_report.py'])
+def test_store_path_suffix(script, tmp_path):
+    """
+    Every procedure names the store <device>_<suffix>.zarr, or
+    <device>.zarr (no underscore) with the default blank suffix.
+    """
+    m = load_script(script)
+    assert m.SUFFIX == ''
+    base = ['--data-dir', str(tmp_path), '--cooldown', 'cd1', '--device',
+            'devA']
+    assert m.store_path(m.parse_args(base)) == \
+        str(tmp_path / 'cd1' / 'devA.zarr')
+    assert m.store_path(m.parse_args(base + ['--suffix', 'warm'])) == \
+        str(tmp_path / 'cd1' / 'devA_warm.zarr')
+    assert m.store_path(m.parse_args(base + ['--suffix', ''])) == \
+        str(tmp_path / 'cd1' / 'devA.zarr')
+
+
+def test_vna_view_script_window(tmp_path):
+    """
+    The script really opens the view window on a simulated store.
+    """
+    from pyqtgraph.Qt import QtCore, QtWidgets
+    from citkid.crs.sim import simulate_vna_store
+    path = tmp_path / 'sim.zarr'
+    small = dict(f_lo = 1.0e9, f_hi = 1.1e9, n_banks = 1, n_per_bank = 6,
+                 pair_frac = 0.)
+    asyncio.run(simulate_vna_store(path, device_kwargs = small, step = 5e-5,
+                                   verbose = False))
+    m = load_script('vna_view.py')
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    QtCore.QTimer.singleShot(0, app.quit)
+    assert m.main(m.parse_args(['--store', str(path)])) == 0
+
+
 @pytest.mark.asyncio
 async def test_01_vna_sweep(monkeypatch, tmp_path):
     m = load_script('01_vna_sweep.py')
@@ -200,6 +267,41 @@ async def test_01_vna_sweep(monkeypatch, tmp_path):
     assert 0.9 < d.min() and d.max() < 1.1
     # A second run adds sweep1 to the same store
     assert await m.main(m.parse_args(argv)) == 1
+
+
+@pytest.mark.asyncio
+async def test_01_vna_sweep_view(monkeypatch, tmp_path):
+    """
+    With --view (or the VIEW setting), the sweep opens in the view window
+    once saved; --no-view overrides the setting.
+    """
+    m = load_script('01_vna_sweep.py')
+    fake_factory(monkeypatch, m, FakeVnaCRS(modules = (1,)))
+    seen = []
+
+    def fake_view(root, k):
+        """
+        Record the store and sweep shown.
+
+        Parameters:
+        root (zarr.Group): the store root.
+        k (int): sweep index.
+        """
+        seen.append((root, k))
+
+    monkeypatch.setattr(m, 'run_vna_view', fake_view)
+    argv = ['--data-dir', str(tmp_path), '--cooldown', 'cd1', '--device',
+            'devA', '--qr-median', '1e4', '--pts-per-lw', '1']
+    assert await m.main(m.parse_args(argv)) == 0 and seen == []
+    assert await m.main(m.parse_args(argv + ['--view'])) == 1
+    root, k = seen[-1]
+    assert k == 1 and root.attrs['device'] == 'devA'
+    # The sweep was saved before the window opened
+    assert len(dl.load_vna_sweep(root, 1)[0]) > 0
+    monkeypatch.setattr(m, 'VIEW', True)
+    assert await m.main(m.parse_args(argv)) == 2 and seen[-1][1] == 2
+    assert await m.main(m.parse_args(argv + ['--no-view'])) == 3
+    assert len(seen) == 2
 
 
 def test_scripts_line_length_and_settings():
@@ -596,6 +698,70 @@ def test_03_tune_windows(tmp_path, monkeypatch, capsys):
     assert t['fres'].min() > np.sort(truth.fr.values)[100]
     with pytest.raises(ValueError, match = 'no windows'):
         m.plan(root, m.parse_args(argv + ['--windows', '7']), str(path))
+
+
+def test_03_tune_frequency_range(tmp_path, monkeypatch, capsys):
+    """
+    FMIN/FMAX (--fmin/--fmax) keep only the resonators in a frequency
+    range as tones; the ones outside still count as close neighbours.
+    """
+    from citkid.crs.sim import simulate_vna_store
+    path = tmp_path / 'sim.zarr'
+    small = dict(f_lo = 1.0e9, f_hi = 1.3e9, n_banks = 1, n_per_bank = 20,
+                 pair_frac = 0., yield_frac = 1.)
+    root, truth = asyncio.run(simulate_vna_store(
+        path, device_kwargs = small, step = 1e-4, verbose = False))
+    fr = np.sort(truth.fr.values)
+    dl.save_resonators(root, 0, fr, np.full(len(fr), 2e4), 'test',
+                       Qr = np.full(len(fr), 1e5))
+    m = load_script('03_tune.py')
+    monkeypatch.setattr(m, 'MIN_SEP_LW', 0.)
+    argv = ['--store', str(path), '--simulate']
+    root = dl.open_store(path, mode = 'a')
+    # Default: no limit
+    assert m.frequency_range(fr).all()
+    tune = m.plan(root, m.parse_args(argv), str(path))
+    assert len(dl.load_tones(tune['tones_init'])['fres']) == len(fr)
+    assert tune['tones_init'].attrs['fmin'] is None
+    assert tune['tones_init'].attrs['n_out_of_range'] == 0
+    assert 'outside' not in capsys.readouterr().out
+    # The range is inclusive at both ends
+    lo, hi = fr[5], fr[12]
+    tune = m.plan(root, m.parse_args(
+        argv + ['--fmin', repr(lo), '--fmax', repr(hi)]), str(path))
+    t = dl.load_tones(tune['tones_init'])
+    np.testing.assert_allclose(np.sort(t['fres']), fr[5:13])
+    np.testing.assert_array_equal(np.sort(t['res_idxs']), np.arange(5, 13))
+    a = tune['tones_init'].attrs
+    assert a['fmin'] == lo and a['fmax'] == hi and a['n_out_of_range'] == 12
+    assert f'12 outside {lo / 1e9:.6g}-{hi / 1e9:.6g} GHz' in \
+        capsys.readouterr().out
+    # Only one end
+    tune = m.plan(root, m.parse_args(argv + ['--fmax', repr(fr[3])]),
+                  str(path))
+    assert len(dl.load_tones(tune['tones_init'])['fres']) == 4
+    assert 'outside below' in capsys.readouterr().out
+    # A resonance just outside the range still makes its neighbour too
+    # close: a second list with an extra resonance 3 linewidths below fr[6]
+    extra = fr[6] - 3 * fr[6] / 1e5
+    fr2 = np.sort(np.append(fr, extra))
+    dl.save_resonators(root, 1, fr2, np.full(len(fr2), 2e4), 'test',
+                       Qr = np.full(len(fr2), 1e5))
+    monkeypatch.setattr(m, 'MIN_SEP_LW', 5.)
+    tune = m.plan(root, m.parse_args(
+        argv + ['--resonators', '1', '--fmin', repr(fr[6])]), str(path))
+    t = dl.load_tones(tune['tones_init'])
+    assert fr[6] not in t['fres'] and extra not in t['fres']
+    np.testing.assert_allclose(np.sort(t['fres']), fr[7:])
+    a = tune['tones_init'].attrs
+    assert a['n_dropped'] == 2 and a['n_out_of_range'] == 6
+    monkeypatch.setattr(m, 'MIN_SEP_LW', 0.)
+    # Errors
+    with pytest.raises(ValueError, match = 'above FMAX'):
+        m.plan(root, m.parse_args(argv + ['--fmin', '2e9', '--fmax', '1e9']),
+               str(path))
+    with pytest.raises(ValueError, match = 'no tones'):
+        m.plan(root, m.parse_args(argv + ['--fmin', '2e9']), str(path))
 
 
 def test_vna_report(tmp_path):

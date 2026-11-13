@@ -8,9 +8,12 @@ connects to this session's modules, and waits for the Sweep button
 (2500-5000 MHz), or both, on a geometric grid (constant df/f), leaving a
 10 MHz guard band on each side of 2500 MHz (the point nearest it
 glitches), with a progress bar, and plots |S21| and phase with a rough
-count of the resonances (matched filter). The settings can be changed in
+count of the resonances (matched filter). A running sweep can be
+cancelled (Cancel, Esc); it stops at the next point and clears the
+board's tones. The settings can be changed in
 the window and the sweep run again; the modules too (type them, e.g.
-"1 2" for a device split over two modules, and press Connect). "Count
+"1 2" for a device split over two modules, and press Connect, or just
+Sweep: it connects to the typed modules first). "Count
 now" counts the resonances of the last sweep without new data. Nothing is
 saved to zarr; the sweep can be saved as a CSV (columns f in Hz, i, q).
 Use it to check the

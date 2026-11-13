@@ -103,6 +103,12 @@ class FakeVnaCRS:
             self.module_cfg[m].update(
                 {k: v for k, v in kwargs.items() if k in self.module_cfg[m]})
 
+    async def clear_tones(self):
+        """
+        Record a ``clear_tones`` call.
+        """
+        self.calls.append(('clear_tones', {}))
+
     async def set_nco(self, nco_freqs, verbose = True):
         """
         Record and set NCO frequencies.

@@ -30,9 +30,12 @@ from citkid.vna.report import export_vna_report
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-DATA_DIR = '~/data'         # stores are in DATA_DIR/COOLDOWN/DEVICE.zarr
+DATA_DIR = '~/data'         # stores are in
+                            # DATA_DIR/COOLDOWN/DEVICE[_SUFFIX].zarr
 COOLDOWN = 'cooldown'       # cooldown name
 DEVICE = 'device'           # device name
+SUFFIX = ''                 # store name suffix: the store is
+                            # DEVICE_SUFFIX.zarr ('': DEVICE.zarr)
 OUT_DIR = '~/data/reports'  # where the files go
 
 ################################################################################
@@ -53,6 +56,9 @@ def parse_args(argv = None):
     p.add_argument('--data-dir', default = DATA_DIR)
     p.add_argument('--cooldown', default = COOLDOWN)
     p.add_argument('--device', default = DEVICE)
+    p.add_argument('--suffix', default = SUFFIX,
+                   help = 'store name suffix: <device>_<suffix>.zarr '
+                   '(blank: <device>.zarr)')
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device;'
                    ' may be a zip)')
@@ -69,12 +75,14 @@ def store_path(args):
     args (argparse.Namespace): options from ``parse_args``.
 
     Returns:
-    path (str): ``--store``, or ``<data dir>/<cooldown>/<device>.zarr``.
+    path (str): ``--store``, or
+        ``<data dir>/<cooldown>/<device>[_<suffix>].zarr``.
     """
     if args.store:
         return os.path.expanduser(args.store)
+    name = args.device + (f'_{args.suffix}' if args.suffix else '')
     return os.path.join(os.path.expanduser(args.data_dir), args.cooldown,
-                        f'{args.device}.zarr')
+                        f'{name}.zarr')
 
 def main(args):
     """

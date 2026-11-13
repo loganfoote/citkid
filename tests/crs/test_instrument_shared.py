@@ -707,13 +707,14 @@ async def test_sweep_passes_dec_stage_check(
 ################################# _sweep macro #################################
 ################################################################################
 
-def make_sweep_module(dec_stage = 6, nchannels = 1024):
+def make_sweep_module(dec_stage = 6, nchannels = 1024, nco = 4.0e9):
     """
     Create a mock ReadoutModule for the _sweep macro.
 
     Parameters:
     dec_stage (int): value returned by ctx.get_decimation.
     nchannels (int): number of channels returned by get_samples.
+    nco (float): value returned by ctx.get_nco_frequency, Hz.
 
     Returns:
     module (MagicMock): mock readout module.
@@ -731,6 +732,9 @@ def make_sweep_module(dec_stage = 6, nchannels = 1024):
     future = Mock()
     future.result.return_value = dec_stage
     ctx.get_decimation.return_value = future
+    nco_future = Mock()
+    nco_future.result.return_value = nco
+    ctx.get_nco_frequency.return_value = nco_future
     ctx.side_effect = None
 
     async def call():
@@ -748,6 +752,7 @@ def make_sweep_module(dec_stage = 6, nchannels = 1024):
     class CtxObj:
         set_frequency = ctx.set_frequency
         get_decimation = ctx.get_decimation
+        get_nco_frequency = ctx.get_nco_frequency
 
         def __call__(self):
             return ctx_call()
@@ -778,6 +783,34 @@ async def test_sweep_macro_checks_dec_stage():
 
 
 @pytest.mark.asyncio
+async def test_sweep_macro_checks_nco():
+    """
+    With the stage check on, the module's NCO is read too, and a sweep
+    stops (clearing the tones) if another session moved it; within 1 Hz
+    is the same NCO.
+    """
+    module, ctx = make_sweep_module(nco = 4.0e9 + 0.5)
+    sweep_f, sweep_z = {}, {}
+    await _sweep(module, {1: 4.0e9}, {1: np.array([[4.0e9, 4.1e9]])},
+                 {1: np.array([-50.])}, sweep_f, sweep_z, nsamps = 5,
+                 verbose = False, full_scale_dbm = {1: 7.0},
+                 check_dec_stage = 6)
+    assert sweep_z[1].shape == (1, 2)
+    ctx.get_nco_frequency.assert_called_with(module = 1)
+    module, ctx = make_sweep_module(nco = 2.25e9)
+    sweep_f, sweep_z = {}, {}
+    with pytest.raises(RuntimeError, match = 'NCO of module 1 changed to '
+                       '2250.000 MHz.*expected 4000.000 MHz'):
+        await _sweep(module, {1: 4.0e9}, {1: np.array([[4.0e9, 4.1e9]])},
+                     {1: np.array([-50.])}, sweep_f, sweep_z, nsamps = 5,
+                     verbose = False, full_scale_dbm = {1: 7.0},
+                     check_dec_stage = 6)
+    module.crs.clear_channels.assert_called()
+    module.crs.get_samples.assert_not_called()
+    assert sweep_f == {}
+
+
+@pytest.mark.asyncio
 async def test_sweep_macro_no_dec_check_by_default():
     """Test the _sweep macro does not read the stage by default."""
     module, ctx = make_sweep_module(dec_stage = 3)
@@ -788,6 +821,7 @@ async def test_sweep_macro_no_dec_check_by_default():
                  verbose = False, full_scale_dbm = {1: 7.0})
 
     ctx.get_decimation.assert_not_called()
+    ctx.get_nco_frequency.assert_not_called()
     assert sweep_z[1].shape == (1, 2)
     module._write_tones.assert_called_once()
     assert module._write_tones.call_args.args[3] == {1: 7.0}

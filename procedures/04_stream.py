@@ -56,9 +56,12 @@ from citkid.crs.stream_gui import run_stream_gui
 ################################################################################
 SERIAL_NUMBER = 46          # CRS serial number
 INTERFACE = 'enp5s0'        # Ethernet interface connected to the CRS
-DATA_DIR = '~/data'         # stores are in DATA_DIR/COOLDOWN/DEVICE.zarr
+DATA_DIR = '~/data'         # stores are in
+                            # DATA_DIR/COOLDOWN/DEVICE[_SUFFIX].zarr
 COOLDOWN = 'cooldown'       # cooldown name
 DEVICE = 'device'           # device name
+SUFFIX = ''                 # store name suffix: the store is
+                            # DEVICE_SUFFIX.zarr ('': DEVICE.zarr)
 MODULES = [1]               # modules connected to this device
 # Preview
 PREVIEW_DEC = 6             # preview decimation stage
@@ -108,6 +111,9 @@ def parse_args(argv = None):
     p.add_argument('--data-dir', default = DATA_DIR)
     p.add_argument('--cooldown', default = COOLDOWN)
     p.add_argument('--device', default = DEVICE)
+    p.add_argument('--suffix', default = SUFFIX,
+                   help = 'store name suffix: <device>_<suffix>.zarr '
+                   '(blank: <device>.zarr)')
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device)')
     p.add_argument('--modules', type = int, nargs = '+', default = MODULES)
@@ -129,12 +135,14 @@ def store_path(args):
     args (argparse.Namespace): options from ``parse_args``.
 
     Returns:
-    path (str): ``--store``, or ``<data dir>/<cooldown>/<device>.zarr``.
+    path (str): ``--store``, or
+        ``<data dir>/<cooldown>/<device>[_<suffix>].zarr``.
     """
     if args.store:
         return os.path.expanduser(args.store)
+    name = args.device + (f'_{args.suffix}' if args.suffix else '')
     return os.path.join(os.path.expanduser(args.data_dir), args.cooldown,
-                        f'{args.device}.zarr')
+                        f'{name}.zarr')
 
 def find_tuning(root, k = None):
     """

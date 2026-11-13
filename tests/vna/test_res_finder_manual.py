@@ -1777,3 +1777,91 @@ def test_log_after_the_panel_is_deleted_prints(capsys):
     ManualResFinder.log(SimpleNamespace(log_text=panel), 'Saved 3 resonances')
 
     assert 'Saved 3 resonances' in capsys.readouterr().out
+
+
+################################################################################
+########################## Resonance marker drawing ############################
+################################################################################
+def _marker_segments(curves):
+    """
+    Count the vertical segments drawn by a plot's marker curves.
+
+    Parameters:
+    curves (list of PlotCurveItem): the plot's marker curves.
+
+    Returns:
+    n (int): segments (two points each).
+    """
+    total = 0
+    for c in curves:
+        x = c.xData
+        total += 0 if x is None else len(x) // 2
+    return total
+
+
+def test_markers_are_segment_curves(synthetic_vna_data, tmp_path):
+    """
+    Resonance markers are a few segment curves per plot, not one item per
+    resonance: a thousand resonances draw as one segment each in the
+    curves of their styles, only those in view (with margin), spanning
+    the view's height; adding one redraws them.
+    """
+    from pyqtgraph.Qt import QtWidgets
+    f = synthetic_vna_data['f']
+    fres = np.linspace(4.1e9, 7.9e9, 1000)
+    finder = ManualResFinder(f, synthetic_vna_data['z'], fres,
+                             str(tmp_path / 'm.zarr'))
+    # setup_ui is patched out in these tests: build the plots as it does
+    finder.win = ResFinderWindow(finder)
+    finder.log_text = QtWidgets.QTextEdit()
+    finder.setup_plots()
+    assert len(finder.mag_markers) == 6 and len(finder.phase_markers) == 6
+    # Only the marker curves and the data curves are in the plots
+    assert len(finder.plot_mag.listDataItems()) == 2 + 6
+    finder.plot_mag.setXRange(4e9, 8e9, padding = 0)
+    finder.update_resonance_markers()
+    assert _marker_segments(finder.mag_markers) == 1000
+    assert _marker_segments(finder.phase_markers) == 1000
+    # Styles cycle through the list: 1000 / 6 segments per curve
+    counts = [0 if c.xData is None else len(c.xData) // 2
+              for c in finder.mag_markers]
+    assert counts == [167, 167, 167, 167, 166, 166]
+    # The segments span more than the plot's visible height
+    y0, y1 = finder.plot_mag.viewRange()[1]
+    y = finder.mag_markers[0].yData
+    assert y.min() < y0 and y.max() > y1
+    # A narrow view draws only the markers in it, with half a view of
+    # margin on each side: 6 GHz +- 10 MHz, margin 10 MHz
+    finder.plot_mag.setXRange(5.99e9, 6.01e9, padding = 0)
+    finder.update_resonance_markers()
+    in_view = np.sum((fres >= 5.98e9) & (fres <= 6.02e9))
+    assert 0 < in_view < 100
+    assert _marker_segments(finder.mag_markers) == in_view
+    assert _marker_segments(finder.phase_markers) == in_view
+    # Adding a resonance in view redraws it; one out of view doesn't show
+    finder.add_resonance(6.0001e9)
+    assert _marker_segments(finder.mag_markers) == in_view + 1
+    finder.add_resonance(7.5e9)
+    assert _marker_segments(finder.mag_markers) == in_view + 1
+    assert len(finder.fres) == 1002
+
+
+def test_sweep_curves_draw_fast(synthetic_vna_data, tmp_path):
+    """
+    The sweep curves use 1 px pens and peak downsampling: Qt strokes wider
+    lines with its slow path, whose cost grows with the pixels each
+    segment covers, so a noisy sweep (low signal, tens of dB of scatter)
+    took seconds per redraw; downsampling bounds the segments to about two
+    per pixel column at any zoom.
+    """
+    from pyqtgraph.Qt import QtWidgets
+    finder = ManualResFinder(synthetic_vna_data['f'],
+                             synthetic_vna_data['z'], [5e9],
+                             str(tmp_path / 'm.zarr'))
+    finder.win = ResFinderWindow(finder)
+    finder.log_text = QtWidgets.QTextEdit()
+    finder.setup_plots()
+    for curve in (finder.mag_curve, finder.phase_curve):
+        assert curve.opts['pen'].widthF() <= 1
+        assert curve.opts['autoDownsample']
+        assert curve.opts['downsampleMethod'] == 'peak'

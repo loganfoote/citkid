@@ -8,9 +8,11 @@ if the range is wider than the modules cover at once, on a geometric grid
 (constant df/f, from the expected median Qr: 25 points per linewidth
 there by default; every channel sweeps downward), and saves the stitched
 sweep as the next ``vna{k}`` of the device store
-``<DATA_DIR>/<COOLDOWN>/<DEVICE>.zarr`` (created if needed; see
-``documents/procedures/vna_screening.pdf``). The next step finds the
-resonances on it.
+``<DATA_DIR>/<COOLDOWN>/<DEVICE>[_<SUFFIX>].zarr`` (created if needed; see
+``documents/procedures/vna_screening.pdf``). With ``VIEW`` (or
+``--view``), it then opens the sweep in a window (|S21| and phase versus
+frequency; ``vna_view.py`` opens the same window later). The next step
+finds the resonances on it.
 
 Needs the board configured by crs_init.py. This session attaches to
 its modules only, so several of these can run at once, one per device.
@@ -21,6 +23,7 @@ between acquisitions and are saved with the sweep.
 Usage:
     python 01_vna_sweep.py --device deviceA --modules 1
     python 01_vna_sweep.py --device deviceA --modules 1 2 3 4 --nyquist both
+    python 01_vna_sweep.py --device deviceA --modules 1 --view
 
 Edit the settings below for your setup; the command-line options override
 them for one run.
@@ -31,15 +34,19 @@ import os
 from citkid import daq_layout as dl
 from citkid.crs.instrument import CRS
 from citkid.crs.procedures import vna_range, vna_step, vna_sweep_to_store
+from citkid.vna.view import run_vna_view
 
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
 SERIAL_NUMBER = 46          # CRS serial number
 INTERFACE = 'enp5s0'        # Ethernet interface connected to the CRS
-DATA_DIR = '~/data'         # stores go in DATA_DIR/COOLDOWN/DEVICE.zarr
+DATA_DIR = '~/data'         # stores go in
+                            # DATA_DIR/COOLDOWN/DEVICE[_SUFFIX].zarr
 COOLDOWN = 'cooldown'       # cooldown name
 DEVICE = 'device'           # device name
+SUFFIX = ''                 # store name suffix: the store is
+                            # DEVICE_SUFFIX.zarr ('': DEVICE.zarr)
 # Free-form description saved with a new store (fridge channel,
 # attenuators, filters, ...)
 SETUP = dict(fridge_ch = None, dac_attenuation = None, dac_filters = None,
@@ -52,6 +59,8 @@ QR_MEDIAN = 2e4             # expected median Qr
 # is best for fitting
 PTS_PER_LW = 25.
 NSAMPS = 100                # samples averaged per point
+VIEW = False                # open the sweep in a window when done
+                            # (vna_view.py shows it again later)
 
 # Notes saved with the data this script makes (attribute 'notes'), e.g.
 # the filters and attenuators on the DAC and ADC lines. Multi-line is fine.
@@ -77,6 +86,9 @@ def parse_args(argv = None):
     p.add_argument('--data-dir', default = DATA_DIR)
     p.add_argument('--cooldown', default = COOLDOWN)
     p.add_argument('--device', default = DEVICE)
+    p.add_argument('--suffix', default = SUFFIX,
+                   help = 'store name suffix: <device>_<suffix>.zarr '
+                   '(blank: <device>.zarr)')
     p.add_argument('--modules', type = int, nargs = '+', default = MODULES)
     p.add_argument('--nyquist', default = NYQUIST,
                    choices = ['1', '2', 'both'])
@@ -90,6 +102,9 @@ def parse_args(argv = None):
     p.add_argument('--npoints', type = int, default = None,
                    help = 'points per channel (default: fastest)')
     p.add_argument('--nsamps', type = int, default = NSAMPS)
+    p.add_argument('--view', action = argparse.BooleanOptionalAction,
+                   default = VIEW,
+                   help = 'open the sweep in a window when done')
     p.add_argument('--notes', default = NOTES,
                    help = 'notes saved with the data (quote multi-line text)')
     return p.parse_args(argv)
@@ -113,14 +128,15 @@ def store_path(args):
     args (argparse.Namespace): options from ``parse_args``.
 
     Returns:
-    path (str): ``<data dir>/<cooldown>/<device>.zarr``.
+    path (str): ``<data dir>/<cooldown>/<device>[_<suffix>].zarr``.
     """
+    name = args.device + (f'_{args.suffix}' if args.suffix else '')
     return os.path.join(os.path.expanduser(args.data_dir), args.cooldown,
-                        f'{args.device}.zarr')
+                        f'{name}.zarr')
 
 async def main(args):
     """
-    Attach to the modules, sweep, and save.
+    Attach to the modules, sweep, save, and show the sweep if asked to.
 
     Parameters:
     args (argparse.Namespace): options from ``parse_args``.
@@ -142,6 +158,8 @@ async def main(args):
     save_notes(root[f'vna{k}'], args.notes)
     print(f'Saved {len(f)} points as vna{k} in {path}')
     print(dl.tree(root, max_depth = 2))
+    if args.view:
+        run_vna_view(root, k)
     return k
 
 if __name__ == '__main__':

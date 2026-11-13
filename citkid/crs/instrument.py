@@ -1893,9 +1893,13 @@ async def _sweep(
         full_scale_dbm (dict): keys (int) are module indices and values
             (float) are DAC full scale powers in dBm. Required.
         check_dec_stage (int or None): If not None, the board's decimation
-            stage is read with every frequency update, and an error is raised
-            if it is not check_dec_stage. Used by sessions without global
-            control to detect changes made by another session.
+            stage and the module's NCO are read with every frequency update,
+            and an error is raised if the stage is not check_dec_stage or
+            the NCO moved (within 1 Hz) from the one the tones were written
+            with. Used by sessions without global control to detect changes
+            made by another session (e.g. a VNA quick check of the same
+            module), which would otherwise leave the sweep reading the
+            wrong frequencies.
         progress (callable or None): if given, called as ``progress(n)``
             after every frequency step with the number of points (channels)
             just taken. ``CRS.sweep`` adds these up across modules.
@@ -1941,7 +1945,7 @@ async def _sweep(
 
         for sweep_idx in pbar:
             # Write frequencies
-            dec_future = None
+            dec_future = nco_future = None
             async with d.tuber_context() as ctx:
                 for ch in range(n_chs):
                     f = frequencies[ch, sweep_idx]
@@ -1949,6 +1953,7 @@ async def _sweep(
                                       module = module_idx)
                 if check_dec_stage is not None:
                     dec_future = ctx.get_decimation()
+                    nco_future = ctx.get_nco_frequency(module = module_idx)
                 await ctx()
             if dec_future is not None and \
                dec_future.result() != check_dec_stage:
@@ -1958,6 +1963,17 @@ async def _sweep(
                     f'{dec_future.result()} during the sweep on module '
                     f'{module_idx} (expected {check_dec_stage}). Another '
                     'session changed the decimation.'
+                    )
+            if nco_future is not None and \
+               abs(float(nco_future.result()) - nco_freq) > 1.:
+                await d.clear_channels(module = module_idx)
+                raise RuntimeError(
+                    f'The NCO of module {module_idx} changed to '
+                    f'{float(nco_future.result()) / 1e6:.3f} MHz during the '
+                    f'sweep (expected {nco_freq / 1e6:.3f} MHz). Another '
+                    'session (e.g. a VNA quick check) used this module; '
+                    'its tones are gone and the sweep would read the '
+                    'wrong frequencies.'
                     )
             samples = await d.get_samples(
                 nsamps, module = module_idx, average = True

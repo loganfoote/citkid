@@ -5,8 +5,9 @@ save the final tone list.
 Steps, in a tuning ``tune{k}`` of the device store:
 
 1. plan: start from a resonator list (``resonators{j}``, from step 02),
-   drop close tones (``tone_plan.select_isolated``), split the rest into
-   tone sets (``tone_plan.plan_tone_sets``), and save ``tones_init`` and
+   drop close tones (``tone_plan.select_isolated``) and the ones outside
+   ``FMIN``-``FMAX`` (if set), split the rest into tone sets
+   (``tone_plan.plan_tone_sets``), and save ``tones_init`` and
    ``crs_config`` (with each tone set's NCOs);
 2. power_sweep: a target sweep at each power in ``POWERS``, stitched over
    the tone sets (``power_sweep/set{i}``);
@@ -62,9 +63,12 @@ from citkid.vna.fq_finder import run_fqfinder
 ################################################################################
 SERIAL_NUMBER = 46          # CRS serial number
 INTERFACE = 'enp5s0'        # Ethernet interface connected to the CRS
-DATA_DIR = '~/data'         # stores are in DATA_DIR/COOLDOWN/DEVICE.zarr
+DATA_DIR = '~/data'         # stores are in
+                            # DATA_DIR/COOLDOWN/DEVICE[_SUFFIX].zarr
 COOLDOWN = 'cooldown'       # cooldown name
 DEVICE = 'device'           # device name
+SUFFIX = ''                 # store name suffix: the store is
+                            # DEVICE_SUFFIX.zarr ('': DEVICE.zarr)
 MODULES = [1]               # modules connected to this device
 # Tones
 RESONATORS = None           # resonator list index (None: the latest)
@@ -91,6 +95,13 @@ CAL_MIN_SEP_LW = 10.        # minimum distance from a calibration tone to
 # For example, STREAM_DEC = 0 and WINDOWS = [2] gives the (up to 128)
 # tones of one window
 WINDOWS = None
+# Frequency range of the tones, Hz (None: no limit), to leave out
+# resonances found by 02 that you don't want to measure, e.g. a few
+# stragglers far above the main band. Resonances outside the range still
+# count as neighbours for MIN_SEP_LW. For example, FMAX = 1.5e9 keeps the
+# tones below 1.5 GHz
+FMIN = None
+FMAX = None
 # Sweeps
 POWERS = np.arange(-60., -35., 3)   # power sweep, dBm
 SHUFFLE = False             # randomize the order of each tone's powers
@@ -142,6 +153,9 @@ def parse_args(argv = None):
     p.add_argument('--data-dir', default = DATA_DIR)
     p.add_argument('--cooldown', default = COOLDOWN)
     p.add_argument('--device', default = DEVICE)
+    p.add_argument('--suffix', default = SUFFIX,
+                   help = 'store name suffix: <device>_<suffix>.zarr '
+                   '(blank: <device>.zarr)')
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device)')
     p.add_argument('--modules', type = int, nargs = '+', default = MODULES)
@@ -158,6 +172,10 @@ def parse_args(argv = None):
                    help = 'NCO windows to use (default: all)')
     p.add_argument('--list-windows', action = 'store_true',
                    help = 'print the NCO windows of a new tuning and stop')
+    p.add_argument('--fmin', type = float, default = FMIN,
+                   help = 'lowest tone frequency, Hz (default: no limit)')
+    p.add_argument('--fmax', type = float, default = FMAX,
+                   help = 'highest tone frequency, Hz (default: no limit)')
     p.add_argument('--notes', default = NOTES,
                    help = 'notes saved with the data (quote multi-line text)')
     return p.parse_args(argv)
@@ -181,12 +199,14 @@ def store_path(args):
     args (argparse.Namespace): options from ``parse_args``.
 
     Returns:
-    path (str): ``--store``, or ``<data dir>/<cooldown>/<device>.zarr``.
+    path (str): ``--store``, or
+        ``<data dir>/<cooldown>/<device>[_<suffix>].zarr``.
     """
     if args.store:
         return os.path.expanduser(args.store)
+    name = args.device + (f'_{args.suffix}' if args.suffix else '')
     return os.path.join(os.path.expanduser(args.data_dir), args.cooldown,
-                        f'{args.device}.zarr')
+                        f'{name}.zarr')
 
 def sweep_kwargs():
     """
@@ -278,10 +298,16 @@ def plan(root, args, path):
                               res['fres_all'] / res['Qr_all'],
                               min_sep_lw = MIN_SEP_LW, pairs = PAIRS,
                               strength = strength)
+    n_close = int((~keep).sum())
+    in_range = frequency_range(res['fres_all'], args.fmin, args.fmax)
+    n_out = int((keep & ~in_range).sum())
+    keep &= in_range
+    if not keep.any():
+        raise ValueError(f'no tones: none of the {len(keep)} resonators of '
+                         f'{name} is isolated and in {range_text(args)}')
     crs = asyncio.run(connect(args, path))
     dl.check_crs_identity(root, crs)
     fres = res['fres_all'][keep]
-    n_close = int((~keep).sum())
     max_tones = max_stream_tones(STREAM_DEC, 1)[0]
     kw = dict(edge_margin = EDGE_MARGIN, extended_bw = bool(crs.extended_bw),
               max_tones = max_tones)
@@ -310,7 +336,8 @@ def plan(root, args, path):
         edge_margin = EDGE_MARGIN, n_dropped = n_close,
         stream_dec = STREAM_DEC, max_tones = max_tones,
         n_cal_tones = len(fcal), cal_min_sep_lw = CAL_MIN_SEP_LW,
-        windows = None if args.windows is None else list(args.windows)))
+        windows = None if args.windows is None else list(args.windows),
+        fmin = args.fmin, fmax = args.fmax, n_out_of_range = n_out))
     dl.save_tones(
         init, np.concatenate((fres, fcal)),
         np.concatenate((qres, np.full(len(fcal), np.median(qres)))), np.nan,
@@ -320,12 +347,60 @@ def plan(root, args, path):
         source = dict(fres = f'{name}/fres_all', qres = f'{name}/qres_all'))
     print(f'plan: tune{k}: {keep.sum()} tones of {len(keep)} resonators '
           f'({n_close} too close'
+          + ('' if args.fmin is None and args.fmax is None else
+             f', {n_out} outside {range_text(args)}')
           + ('' if args.windows is None else
              f', windows {list(args.windows)}')
           + f'), {len(tplan["ncos"])} tone set(s)'
           + (', extended bandwidth' if tplan['extended_bw'] else '')
           + (f', {len(fcal)} calibration tones' if len(fcal) else ''))
     return tune
+
+def frequency_range(fres, fmin = None, fmax = None):
+    """
+    Return which frequencies are in a range.
+
+    Parameters:
+    fres (np.array): frequencies, Hz.
+    fmin (float or None): lowest frequency (inclusive), Hz. None: no limit.
+    fmax (float or None): highest frequency (inclusive), Hz. None: no limit.
+
+    Returns:
+    in_range (np.array, bool): True where fmin <= fres <= fmax.
+
+    Raises:
+    ValueError: if fmin > fmax.
+    """
+    if fmin is not None and fmax is not None and fmin > fmax:
+        raise ValueError(f'FMIN ({fmin:.6g} Hz) is above FMAX ({fmax:.6g} Hz)')
+    fres = np.asarray(fres, dtype = float)
+    in_range = np.ones(len(fres), dtype = bool)
+    if fmin is not None:
+        in_range &= fres >= fmin
+    if fmax is not None:
+        in_range &= fres <= fmax
+    return in_range
+
+def range_text(args):
+    """
+    Describe the tone frequency range, for messages.
+
+    Parameters:
+    args (argparse.Namespace): options (``fmin``, ``fmax``).
+
+    Returns:
+    text (str): e.g. '1-1.5 GHz', 'below 1.5 GHz', 'above 1 GHz', or
+        'any frequency'.
+    """
+    lo = None if args.fmin is None else f'{args.fmin / 1e9:.6g}'
+    hi = None if args.fmax is None else f'{args.fmax / 1e9:.6g}'
+    if lo is not None and hi is not None:
+        return f'{lo}-{hi} GHz'
+    if hi is not None:
+        return f'below {hi} GHz'
+    if lo is not None:
+        return f'above {lo} GHz'
+    return 'any frequency'
 
 def tone_windows(fres, tplan):
     """

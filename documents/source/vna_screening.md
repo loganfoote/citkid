@@ -1,6 +1,6 @@
 ---
 title: "VNA screening"
-subtitle: "vna_quick_check, 01_vna_sweep, 02_find_resonances, vna_report"
+subtitle: "vna_quick_check, 01_vna_sweep, vna_view, 02_find_resonances, vna_report"
 ---
 
 # Overview
@@ -17,6 +17,7 @@ terms used here.
 |---|---|---|---|
 | `vna_quick_check.py` | Any time | Takes quick VNA sweeps of one device in an interactive window | Optionally, a CSV of f, I, Q |
 | `01_vna_sweep.py` | Once per device, or after a change to the setup | Takes a full VNA sweep | `vna{k}` |
+| `vna_view.py` | After a VNA sweep, before analyzing it | Shows a saved sweep (|S21| and phase) in an interactive window | Nothing |
 | `02_find_resonances.py` | After each VNA sweep | Finds, checks, and fits the resonances | `full_sweep_fit`, `resonators{k}` |
 | `vna_report.py` | After `02_find_resonances.py` | Writes a plot, a text summary, and a table of the results | Files in a folder |
 
@@ -51,7 +52,13 @@ The window has these controls:
 
 - **Modules**: the modules connected to the device. Use several if a
   splitter feeds the device to more than one module. Type them (for
-  example `1 2` or `5 6`) and press Connect to change them.
+  example `1 2` or `5 6`) and press Connect to change them; Sweep
+  connects to the typed modules first if they differ, and the status
+  line says which modules it is sweeping.
+  Don't quick-check a module that another script is sweeping or
+  streaming: the check takes the module's tones and NCO for itself, and
+  the other script's sweep stops with an error saying so (a stream, or a
+  sweep that was already past that point, keeps the wrong data).
 - **Nyquist zone**: zone 1 (100-2500 MHz), zone 2 (2500-5000 MHz), or
   both. Sweeps skip 10 MHz on each side of 2500 MHz, because the point
   nearest the Nyquist frequency is unreliable. The range can also be set
@@ -68,6 +75,10 @@ The window has these controls:
   sweeping" is checked, the resonances are counted with a matched filter
   (a rough count) and marked on the plot. **Count now** counts the
   resonances of the last sweep without taking new data.
+- **Cancel** (Esc): stops the running sweep at its next point (nothing of
+  it is kept), clears the tones on the board, and shows "Cancelled" in
+  the status line. The settings can then be changed and the sweep run
+  again. The button is enabled only while a sweep runs.
 
 With `--no-gui` (for example, over ssh without a display), the script
 takes one sweep with the settings, prints the resonance count, and saves
@@ -105,6 +116,10 @@ created, with the `SETUP` setting saved as a description of the setup
   frequency), the band arrays (edges, NCO frequencies, modules, passes,
   Nyquist zones, channels, and start times), the sweep settings, and the
   CRS settings (`crs_config`).
+- With `VIEW = True` (or `--view`; `--no-view` turns it off for one
+  run), the saved sweep opens in the view window described next, so it
+  can be checked before the resonances are found. The script ends when
+  the window is closed.
 
 ## Settings
 
@@ -114,6 +129,33 @@ created, with the `SETUP` setting saved as a description of the setup
 
 {{help:01_vna_sweep.py}}
 
+# vna_view.py: look at a saved sweep
+
+This script shows a saved VNA sweep (`vna{k}`, the latest by default;
+choose another with `--vna k`) in a window, for a look at it after
+`01_vna_sweep.py` and before `02_find_resonances.py`: whether the
+resonances are there, the power is right, and the bands join up. It does
+not need the CRS, and saves nothing.
+
+The window shows |S21| in dB above the phase of S21 in radians, both
+against frequency in MHz, with the band edges marked by dotted lines and
+the sweep's settings (points, range, power, samples per point,
+resolution, bands, passes, modules, and notes) in the header.
+
+- The two plots share the frequency axis: drag to pan, scroll to zoom,
+  and right-drag to zoom one axis at a time; the other plot follows.
+- **R** (or the Rescale button) fits both plots to the data again.
+- **Unwrap phase** switches between the unwrapped phase (the default,
+  a ramp from the cable delay) and the wrapped phase.
+
+## Settings
+
+{{settings:vna_view.py}}
+
+## Command line
+
+{{help:vna_view.py}}
+
 # 02_find_resonances.py: find and fit the resonances
 
 This script analyzes a saved VNA sweep (by default the latest; choose
@@ -122,7 +164,12 @@ another with `--sweep k`). It does not need the CRS. It runs these steps:
 1. **find**: The CNN finder (default) or the interactive automatic finder
    (`--finder auto`) finds the resonances and saves their frequencies in
    `fres_auto`, with the finder's settings and results in
-   `res_finder_auto/`.
+   `res_finder_auto/`. The CNN finder needs PyTorch, which is installed
+   with `uv sync --extra cnn` (see the "Getting started" document); a
+   plain `uv sync` does not install it. Without PyTorch, this step raises
+   an `ImportError` saying that the CNN finder needs PyTorch and how to
+   install it, and nothing is saved; run the script with `--finder auto`
+   instead, or install PyTorch and run it again.
 2. **manual**: Check and edit the list of resonances in the manual finder
    window, which saves `fres_manual`. With `--no-manual`, the finder's
    list is used as it is (useful for simulated data).

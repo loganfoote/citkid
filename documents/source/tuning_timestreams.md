@@ -79,6 +79,11 @@ The tone sets are assigned once, when the tuning is planned:
 - `WINDOWS` (`--windows`) selects a subset of the windows, to measure only
   part of the array. `--list-windows` prints the windows with their NCO
   frequencies, tone ranges, and numbers of tones.
+- `FMIN` and `FMAX` (`--fmin`, `--fmax`, in Hz) keep only the resonators
+  in a frequency range as tones, e.g. to leave out a few stragglers found
+  far above the main band that you want fitted by 02 but not measured.
+  Resonances outside the range still count as neighbours for `MIN_SEP_LW`.
+  The tone sets are planned on the tones that remain.
 
 # 03_tune.py: make a tuning
 

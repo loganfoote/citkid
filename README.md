@@ -61,8 +61,20 @@ uv run --project /path/to/citkid script.py
 or set `UV_PROJECT=/path/to/citkid` in your shell. Otherwise, activate the
 environment as in step 5.
 
-To also install PyTorch for the CNN resonance finder, run
-`uv sync --extra cnn`.
+### The CNN resonance finder (optional)
+The CNN resonance finder (`citkid.vna.res_finder_cnn`), which
+`procedures/02_find_resonances.py` uses by default to find the resonances
+of a full VNA sweep, needs PyTorch. PyTorch is not installed by `uv sync`;
+install it with the `cnn` extra:
+```bash
+uv sync --extra cnn
+```
+Without it, everything else works, but running the CNN finder (the `find`
+step of `02_find_resonances.py`, or `run_res_finder_cnn`) raises an
+`ImportError` saying that the CNN finder needs PyTorch and how to install
+it. Until PyTorch is installed, use the interactive automatic finder
+instead: `02_find_resonances.py --finder auto`. Run `uv sync --extra cnn`
+again after pulling changes, since a plain `uv sync` removes the extra.
 
 ## Installation with pip
 1. Clone this repository: `git clone https://github.com/loganfoote/citkid`
@@ -75,6 +87,8 @@ Or, to install in editable mode with the test tools and JupyterLab, run
 ```bash
 python -m pip install --editable ".[dev,notebooks]"
 ```
+Add the `cnn` extra (for example `".[dev,notebooks,cnn]"`) to install
+PyTorch for the CNN resonance finder (see above).
 
 ## Installation with conda (legacy)
 `environment.yml` and `environment-cnn.yml` are kept for conda users:

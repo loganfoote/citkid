@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from citkid import daq_layout as dl
 from citkid.crs import sim as csim
-from citkid.crs.procedures import vna_sweep
+from citkid.crs.procedures import SweepCancelled, vna_sweep
 from citkid.vna import simulate as sim
 
 SMALL = dict(f_lo = 1.0e9, f_hi = 1.1e9, n_banks = 1, n_per_bank = 15)
@@ -218,3 +218,20 @@ async def test_tuning_config_with_tone_sets(tmp_path):
         dl.check_tune_config(tune, crs)
     with pytest.raises(ValueError, match = 'extended_bw'):
         dl.tuning_config(crs, dict(plan, extended_bw = True))
+
+
+
+@pytest.mark.asyncio
+async def test_vna_sweep_cancelled_on_simulated_board():
+    """
+    A cancelled sweep of the simulated board leaves no tones written and
+    the Nyquist zones as they were.
+    """
+    crs = make_crs(module_idxs = (1,))
+    reports = []
+    with pytest.raises(SweepCancelled):
+        await vna_sweep(crs, 2.6e9, 3.6e9, -55., 10, step = 1e-4,
+                        verbose = False, progress = lambda d, t:
+                        reports.append(d), cancelled = lambda: len(reports) > 2)
+    assert crs.ch_map == {} and crs.ntones == 0
+    assert all(cfg['nyquist_zone'] == 1 for cfg in crs.module_cfg.values())

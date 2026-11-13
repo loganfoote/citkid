@@ -7,6 +7,7 @@ import zarr
 from citkid import daq_layout as dl
 from .fake_crs import FakeVnaCRS
 from citkid.crs.procedures import (
+    SweepCancelled,
     NYQUIST_FREQ, NYQUIST_GUARD, VNA_NCHANNELS, VNA_STEP,
     _validate_target_sweep_inputs,
     plan_vna_sweep, vna_range, vna_step, vna_sweep, vna_sweep_to_store
@@ -1874,6 +1875,60 @@ async def test_vna_sweep_restores_zones_on_failure():
         await vna_sweep(crs, 2.6e9, 3.6e9, -50., 10, step = 2e-5,
                         verbose = False)
     assert crs.module_cfg[1]['nyquist_zone'] == 1
+
+
+@pytest.mark.asyncio
+async def test_vna_sweep_cancelled_in_a_pass():
+    """
+    Cancelling from the progress callback stops the sweep at that point:
+    the tones are cleared, the zones restored, and no later pass runs.
+    """
+    crs = FakeVnaCRS(modules = (1,))
+    reports = []
+    stop_at = 3
+
+    def progress(done, total):
+        """
+        Record a report.
+
+        Parameters:
+        done, total (int): points taken and total.
+        """
+        reports.append(done)
+
+    with pytest.raises(SweepCancelled):
+        await vna_sweep(crs, 2.6e9, 3.6e9, -50., 10, step = 2e-5,
+                        verbose = False, progress = progress,
+                        cancelled = lambda: len(reports) > stop_at)
+    # Stopped during the first pass's points (the fake reports before it
+    # records the call), after the report that tripped the flag
+    assert len(reports) == stop_at + 1 and crs.sweep_calls == []
+    assert ('clear_tones', {}) in crs.calls
+    assert crs.module_cfg[1]['nyquist_zone'] == 1
+    with pytest.raises(TypeError, match = 'cancelled'):
+        await vna_sweep(crs, 2.6e9, 3.6e9, -50., 10, step = 2e-5,
+                        verbose = False, cancelled = 1)
+
+
+@pytest.mark.asyncio
+async def test_vna_sweep_cancelled_between_passes():
+    """
+    The flag is also checked before each pass (without a progress
+    callback), and a sweep that is never cancelled is unaffected.
+    """
+    crs = FakeVnaCRS(modules = (1,))
+    with pytest.raises(SweepCancelled):
+        await vna_sweep(crs, 400e6, 2400e6, -50., 10, step = 2e-5,
+                        verbose = False,
+                        cancelled = lambda: len(crs.sweep_calls) >= 1)
+    assert len(crs.sweep_calls) == 1
+    assert crs.module_cfg[1]['nyquist_zone'] == 1
+    crs = FakeVnaCRS(modules = (1,))
+    f, _, bands = await vna_sweep(crs, 400e6, 2400e6, -50., 10, step = 2e-5,
+                                  verbose = False, cancelled = lambda: False)
+    assert len(crs.sweep_calls) == bands['chunk_passes'].max() + 1
+    assert len(f) == sum(c['frequencies'].size for c in crs.sweep_calls)
+    assert ('clear_tones', {}) not in crs.calls
 
 
 @pytest.mark.asyncio

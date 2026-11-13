@@ -15,7 +15,7 @@ The scripts themselves are described in two more documents:
 
 | Document | Scripts |
 |--------|----------------------------|
-| VNA screening | `vna_quick_check.py`, `01_vna_sweep.py`, `02_find_resonances.py`, `vna_report.py` |
+| VNA screening | `vna_quick_check.py`, `01_vna_sweep.py`, `vna_view.py`, `02_find_resonances.py`, `vna_report.py` |
 | Tuning and timestreams | `03_tune.py`, `04_stream.py`, `05_calibrate_streams.py`, `06_find_photons.py` |
 
 The usual order is:
@@ -23,12 +23,13 @@ The usual order is:
 1. `crs_init.py`: configure the board (after a power cycle);
 2. `vna_quick_check.py` (optional): check the wiring and the resonances;
 3. `01_vna_sweep.py`: full VNA sweep;
-4. `02_find_resonances.py`: find and fit the resonances;
-5. `vna_report.py` (optional): the VNA results as plain files;
-6. `03_tune.py`: find the optimal tone powers and frequencies;
-7. `04_stream.py`: take timestreams;
-8. `05_calibrate_streams.py`: calibrate the timestreams;
-9. `06_find_photons.py`: find photons and cosmic rays.
+4. `vna_view.py` (optional): look at the sweep before analyzing it;
+5. `02_find_resonances.py`: find and fit the resonances;
+6. `vna_report.py` (optional): the VNA results as plain files;
+7. `03_tune.py`: find the optimal tone powers and frequencies;
+8. `04_stream.py`: take timestreams;
+9. `05_calibrate_streams.py`: calibrate the timestreams;
+10. `06_find_photons.py`: find photons and cosmic rays.
 
 # The environment
 
@@ -44,8 +45,19 @@ The scripts run in citkid's Python environment, which is managed with
    uv sync
    ```
 
-   The CNN resonance finder used by `02_find_resonances.py` also needs
-   PyTorch: use `uv sync --extra cnn` instead.
+   The CNN resonance finder, which `02_find_resonances.py` uses by
+   default, also needs PyTorch, which `uv sync` does not install. To
+   install it too, use
+
+   ```text
+   uv sync --extra cnn
+   ```
+
+   instead (and again after pulling changes: a plain `uv sync` removes
+   it). Without PyTorch, every other script works, but the `find` step
+   of `02_find_resonances.py` stops with an `ImportError` saying that
+   the CNN finder needs PyTorch and how to install it; until then, run
+   it with `--finder auto` (the interactive automatic finder).
 4. Activate the environment in each new terminal, so that `python` runs
    citkid's Python:
 
@@ -78,7 +90,11 @@ document.
 
 Each device has one zarr store per cooldown,
 `<DATA_DIR>/<COOLDOWN>/<DEVICE>.zarr`, set by the `DATA_DIR`, `COOLDOWN`,
-and `DEVICE` settings (or `--store` with a path). The store holds all of
+and `DEVICE` settings (or `--store` with a path). A `SUFFIX` setting (or
+`--suffix`) names the store `<DEVICE>_<SUFFIX>.zarr` instead, for more
+than one store of a device in a cooldown (e.g. a second run of the
+procedures with another setup); it is blank by default, and then the
+underscore is left out too. The store holds all of
 the data measured and analyzed for the device: VNA sweeps (`vna{k}`),
 resonator lists (`resonators{k}`), tunings with their calibration sweeps
 and timestreams (`tune{k}`), stream calibrations (`ts_cal{c}`), and

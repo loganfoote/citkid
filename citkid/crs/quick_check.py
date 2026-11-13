@@ -5,14 +5,19 @@ Interactive quick check of a device with VNA sweeps.
 zone, range, power, resolution, averaging), connects to the CRS, and waits
 for the Sweep button (Ctrl+R). The settings can be changed and the sweep
 run again; it shows |S21| and phase with the band edges and a rough count
-of the resonances (matched filter). Nothing is saved to zarr; the sweep can
-be saved as a CSV of frequency, I, and Q (``save_sweep_csv``).
-``procedures/vna_quick_check.py`` is the script.
+of the resonances (matched filter). A running sweep can be cancelled
+(Cancel, Esc): it stops at the next point, clears the board's tones, and
+the settings can be changed and the sweep run again. Nothing is saved to
+zarr; the sweep can be saved as a CSV of frequency, I, and Q
+(``save_sweep_csv``). ``procedures/vna_quick_check.py`` is the script.
 
 The CRS lives on a background thread with its own asyncio event loop
 (``AsyncWorker``), so the window stays responsive while sweeping. The
 sweep itself is ``crs.procedures.vna_sweep``; its ``progress`` callback
-drives the window's progress bar.
+drives the window's progress bar, and its ``cancelled`` callable reads the
+window's cancel flag (a ``threading.Event``), so cancelling is
+cooperative: the sweep ends between points, not in the middle of a
+board command.
 """
 import asyncio
 import threading
@@ -27,7 +32,8 @@ from ..qt_compat import (
 from ..vna.matched_filter import find_candidates_mf
 from ..vna.sweep_info import prepare_full_sweep
 from .procedures import (
-    VNA_RANGES, plan_vna_sweep, vna_range, vna_step, vna_sweep
+    SweepCancelled, VNA_RANGES, plan_vna_sweep, vna_range, vna_step,
+    vna_sweep
 )
 from .util import get_sample_freq
 
@@ -313,6 +319,8 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         or None if not counted).
     progress (QProgressBar): points taken in the running sweep; hidden
         when idle.
+    sweeping (bool): True while a sweep runs (not while connecting or
+        counting).
     """
     # Sweep progress (points done, total), emitted from the background
     # thread and delivered on the GUI thread
@@ -354,11 +362,15 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
             self.setStyleSheet(widget_font_stylesheet(ui_scale))
         self.crs = None
         self.result = None
+        self.sweeping = False
         self._plan_ok = False
+        # Set to ask the running sweep to stop; read on the background loop
+        self._cancel = threading.Event()
         self.worker = AsyncWorker(self)
         self._module_idxs = [int(m) for m in module_idxs]
         self._connect = connect
         self._sweep_on_start = sweep_on_start
+        self._sweep_after_connect = False   # Sweep pressed with new modules
         self._band_lines = []
         self._clock = ProgressClock()
         self._build_controls(nyquist, fmin, fmax, amplitude, qr_median,
@@ -414,7 +426,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         self.modules = QtWidgets.QLineEdit(
             ' '.join(str(m) for m in self._module_idxs))
         self.modules.setToolTip('Modules connected to the device, e.g. 1 or '
-                                '1 2 3 4; press Connect to use them')
+                                '1 2 3 4; Sweep connects to them')
         self.connect_btn = QtWidgets.QPushButton('Connect')
         self.connect_btn.clicked.connect(self._on_connect_clicked)
         row = QtWidgets.QHBoxLayout()
@@ -460,9 +472,18 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         self.sweep_btn = QtWidgets.QPushButton('Sweep (Ctrl+R)')
         self.sweep_btn.clicked.connect(self.sweep)
         QtWidgets.QShortcut(QtGui.QKeySequence('Ctrl+R'), self, self.sweep)
+        self.cancel_btn = QtWidgets.QPushButton('Cancel (Esc)')
+        self.cancel_btn.setToolTip('Stop the running sweep at the next '
+                                   'point; nothing is kept')
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.clicked.connect(self.cancel)
+        QtWidgets.QShortcut(QtGui.QKeySequence('Esc'), self, self.cancel)
         self.save_btn = QtWidgets.QPushButton('Save data (CSV)...')
         self.save_btn.clicked.connect(self._ask_save_csv)
-        form.addRow(self.sweep_btn)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(self.sweep_btn, stretch = 1)
+        row.addWidget(self.cancel_btn)
+        form.addRow(row)
         form.addRow(self.count_btn)
         form.addRow(self.save_btn)
         self.progress = QtWidgets.QProgressBar()
@@ -519,6 +540,10 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
             w.setEnabled(not busy)
         self.save_btn.setEnabled(not busy and self.result is not None)
         self.count_btn.setEnabled(not busy and self.result is not None)
+        # Only a sweep can be cancelled (not connecting or counting), and
+        # only once
+        self.cancel_btn.setEnabled(busy and self.sweeping and
+                                   not self._cancel.is_set())
         self._update_sweep_button()
 
     def _show_progress(self, show):
@@ -673,7 +698,8 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
                 else '1-4'
             text += (f' Modules {dropped} are not in the active analog bank '
                      f'(modules {bank}); crs_init.py sets the bank.')
-        if self._sweep_on_start:
+        if self._sweep_on_start or self._sweep_after_connect:
+            self._sweep_after_connect = False
             self._set_status(text)
             self.sweep()
         else:
@@ -681,13 +707,27 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
 
     def sweep(self):
         """
-        Sweep with the current settings (on the background loop).
+        Sweep with the current settings (on the background loop). If the
+        modules typed in the window aren't the connected ones, connect to
+        them first, so the sweep is never of other modules than the
+        window shows.
         """
         if not self.sweep_btn.isEnabled():
+            return
+        mods = self.parse_modules()
+        if mods is None:
+            self._set_status('Modules must be numbers 1-8, e.g. "1" or '
+                             '"1 2 3 4".')
+            return
+        if mods != self._module_idxs:
+            self._sweep_after_connect = True
+            self.reconnect(mods)
             return
         s = self.settings()
         crs = self.crs
         report = self._progress.emit
+        self._cancel.clear()
+        cancelled = self._cancel.is_set
 
         async def job():
             """
@@ -698,14 +738,30 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
             """
             f, z, bands = await vna_sweep(
                 crs, s['fmin'], s['fmax'], s['amplitude'], s['nsamps'],
-                step = s['step'], verbose = False, progress = report)
+                step = s['step'], verbose = False, progress = report,
+                cancelled = cancelled)
             fr = rough_resonances(f, z) if s['count'] else None
             return f, z, bands, fr
 
+        self.sweeping = True
         self.worker.submit(job(), self._on_swept)
         self._set_busy(True)
         self._show_progress(True)
-        self._set_status('Sweeping...')
+        self._set_status(f'Sweeping modules {list(crs.active_module_idxs)}'
+                         '... (Cancel or Esc to stop)')
+
+    def cancel(self):
+        """
+        Ask the running sweep to stop (the Cancel button, Esc). The sweep
+        ends at its next point, on the background loop, and
+        ``_on_swept`` then reports it as cancelled. Does nothing when no
+        sweep runs.
+        """
+        if not self.sweeping or self._cancel.is_set():
+            return
+        self._cancel.set()
+        self.cancel_btn.setEnabled(False)
+        self._set_status('Cancelling...')
 
     def _on_swept(self, result, error):
         """
@@ -716,6 +772,12 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         error (BaseException or None): the sweep error.
         """
         self._show_progress(False)
+        self.sweeping = False
+        if isinstance(error, SweepCancelled):
+            self._set_status('Cancelled. Change the settings and press '
+                             'Sweep (Ctrl+R) to run again.')
+            self._set_busy(False)
+            return
         if error is not None:
             self._set_status(f'Sweep failed: {error!r}')
             self._set_busy(False)
@@ -824,6 +886,9 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
             if answer != QtWidgets.QMessageBox.Yes:
                 event.ignore()
                 return
+        # Let a running sweep stop at its next point (clearing the tones)
+        # while the worker drains
+        self._cancel.set()
         self.worker.stop()
         event.accept()
 

@@ -25,6 +25,13 @@ NYQUIST_GUARD = 10e6
 if TYPE_CHECKING:
     from . import instrument as inst
 
+class SweepCancelled(Exception):
+    """
+    Raised by ``vna_sweep`` when its ``cancelled`` callable asks it to stop
+    (between points or passes). The board's tones are cleared and the
+    modules' Nyquist zones restored before it is raised.
+    """
+
 async def target_sweep(
     crs, fres, ares, qres, res_idxs, grp, ch_map = None, gain_span_factor = 10,
     npoints_fine = 500, npoints_gain = 50, npoints_rough = None, nsamps = 100,
@@ -1191,7 +1198,8 @@ async def _set_nyquist_zones(crs, zones):
 async def vna_sweep(
     crs, fmin, fmax, amplitude, nsamps, step = VNA_STEP,
     npoints_per_ch = None, pass_overhead = 50,
-    nyquist_guard = NYQUIST_GUARD, verbose = True, progress = None
+    nyquist_guard = NYQUIST_GUARD, verbose = True, progress = None,
+    cancelled = None
 ):
     """
     Sweep a frequency range on a geometric grid with this session's
@@ -1219,6 +1227,12 @@ async def vna_sweep(
         total)`` with the number of points taken so far over the whole
         sweep and the total, at the start of each pass and after every
         frequency step (``CRS.sweep``). Independent of ``verbose``.
+    cancelled (callable or None): if given, called with no arguments
+        before each pass and after every frequency step; when it returns
+        True, the sweep stops (cooperatively: between points or passes),
+        clears the board's tones, restores the Nyquist zones, and raises
+        ``SweepCancelled``. E.g. ``threading.Event().is_set`` set from a
+        GUI thread. Default None: never cancelled.
 
     Returns:
     f (np.array): frequencies in Hz (dithered), ascending.
@@ -1228,9 +1242,19 @@ async def vna_sweep(
 
     Raises:
     ValueError: if the inputs are invalid.
+    SweepCancelled: if ``cancelled()`` returned True.
     """
     if progress is not None and not callable(progress):
         raise TypeError('progress must be callable or None')
+    if cancelled is not None and not callable(cancelled):
+        raise TypeError('cancelled must be callable or None')
+
+    def check_cancelled():
+        """
+        Raise ``SweepCancelled`` if the caller asked to stop.
+        """
+        if cancelled is not None and cancelled():
+            raise SweepCancelled('VNA sweep cancelled')
     bands, freqs, npc = plan_vna_sweep(
         fmin, fmax, crs.bw, crs.active_module_idxs, step = step,
         npoints_per_ch = npoints_per_ch, pass_overhead = pass_overhead,
@@ -1248,6 +1272,7 @@ async def vna_sweep(
     done_before = 0
     try:
         for p in passes:
+            check_cancelled()
             idx = np.flatnonzero(bands['chunk_passes'] == p)
             modules = [int(m) for m in bands['chunk_modules'][idx]]
             await _set_nyquist_zones(crs, {
@@ -1263,18 +1288,22 @@ async def vna_sweep(
                       for k, m in enumerate(modules)}
             bands['chunk_times'][idx] = time.time()
             pass_progress = None
-            if progress is not None:
+            if progress is not None or cancelled is not None:
                 offset = done_before
 
                 def pass_progress(done, total, offset = offset):
                     """
-                    Report this pass's progress as sweep progress.
+                    Report this pass's progress as sweep progress, and
+                    stop the sweep if asked to (raising from the sweep's
+                    progress callback ends ``CRS.sweep`` at this point).
 
                     Parameters:
                     done, total (int): points taken and total in the pass.
                     offset (int): points taken before the pass.
                     """
-                    progress(offset + done, npoints)
+                    if progress is not None:
+                        progress(offset + done, npoints)
+                    check_cancelled()
             f, z = await crs.sweep(
                 rows, np.full(len(rows), float(amplitude)), nsamps,
                 ch_map = ch_map, allow_missing = False, verbose = verbose,
@@ -1283,6 +1312,10 @@ async def vna_sweep(
             fs.append(np.asarray(f).ravel())
             zs.append(np.asarray(z).ravel())
             done_before += rows.size
+    except SweepCancelled:
+        # Stopped inside a pass: the sweep's tones are still written
+        await crs.clear_tones()
+        raise
     finally:
         await _set_nyquist_zones(crs, zones0)
     f, z = np.concatenate(fs), np.concatenate(zs)

@@ -9,7 +9,47 @@ from pyqtgraph.Qt import QtCore, QtWidgets
 from citkid.crs.quick_check import (
     AsyncWorker, QuickCheckWindow, rough_resonances, sweep_plan_text
 )
+from citkid.crs.sim import SimulatedCRS
+from citkid.vna import simulate as sim
 from .fake_crs import FakeVnaCRS
+
+
+class SlowSimulatedCRS(SimulatedCRS):
+    """
+    Simulated board whose passes take a while, so a sweep can be cancelled
+    in the middle from the window.
+    """
+
+    async def sweep(self, *args, **kwargs):
+        """
+        Sweep after a pause.
+
+        Parameters:
+        *args, **kwargs: ``SimulatedCRS.sweep`` arguments.
+
+        Returns:
+        f, z (np.array): the pass.
+        """
+        await asyncio.sleep(0.15)
+        return await super().sweep(*args, **kwargs)
+
+
+def make_simulated_crs(slow = False):
+    """
+    Make a simulated board with a small device on module 1.
+
+    Parameters:
+    slow (bool): If True, a ``SlowSimulatedCRS``. Default False.
+
+    Returns:
+    crs (SimulatedCRS): the board.
+    """
+    rng = np.random.default_rng(0)
+    small = dict(f_lo = 1.0e9, f_hi = 1.1e9, n_banks = 1, n_per_bank = 8,
+                 pair_frac = 0.)
+    cls = SlowSimulatedCRS if slow else SimulatedCRS
+    return cls(sim.draw_device(rng, **small),
+               sim.draw_gain(rng, f_lo = 1e8, f_hi = 5e9), module_idxs = (1,))
 
 
 @pytest.fixture(scope = 'module')
@@ -241,6 +281,52 @@ def test_window_settings_and_plan(qapp):
     close(win)
 
 
+def test_window_cancel_sweep(qapp):
+    """
+    Cancel stops a sweep of the simulated board between its points: the
+    tones are cleared, the window reports it and is idle again, and a new
+    sweep runs with changed settings.
+    """
+    crs = make_simulated_crs(slow = True)
+    win = make_window(crs, count = False, nsamps = 1)
+    # Nothing to cancel while idle or connecting
+    assert not win.cancel_btn.isEnabled() and not win.sweeping
+    win.cancel()
+    assert not win._cancel.is_set()
+    reports = []
+    win._progress.connect(lambda d, t: reports.append(d))
+    win.sweep()
+    assert win.sweeping and win.cancel_btn.isEnabled()
+    assert not win.sweep_btn.isEnabled() and not win.fmin.isEnabled()
+    # Let the first pass finish, then cancel during the second
+    wait_for(lambda: reports and reports[-1] > 0)
+    total = reports[-1]
+    win.cancel()
+    assert 'Cancelling' in win.status.text()
+    assert not win.cancel_btn.isEnabled()
+    wait_for(lambda: not win.worker.busy)
+    wait_for(lambda: 'Cancelled' in win.status.text())
+    # Idle again: nothing kept, the settings enabled, no tones written,
+    # the zones restored, and the progress bar hidden
+    assert win.result is None and not win.sweeping
+    assert win.sweep_btn.isEnabled() and win.fmin.isEnabled()
+    assert not win.cancel_btn.isEnabled() and not win.save_btn.isEnabled()
+    assert crs.ch_map == {} and crs.ntones == 0
+    assert crs.module_cfg[1]['nyquist_zone'] == 1
+    assert win.progress.isHidden()
+    assert 0 < reports[-1] < total * 10
+    # A new sweep with other settings runs to the end
+    win.fmin.setValue(1000.)
+    win.fmax.setValue(1200.)
+    win.sweep()
+    assert not win._cancel.is_set()
+    wait_for(lambda: win.result is not None)
+    f = win.result[0]
+    assert 1e9 - 50 <= f[0] and f[-1] < 1.2e9
+    assert 'points' in win.status.text() and win.save_btn.isEnabled()
+    assert not close(win).running
+
+
 def test_window_connect_and_sweep_errors(qapp):
     crs = FakeVnaCRS()
     win = QuickCheckWindow(connector(crs, RuntimeError('no board')), [1])
@@ -273,6 +359,7 @@ def test_window_modules_and_count(qapp):
         win.modules.setText(bad)
         win._on_connect_clicked()
         assert 'Modules must be' in win.status.text() and len(calls) == 2
+    win.modules.setText('1 2')
     # Sweep without counting, then count without new data
     assert not win.count_btn.isEnabled()
     win.sweep()
@@ -283,6 +370,38 @@ def test_window_modules_and_count(qapp):
     wait_for(lambda: win.result[3] is not None and not win.worker.busy)
     assert len(win.result[3]) == 2 and len(crs.sweep_calls) == n_sweeps
     assert 'About 2 resonances' in win.status.text()
+    close(win)
+
+
+def test_window_sweep_connects_typed_modules(qapp):
+    """
+    Sweep with other modules typed than the connected ones connects to
+    them first (so a sweep is never of modules the window doesn't show);
+    invalid text stops it.
+    """
+    calls = []
+    crs = FakeVnaCRS(modules = (1, 2), fres = (1.0e9, 1.6e9))
+    win = QuickCheckWindow(connector(crs, calls = calls), [1], count = False,
+                           pts_per_lw = 1.)
+    wait_for(lambda: win.crs is not None)
+    assert calls == [[1]]
+    assert not crs.sweep_calls
+    win.modules.setText('2')
+    win.sweep()
+    wait_for(lambda: win.result is not None and not win.worker.busy)
+    assert calls == [[1], [2]] and win._module_idxs == [2]
+    n1 = len(crs.sweep_calls)     # passes of the first sweep
+    assert n1 and not win._sweep_after_connect
+    # Same modules: no reconnection
+    result = win.result
+    win.sweep()
+    wait_for(lambda: win.result is not result and not win.worker.busy)
+    assert calls == [[1], [2]] and len(crs.sweep_calls) == 2 * n1
+    # Invalid text: no sweep
+    win.modules.setText('9')
+    win.sweep()
+    assert 'Modules must be' in win.status.text()
+    assert len(crs.sweep_calls) == 2 * n1 and not win.worker.busy
     close(win)
 
 

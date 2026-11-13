@@ -42,7 +42,7 @@ dependencies = [
   # Plotting / UI
   "matplotlib>=3.10.8",
   "pillow>=12.3.0",
-  "pyqtgraph>=0.13.7",
+  "pyqtgraph>=0.14.0",
   "pyqt5>=5.15.11",
 
   # Data handling
@@ -87,7 +87,7 @@ constraint-dependencies = [
   "pyfftw==0.15.1",
   "matplotlib==3.10.8",
   "pillow==12.3.0",
-  "pyqtgraph==0.13.7",
+  "pyqtgraph==0.14.0",
   "pyqt5==5.15.11",
   "tqdm==4.67.1",
   "pandas==2.3.3",

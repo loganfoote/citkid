@@ -23,6 +23,17 @@ from ..qt_compat import (
 )
 from .s21_filt import remove_linear_phase
 
+# Resonance marker styles, cycled so that adjacent markers always differ:
+# (color, line style)
+_MARKER_STYLES = (
+    ((255, 255,   0, 180), _Qt.SolidLine),  # yellow solid
+    ((  0, 255, 255, 180), _Qt.DashLine),   # cyan   dash
+    ((255, 100, 255, 180), _Qt.DotLine),    # magenta dot
+    ((255, 255,   0, 180), _Qt.DashLine),   # yellow dash
+    ((  0, 255, 255, 180), _Qt.DotLine),    # cyan   dot
+    ((255, 100, 255, 180), _Qt.SolidLine),  # magenta solid
+)
+
 
 def run_res_finder_manual(f, z, fres_initial, zarr_grp, margin_factor = 0.15):
     """
@@ -437,10 +448,16 @@ class ManualResFinder(QtCore.QObject):
         # Plot magnitude data — initialised empty; _update_curves pushes
         # only the visible slice on each range change, so pyqtgraph never
         # processes the full 1e6-point array during startup or interaction.
+        # The pen is 1 px wide on purpose: Qt strokes wider lines with its
+        # slow path, whose cost grows with the pixels each segment covers,
+        # and a noisy sweep (low signal, tens of dB of scatter) then takes
+        # seconds per redraw. Peak downsampling keeps the drawn segments at
+        # about two per pixel column, whatever the zoom
         self.mag_curve = self.plot_mag.plot(
             [], [],
-            pen = pg.mkPen(color = (100, 200, 255, 90), width = 1.5)
+            pen = pg.mkPen(color = (100, 200, 255, 90), width = 1)
         )
+        self.mag_curve.setDownsampling(auto = True, method = 'peak')
         # Highlighted overlay (IQ window) — drawn on top, hidden by default
         self.mag_highlight = self.plot_mag.plot(
             [], [],
@@ -459,8 +476,9 @@ class ManualResFinder(QtCore.QObject):
         # Plot phase data — initialised empty; populated by _update_curves
         self.phase_curve = self.plot_phase.plot(
             [], [],
-            pen = pg.mkPen(color = (255, 150, 100, 90), width = 1.5)
+            pen = pg.mkPen(color = (255, 150, 100, 90), width = 1)
         )
+        self.phase_curve.setDownsampling(auto = True, method = 'peak')
         # Highlighted overlay (IQ window) — drawn on top, hidden by default
         self.phase_highlight = self.plot_phase.plot(
             [], [],
@@ -491,9 +509,22 @@ class ManualResFinder(QtCore.QObject):
         self.win.ci.layout.setColumnStretchFactor(0, 3)
         self.win.ci.layout.setColumnStretchFactor(1, 1)
 
-        # Store resonance markers
+        # Resonance markers: one curve per line style, drawing a vertical
+        # segment ('pairs') for each resonance in view, kept out of the
+        # auto-range. One item per resonance (an InfiniteLine) made adding
+        # them quadratic in their number and every repaint linear: a sweep
+        # with 900 resonances took 20 s to open and 0.5 s per pan
         self.mag_markers = []
         self.phase_markers = []
+        for color, line_style in _MARKER_STYLES:
+            for plot, curves in ((self.plot_mag, self.mag_markers),
+                                 (self.plot_phase, self.phase_markers)):
+                curve = pg.PlotCurveItem(
+                    pen = pg.mkPen(color = color, width = 2,
+                                   style = line_style),
+                    connect = 'pairs')
+                plot.addItem(curve, ignoreBounds = True)
+                curves.append(curve)
         
         # Connect signals — all plots share the same scene so connect once
         self.plot_mag.scene().sigMouseClicked.connect(self.on_click)
@@ -933,60 +964,30 @@ class ManualResFinder(QtCore.QObject):
             self.log(msg)        
     def update_resonance_markers(self):
         """
-        Update the vertical lines marking resonances.
+        Redraw the vertical lines marking the resonances in view (with
+        half a view's width of margin on each side, so a pan never shows
+        a bare edge), each spanning the plot's visible height with
+        margin, in the style of its position in the list.
         """
         if not hasattr(self, 'mag_markers'):
             return  # UI not initialized
-        # Remove old markers
-        for marker in self.mag_markers:
-            self.plot_mag.removeItem(marker)
-        for marker in self.phase_markers:
-            self.plot_phase.removeItem(marker)
-            
-        self.mag_markers = []
-        self.phase_markers = []
-        
-        # Cycle through 6 distinct (color, line-style) combinations so
-        # adjacent markers are always visually distinct.
-        _styles = [
-            ((255, 255,   0, 180), _Qt.SolidLine),  # yellow solid
-            ((  0, 255, 255, 180), _Qt.DashLine),   # cyan   dash
-            ((255, 100, 255, 180), _Qt.DotLine),    # magenta dot
-            ((255, 255,   0, 180), _Qt.DashLine),   # yellow dash
-            ((  0, 255, 255, 180), _Qt.DotLine),    # cyan   dot
-            ((255, 100, 255, 180), _Qt.SolidLine),  # magenta solid
-        ]
-
-        # Add new markers
-        for i, freq in enumerate(self.fres):
-            color, line_style = _styles[i % len(_styles)]
-            
-            # Magnitude plot marker
-            line_mag = pg.InfiniteLine(
-                pos = freq,
-                angle = 90,
-                pen = pg.mkPen(
-                    color = color,
-                    width = 2,
-                    style = line_style
-                )
-            )
-            self.plot_mag.addItem(line_mag)
-            self.mag_markers.append(line_mag)
-            
-            # Phase plot marker
-            line_phase = pg.InfiniteLine(
-                pos = freq,
-                angle = 90,
-                pen = pg.mkPen(
-                    color = color,
-                    width = 2,
-                    style = line_style
-                )
-            )
-            self.plot_phase.addItem(line_phase)
-            self.phase_markers.append(line_phase)
-
+        fres = np.asarray(self.fres, dtype = np.float64)
+        x_min, x_max = self.plot_mag.viewRange()[0]
+        span = x_max - x_min
+        in_view = np.flatnonzero((fres >= x_min - 0.5 * span) &
+                                 (fres <= x_max + 0.5 * span))
+        n_styles = len(_MARKER_STYLES)
+        for plot, curves in ((self.plot_mag, self.mag_markers),
+                             (self.plot_phase, self.phase_markers)):
+            y0, y1 = plot.viewRange()[1]
+            pad = 10 * (y1 - y0) if y1 > y0 else 1.
+            for k, curve in enumerate(curves):
+                sel = in_view[in_view % n_styles == k]
+                if len(sel):
+                    curve.setData(np.repeat(fres[sel], 2),
+                                  np.tile([y0 - pad, y1 + pad], len(sel)))
+                else:
+                    curve.setData([], [])
         if getattr(self, 'iq_visible', False):
             self.update_iq_plot()
 
@@ -1010,8 +1011,7 @@ class ManualResFinder(QtCore.QObject):
         self._update_curves()
         self.auto_scale_y()
         self._update_overview_region()
-        if self.iq_visible:
-            self.update_iq_plot()
+        self.update_resonance_markers()
 
     def _on_overview_region_changed(self):
         """
