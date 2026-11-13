@@ -83,6 +83,33 @@ def find_glitch_idxs(ts, dt, dtbin, nstd, distance, width, nrounds, i0, i1):
         
     return idxs, ts_bin_interp
 
+def get_idxs_to_replace(ts, idxs, i0, i1):
+    """
+    Get the list of indices to replace around each glitch index.
+    Also includes indices where the timestream is np.nan.
+    
+    Parameters:
+    ts (float, array-like): Timestream data.
+    idxs (int, array-like): The sample points at which glitches were found.
+    i0 (int): Number of points before each sample point to remove.
+    i1 (int): Number of points after each sample point to remove.
+    
+    Returns:
+    idxs_to_replace (np.array, int): Sorted sample indices to replace.
+    """
+    # Start by finding indices where the timestream is np.nan.
+    idxs_to_replace = np.where(np.isnan(ts))[0]
+    
+    # Collect TOD indices around the user-specified indices
+    for idx in idxs:
+        thisi0 = max(0, idx-i0)
+        thisi1 = min(len(ts), idx+i1)
+        idxs_to_replace = np.append(idxs_to_replace, np.arange(thisi0, thisi1))
+    idxs_to_replace = np.sort(np.unique(idxs_to_replace))
+    
+    return idxs_to_replace
+    
+    
 def replace_glitches_with_gaussian_noise(ts, idxs, i0, i1):
     """
     Replace the areas around each of a list of sample points in a timestream
@@ -99,19 +126,12 @@ def replace_glitches_with_gaussian_noise(ts, idxs, i0, i1):
         points replaced by Gaussian noise.
     idxs_masked (np.array, int): Sorted sample indices that were replaced.
     """
-    # Find TOD indices that are nans
-    idxs_masked = np.where(np.isnan(ts))[0]
-    
-    # Collect TOD indices around the user-specified indices
-    ts_clean = np.copy(ts)
-    ts_clean -= np.nanmedian(ts_clean)
-    for idx in idxs:
-        thisi0 = max(0, idx-i0)
-        thisi1 = min(len(ts), idx+i1)
-        idxs_masked = np.append(idxs_masked, np.arange(thisi0, thisi1))
-    idxs_masked = np.sort(np.unique(idxs_masked))
+    # Get indices to replace with Gaussian noise
+    idxs_masked = get_idxs_to_replace(ts, idxs, i0, i1)
     
     # Replace masked TOD indices with Gaussian noise
+    ts_clean = np.copy(ts)
+    ts_clean -= np.nanmedian(ts_clean)
     ts_clean[idxs_masked] = 0
     std = np.nanstd(ts_clean)
     noise = np.random.normal(loc=0, scale=std, size=len(idxs_masked))
