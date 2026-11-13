@@ -18,8 +18,12 @@ scratch:
    (``signal.photons.run_detection``): first-pass peaks above
    ``INIT_NSIGMA`` noise sigma and at most ``INIT_HMAX`` times their
    median height seed the template; then the filter is rebuilt
-   ``OF_ITERATIONS`` times from the pulses with heights in [``HMIN``,
-   ``HMAX``] (in units of the mean photon).
+   ``OF_ITERATIONS`` times from the isolated pulses with heights in
+   [``HMIN``, ``HMAX``] (in kHz/GHz: the fractional frequency shift x
+   times 1e6; set them from the single-photon shift you expect). The
+   filter uses the first ``FILTER_POST_S`` of the template after its
+   maximum; the whole template (``TEMPLATE_POST_S``) is kept for the
+   mean pulse and its decay-time fit.
 2. The thresholds are checked in the photon threshold window (height
    histograms with draggable lines), globally or per tone, rerunning the
    tones they change (skipped with ``INTERACTIVE = False`` or
@@ -94,15 +98,26 @@ INIT_NSIGMA = 6.            # lower threshold, noise sigma of the boxcar
 INIT_HMAX = 3.              # upper cut, times the median first-pass height
 # Optimal filter
 OF_ITERATIONS = 5           # filter iterations
-HMIN = 0.5                  # height window, in units of the mean photon
-HMAX = 1.6
+# Height window of the filter output, kHz/GHz (x times 1e6):
+# the pulses in it are single photons (template, mean photon pulse); set
+# it from the shift you expect per photon (the simulation's is 2 kHz/GHz)
+HMIN = 1.
+HMAX = 3.2
 # Choose HMIN automatically: the lowest value (from HMIN up to
-# HMIN_AUTO_MAX) with at most this fraction of expected noise pulses in the
-# height window. None: use HMIN as it is
+# HMIN_AUTO_MAX, kHz/GHz) with at most this fraction of expected noise pulses
+# in the height window. None: use HMIN as it is
 HMIN_FALSE_FRAC = None
-HMIN_AUTO_MAX = 0.8
+HMIN_AUTO_MAX = 1.6
 TEMPLATE_PRE_S = 0.5e-3     # template length before the pulse maximum, s
 TEMPLATE_POST_S = 2.5e-3    # template length after the pulse maximum, s
+# The optimal filter's template ends this long after the maximum (at
+# most TEMPLATE_POST_S): a few decay times, so it does not run into the
+# next pulse. None: the whole template
+FILTER_POST_S = 1.0e-3
+# Decay-time fit of the mean pulses: from TAU_SKIP samples after the
+# maximum, out to TAU_LIFETIMES decay times (None: the whole template)
+TAU_SKIP = 2
+TAU_LIFETIMES = 5.
 HIGHPASS_HZ = 10.           # drift removal before detection, Hz
 # Coincidences and cosmic rays
 COINC_NSIGMA = 4.           # pulses counted for coincidences, filter sigma
@@ -188,10 +203,12 @@ def detection_settings():
     """
     return DetectionSettings(
         template_pre_s = TEMPLATE_PRE_S, template_post_s = TEMPLATE_POST_S,
+        filter_post_s = FILTER_POST_S,
         highpass_hz = HIGHPASS_HZ, init_nsigma = INIT_NSIGMA,
         init_hmax = INIT_HMAX, of_iterations = OF_ITERATIONS, hmin = HMIN,
         hmax = HMAX, hmin_false_frac = HMIN_FALSE_FRAC,
-        hmin_auto_max = HMIN_AUTO_MAX, coinc_nsigma = COINC_NSIGMA)
+        hmin_auto_max = HMIN_AUTO_MAX, coinc_nsigma = COINC_NSIGMA,
+        tau_skip = TAU_SKIP, tau_lifetimes = TAU_LIFETIMES)
 
 def find_photons(
     ts, data, settings, thresholds, interactive, reference = None
@@ -232,8 +249,21 @@ def find_photons(
             return pf.detect_timestream(ts, data, settings, th,
                                         rows = rows, progress = False)
 
+        def tone_data(row):
+            """
+            Return one tone's detection timestream for the data snippet.
+
+            Parameters:
+            row (int): DataSet row.
+
+            Returns:
+            d (np.array or str): the timestream, or the error message.
+            """
+            return next(iter(data.get([row])))[1]
+
         thresholds, results = run_photon_thresholds(
-            ts, results, thresholds, rerun,
+            ts, results, thresholds, rerun, data = tone_data,
+            settings = settings,
             title = f"Photon thresholds: {ts['run']} ({ts['name']}), "
             f"tone set {ts['tone_set']}")
     return results, thresholds

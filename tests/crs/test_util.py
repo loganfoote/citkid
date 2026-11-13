@@ -764,3 +764,36 @@ def test_write_acq_cfg_to_zarr_unknown_short_and_modules(tmp_path):
     assert grp.attrs["dec_short"] is None
     assert grp.attrs["dec_module_idxs"] is None
     assert grp.attrs["dec_stage"] == 6
+
+################################################################################
+################################## NCO state ###################################
+################################################################################
+def test_nco_state_file(tmp_path):
+    """
+    The NCO state file keeps each module's setting; saving some modules
+    keeps the others; recovery matches the board's frequencies.
+    """
+    assert util.nco_state_path(7, None) is None
+    path = util.nco_state_path(7, tmp_path / 'state')
+    assert path == str(tmp_path / 'state' / 'nco_state_crs0007.json')
+    assert util.load_nco_state(path) == {}
+    assert util.load_nco_state(None) == {}
+    util.save_nco_state(None, {}, {}, [])
+    util.save_nco_state(path, {1: 1e9, 2: 2e9}, {1: 'a', 2: 'b'}, [1, 2])
+    state = util.load_nco_state(path)
+    assert {m: (v['freq'], v['id']) for m, v in state.items()} == \
+        {1: (1e9, 'a'), 2: (2e9, 'b')}
+    assert all('set' in v for v in state.values())
+    util.save_nco_state(path, {1: 1.5e9, 2: 2e9}, {1: 'c', 2: 'b'}, [1])
+    state = util.load_nco_state(path)
+    assert (state[1]['freq'], state[1]['id'], state[2]['id']) == \
+        (1.5e9, 'c', 'b')
+    # Recovery: the board's frequency within 1 Hz of the saved one
+    found = util.recover_nco_ids(state, {1: 1.5e9 + 0.4, 2: 2e9 + 5.,
+                                         3: 3e9})
+    assert found == {1: (1.5e9 + 0.4, 'c')}
+    assert util.recover_nco_ids(state, {1: np.nan, 2: None}) == {}
+    # A broken file reads as empty
+    with open(path, 'w') as fh:
+        fh.write('{not json')
+    assert util.load_nco_state(path) == {}

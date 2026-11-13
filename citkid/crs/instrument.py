@@ -53,7 +53,17 @@ def uses_board(method):
 class CRS:
     """
     Control a CRS (control and readout system) board.
+
+    Class attributes:
+    nco_state_dir (str or None): directory of the boards' NCO state files
+        (``util.nco_state_path``): the NCO settings a session made, taken
+        over by the next session on the same board when it still has
+        them (``recover_nco_state``), so that calibrations stay usable
+        across sessions. Default ``util.NCO_STATE_DIR`` ('~/.citkid').
+        None: not kept.
     """
+    nco_state_dir = util.NCO_STATE_DIR
+
     def __init__(
         self, serial_number, interface, module_idxs = None,
         global_control = True
@@ -298,6 +308,12 @@ class CRS:
 
         # Configure this session's modules
         await self.configure_modules(full_scale_dbm = full_scale_dbm)
+        # Take over the NCO settings the board still has from an earlier
+        # session, so that its calibrations stay in frame
+        found = await self.recover_nco_state()
+        if verbose and found:
+            print('NCO settings of an earlier session recovered on modules '
+                  + ', '.join(str(m) for m in found))
         self.ntones = 0
 
         if verbose:
@@ -689,7 +705,11 @@ class CRS:
         NCO of its modules was set between the two, and an NCO already at
         its frequency (within 1 Hz) is left alone unless ``force``. Each
         setting gets an id in ``nco_ids`` (module: str), recorded by
-        calibration sweeps to tell whether they are still in frame.
+        calibration sweeps to tell whether they are still in frame. The
+        settings are also saved in the board's NCO state file
+        (``nco_state_dir``, ``util.save_nco_state``), from which the next
+        session takes them over when the board still has them
+        (``recover_nco_state``).
 
         Parameters:
         nco_freqs (dict): keys (int) are module indices and values (float)
@@ -721,6 +741,7 @@ class CRS:
         self.nco_freqs.update(nco_freqs)
         for m in changed:
             self.nco_ids[m] = uuid.uuid4().hex[:12]
+        self._save_nco_state(changed)
         # Clear channels on modules with newly set NCO frequencies
         await self._clear_channels(changed)
 
@@ -787,14 +808,14 @@ class CRS:
     def _forget_modules(self, module_idxs, forget_ncos = False):
         """
         Remove modules from ``self.fres_map``, ``self.ares_map``, and
-        ``self.ch_map``, and optionally from ``self.nco_freqs``. Reset
-        ``self.ntones`` to 0 if no channels remain in ``self.ch_map``. Does
-        not communicate with the board.
+        ``self.ch_map``, and optionally from ``self.nco_freqs`` and
+        ``self.nco_ids``. Reset ``self.ntones`` to 0 if no channels remain
+        in ``self.ch_map``. Does not communicate with the board.
 
         Parameters:
         module_idxs (array-like int): module indices to remove.
         forget_ncos (bool): If True, also removes the modules from
-            ``self.nco_freqs``.
+            ``self.nco_freqs`` and ``self.nco_ids``.
 
         Returns:
         None
@@ -805,8 +826,62 @@ class CRS:
             self.ch_map.pop(module_idx, None)
             if forget_ncos:
                 self.nco_freqs.pop(module_idx, None)
+                self.nco_ids.pop(module_idx, None)
         if not any(len(chs) for chs in self.ch_map.values()):
             self.ntones = 0
+
+    def _save_nco_state(self, modules):
+        """
+        Record some modules' NCO settings in the board's NCO state file
+        (``util.save_nco_state``); a file that can't be written is only
+        warned about.
+
+        Parameters:
+        modules (list of int): the modules set.
+        """
+        path = util.nco_state_path(self.serial_number, self.nco_state_dir)
+        try:
+            util.save_nco_state(path, self.nco_freqs, self.nco_ids, modules)
+        except OSError as e:
+            warnings.warn(f'could not save the NCO state to {path}: {e}; '
+                          'calibrations will go stale when this session '
+                          'ends')
+
+    async def recover_nco_state(self):
+        """
+        Take over the NCO settings of an earlier session that the board
+        still has: for each of this session's active modules whose NCO
+        frequency on the board is the one saved in the board's NCO state
+        file (``nco_state_dir``), the frequency goes into ``nco_freqs``
+        (so ``set_nco`` leaves it alone) and the setting's id into
+        ``nco_ids`` (so the calibrations taken with it stay in frame).
+        Called by ``attach``.
+
+        A setting to the same frequency by something else since (another
+        program, e.g. rfmux's periscope) can't be told from here: it
+        changes the phase frame without changing the file. Calibrate
+        again after such a thing.
+
+        Returns:
+        found (list of int): the modules recovered.
+        """
+        path = util.nco_state_path(self.serial_number, self.nco_state_dir)
+        state = util.load_nco_state(path)
+        if not state:
+            return []
+        board = {}
+        for m in self.active_module_idxs:
+            if m not in state:
+                continue
+            try:
+                board[m] = float(await self.d.get_nco_frequency(module = m))
+            except Exception as e:
+                warnings.warn(f'could not read the NCO frequency of module '
+                              f'{m}: {e}')
+        found = util.recover_nco_ids(state, board)
+        for m, (f, i) in found.items():
+            self.nco_freqs[m], self.nco_ids[m] = f, i
+        return sorted(found)
 
     def _require_global_control(self, action):
         """

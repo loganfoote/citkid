@@ -68,8 +68,19 @@ def test_detection_rate_and_tau():
     assert res['amp_ph'] == pytest.approx(1e-6, rel = 0.05)
     assert np.median(res['cand_h'][np.isin(res['cand_idx'], found)]) == \
         pytest.approx(1, abs = 0.05)
-    tau, popt = ph.fit_tau(res['template'], res['p'], DT)
+    # The saved filter reproduces the heights, in kHz/GHz
+    of = ph.OptimalFilter.from_kernel(res['filter'], res['p'], res['nfft'])
+    y = of.apply(d, res['sign']) * ph.PPM
+    np.testing.assert_allclose(y[res['cand_idx']], res['cand_h'], rtol = 1e-5)
+    tau, popt, n_fit = ph.fit_tau(res['template'], res['p'], DT)
     assert tau == pytest.approx(TAU, rel = 0.1)
+    # The fit covers 5 decay times from 2 samples after the peak; without
+    # the limit, the whole decay
+    assert n_fit == pytest.approx(5 * TAU / DT, abs = 2)
+    tau_all, _, n_all = ph.fit_tau(res['template'], res['p'], DT,
+                                   n_skip = 1, lifetimes = None)
+    assert n_all == len(res['template']) - res['p'] - 1
+    assert tau_all == pytest.approx(TAU, rel = 0.1)
     assert len(res['history']) == ph.DetectionSettings().of_iterations
     assert res['sign'] == -1
 
@@ -139,8 +150,8 @@ def test_helpers():
     np.testing.assert_array_equal(m[0], [2, 1])
     np.testing.assert_array_equal(m[1], [2])
     assert len(m[2]) == 0
-    tau, popt = ph.fit_tau(np.ones(3), 0, DT)
-    assert np.isnan(tau)
+    tau, popt, n_fit = ph.fit_tau(np.ones(3), 0, DT)
+    assert np.isnan(tau) and n_fit == 0
     with pytest.raises(ValueError, match = 'no events'):
         ph.build_template(np.zeros(10), [0], 5, 5, 1)
 
@@ -277,6 +288,94 @@ def test_cosmic_event_grouping():
     np.testing.assert_allclose(
         ph.raw_peaks(np.array([0., -1., -3., -2., 0.]), [2, 0], -1, 1),
         [3., 1.])
+
+
+def test_isolated_events():
+    """
+    Events with another peak within the near window, or a large pulse
+    within the far window, are not isolated.
+    """
+    events = np.array([100, 200, 300, 400, 500])
+    peaks = np.array([100, 200, 230, 300, 400, 500, 1000])
+    big = np.array([1000])
+    keep = ph.isolated_events(events, peaks, big, 50, 550)
+    # 200 has 230 next to it; 500 is within 550 of the big one at 1000
+    assert keep.tolist() == [True, False, True, True, False]
+    # Events need not be among the peaks
+    assert ph.isolated_events([150], peaks, big, 10, 10).tolist() == [True]
+    assert ph.isolated_events([150], peaks, big, 60, 10).tolist() == \
+        [False]
+    assert ph.isolated_events([], peaks, big, 10, 10).size == 0
+
+
+def test_template_from_isolated_events_and_filter_length():
+    """
+    Pile-up and the neighbourhood of large pulses stay out of the
+    template, so a cosmic ray's side lobes don't corrupt it and the
+    heights don't jump between iterations; the filter uses the short
+    template, the mean pulse the whole one.
+    """
+    rng = np.random.default_rng(11)
+    n = int(10 / DT)
+    times = np.arange(500, n - 500, 400)
+    # Pairs of pulses 40 samples apart (pile-up), and a few 50-photon
+    # cosmic rays
+    pair = rng.random(len(times)) < 0.2
+    big = ~pair & (rng.random(len(times)) < 0.05)
+    t_all = np.concatenate([times, times[pair] + 40])
+    h_all = np.concatenate([np.where(big, 50., 1.), np.ones(pair.sum())])
+    d = ph.detection_timestream(synth(rng, n, t_all, height = h_all), DT)
+    s = ph.DetectionSettings(template_post_s = 2.5e-3,
+                             filter_post_s = 0.8e-3, of_iterations = 6)
+    res = ph.run_detection(d, DT, s)
+    pre, post, post_f = ph.template_lengths(s, DT)
+    assert (res['pre'], res['post'], res['filter_post']) == \
+        (pre, post, post_f)
+    assert post_f == round(0.8e-3 / DT) and post == round(2.5e-3 / DT)
+    assert len(res['template']) == pre + post
+    assert res['nfft'] >= 2 * (pre + post_f) and res['nfft'] < 2 * (pre + post)
+    # The template events are isolated: none within the template length
+    # of another peak, none within the filter length of a cosmic ray
+    ti = res['template_idx']
+    keep = ph.isolated_events(ti, res['cand_idx'],
+                              res['cand_idx'][res['cand_h'] > res['hmax']],
+                              pre + post, res['nfft'])
+    assert keep.all() and len(ti) > 0.5 * len(times)
+    assert not np.any(ph.near(ti, times[big], res['nfft'], res['nfft']))
+    assert not np.any(ph.near(ti, times[pair], 1, 2))
+    # The template amplitude settles on one photon and the iterations
+    # agree with each other
+    assert res['amp_ph'] == pytest.approx(1e-6, rel = 0.05)
+    amps = [float(l.split('amplitude ')[1].split(',')[0])
+            for l in res['log'][1:]]
+    assert np.ptp(amps[1:]) < 0.05e-6
+    assert res['template'][-1] == pytest.approx(0., abs = 0.05e-6)
+    # Nearly all single pulses are found, and both of a pair
+    found = np.isin(times, res['events']) | np.isin(times + 1, res['events'])
+    assert found[~big].mean() > 0.95
+    second = times[pair] + 40
+    assert np.mean(np.isin(second, res['events']) |
+                   np.isin(second + 1, res['events'])) > 0.9
+    # The whole template is the filter's when filter_post_s is None
+    full = ph.run_detection(d, DT, ph.DetectionSettings(
+        filter_post_s = None, of_iterations = 2))
+    assert full['filter_post'] == full['post']
+    # The mean photon pulse leaves the pile-up and the cosmic rays'
+    # neighbourhoods out as well
+    avg, p, used, _ = ph.average_pulse(d, res)
+    assert ph.isolated_events(
+        used, res['coinc_idx'], res['cand_idx'][res['cand_h'] > res['hmax']],
+        pre + post, res['nfft']).all()
+    _, _, used_all, _ = ph.average_pulse(d, res, isolated = False)
+    assert len(used_all) > len(used)
+    # With the reference filter, too
+    ref = ph.detect_with_filter(d, DT, res)
+    assert ref['filter_post'] == post_f
+    assert ph.isolated_events(
+        ref['template_idx'], ref['cand_idx'],
+        ref['cand_idx'][ref['cand_h'] > ref['hmax']], pre + post,
+        res['nfft']).all()
+    assert ref['amp_ph_own'] == pytest.approx(1e-6, rel = 0.05)
 
 
 def test_detect_with_filter():

@@ -7,21 +7,18 @@ connects to this session's modules, and waits for the Sweep button
 (Ctrl+R). A sweep covers the first Nyquist zone (100-2500 MHz), the second
 (2500-5000 MHz), or both, on a geometric grid (constant df/f), leaving a
 10 MHz guard band on each side of 2500 MHz (the point nearest it
-glitches), with a progress bar, and plots |S21| and phase with a rough
-count of the resonances (matched filter). A running sweep can be
-cancelled (Cancel, Esc); it stops at the next point and clears the
-board's tones. The settings can be changed in
-the window and the sweep run again; the modules too (type them, e.g.
-"1 2" for a device split over two modules, and press Connect, or just
-Sweep: it connects to the typed modules first). "Count
-now" counts the resonances of the last sweep without new data. Nothing is
-saved to zarr; the sweep can be saved as a CSV (columns f in Hz, i, q).
-Use it to check the
-wiring, power levels, and that resonances are there before the full
-sweep (01_vna_sweep.py).
+glitches), with a progress bar, and plots |S21| and phase. A running
+sweep can be cancelled (Cancel, Esc); it stops at the next point and
+clears the board's tones. The settings can be changed in the window and
+the sweep run again; the modules too (type them, e.g. "1 2" for a device
+split over two modules, and press Connect, or just Sweep: it connects to
+the typed modules first). Nothing is saved to zarr; the sweep can be
+saved as a CSV (columns f in Hz, i, q). Use it to check the wiring,
+power levels, and that resonances are there before the full sweep
+(01_vna_sweep.py).
 
 With --no-gui (e.g. over ssh without a display), it sweeps once with the
-settings below, prints the count, and saves the sweep with --csv.
+settings below and saves the sweep with --csv.
 
 Needs the board configured by crs_init.py. This session attaches to
 its modules only, so several of these (or other module scripts) can run at
@@ -39,9 +36,7 @@ import argparse
 import asyncio
 from citkid.crs.instrument import CRS
 from citkid.crs.procedures import vna_range, vna_step, vna_sweep
-from citkid.crs.quick_check import (
-    rough_resonances, run_quick_check, save_sweep_csv
-)
+from citkid.crs.quick_check import run_quick_check, save_sweep_csv
 
 ################################################################################
 ################################### Settings ###################################
@@ -83,8 +78,6 @@ def parse_args(argv = None):
     p.add_argument('--qr-median', type = float, default = QR_MEDIAN)
     p.add_argument('--pts-per-lw', type = float, default = PTS_PER_LW)
     p.add_argument('--nsamps', type = int, default = NSAMPS)
-    p.add_argument('--no-count', action = 'store_true',
-                   help = "don't count resonances")
     p.add_argument('--no-gui', action = 'store_true',
                    help = 'sweep once without the window')
     p.add_argument('--csv', default = None,
@@ -111,29 +104,24 @@ async def connect(args, modules = None):
 
 async def sweep_once(args):
     """
-    Connect, sweep, count resonances, and save the sweep (no window).
+    Connect, sweep, and save the sweep (no window).
 
     Parameters:
     args (argparse.Namespace): options from ``parse_args``.
 
     Returns:
     f, z (np.array): the sweep.
-    n_found (int or None): rough resonance count (None with --no-count).
     """
     crs = await connect(args)
     fmin, fmax = vna_range(args.nyquist, args.fmin, args.fmax)
     f, z, _ = await vna_sweep(
         crs, fmin, fmax, args.amplitude, args.nsamps,
         step = vna_step(args.qr_median, args.pts_per_lw))
-    n_found = None
     print(f'{len(f):,} points')
-    if not args.no_count:
-        n_found = len(rough_resonances(f, z))
-        print(f'About {n_found} resonances (matched filter; a rough count)')
     if args.csv:
         save_sweep_csv(args.csv, f, z)
         print(f'Saved {args.csv}')
-    return f, z, n_found
+    return f, z
 
 def main(args):
     """
@@ -144,10 +132,10 @@ def main(args):
 
     Returns:
     if --no-gui:
-        f, z, n_found: see ``sweep_once``.
+        f, z: see ``sweep_once``.
     else:
         result (tuple or None): the window's last sweep (``f``, ``z``,
-            ``bands``, ``fr``), or None.
+            ``bands``), or None.
     """
     if args.no_gui:
         return asyncio.run(sweep_once(args))
@@ -156,7 +144,7 @@ def main(args):
         nyquist = args.nyquist,
         fmin = args.fmin, fmax = args.fmax, amplitude = args.amplitude,
         qr_median = args.qr_median, pts_per_lw = args.pts_per_lw,
-        nsamps = args.nsamps, count = not args.no_count)
+        nsamps = args.nsamps)
 
 if __name__ == '__main__':
     main(parse_args())

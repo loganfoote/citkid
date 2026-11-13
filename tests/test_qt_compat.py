@@ -594,3 +594,49 @@ def test_get_qapp_refuses_to_create_app_with_pyqt6_loaded():
         with pytest.raises(RuntimeError, match='PyQt6 is also loaded'):
             qt_compat.get_qapp()
     mk.assert_not_called()
+
+
+def test_format_sci():
+    from citkid.qt_compat import format_sci
+    assert format_sci(120000., 1) == '1.2e5'
+    assert format_sci(3e-5, 0) == '3e-5'
+    assert format_sci(-2.5e-7, 1) == '-2.5e-7'
+    assert format_sci(0., 2) == '0'
+
+
+def test_plain_axis_item_tick_strings():
+    """
+    Ticks are plain numbers (no SI prefix on the label): fixed notation
+    between 1e-4 and 1e4, scientific beyond, with enough digits to tell
+    the ticks apart; log mode is pyqtgraph's.
+    """
+    import pyqtgraph as pg
+    from citkid.qt_compat import PlainAxisItem, get_qapp
+    get_qapp('citkid-qt-compat-tests')
+    ax = PlainAxisItem('left')
+    assert not ax.autoSIPrefix
+    # Values in the hundreds with a 0.001 scale (what the default axis
+    # shows as "(x0.001)") come out as plain decimals
+    assert ax.tickStrings([100., 200., 300.], 0.001, 100.) == \
+        ['0.1', '0.2', '0.3']
+    assert ax.tickStrings([0.15, 0.2, 0.25], 1., 0.05) == \
+        ['0.15', '0.20', '0.25']
+    assert ax.tickStrings([0., 2000., 4000.], 1., 2000.) == \
+        ['0', '2000', '4000']
+    assert ax.tickStrings([0.0005, 0.001], 1., 0.0005) == ['0.0005', '0.0010']
+    # Scientific notation at 1e4 and above, and below 1e-4
+    assert ax.tickStrings([10000., 12000., 14000.], 1., 2000.) == \
+        ['1.0e4', '1.2e4', '1.4e4']
+    assert ax.tickStrings([0., 1e5, 2e5], 1., 1e5) == ['0', '1e5', '2e5']
+    assert ax.tickStrings([2e-5, 4e-5, 6e-5], 1., 2e-5) == \
+        ['2e-5', '4e-5', '6e-5']
+    assert ax.tickStrings([-3e-6, -2e-6], 1., 1e-6) == ['-3e-6', '-2e-6']
+    # Log mode is pyqtgraph's; an odd spacing still gives numbers
+    plain = pg.AxisItem('left')
+    ax.setLogMode(True)
+    plain.setLogMode(True)
+    assert ax.tickStrings([1., 2., 3.], 1., 1.) == \
+        plain.tickStrings([1., 2., 3.], 1., 1.)
+    ax.setLogMode(False)
+    assert ax.tickStrings([1., 2.5], 1., 0.) == ['1', '2.5']
+    assert ax.tickStrings([], 1., 1.) == []

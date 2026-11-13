@@ -3633,3 +3633,18 @@ def test_run_through_panel_runs_following_panels_until_a_failure(
     assert win.panels[1].prepare_run.call_count == 1
     win.AR.execute_step.side_effect = None
     _close_window(win)
+
+
+def test_series_plot_axes_are_plain(qt_app, monkeypatch):
+    """
+    The series plot's axes show plain numbers: no "(x0.001)" scaling of
+    the label, decimals like 0.2 for small values (PlainAxisItem).
+    """
+    from citkid.qt_compat import PlainAxisItem
+    win = _make_series_window(qt_app, monkeypatch)
+    for name in ('left', 'bottom'):
+        ax = win._plot_series.getAxis(name)
+        assert isinstance(ax, PlainAxisItem) and not ax.autoSIPrefix
+    assert win._plot_series.getAxis('left').tickStrings(
+        [100., 200.], 0.001, 100.) == ['0.1', '0.2']
+    _close(win)

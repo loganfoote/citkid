@@ -825,10 +825,10 @@ def calibrations(tune):
 
     Returns:
     cals (list of dict): per sweep: ``name`` ('cal{j}'), ``path`` (in the
-        store), ``index`` (j), ``tone_set``, ``created``, ``complete``,
-        ``ntones``, ``npoints_fine`` (0 without a fine sweep), ``nsamps``,
-        and ``nco_ids`` (the NCO settings it was taken under, see
-        ``crs.procedures.calibration_in_frame``).
+        store), ``index`` (j), ``tone_set``, ``created``, ``notes`` ('' if
+        none), ``complete``, ``ntones``, ``npoints_fine`` (0 without a
+        fine sweep), ``nsamps``, and ``nco_ids`` (the NCO settings it was
+        taken under, see ``crs.procedures.calibration_in_frame``).
     """
     out = []
     for j in list_indices(tune, CAL_PREFIX):
@@ -840,6 +840,7 @@ def calibrations(tune):
             name = grp.basename, path = grp.path, index = j,
             tone_set = grp.attrs.get('tone_set'),
             created = grp.attrs.get('created'),
+            notes = str(grp.attrs.get('notes') or ''),
             complete = bool(grp.attrs.get('complete')), ntones = ntones,
             npoints_fine = npoints, nsamps = grp.attrs.get('nsamps'),
             nco_ids = grp.attrs.get('nco_ids')))
@@ -882,6 +883,24 @@ def update_stream_run(tune, n, **changes):
     runs = list(grp.attrs.get('runs', []))
     runs[n] = to_jsonable(dict(runs[n], **changes))
     grp.attrs['runs'] = runs
+
+def remove_stream_run(tune, n):
+    """
+    Drop the last run from a tuning's run list (e.g. one that failed
+    before saving a stream), so that the next run takes its index.
+
+    Parameters:
+    tune (zarr.Group): the tuning, writable.
+    n (int): the run's index; it must be the last one.
+
+    Raises:
+    ValueError: if run n is not the last run.
+    """
+    grp = tune[STREAMS_GROUP]
+    runs = list(grp.attrs.get('runs', []))
+    if n != len(runs) - 1:
+        raise ValueError(f'run {n} is not the last run ({len(runs)} runs)')
+    grp.attrs['runs'] = runs[:-1]
 
 def _stream_size(root, run):
     """

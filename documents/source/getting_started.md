@@ -16,7 +16,7 @@ The scripts themselves are described in two more documents:
 | Document | Scripts |
 |--------|----------------------------|
 | VNA screening | `vna_quick_check.py`, `01_vna_sweep.py`, `vna_view.py`, `02_find_resonances.py`, `vna_report.py` |
-| Tuning and timestreams | `03_tune.py`, `04_stream.py`, `05_calibrate_streams.py`, `06_find_photons.py` |
+| Tuning and timestreams | `03_tune.py`, `04_stream.py`, `store_browser.py`, `05_calibrate_streams.py`, `06_find_photons.py` |
 
 The usual order is:
 
@@ -28,8 +28,10 @@ The usual order is:
 6. `vna_report.py` (optional): the VNA results as plain files;
 7. `03_tune.py`: find the optimal tone powers and frequencies;
 8. `04_stream.py`: take timestreams;
-9. `05_calibrate_streams.py`: calibrate the timestreams;
-10. `06_find_photons.py`: find photons and cosmic rays.
+9. `store_browser.py` (optional, any time): look around the store, e.g.
+   at the timestreams taken and their notes;
+10. `05_calibrate_streams.py`: calibrate the timestreams;
+11. `06_find_photons.py`: find photons and cosmic rays.
 
 # The environment
 

@@ -4,8 +4,8 @@ Interactive quick check of a device with VNA sweeps.
 ``run_quick_check`` opens a window with the given sweep settings (Nyquist
 zone, range, power, resolution, averaging), connects to the CRS, and waits
 for the Sweep button (Ctrl+R). The settings can be changed and the sweep
-run again; it shows |S21| and phase with the band edges and a rough count
-of the resonances (matched filter). A running sweep can be cancelled
+run again; it shows |S21| and phase with the band edges. A running sweep
+can be cancelled
 (Cancel, Esc): it stops at the next point, clears the board's tones, and
 the settings can be changed and the sweep run again. Nothing is saved to
 zarr; the sweep can be saved as a CSV of frequency, I, and Q
@@ -29,8 +29,6 @@ from ..qt_compat import (
     Qt, delete_on_close, fit_window_to_screen, get_qapp,
     widget_font_stylesheet
 )
-from ..vna.matched_filter import find_candidates_mf
-from ..vna.sweep_info import prepare_full_sweep
 from .procedures import (
     SweepCancelled, VNA_RANGES, plan_vna_sweep, vna_range, vna_step,
     vna_sweep
@@ -56,23 +54,6 @@ def save_sweep_csv(path, f, z):
     data = np.column_stack([f, np.real(z), np.imag(z)])
     np.savetxt(str(path), data, delimiter = ',', header = 'f,i,q',
                comments = '', fmt = ['%.6f', '%.9e', '%.9e'])
-
-def rough_resonances(f, z, threshold = 12.):
-    """
-    Find resonances roughly with the matched filter, for a quick count.
-
-    Parameters:
-    f (np.array): frequencies in Hz.
-    z (np.array): complex S21.
-    threshold (float): detection threshold (noise units). Default 12 (the
-        CNN finder's matched-filter setting).
-
-    Returns:
-    fr (np.array): resonance frequencies in Hz, ascending.
-    """
-    fp, zp, _ = prepare_full_sweep(f, z)
-    return find_candidates_mf(fp, zp, threshold = threshold,
-                              suppress_sidelobes = True)[0]
 
 def sweep_plan_text(fmin, fmax, bw, module_idxs, step, nsamps):
     """
@@ -315,12 +296,10 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
     Attributes:
     crs (CRS or None): the connected instrument (None until connected).
     result (tuple or None): the last sweep: ``f``, ``z``, ``bands``
-        (``vna_sweep`` outputs), and ``fr`` (rough resonance frequencies,
-        or None if not counted).
+        (``vna_sweep`` outputs).
     progress (QProgressBar): points taken in the running sweep; hidden
         when idle.
-    sweeping (bool): True while a sweep runs (not while connecting or
-        counting).
+    sweeping (bool): True while a sweep runs (not while connecting).
     """
     # Sweep progress (points done, total), emitted from the background
     # thread and delivered on the GUI thread
@@ -329,8 +308,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
     def __init__(
         self, connect, module_idxs, nyquist = '1', fmin = None, fmax = None,
         amplitude = -50., qr_median = 2e4, pts_per_lw = 5., nsamps = 10,
-        count = True, sweep_on_start = False, title = 'VNA quick check',
-        ui_scale = 1.0
+        sweep_on_start = False, title = 'VNA quick check', ui_scale = 1.0
     ):
         """
         Build the window and start connecting.
@@ -350,7 +328,6 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         pts_per_lw (float): points per linewidth at ``qr_median``. Default
             5.
         nsamps (int): samples per point. Default 10.
-        count (bool): If True (default), count resonances after sweeping.
         sweep_on_start (bool): If True, sweep as soon as connected. Default
             False: wait for the Sweep button (Ctrl+R).
         title (str): window title. Default 'VNA quick check'.
@@ -374,7 +351,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         self._band_lines = []
         self._clock = ProgressClock()
         self._build_controls(nyquist, fmin, fmax, amplitude, qr_median,
-                             pts_per_lw, nsamps, count)
+                             pts_per_lw, nsamps)
         self._build_plots()
         self._progress.connect(self._on_progress)
         central = QtWidgets.QWidget()
@@ -387,15 +364,14 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
 
     ############################################################################
     def _build_controls(
-        self, nyquist, fmin, fmax, amplitude, qr_median, pts_per_lw, nsamps,
-        count
+        self, nyquist, fmin, fmax, amplitude, qr_median, pts_per_lw, nsamps
     ):
         """
         Build the settings panel.
 
         Parameters:
-        nyquist, fmin, fmax, amplitude, qr_median, pts_per_lw, nsamps,
-            count: starting values (see ``__init__``).
+        nyquist, fmin, fmax, amplitude, qr_median, pts_per_lw, nsamps:
+            starting values (see ``__init__``).
         """
         def spin(lo, hi, value, decimals = 1, step = 1., suffix = ''):
             """
@@ -450,12 +426,6 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         self.nsamps.setValue(int(nsamps))
         self.nsamps.setKeyboardTracking(False)
         self.nsamps.valueChanged.connect(self._update_plan)
-        self.count = QtWidgets.QCheckBox('Count resonances after sweeping')
-        self.count.setChecked(bool(count))
-        self.count_btn = QtWidgets.QPushButton('Count now')
-        self.count_btn.setToolTip('Count the resonances of the last sweep '
-                                  '(no new data)')
-        self.count_btn.clicked.connect(self.count_resonances)
         form.addRow('Nyquist zone', self.zone)
         form.addRow('From', self.fmin)
         form.addRow('To', self.fmax)
@@ -463,7 +433,6 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         form.addRow('Median Qr', self.qr_median)
         form.addRow('Points per linewidth', self.pts_per_lw)
         form.addRow('Samples per point', self.nsamps)
-        form.addRow(self.count)
         # Width of the settings; the wrapped labels below follow it
         width = self._panel.sizeHint().width() + 40
         self.plan_label = QtWidgets.QLabel()
@@ -484,7 +453,6 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         row.addWidget(self.sweep_btn, stretch = 1)
         row.addWidget(self.cancel_btn)
         form.addRow(row)
-        form.addRow(self.count_btn)
         form.addRow(self.save_btn)
         self.progress = QtWidgets.QProgressBar()
         self.progress.setTextVisible(True)
@@ -495,8 +463,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         form.addRow(self.status)
         self._inputs = (self.modules, self.connect_btn, self.zone,
                         self.fmin, self.fmax, self.amplitude,
-                        self.qr_median, self.pts_per_lw, self.nsamps,
-                        self.count)
+                        self.qr_median, self.pts_per_lw, self.nsamps)
         self._panel.setFixedWidth(width)
 
     def _build_plots(self):
@@ -515,9 +482,6 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         for item in (self.mag_curve, self.phase_curve):
             item.setDownsampling(auto = True, method = 'peak')
             item.setClipToView(True)
-        self.markers = pg.ScatterPlotItem(
-            size = 7, symbol = 't', brush = pg.mkBrush(255, 80, 80))
-        self.mag_plot.addItem(self.markers)
 
     ############################################################################
     def _set_status(self, text):
@@ -539,9 +503,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         for w in self._inputs:
             w.setEnabled(not busy)
         self.save_btn.setEnabled(not busy and self.result is not None)
-        self.count_btn.setEnabled(not busy and self.result is not None)
-        # Only a sweep can be cancelled (not connecting or counting), and
-        # only once
+        # Only a sweep can be cancelled (not connecting), and only once
         self.cancel_btn.setEnabled(busy and self.sweeping and
                                    not self._cancel.is_set())
         self._update_sweep_button()
@@ -601,13 +563,12 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
 
         Returns:
         settings (dict): ``fmin``, ``fmax`` (Hz), ``amplitude`` (dBm),
-            ``nsamps``, ``step`` (df/f), ``count`` (bool).
+            ``nsamps``, ``step`` (df/f).
         """
         return dict(
             fmin = self.fmin.value() * 1e6, fmax = self.fmax.value() * 1e6,
             amplitude = self.amplitude.value(), nsamps = self.nsamps.value(),
-            step = vna_step(self.qr_median.value(), self.pts_per_lw.value()),
-            count = self.count.isChecked())
+            step = vna_step(self.qr_median.value(), self.pts_per_lw.value()))
 
     def _update_plan(self):
         """
@@ -731,17 +692,15 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
 
         async def job():
             """
-            Sweep and count.
+            Sweep.
 
             Returns:
-            result (tuple): ``f``, ``z``, ``bands``, ``fr``.
+            result (tuple): ``f``, ``z``, ``bands``.
             """
-            f, z, bands = await vna_sweep(
+            return await vna_sweep(
                 crs, s['fmin'], s['fmax'], s['amplitude'], s['nsamps'],
                 step = s['step'], verbose = False, progress = report,
                 cancelled = cancelled)
-            fr = rough_resonances(f, z) if s['count'] else None
-            return f, z, bands, fr
 
         self.sweeping = True
         self.worker.submit(job(), self._on_swept)
@@ -768,7 +727,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         Show a finished sweep (GUI thread).
 
         Parameters:
-        result (tuple or None): ``f``, ``z``, ``bands``, ``fr``.
+        result (tuple or None): ``f``, ``z``, ``bands``.
         error (BaseException or None): the sweep error.
         """
         self._show_progress(False)
@@ -783,42 +742,17 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
             self._set_busy(False)
             return
         self.result = result
-        f, z, bands, fr = result
-        self._plot(f, z, bands, fr)
-        text = f'{len(f):,} points.'
-        if fr is not None:
-            text += f' About {len(fr)} resonances (rough count).'
-        self._set_status(text)
+        f, z, bands = result
+        self._plot(f, z, bands)
+        self._set_status(f'{len(f):,} points.')
         self._set_busy(False)
 
-    def count_resonances(self):
-        """
-        Count the resonances of the last sweep (no new data), on the
-        background loop.
-        """
-        if self.result is None or self.worker.busy:
-            return
-        f, z, bands, _ = self.result
-
-        async def job():
-            """
-            Count.
-
-            Returns:
-            result (tuple): ``f``, ``z``, ``bands``, ``fr``.
-            """
-            return f, z, bands, rough_resonances(f, z)
-
-        self.worker.submit(job(), self._on_swept)
-        self._set_busy(True)
-        self._set_status('Counting resonances...')
-
-    def _plot(self, f, z, bands, fr):
+    def _plot(self, f, z, bands):
         """
         Plot a sweep.
 
         Parameters:
-        f, z, bands, fr: see ``_on_swept``.
+        f, z, bands: see ``_on_swept``.
         """
         fm = f / 1e6
         db = 20 * np.log10(np.abs(z))
@@ -833,10 +767,6 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
                 line = pg.InfiniteLine(lo, pen = pen)
                 plot.addItem(line)
                 self._band_lines.append((plot, line))
-        if fr is None or not len(fr):
-            self.markers.setData([], [])
-        else:
-            self.markers.setData(fr / 1e6, np.interp(fr, f, db) + 1)
         self.mag_plot.enableAutoRange()
         self.phase_plot.enableAutoRange()
 
@@ -854,7 +784,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         """
         if self.result is None:
             return False
-        f, z, _, _ = self.result
+        f, z, _ = self.result
         try:
             save_sweep_csv(path, f, z)
         except OSError:
@@ -898,8 +828,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
 def run_quick_check(
     connect, module_idxs, nyquist = '1', fmin = None, fmax = None,
     amplitude = -50., qr_median = 2e4, pts_per_lw = 5., nsamps = 10,
-    count = True, sweep_on_start = False, title = 'VNA quick check',
-    ui_scale = 1.0
+    sweep_on_start = False, title = 'VNA quick check', ui_scale = 1.0
 ):
     """
     Open the quick-check window and wait until it is closed.
@@ -912,20 +841,20 @@ def run_quick_check(
         every sweep then uses, and again when the modules are changed in
         the window.
     module_idxs (list of int): the starting modules.
-    nyquist, fmin, fmax, amplitude, qr_median, pts_per_lw, nsamps, count,
+    nyquist, fmin, fmax, amplitude, qr_median, pts_per_lw, nsamps,
         sweep_on_start, title, ui_scale: starting settings (see
         ``QuickCheckWindow``). By default the window waits for the Sweep
         button once connected.
 
     Returns:
-    result (tuple or None): the last sweep (``f``, ``z``, ``bands``,
-        ``fr``), or None if there was none.
+    result (tuple or None): the last sweep (``f``, ``z``, ``bands``), or
+        None if there was none.
     """
     app = get_qapp(title)
     win = QuickCheckWindow(
         connect, module_idxs, nyquist = nyquist, fmin = fmin, fmax = fmax,
         amplitude = amplitude, qr_median = qr_median,
-        pts_per_lw = pts_per_lw, nsamps = nsamps, count = count,
+        pts_per_lw = pts_per_lw, nsamps = nsamps,
         sweep_on_start = sweep_on_start, title = title, ui_scale = ui_scale)
     delete_on_close(win)
     fit_window_to_screen(win)

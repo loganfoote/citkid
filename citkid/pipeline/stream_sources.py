@@ -155,9 +155,24 @@ def stream_sources_steps(
             if ft0 is None:
                 ft0 = ft[sweep_rows]
             elif not np.allclose(ft[sweep_rows], ft0, atol = 1., rtol = 0):
-                warnings.warn(f"{s['group']} streamed other tone "
-                              f"frequencies than {sources[0]['group']}: "
-                              "the first source's are used")
+                # The board rounds the tones it writes; a later write of
+                # the same requested frequencies can land them tens of Hz
+                # away. The calibration places every stream's tones at
+                # the first source's frequencies, so such a stream reads
+                # x offset by the difference over the frequency.
+                diff = ft[sweep_rows] - ft0
+                worst = int(np.argmax(np.abs(diff)))
+                first = sources[0]
+                warnings.warn(
+                    f"{s['group']}/{s['writes'][0]}/{stream} was streamed "
+                    'with tones written up to '
+                    f'{np.abs(diff[worst]):.0f} Hz away from those of '
+                    f"{first['group']}/{first['writes'][0]}/"
+                    f"{first.get('stream', 'stream')} (the same requested "
+                    "frequencies rounded differently): the first source's "
+                    'frequencies calibrate every stream, which offsets x '
+                    f'by up to {abs(diff[worst]) / ft0[worst]:.1e} for '
+                    'this one')
             n = int(s['stop']) - int(s['start'])
             bounds.append((offset, offset + n))
             offset += n
@@ -497,11 +512,13 @@ def apply_stream_calibration(
              for a in range(start, stop, chunk)]
     for wg, stream, sel, ts_rows, a, b in tqdm(
             steps, desc = 'Applying', leave = False, disable = not verbose):
-        o = np.argsort(ts_rows)
-        z = stream['z'][:, ts_rows[o], a:b]
-        scale = np.asarray(stream['counts_to_s21'][...])[ts_rows[o]]
-        zt = np.empty((len(sel), b - a), dtype = np.complex128)
-        zt[o] = (z[0] + 1j * z[1]) * scale[:, None]
+        # Read the tones' rows as one slice (the rows between them too),
+        # then pick them: zarr is many times slower with a row index
+        # (an orthogonal selection) than with a slice of the same rows
+        lo, hi = int(ts_rows.min()), int(ts_rows.max()) + 1
+        z = stream['z'][:, lo:hi, a:b][:, ts_rows - lo]
+        scale = np.asarray(stream['counts_to_s21'][...])[ts_rows]
+        zt = (z[0] + 1j * z[1]) * scale[:, None]
         ft = np.asarray(wg['fres'][...])[ts_rows]
         res = DS.apply_cal(rows[sel], outputs, replacements = dict(
             zt = zt, ft = ft, dt = dt))
@@ -573,7 +590,10 @@ def open_calibration(root, cal):
         Calibration-tone DataSets are not included.
 
     Raises:
-    KeyError: if the group records no selection of streams.
+    KeyError: if the group records no selection of streams, or has no
+        DataSet for a tone set the selection needs (e.g. a calibration
+        made by an earlier version, with one DataSet per decimation
+        stage: calibrate again with 05_calibrate_streams.py).
     """
     cal = root[cal] if isinstance(cal, str) else cal
     if 'selection' not in cal.attrs:
@@ -581,7 +601,14 @@ def open_calibration(root, cal):
     out = {}
     for name, g in plan_stream_datasets(root, cal.attrs['selection']).items():
         res = g['resonators']
-        grp = cal.require_group(name)
+        if name not in cal:
+            have = sorted(cal.group_keys())
+            raise KeyError(
+                f'{cal.path} has no DataSet {name!r} for tone set '
+                f"{g['tone_set']} (it has {have}): it was made by another "
+                'version of 05_calibrate_streams.py; run it again to '
+                'calibrate the streams in the current layout')
+        grp = cal[name]
         DS = open_stream_dataset(
             grp, g['sources'], f'{res}/fres_all', f'{res}/qres_all',
             f_avg = int(grp.attrs.get('f_avg', 1)))

@@ -14,7 +14,7 @@ from citkid.crs.procedures import (
     stream_tone_sets, tones_written, write_set_tones, write_stream_chunk
 )
 from citkid.crs.sim import DEFAULT_PULSES, SimulatedCRS
-from citkid.crs.stream_gui import MODES, StreamWindow
+from citkid.crs.stream_gui import MODES, StreamWindow, load_run_view
 from citkid.vna import simulate as sim
 
 SMALL = dict(f_lo = 1.0e9, f_hi = 1.1e9, n_banks = 1, n_per_bank = 12,
@@ -252,20 +252,39 @@ async def test_stream_tone_sets(tmp_path):
     assert sorted(k for k in root['tune0/cal3/write2'].keys()
                   if k.startswith('ts')) == ['ts2', 'ts3']
     assert dl.stream_runs(root)[3]['calibration'] == 'tune0/cal3'
+    # Tones put on the board without a write group (a preview capture)
+    # get a write of their own: no 'write' in ``written`` used to be a
+    # TypeError from zarr (None in root)
+    written.pop('write')
+    paths = await stream_tone_sets(crs, tune, 'b2', 0.1, 6, set_idxs = [1],
+                                   calibrations = cals, written = written,
+                                   keep_tones = True, **kw)
+    assert paths == ['tune0/cal3/write3/ts4']
+    assert written['write'] == 'tune0/cal3/write3'
+    # A run that fails before saving a stream leaves no record; one that
+    # fails later keeps its (incomplete) record
+    bad_dec = 99
+    with pytest.raises(ValueError):
+        await stream_tone_sets(crs, tune, 'nope', 0.1, bad_dec,
+                               set_idxs = [1], calibrations = cals,
+                               written = written, keep_tones = True, **kw)
+    assert [r['name'] for r in dl.stream_runs(root)][-1] == 'b2'
+    with pytest.raises(ValueError, match = 'not the last'):
+        dl.remove_stream_run(tune, 0)
     # Another set means a calibration and a write; not keeping the tones
     # clears them
     paths = await stream_tone_sets(crs, tune, 'c', 0.1, 6, set_idxs = [0],
                                    written = written, **kw)
-    assert paths == ['tune0/cal4/write0/ts4']
-    assert dl.stream_runs(root)[4]['calibration'] == 'tune0/cal4'
+    assert paths == ['tune0/cal4/write0/ts5']
+    assert dl.stream_runs(root)[5]['calibration'] == 'tune0/cal4'
     assert written == {}
     # A stream still being written (no 'dt' yet) is left out of the runs
     g = dl.create_group(root['tune0/cal4/write0'], 'ts9', 'raw')
     g.create_array('z', data = np.zeros((2, 1, 10), dtype = np.int32))
-    dl.update_stream_run(tune, 4, paths = paths + ['tune0/cal4/write0/ts9'])
-    assert dl.stream_runs(root)[-1]['paths'] == ['tune0/cal4/write0/ts4']
+    dl.update_stream_run(tune, 5, paths = paths + ['tune0/cal4/write0/ts9'])
+    assert dl.stream_runs(root)[-1]['paths'] == ['tune0/cal4/write0/ts5']
     text = dl.describe_stream_runs(root)
-    assert 'ts4: c, tune0, tune0/cal4' in text
+    assert 'ts5: c, tune0, tune0/cal4' in text
 
 @pytest.mark.asyncio
 async def test_calibrate_and_write_set_tones(tmp_path):
@@ -276,15 +295,18 @@ async def test_calibrate_and_write_set_tones(tmp_path):
     with pytest.raises(ValueError, match = 'tone set 5'):
         await calibrate_tone_set(crs, tune, 5, **kw)
     said = []
-    cal = await calibrate_tone_set(crs, tune, 1, status = said.append, **kw)
+    cal = await calibrate_tone_set(crs, tune, 1, status = said.append,
+                                   notes = 'after warm-up', **kw)
     assert cal.path == 'tune0/cal0' and cal.attrs['tone_set'] == 1
     assert cal.attrs['tones'] == 'tune0/tones' and cal.attrs['complete']
+    assert cal.attrs['notes'] == 'after warm-up'
     n1 = int(np.sum(tune['tones/tone_set'][:] == 1))
     assert cal['fine_sweep/z'].shape == (n1, 40)
     assert any('cal0' in m for m in said)
     c = dl.calibrations(tune)
     assert len(c) == 1 and c[0]['ntones'] == n1 and \
         c[0]['npoints_fine'] == 40 and c[0]['nsamps'] == 100
+    assert c[0]['notes'] == 'after warm-up'
     # write_set_tones writes once, then reuses; a write group gets the
     # tones either way
     written = {}
@@ -392,16 +414,25 @@ def test_stream_window(qapp, tmp_path):
     assert win.cal_kwargs()['npoints_fine'] == 50 and \
         win.cal_kwargs()['npoints_gain'] == 10
     win.set_box.setCurrentIndex(1)
+    # Notes typed for this calibration are saved with it, shown in the
+    # list, and the box is emptied for the next one
+    assert win.cal_notes_edit.toPlainText() == ''
+    win.cal_notes_edit.setPlainText('fridge at 100 mK\nlights off')
     win.calibrate()
-    assert win.progress.isVisible() or win.worker.busy
+    assert win.progress.maximum() == 0 or not win.worker.busy
     wait_for(lambda: win.cal is not None and not win.worker.busy)
     assert win.cal['set'] == 1 and win.cal['name'] == 'cal0'
     assert tune['cal0'].attrs['tone_set'] == 1
+    assert tune['cal0'].attrs['notes'] == 'fridge at 100 mK\nlights off'
+    assert win.cal_notes_edit.toPlainText() == ''
     assert tune['cal0/fine_sweep/z'].shape[1] == 50
     assert win.cal_box.count() == 1 and win.cal_box.currentData() == 'cal0'
+    assert win.cal_box.currentText().endswith(' - fridge at 100 mK lights off')
     assert win.capture_btn.isEnabled() and win.write_btn.isEnabled()
     assert win.run_btn.isEnabled()
-    assert not win.progress.isVisible() and win.written == {}
+    # The progress bar keeps its place, empty, between jobs
+    assert not win.progress.isHidden() and win.progress.maximum() == 1
+    assert win.progress.value() == 0 and win.written == {}
     win.tone_box.setCurrentIndex(2)
     win.preview_dec.setValue(0)
     win.preview_s.setValue(0.05)
@@ -475,6 +506,8 @@ def test_stream_window(qapp, tmp_path):
     win.calibrate()
     wait_for(lambda: win.cal['name'] == 'cal1' and not win.worker.busy)
     assert win.cal_box.count() == 2 and win.written == {}
+    assert tune['cal1'].attrs['notes'] == ''
+    assert ' - ' not in win.cal_box.currentText()
     win.cal_box.setCurrentIndex(0)
     assert win.cal['name'] == 'cal0' and win.chosen[1] == 'cal0'
     assert win.run_btn.isEnabled()
@@ -492,6 +525,53 @@ def test_stream_window(qapp, tmp_path):
     win.run()
     wait_for(lambda: len(win.runs) == 4 and not win.worker.busy)
     assert dl.stream_runs(root)[3]['calibration'] == 'tune0/cal2'
+    # View a saved run: the first run (set 1, stage 6, one chunk) shows
+    # in the plots with its own calibration loop, the set and tone boxes
+    # following it; the chunk box offers the run's chunks
+    assert not win.view_btn.isEnabled()
+    win.runs_list.setCurrentRow(0)
+    assert win.view_btn.isEnabled()
+    run0 = dl.stream_runs(root)[0]
+    assert win.view_chunks.maximum() == run0['n_chunks'] == 1
+    assert win.view_label.text().startswith('of 1 (')
+    win.view_run()
+    wait_for(lambda: win.view is not None and not win.worker.busy)
+    v = win.view
+    assert v['source'] == 'tune0/cal0/write0/ts0' and v['tone_set'] == 1
+    assert v['calibration'] == 'tune0/cal0' and v['chunks'] == (1, 1)
+    assert v['zt'].shape == (n1, run0['nsamples']) and \
+        v['zt'].dtype == np.complex64
+    assert v['f'].shape[0] == n1 and v['z'].shape == v['f'].shape
+    assert win.set_box.currentData() == 1
+    assert win.tone_box.currentData() in v['rows']
+    assert 'Showing ts0 (dark_dec6)' in win.status.text()
+    assert len(win.ts_plot.listDataItems()) >= 1
+    assert len(win.iq_plot.listDataItems()) == 3
+    # The data match the saved stream
+    st = root['tune0/cal0/write0/ts0']
+    k = int(np.flatnonzero(v['rows'] == win.tone_box.currentData())[0])
+    want = (st['z'][0, k, :] + 1j * st['z'][1, k, :]) * \
+        st['counts_to_s21'][k]
+    np.testing.assert_allclose(v['zt'][k], want, rtol = 1e-6)
+    # A capture replaces the view (of set 0, whose calibration is in
+    # frame; set 1's went stale with set 0's NCO)
+    win.set_box.setCurrentIndex(0)
+    assert win.capture_btn.isEnabled()
+    win.capture()
+    wait_for(lambda: win.view is None and not win.worker.busy)
+    assert win.preview is not None
+    # A run without streams can't be viewed; a missing calibration is a
+    # KeyError of the loader
+    dl.register_stream_run(tune, dict(name = 'empty', paths = [],
+                                      tone_set = 1))
+    win.runs_list.addItem('empty')
+    win.runs_list.setCurrentRow(win.runs_list.count() - 1)
+    assert win.view_chunks.maximum() == 1 and \
+        win.view_label.text() == 'no streams'
+    win.view_run()
+    assert 'no streams to show' in win.status.text()
+    with pytest.raises(KeyError):
+        load_run_view(root, dict(group = 'ts9', paths = []), np.arange(2))
     assert win.runs[3] == ['tune0/cal2/write0/ts3']
     assert [c['tone_set'] for c in dl.calibrations(tune)] == [1, 1, 0]
     assert [c['in_frame'] for c in win.cals] == [False, False, True]
@@ -583,3 +663,70 @@ async def test_series_fits_on_stitched_tone_sets(tmp_path):
             # The fitted fr is the tone's resonance
             assert abs(popt[0] - crs.truth.fr.values[r]) < \
                 0.3 * crs.truth.fr.values[r] / crs.truth.Qr.values[r]
+
+
+@pytest.mark.asyncio
+async def test_calibration_survives_a_restart(tmp_path, monkeypatch):
+    """
+    A new session on the same board takes over the NCO settings the
+    board still has (from the NCO state file), so a saved calibration is
+    still in frame and a run uses it; an NCO changed by something else
+    in between puts it out of frame.
+    """
+    monkeypatch.setattr(SimulatedCRS, 'nco_state_dir', str(tmp_path / 'st'))
+    board = {}
+    rng = np.random.default_rng(0)
+    truth = sim.draw_device(rng, **SMALL)
+    gain = sim.draw_gain(rng, f_lo = 1e8, f_hi = 5e9)
+
+    def session():
+        """
+        Start a session on the shared simulated board.
+
+        Returns:
+        crs (SimulatedCRS): the attached board.
+        """
+        crs = SimulatedCRS(truth, gain, module_idxs = (1, 2),
+                           global_control = True, board = board)
+        return crs
+
+    crs = session()
+    await crs.attach()
+    assert crs.nco_ids == {}
+    root, tune = make_tuning(tmp_path, crs)
+    kw = dict(npoints_fine = 40, npoints_gain = 10, verbose = False)
+    cal = await calibrate_tone_set(crs, tune, 1, **kw)
+    ids = dict(crs.nco_ids)
+    assert calibration_in_frame(crs, cal)
+    state = util.load_nco_state(util.nco_state_path(crs.serial_number,
+                                                    tmp_path / 'st'))
+    assert {m: v['id'] for m, v in state.items()} == {
+        1: ids[1], 2: ids[2]}
+    # Restart: the new session recovers both modules and the calibration
+    # is in frame; setting the NCOs again is a no-op and a run uses it
+    crs2 = session()
+    await crs2.attach()
+    assert crs2.nco_ids == ids and crs2.nco_freqs == crs.nco_freqs
+    assert calibration_in_frame(crs2, cal)
+    assert crs2._seam == crs._seam
+    ncos = tune['crs_config'].attrs['config']['tone_sets'][1]
+    assert await crs2.set_nco({int(m): f for m, f in ncos.items()}) == []
+    said = []
+    await stream_tone_sets(crs2, tune, 'r', 0.05, 6, set_idxs = [1],
+                           calibrations = {1: cal}, status = said.append,
+                           **kw)
+    assert not any('out of frame' in m for m in said)
+    assert dl.stream_runs(root)[0]['calibration'] == 'tune0/cal0'
+    assert [c['name'] for c in dl.calibrations(tune)] == ['cal0']
+    # Something else set module 1's NCO (even to the same frequency,
+    # here a different one) between sessions: not in frame
+    board[1] = (board[1][0] + 1e4, board[1][1])
+    crs3 = session()
+    await crs3.attach()
+    assert sorted(crs3.nco_ids) == [2]
+    assert not calibration_in_frame(crs3, cal)
+    # Without a state file nothing is recovered
+    monkeypatch.setattr(SimulatedCRS, 'nco_state_dir', None)
+    crs4 = session()
+    await crs4.attach()
+    assert crs4.nco_ids == {}

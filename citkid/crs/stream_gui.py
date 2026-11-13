@@ -6,19 +6,23 @@ them, then take named timestreams without sweeping or writing tones again.
 from ``procedures/03_tune.py``):
 
 - Calibration: pick a tone set and the sweep settings (fine and gain
-  points, samples per point, gain span) and press Calibrate: a target
-  sweep of the set, saved as the tuning's next ``cal{j}``
-  (``crs.procedures.calibrate_tone_set``). A progress bar follows every
+  points, samples per point, gain span), add notes if you like (saved
+  with the sweep; the box is emptied once it is taken), and press
+  Calibrate: a target sweep of the set, saved as the tuning's next
+  ``cal{j}`` (``crs.procedures.calibrate_tone_set``). A progress bar
+  follows every
   sweep and stream (streams by their elapsed time), with the estimated
   time left. The
   calibration list shows the set's saved sweeps, the latest usable one
   chosen; pick another to use it instead. A calibration takes long, so
   one is taken per set and every preview and run after that uses it,
-  for as long as it is in frame: setting an NCO (another tone set, or a
-  new session) starts a new phase frame, after which the set has to be
-  calibrated again (``crs.procedures.calibration_in_frame``; stale ones
-  are marked in the list and not used). So work one tone set at a time:
-  calibrate it, then write tones and stream as often as needed.
+  for as long as it is in frame: setting an NCO (another tone set)
+  starts a new phase frame, after which the set has to be calibrated
+  again (``crs.procedures.calibration_in_frame``; stale ones are marked
+  in the list and not used). A restarted session takes over the NCO
+  settings the board still has (``CRS.recover_nco_state``), so its
+  calibrations stay usable. So work one tone set at a time: calibrate
+  it, then write tones and stream as often as needed.
 - Preview: Capture writes the chosen calibration's tones (the chunk
   holding the selected tone) and streams a few seconds into memory. Pick
   a tone to see its timestream as the resonance frequency shift x
@@ -33,6 +37,12 @@ from ``procedures/03_tune.py``):
   Presets fill in the usual runs.
   Repeat for the next timestream. For another tone set, select it and
   calibrate it (its NCO is set, so the sets calibrated before go stale).
+- Runs of this tuning: the run list. View run (or a double-click) reads
+  the selected run's first zarr chunks (as many as the box says) from
+  the store and shows them in the plots like a capture, with the
+  calibration loop the run was taken on (``load_run_view``), until the
+  next capture or view. A progress bar below the list follows the
+  sweeps and streams.
 
 Tones stay on the board: whatever wrote them last (Capture, Write tones,
 or a run), the next capture or run of the same tones from the same
@@ -75,6 +85,61 @@ CAL_SETTINGS = (
     ('nsamps', 'Samples / point', (1, 1000000), True),
     ('gain_span_factor', 'Gain span factor', (1.1, 1000.), False),
 )
+
+def load_run_view(root, run, set_rows, chunks = 1, tone = None):
+    """
+    Read the first chunks of a saved run's stream, with the calibration
+    loop of its tones, in the shape of a capture (``StreamWindow``'s
+    ``preview``) plus the loop.
+
+    Parameters:
+    root (zarr.Group): the store root.
+    run (dict): the run (``daq_layout.stream_runs``: ``paths``,
+        ``calibration``, ``chunk_samples``, ``tone_set``, ``group``,
+        ``name``).
+    set_rows (np.array): the tuning's tone indices of the run's tone set,
+        in the calibration's order.
+    chunks (int): zarr chunks along time to read. Default 1.
+    tone (int or None): a tone index of the tuning: the stream holding it
+        is read (a set streams in several writes at fast stages). None
+        (default), or a tone in none of them: the first stream.
+
+    Returns:
+    view (dict): ``rows`` (tone indices of the tuning), ``fres`` (the
+        tones' written frequencies), ``zt`` (complex64 S21 timestreams,
+        (ntones, nsamples)), ``dt``, ``f``, ``z`` (the calibration sweep
+        of those tones), ``tone_set``, ``calibration``, ``source`` (the
+        stream's path), ``label``, ``chunks`` (read, of ``n_chunks``).
+
+    Raises:
+    KeyError: if the run has no streams on a calibration of the store.
+    """
+    paths = list(run.get('paths') or [])
+    if not paths or not run.get('calibration'):
+        raise KeyError(f"{run.get('group')} has no streams on a calibration")
+    cal = root[run['calibration']]
+    chosen = None
+    for path in paths:
+        write = root[path.rsplit('/', 1)[0]]
+        rows = set_rows[write['sweep_rows'][:]]
+        if chosen is None or (tone is not None and tone in rows):
+            chosen = (path, write, rows)
+    path, write, rows = chosen
+    stream = root[path]
+    n = int(run['chunk_samples']) * max(int(chunks), 1)
+    z = stream['z'][:, :, :n]
+    scale = np.asarray(stream['counts_to_s21'][...])
+    zt = ((z[0] + 1j * z[1]) * scale[:, None]).astype(np.complex64)
+    sweep_rows = write['sweep_rows'][:]
+    return dict(
+        rows = rows, fres = write['fres'][:], zt = zt,
+        dt = float(np.asarray(stream['dt'][...])),
+        f = cal['fine_sweep/f'][:][sweep_rows],
+        z = cal['fine_sweep/z'][:][sweep_rows],
+        tone_set = int(run.get('tone_set')), calibration = cal.path,
+        source = path, label = f"{run['group']} ({run.get('name')})",
+        chunks = (min(int(chunks), int(run.get('n_chunks', 1))),
+                  int(run.get('n_chunks', 1))))
 
 class StreamWindow(QtWidgets.QMainWindow):
     """
@@ -136,9 +201,11 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.presets = [dict(p) for p in presets]
         self.cals = dl.calibrations(tune)
         self.crs, self.cal, self.preview, self.runs = None, None, None, []
+        self.view = None            # a saved run shown instead of a capture
         self.chosen, self.written = {}, {}
         self.worker = AsyncWorker(self)
         self._clock = ProgressClock()
+        self._progress_on = False
         self._message.connect(self._set_status)
         self._progress.connect(self._on_progress)
         self._build_panel(preview_dec, preview_s)
@@ -224,13 +291,14 @@ class StreamWindow(QtWidgets.QMainWindow):
             spin.setValue(value)
             self.cal_params[key] = spin
             form.addRow(label, spin)
+        self.cal_notes_edit = QtWidgets.QPlainTextEdit()
+        self.cal_notes_edit.setFixedHeight(60)
+        self.cal_notes_edit.setPlaceholderText(
+            'Notes saved with the next calibration (optional)')
+        form.addRow('Notes', self.cal_notes_edit)
         self.cal_btn = QtWidgets.QPushButton('Calibrate')
         self.cal_btn.clicked.connect(self.calibrate)
         form.addRow(self.cal_btn)
-        self.progress = QtWidgets.QProgressBar()
-        self.progress.setTextVisible(True)
-        self.progress.setVisible(False)
-        form.addRow(self.progress)
         self.cal_box = QtWidgets.QComboBox()
         self.cal_box.currentIndexChanged.connect(self._on_cal)
         form.addRow('Use', self.cal_box)
@@ -291,14 +359,39 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.runs_list = QtWidgets.QListWidget()
         for r in self.tuning_runs():
             self.runs_list.addItem(self._run_label(r))
+        self.runs_list.currentRowChanged.connect(self._on_run_selected)
+        self.runs_list.itemDoubleClicked.connect(lambda _: self.view_run())
         outer.addWidget(QtWidgets.QLabel('Runs of this tuning'))
         outer.addWidget(self.runs_list)
+        # View a saved run in the plots: its first chunks
+        row = QtWidgets.QHBoxLayout()
+        self.view_btn = QtWidgets.QPushButton('View run')
+        self.view_btn.setToolTip('Show the selected run\'s saved data in '
+                                 'the plots (its first chunks), like a '
+                                 'capture')
+        self.view_btn.clicked.connect(self.view_run)
+        self.view_chunks = QtWidgets.QSpinBox()
+        self.view_chunks.setRange(1, 1)
+        self.view_chunks.setToolTip('zarr chunks along time to load')
+        row.addWidget(self.view_btn)
+        row.addWidget(QtWidgets.QLabel('chunks'))
+        row.addWidget(self.view_chunks)
+        self.view_label = QtWidgets.QLabel()
+        row.addWidget(self.view_label, stretch = 1)
+        outer.addLayout(row)
+        # The progress bar has a place of its own, kept while idle so that
+        # nothing moves when a job starts
+        self.progress = QtWidgets.QProgressBar()
+        self.progress.setTextVisible(True)
+        self._show_progress(False)
+        outer.addWidget(self.progress)
         self.status = QtWidgets.QLabel()
         self.status.setWordWrap(True)
         outer.addWidget(self.status)
-        self._inputs = (self.set_box, self.cal_box, self.preview_dec,
-                        self.preview_s, self.preset_box, self.name_edit,
-                        self.notes_edit, self.run_dec, self.run_s) + \
+        self._inputs = (self.set_box, self.cal_box, self.cal_notes_edit,
+                        self.preview_dec, self.preview_s, self.preset_box,
+                        self.name_edit, self.notes_edit, self.run_dec,
+                        self.run_s, self.view_chunks) + \
             tuple(self.cal_params.values())
         self._panel.setFixedWidth(self._panel.sizeHint().width() + 40)
         if self.presets:
@@ -346,11 +439,13 @@ class StreamWindow(QtWidgets.QMainWindow):
         Returns:
         label (str): one line.
         """
+        notes = ' '.join(cal.get('notes', '').split())
         return (f"{cal['name']}: {cal['ntones']} tones, "
                 f"{cal['npoints_fine']} fine points x {cal['nsamps']} "
                 f"samples, {cal.get('created', '')}"
                 + ('' if cal['complete'] else ', incomplete')
-                + ('' if cal.get('in_frame') else ', stale (NCO set since)'))
+                + ('' if cal.get('in_frame') else ', stale (NCO set since)')
+                + (f' - {notes}' if notes else ''))
 
     def tuning_runs(self):
         """
@@ -385,15 +480,17 @@ class StreamWindow(QtWidgets.QMainWindow):
 
     def _show_progress(self, show):
         """
-        Show (indeterminate, until the first report) or hide the progress
-        bar.
+        Start the progress bar (indeterminate, until the first report) or
+        put it to rest (empty; it keeps its place).
 
         Parameters:
-        show (bool): whether to show it.
+        show (bool): whether a job with progress reports is running.
         """
-        self.progress.setRange(0, 0)
+        self._progress_on = bool(show)
+        self.progress.setRange(0, 0 if show else 1)
+        if not show:
+            self.progress.setValue(0)
         self.progress.setFormat('')
-        self.progress.setVisible(show)
         self._clock.reset()
 
     def _on_progress(self, done, total):
@@ -404,7 +501,7 @@ class StreamWindow(QtWidgets.QMainWindow):
         done (int): points taken so far.
         total (int): points in the sweep.
         """
-        if self.progress.isHidden():
+        if not self._progress_on:
             return
         if total <= 0:
             self.progress.setRange(0, 0)
@@ -445,6 +542,8 @@ class StreamWindow(QtWidgets.QMainWindow):
                                   and len(chunks) == 1)
         self.run_btn.setEnabled(idle and has_cal and
                                 bool(self.name_edit.text().strip()))
+        self.view_btn.setEnabled(not self.worker.busy and
+                                 self.runs_list.currentRow() >= 0)
         w = self.written
         self.written_label.setText(
             'Tones on the board: none (or unknown)' if not w else
@@ -609,10 +708,11 @@ class StreamWindow(QtWidgets.QMainWindow):
     def calibrate(self):
         """
         Take a calibration sweep of the selected tone set, saved as the
-        tuning's next ``cal{j}``.
+        tuning's next ``cal{j}`` with the notes in the box.
         """
         s, kw = self.set_box.currentData(), self.cal_kwargs()
         crs, tune, report = self.crs, self.tune, self._progress.emit
+        notes = self.cal_notes_edit.toPlainText()
 
         async def job():
             """
@@ -622,7 +722,8 @@ class StreamWindow(QtWidgets.QMainWindow):
             name (str): the calibration's name.
             """
             grp = await calibrate_tone_set(crs, tune, s, verbose = False,
-                                           progress = report, **kw)
+                                           progress = report, notes = notes,
+                                           **kw)
             return grp.basename
 
         self._submit(job(), self._on_calibrated,
@@ -640,6 +741,8 @@ class StreamWindow(QtWidgets.QMainWindow):
         # The sweep cleared the board's tones
         self.written.clear()
         if error is None:
+            # The notes were for that calibration; the next starts empty
+            self.cal_notes_edit.clear()
             self._refresh_cals(select = name)
             self._set_status(f"Tone set {self.cal['set']} calibrated as "
                              f'{name}. Capture to preview it.')
@@ -697,7 +800,7 @@ class StreamWindow(QtWidgets.QMainWindow):
         error (BaseException or None): the stream error.
         """
         if error is None:
-            self.preview = preview
+            self.preview, self.view = preview, None
             self._set_status(f"Captured {preview['zt'].shape[1]:,} samples "
                              f"of {len(preview['rows'])} tones.")
         else:
@@ -785,6 +888,80 @@ class StreamWindow(QtWidgets.QMainWindow):
             self._set_status(f'Run failed: {error!r}')
         self._refresh_cals(select = self.chosen.get(self.set_box.currentData()))
 
+    def _on_run_selected(self, row):
+        """
+        Offer the selected run's chunks to view.
+
+        Parameters:
+        row (int): the row in the runs list.
+        """
+        runs = self.tuning_runs()
+        run = runs[row] if 0 <= row < len(runs) else None
+        n = int(run.get('n_chunks', 0)) if run else 0
+        self.view_chunks.setRange(1, max(n, 1))
+        self.view_chunks.setValue(1)
+        self.view_label.setText(
+            f"of {n} ({run['chunk_s']:.3g} s each)" if n else
+            ('' if run is None else 'no streams'))
+        self._update_buttons()
+
+    def view_run(self):
+        """
+        Show the selected run's saved data (its first chunks) in the
+        plots, with the calibration it was taken on, as a capture.
+        """
+        row = self.runs_list.currentRow()
+        runs = self.tuning_runs()
+        if not 0 <= row < len(runs) or self.worker.busy:
+            return
+        run = runs[row]
+        if not run.get('n_chunks'):
+            self._set_status(f"{run['group']} has no streams to show.")
+            return
+        root = dl.store_root(self.tune)
+        k = int(self.view_chunks.value())
+        tone = self.tone_box.currentData()
+        set_rows = np.flatnonzero(self.tones['tone_set'] ==
+                                  run.get('tone_set'))
+
+        async def job():
+            """
+            Read the run's data.
+
+            Returns:
+            view (dict): ``load_run_view``.
+            """
+            return load_run_view(root, run, set_rows, k, tone)
+
+        self._submit(job(), self._on_viewed,
+                     f"Reading {k} chunk(s) of {run['group']}...")
+
+    def _on_viewed(self, view, error):
+        """
+        Show a saved run (GUI thread).
+
+        Parameters:
+        view (dict or None): ``load_run_view``.
+        error (BaseException or None): the read error.
+        """
+        if error is None:
+            self.view = view
+            if self.set_box.currentData() != view['tone_set']:
+                self.set_box.setCurrentIndex(
+                    self.set_box.findData(view['tone_set']))
+            if self.tone_box.currentData() not in view['rows']:
+                self.tone_box.setCurrentIndex(
+                    self.tone_box.findData(int(view['rows'][0])))
+            self._set_status(
+                f"Showing {view['label']}: {view['zt'].shape[1]:,} samples "
+                f"({view['zt'].shape[1] * view['dt']:.3g} s) of "
+                f"{len(view['rows'])} tones from {view['source']}, on "
+                f"{view['calibration']}. Capture or View run to replace it.")
+        else:
+            self._set_status(f'Could not read the run: {error!r}')
+        self._update_buttons()
+        self._plot()
+
     ############################################################################
     def _plot(self):
         """
@@ -795,12 +972,15 @@ class StreamWindow(QtWidgets.QMainWindow):
         if self.ts_plot.legend is not None:
             self.ts_plot.legend.clear()
         r = self.tone_box.currentData()
-        if self.cal is None or r is None or r not in self.cal['rows']:
+        # A saved run brings its own calibration loop; a capture uses the
+        # chosen calibration's
+        cal = self.view if self.view is not None else self.cal
+        if cal is None or r is None or r not in cal['rows']:
             return
-        c = int(np.flatnonzero(self.cal['rows'] == r)[0])
-        f, z = self.cal['f'][c], self.cal['z'][c]
+        c = int(np.flatnonzero(cal['rows'] == r)[0])
+        f, z = cal['f'][c], cal['z'][c]
         self.iq_plot.plot(z.real, z.imag, pen = pg.mkPen(width = 1))
-        p = self.preview
+        p = self.view if self.view is not None else self.preview
         if p is None or r not in p['rows']:
             return
         k = int(np.flatnonzero(p['rows'] == r)[0])

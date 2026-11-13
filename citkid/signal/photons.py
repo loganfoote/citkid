@@ -15,8 +15,18 @@ Detection on one tone (``run_detection``):
 3. Repeat ``of_iterations`` times: average the events into a template,
    estimate the noise PSD from segments without pulses, build the optimal
    filter, filter, and take the filter peaks with heights in [hmin, hmax]
-   as the new events. Heights are in units of the mean single-photon
-   amplitude, so thresholds don't depend on the tone's responsivity. The
+   as the new events. Only isolated events go into the template
+   (``isolated_events``): none with another peak within the template
+   length (pile-up), and none within the filter length of a large pulse
+   (above hmax, or above ``init_hmax`` in the first pass), whose filter
+   side lobes would otherwise put its edges into the template. The filter
+   is built from the first ``filter_post_s`` of the template after its
+   maximum (short, so that it does not reach into the next pulse); the
+   whole template (``template_post_s``) is kept for display and for the
+   decay-time fit. Heights are in kHz/GHz (the fractional frequency
+   shift x times 1e6, ``PPM``), so a threshold means the same shift on
+   every tone and the data keeps its physical size; the template's
+   amplitude (the mean photon, ``amp_ph``) is reported alongside. The
    lower threshold can be chosen automatically: the lowest hmin at which
    the expected noise events (peaks of the inverted filter output, which
    has noise but no pulses) are at most ``hmin_false_frac`` of the
@@ -59,8 +69,12 @@ class DetectionSettings:
     Attributes:
     pulse_sign (int): sign of a photon pulse in the detection timestream.
         -1 (default) for citkid's x (the resonance moves down).
-    template_pre_s, template_post_s (float): template length before and
-        after the pulse maximum, s. Default 0.5 ms and 2.5 ms.
+    template_pre_s, template_post_s (float): template (mean pulse) length
+        before and after the pulse maximum, s. Default 0.5 ms and 2.5 ms.
+    filter_post_s (float or None): the optimal filter's template reaches
+        this long after the maximum (at most ``template_post_s``): a few
+        decay times, so that the filter does not run into the next pulse.
+        Default 1 ms. None: the whole template.
     highpass_hz (float): drift removal for detection (running median over
         about 1 / highpass_hz). Default 10.
     init_nsigma (float): first-pass threshold, MAD sigma of the 3-sample
@@ -69,13 +83,13 @@ class DetectionSettings:
         first-pass peak height. Default 3 (loose: it only keeps large
         pulses out of the first template). None: no cut.
     of_iterations (int): optimal-filter iterations. Default 5.
-    hmin, hmax (float): accepted height window, in units of the mean
-        single-photon amplitude. Default 0.5, 1.6.
+    hmin, hmax (float): accepted height window of the filter output, in
+        kHz/GHz (x times 1e6). Default 0.5, 1.6 (a 1 kHz/GHz photon).
     hmin_false_frac (float or None): if set (e.g. 1e-3), hmin is chosen in
         every iteration as the lowest value in [hmin, hmin_auto_max] with at
         most this fraction of expected noise events among the accepted
         ones. Default None (fixed hmin).
-    hmin_auto_max (float): largest automatic hmin. Default 0.8.
+    hmin_auto_max (float): largest automatic hmin, kHz/GHz. Default 0.8.
     coinc_nsigma (float): threshold of the coincidence candidates, in
         sigma of the filter output. Default 4. The threshold is never above
         hmin, so every pulse candidate is also a coincidence candidate.
@@ -84,11 +98,17 @@ class DetectionSettings:
     psd_max_segments (int): most segments in the noise PSD. Default 4000.
     baseline_gap (int): the template's baseline ends this many samples
         before its pre-maximum part ends. Default 3.
+    tau_skip (int): the decay-time fit of a mean pulse (``fit_tau``)
+        starts this many samples after its maximum. Default 2.
+    tau_lifetimes (float or None): the fit reaches this many decay times
+        after its start (from a first fit of the whole decay). Default 5.
+        None: the whole template after the maximum.
     block (int): samples per processing block. Default 2**22.
     """
     pulse_sign: int = -1
     template_pre_s: float = 0.5e-3
     template_post_s: float = 2.5e-3
+    filter_post_s: Optional[float] = 1e-3
     highpass_hz: float = 10.
     init_nsigma: float = 6.
     init_hmax: Optional[float] = 3.
@@ -101,7 +121,13 @@ class DetectionSettings:
     raw_half_width: int = 2
     psd_max_segments: int = 4000
     baseline_gap: int = 3
+    tau_skip: int = 2
+    tau_lifetimes: Optional[float] = 5.
     block: int = 2 ** 22
+
+# Filter heights and thresholds are x times this: parts per million of the
+# resonance frequency (kHz per GHz)
+PPM = 1e6
 
 class DetectionError(RuntimeError):
     """
@@ -253,6 +279,26 @@ class OptimalFilter:
         self.c = self.nfft // 2
         self.gc = np.roll(g, self.c) / self.norm
 
+    @classmethod
+    def from_kernel(cls, gc, p, nfft):
+        """
+        Rebuild a filter from its centered kernel (``gc``, as saved with a
+        detection result), to apply it again.
+
+        Parameters:
+        gc (np.array): the centered kernel (length ``nfft``).
+        p (int): index of the maximum of the template it was built for.
+        nfft (int): FFT length.
+
+        Returns:
+        of (OptimalFilter): the filter (``a`` and ``norm`` unset).
+        """
+        of = cls.__new__(cls)
+        of.a, of.p, of.nfft = None, int(p), int(nfft)
+        of.norm, of.c = 1., of.nfft // 2
+        of.gc = np.asarray(gc, float)
+        return of
+
     def apply(self, d, sign = 1, block = 2 ** 22):
         """
         Filter sign * d.
@@ -308,6 +354,38 @@ def build_template(d, events, pre, post, sign, gap = 3):
     nb = max(pre - gap, 1)
     avg = avg - avg[:nb].mean()
     return avg, int(np.argmax(avg))
+
+def isolated_events(events, peaks, big, near_len, far_len):
+    """
+    Keep the events clean enough to average into a template: those with
+    no other peak within ``near_len`` samples (pile-up, which would put
+    another pulse into the template window) and no large pulse within
+    ``far_len`` samples (whose edges the filter's side lobes can turn into
+    events of their own).
+
+    Parameters:
+    events (np.array, int): event indices.
+    peaks (np.array, int): every peak found (the events among them).
+    big (np.array, int): the large pulses (e.g. above hmax), and any
+        vetoed times.
+    near_len (int): half-width of the pile-up window (the template
+        length).
+    far_len (int): half-width of the window around a large pulse (the
+        filter length).
+
+    Returns:
+    keep (np.array, bool): True for the isolated events.
+    """
+    ev = np.asarray(events, dtype = np.int64)
+    peaks = np.sort(np.asarray(peaks, dtype = np.int64))
+    n_near = np.searchsorted(peaks, ev + near_len, side = 'right') - \
+        np.searchsorted(peaks, ev - near_len, side = 'left')
+    # The event is one of the peaks (or none, if it isn't listed)
+    own = np.isin(ev, peaks).astype(int)
+    keep = n_near - own < 1
+    keep &= ~near(ev, np.sort(np.asarray(big, dtype = np.int64)), far_len,
+                  far_len + 1)
+    return keep
 
 def exclusion_mask(n, peaks, pre, post):
     """
@@ -506,6 +584,26 @@ def auto_hmin(
 ################################################################################
 ################################### Detection ##################################
 ################################################################################
+def template_lengths(s, dt):
+    """
+    Return the template lengths in samples.
+
+    Parameters:
+    s (DetectionSettings): the settings.
+    dt (float): sample period, s.
+
+    Returns:
+    pre (int): samples before the maximum (at least baseline_gap + 2).
+    post (int): samples after it (at least 4).
+    post_f (int): the filter template's samples after it (at least 4, at
+        most ``post``).
+    """
+    pre = max(int(round(s.template_pre_s / dt)), s.baseline_gap + 2)
+    post = max(int(round(s.template_post_s / dt)), 4)
+    post_f = post if s.filter_post_s is None else \
+        min(max(int(round(s.filter_post_s / dt)), 4), post)
+    return pre, post, post_f
+
 def run_detection(d, dt, settings = None, hmin = None, hmax = None,
                   veto = None):
     """
@@ -526,20 +624,26 @@ def run_detection(d, dt, settings = None, hmin = None, hmax = None,
     Returns:
     res (dict):
         ``cand_idx``, ``cand_h``: every filter peak at or above hmin (the
-            noise threshold) and its height, in units of the mean photon;
+            noise threshold) and its height, in kHz/GHz (x times ``PPM``);
         ``events``: those with heights in [hmin, hmax];
-        ``template`` (mean pulse of the events, in units of d, times
-            ``sign``), ``p`` (index of its maximum), ``pre``, ``post``,
-            ``amp_ph`` (its amplitude), ``sign`` (the pulse sign);
-        ``hmin``, ``hmax``, ``sigma_y`` (filter noise, photon units),
+        ``template`` (the mean pulse the last filter was built from: the
+            isolated events of the iteration before, in units of d, times
+            ``sign``), ``template_idx`` (those events), ``p`` (index of
+            its maximum), ``pre``, ``post``, ``filter_post`` (the filter's
+            template ends this many samples after the maximum),
+            ``amp_ph`` (its amplitude, in x: the mean photon), ``sign``
+            (the pulse sign);
+        ``hmin``, ``hmax``, ``sigma_y`` (filter noise), in kHz/GHz,
             ``rate`` (events per second);
-        ``psd``, ``nfft``, ``filter`` (centered), ``history`` (template
-            of each iteration);
+        ``psd``, ``nfft``, ``filter`` (the last filter's centered kernel;
+            ``OptimalFilter.from_kernel(filter, p, nfft)`` applies it
+            again, and its output times ``PPM`` gives the heights),
+            ``history`` (template of each iteration);
         ``neg_h``, ``clean_frac`` (noise peaks, for the false fraction);
         ``coinc_idx``, ``coinc_h``, ``coinc_raw``: the coincidence
             candidates (filter peaks above ``coinc_nsigma`` sigma or hmin,
             whichever is lower; they include every ``cand_idx``), their
-            heights in units of the mean photon, and their raw peaks
+            heights in kHz/GHz, and their raw peaks
             (``raw_peaks``, in units of d, sign-corrected);
         ``init_idx``, ``init_h``: the first-pass peaks and their heights
             (boxcar, units of d), before the ``init_hmax`` cut;
@@ -554,10 +658,9 @@ def run_detection(d, dt, settings = None, hmin = None, hmax = None,
     hmin = s.hmin if hmin is None else float(hmin)
     hmax = s.hmax if hmax is None else float(hmax)
     sign = int(s.pulse_sign)
-    pre = max(int(round(s.template_pre_s / dt)), s.baseline_gap + 2)
-    post = max(int(round(s.template_post_s / dt)), 4)
+    pre, post, post_f = template_lengths(s, dt)
     M = pre + post
-    nfft = next_fast_len(2 * M)
+    nfft = next_fast_len(2 * (pre + post_f))
     n = d.shape[0]
     if s.of_iterations < 1:
         raise ValueError('of_iterations must be at least 1')
@@ -565,7 +668,7 @@ def run_detection(d, dt, settings = None, hmin = None, hmax = None,
         np.sort(np.asarray(veto, dtype = np.int64))
     sd = _boxcar3(d, sign)
     sig0 = mad_sigma(sd[_sub(n)])
-    init_idx, init_h = _find_peaks_blocked(sd, s.init_nsigma * sig0, post)
+    init_idx, init_h = _find_peaks_blocked(sd, s.init_nsigma * sig0, post_f)
     del sd
     init_hmax_abs = np.inf
     if s.init_hmax is not None and init_h.size:
@@ -574,6 +677,7 @@ def run_detection(d, dt, settings = None, hmin = None, hmax = None,
                       ~near(init_idx, veto, post, post)]
     # The noise PSD avoids every first-pass peak, the large ones included
     peaks_all = np.union1d(init_idx, veto)
+    big = np.union1d(init_idx[init_h > init_hmax_abs], veto)
     history = []
     log = [f'initial: {init_idx.size} peaks above {s.init_nsigma:g} sigma '
            f'of the boxcar, {events.size} at most {s.init_hmax} x their '
@@ -582,55 +686,63 @@ def run_detection(d, dt, settings = None, hmin = None, hmax = None,
         if events.size == 0:
             raise DetectionError('no events to build the template from; '
                                  + '; '.join(log))
-        avg, p = build_template(d, events, pre, post, sign, s.baseline_gap)
+        # Only the isolated events make the template; all of them if none
+        # is isolated
+        iso = isolated_events(events, peaks_all, big, M, nfft)
+        tmpl_idx = events[iso] if iso.any() else events
+        avg, p = build_template(d, tmpl_idx, pre, post, sign,
+                                s.baseline_gap)
         if p != pre:
-            events = events + (p - pre)
-            avg, p = build_template(d, events, pre, post, sign,
+            tmpl_idx = tmpl_idx + (p - pre)
+            avg, p = build_template(d, tmpl_idx, pre, post, sign,
                                     s.baseline_gap)
         amp_ph = avg[p]
         history.append(avg / amp_ph)
         excl = exclusion_mask(n, peaks_all, pre, post)
         psd, nseg = noise_psd(d, nfft, excl, s.psd_max_segments)
-        of = OptimalFilter(avg / amp_ph, p, psd, nfft)
-        y = of.apply(d, sign, s.block) / amp_ph
+        # The filter of a unit-height template (its first post_f samples
+        # after the maximum) reads pulse amplitudes in units of d (x);
+        # heights are in kHz/GHz
+        of = OptimalFilter(avg[:pre + post_f] / amp_ph, p, psd, nfft)
+        y = of.apply(d, sign, s.block) * PPM
         sub = _sub(n)
         sigma_y = mad_sigma(y[sub][~excl[sub]])
         del excl
-        cidx, ch = candidates(y, sigma_y, distance = post)
+        cidx, ch = candidates(y, sigma_y, distance = post_f)
         vetoed = near(cidx, veto, post, post)
         cidx, ch = cidx[~vetoed], ch[~vetoed]
         neg_h, clean = inverted_candidates(
-            y, sigma_y, post, np.union1d(cidx[ch >= s.hmin], veto), M, nfft)
+            y, sigma_y, post_f, np.union1d(cidx[ch >= s.hmin], veto),
+            pre + post_f, nfft)
         if auto:
             hmin = auto_hmin(ch, neg_h, clean, s.hmin, hmax,
                              s.hmin_false_frac, s.hmin_auto_max)
         keep = (ch >= hmin) & (ch <= hmax)
         events = cidx[keep]
         peaks_all = np.union1d(cidx[ch >= hmin], veto)
-        log.append(f'iteration {it}: template amplitude {amp_ph:.3g}, '
-                   f'sigma_y {sigma_y:.3g}, {cidx.size} candidates, '
-                   f'{events.size} in [{hmin:g}, {hmax:g}]')
+        big = np.union1d(cidx[ch > hmax], veto)
+        log.append(f'iteration {it}: template of {tmpl_idx.size} isolated '
+                   f'events, amplitude {amp_ph:.3g}, sigma_y {sigma_y:.3g}, '
+                   f'{cidx.size} candidates, {events.size} in '
+                   f'[{hmin:g}, {hmax:g}]')
     if events.size == 0:
         raise DetectionError('no events after the last iteration; '
                              + '; '.join(log))
     # Coincidence candidates: the lower threshold, never above hmin
     floor = min(s.coinc_nsigma * sigma_y, hmin)
-    coinc_idx, coinc_h = candidates(y, sigma_y, distance = post,
+    coinc_idx, coinc_h = candidates(y, sigma_y, distance = post_f,
                                     floor = floor, nsig = 0.)
     del y
-    avg, p = build_template(d, events, pre, post, sign, s.baseline_gap)
-    if p != pre:
-        shift = p - pre
-        events, cidx = events + shift, cidx + shift
-        coinc_idx = coinc_idx + shift
-        avg, p = build_template(d, events, pre, post, sign, s.baseline_gap)
+    # The template stays the one the last filter was built from, so the
+    # heights (in units of its amplitude), the filter, and the template
+    # agree; the mean pulse of the final events is ``average_pulse``'s
     above = ch >= hmin
     coinc_idx = np.clip(coinc_idx, 0, n - 1)
     coinc_raw = raw_peaks(d, coinc_idx, sign, s.raw_half_width)
     return dict(
         cand_idx = cidx[above], cand_h = ch[above], events = events,
-        template = avg, p = p, pre = pre, post = post, amp_ph = avg[p],
-        sign = sign,
+        template = avg, template_idx = tmpl_idx, p = p, pre = pre,
+        post = post, filter_post = post_f, amp_ph = amp_ph, sign = sign,
         hmin = hmin, hmax = hmax, sigma_y = sigma_y,
         rate = events.size / (n * dt), psd = psd, nfft = nfft,
         filter = of.gc, history = np.array(history), neg_h = neg_h,
@@ -646,18 +758,20 @@ def detect_with_filter(d, dt, ref, settings = None, hmin = None, hmax = None):
     tone), without iterating.
 
     The filter is the reference's template and noise PSD. Heights are in
-    units of the reference's mean photon, so the reference's thresholds
-    apply. The result has the keys of ``run_detection``; ``template``,
-    ``p`` and ``amp_ph_own`` describe this timestream's own mean pulse
-    (of the events), while ``amp_ph`` stays the reference's (the height
-    unit).
+    kHz/GHz as always, so the reference's thresholds apply. The result has
+    the keys of ``run_detection``; ``template``, ``p`` and ``amp_ph_own``
+    describe this timestream's own mean pulse (of the events), while
+    ``amp_ph`` stays the reference's (the filter's template amplitude)
+    and ``filter_p`` is the reference template's maximum (the filter's
+    alignment: ``OptimalFilter.from_kernel(filter, filter_p, nfft)``).
 
     Parameters:
     d (np.array): detection timestream (``detection_timestream``).
     dt (float): sample period, s.
     ref (dict): ``run_detection`` result to take the filter from
         (``template``, ``p``, ``pre``, ``post``, ``sign``, ``amp_ph``,
-        ``psd``, ``nfft``, ``hmin``, ``hmax``, and ``dt``, if present).
+        ``psd``, ``nfft``, ``hmin``, ``hmax``, and ``filter_post`` and
+        ``dt``, if present).
     settings (DetectionSettings or None): settings for ``coinc_nsigma``,
         ``raw_half_width``, ``baseline_gap`` and ``block``. None: the
         defaults.
@@ -679,22 +793,23 @@ def detect_with_filter(d, dt, ref, settings = None, hmin = None, hmax = None):
     hmin = float(ref['hmin']) if hmin is None else float(hmin)
     hmax = float(ref['hmax']) if hmax is None else float(hmax)
     sign, pre, post = int(ref['sign']), int(ref['pre']), int(ref['post'])
+    post_f = int(ref.get('filter_post', post))
     nfft, amp_ph = int(ref['nfft']), float(ref['amp_ph'])
     M = pre + post
     n = d.shape[0]
-    of = OptimalFilter(np.asarray(ref['template']) / amp_ph, int(ref['p']),
-                       np.asarray(ref['psd']), nfft)
-    y = of.apply(d, sign, s.block) / amp_ph
+    of = OptimalFilter(np.asarray(ref['template'])[:pre + post_f] / amp_ph,
+                       int(ref['p']), np.asarray(ref['psd']), nfft)
+    y = of.apply(d, sign, s.block) * PPM
     sub = _sub(n)
     # Filter noise away from pulses (found with a first estimate)
     sigma_y = mad_sigma(y[sub])
-    cidx, ch = candidates(y, sigma_y, distance = post)
+    cidx, ch = candidates(y, sigma_y, distance = post_f)
     excl = exclusion_mask(n, cidx[ch >= hmin], pre, post)
     sigma_y = mad_sigma(y[sub][~excl[sub]])
     del excl
-    cidx, ch = candidates(y, sigma_y, distance = post)
-    neg_h, clean = inverted_candidates(y, sigma_y, post, cidx[ch >= hmin],
-                                       M, nfft)
+    cidx, ch = candidates(y, sigma_y, distance = post_f)
+    neg_h, clean = inverted_candidates(y, sigma_y, post_f,
+                                       cidx[ch >= hmin], pre + post_f, nfft)
     events = cidx[(ch >= hmin) & (ch <= hmax)]
     log = [f'reference filter: sigma_y {sigma_y:.3g}, {cidx.size} '
            f'candidates, {events.size} in [{hmin:g}, {hmax:g}]']
@@ -702,18 +817,23 @@ def detect_with_filter(d, dt, ref, settings = None, hmin = None, hmax = None):
         raise DetectionError('no events with the reference filter; '
                              + '; '.join(log))
     floor = min(s.coinc_nsigma * sigma_y, hmin)
-    coinc_idx, coinc_h = candidates(y, sigma_y, distance = post,
+    coinc_idx, coinc_h = candidates(y, sigma_y, distance = post_f,
                                     floor = floor, nsig = 0.)
     del y
-    avg, p = build_template(d, events, pre, post, sign, s.baseline_gap)
+    iso = isolated_events(events, cidx[ch >= hmin], cidx[ch > hmax], M,
+                          nfft)
+    tmpl_idx = events[iso] if iso.any() else events
+    avg, p = build_template(d, tmpl_idx, pre, post, sign, s.baseline_gap)
     above = ch >= hmin
     return dict(
         cand_idx = cidx[above], cand_h = ch[above], events = events,
-        template = avg, p = p, pre = pre, post = post, amp_ph = amp_ph,
+        template = avg, template_idx = tmpl_idx, p = p, pre = pre,
+        post = post, filter_post = post_f, amp_ph = amp_ph,
         amp_ph_own = float(avg[p]), sign = sign, dt = dt,
         hmin = hmin, hmax = hmax, sigma_y = sigma_y,
         rate = events.size / (n * dt), psd = np.asarray(ref['psd']),
-        nfft = nfft, filter = of.gc, history = np.zeros((0, M)),
+        nfft = nfft, filter = of.gc, filter_p = int(ref['p']),
+        history = np.zeros((0, M)),
         neg_h = neg_h, clean_frac = clean, coinc_idx = coinc_idx,
         coinc_h = coinc_h,
         coinc_raw = raw_peaks(d, coinc_idx, sign, s.raw_half_width),
@@ -875,10 +995,9 @@ def cosmic_events(results, win, min_mult = 3):
         int64), ``mult`` (number of tones).
     hits (dict): one entry per tone of each event, in event order:
         ``event`` (index into ``events``), ``tone`` (index into
-        ``results``), ``idx`` (pulse sample), ``h`` (filter height, units
-        of the tone's mean photon), ``x`` (filter height in units of d: h
-        times the tone's ``amp_ph``), ``raw`` (raw peak, units of d,
-        sign-corrected).
+        ``results``), ``idx`` (pulse sample), ``h`` (filter height, kHz/GHz),
+        ``x`` (filter height in units of d: h over ``PPM``), ``raw`` (raw
+        peak, units of d, sign-corrected).
     """
     def column(key, dtype):
         """
@@ -899,10 +1018,8 @@ def cosmic_events(results, win, min_mult = 3):
     tone = column(lambda i, r: np.full(len(r['coinc_idx']), i), np.int64)
     h = column('coinc_h', np.float64)
     raw = column('coinc_raw', np.float64)
-    amp = column(lambda i, r: np.full(len(r['coinc_idx']), r['amp_ph']),
-                 np.float64)
     o = np.argsort(t, kind = 'stable')
-    t, tone, h, raw, amp = t[o], tone[o], h[o], raw[o], amp[o]
+    t, tone, h, raw = t[o], tone[o], h[o], raw[o]
     ev_t0, ev_mult, ev_rows = [], [], []
     i = 0
     while i < len(t):
@@ -926,13 +1043,16 @@ def cosmic_events(results, win, min_mult = 3):
     else:
         rows, event = np.zeros(0, np.int64), np.zeros(0, np.int64)
     hits = dict(event = event, tone = tone[rows], idx = t[rows],
-                h = h[rows], x = h[rows] * amp[rows], raw = raw[rows])
+                h = h[rows], x = h[rows] / PPM, raw = raw[rows])
     return events, hits
 
-def average_pulse(d, res, mult = None, max_mult = 1, gap = 3):
+def average_pulse(d, res, mult = None, max_mult = 1, gap = 3,
+                  isolated = True):
     """
     Average the photon pulses of one tone: the events in the height window
-    whose coincidence multiplicity is at most ``max_mult``.
+    whose coincidence multiplicity is at most ``max_mult``, and that are
+    isolated (``isolated_events``: no other candidate within the template
+    length, no pulse above hmax within the filter length).
 
     Parameters:
     d (np.array): detection timestream.
@@ -942,6 +1062,7 @@ def average_pulse(d, res, mult = None, max_mult = 1, gap = 3):
         None: no coincidence cut.
     max_mult (int): largest multiplicity kept. Default 1 (no other tone).
     gap (int): baseline gap (``build_template``). Default 3.
+    isolated (bool): If True (default), only the isolated events.
 
     Returns:
     avg (np.array): mean pulse in units of d, sign-corrected, baseline
@@ -956,6 +1077,9 @@ def average_pulse(d, res, mult = None, max_mult = 1, gap = 3):
     ok = (h >= res['hmin']) & (h <= res['hmax'])
     coinc = np.zeros(len(idx), bool) if mult is None else \
         np.asarray(mult) > max_mult
+    if isolated:
+        ok &= isolated_events(idx, res['coinc_idx'], idx[h > res['hmax']],
+                              res['pre'] + res['post'], res['nfft'])
     used = idx[ok & ~coinc]
     avg, p = build_template(d, used, res['pre'], res['post'], res['sign'],
                             gap)
@@ -964,32 +1088,61 @@ def average_pulse(d, res, mult = None, max_mult = 1, gap = 3):
 ################################################################################
 ###################################### Tau #####################################
 ################################################################################
-def fit_tau(avg, p, dt, n_skip = 1):
+def fit_tau(avg, p, dt, n_skip = 2, lifetimes = 5.):
     """
-    Fit A exp(-t / tau) + B to the decay of a mean pulse after its maximum.
+    Fit A exp(-t / tau) + B to the decay of a mean pulse after its maximum:
+    from ``n_skip`` samples after the maximum (where the pulse's rise and
+    the filter's ringing are over) out to ``lifetimes`` decay times
+    (first fit over the whole decay to find the decay time, then again
+    over that range), so a long, flat tail doesn't weigh on the fit.
 
     Parameters:
     avg (np.array): mean pulse (positive-going).
     p (int): index of its maximum.
     dt (float): sample period, s.
-    n_skip (int): samples after the maximum to skip. Default 1.
+    n_skip (int): samples after the maximum to skip. Default 2.
+    lifetimes (float or None): length of the fit in decay times. Default
+        5. None: the whole template after the maximum.
 
     Returns:
     tau (float): decay time in s (NaN if the fit fails).
-    popt (np.array): (A, tau, B) (NaN if the fit fails).
+    popt (np.array): (A, tau, B), with t = 0 at the first fitted sample
+        (``p + n_skip``) (NaN if the fit fails).
+    n_fit (int): samples fitted (0 if the fit fails).
     """
-    y = np.asarray(avg[p + n_skip:], float)
-    t = np.arange(y.size) * dt
-    if y.size < 4 or not y[0] > 0:
-        return np.nan, np.full(3, np.nan)
+    y_all = np.asarray(avg[p + int(n_skip):], float)
+    if y_all.size < 4 or not y_all[0] > 0:
+        return np.nan, np.full(3, np.nan), 0
     # Fit in units of the first point: x pulses are ~1e-6, too small for
     # the fitter's default tolerances
-    scale = y[0]
-    try:
-        popt, _ = curve_fit(
-            lambda t, A, tau, B: A * np.exp(-t / tau) + B, t, y / scale,
-            p0 = [1., t[-1] / 5, 0.],
-            bounds = ([0, dt / 10, -1.], [10., 10 * t[-1] + dt, 1.]))
-    except (RuntimeError, ValueError):
-        return np.nan, np.full(3, np.nan)
-    return float(popt[1]), popt * np.array([scale, 1., scale])
+    scale = y_all[0]
+
+    def fit(n):
+        """
+        Fit the first n samples of the decay.
+
+        Parameters:
+        n (int): samples.
+
+        Returns:
+        popt (np.array or None): (A, tau, B) in units of the first point,
+            or None if the fit fails.
+        """
+        y = y_all[:n] / scale
+        t = np.arange(n) * dt
+        try:
+            return curve_fit(
+                lambda t, A, tau, B: A * np.exp(-t / tau) + B, t, y,
+                p0 = [1., t[-1] / 5, 0.],
+                bounds = ([0, dt / 10, -1.], [10., 10 * t[-1] + dt, 1.]))[0]
+        except (RuntimeError, ValueError):
+            return None
+
+    n = y_all.size
+    popt = fit(n)
+    if popt is not None and lifetimes is not None:
+        n = int(min(max(round(lifetimes * popt[1] / dt), 4), y_all.size))
+        popt = fit(n)
+    if popt is None:
+        return np.nan, np.full(3, np.nan), 0
+    return float(popt[1]), popt * np.array([scale, 1., scale]), n

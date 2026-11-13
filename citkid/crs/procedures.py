@@ -609,12 +609,12 @@ async def write_stream_chunk(
 
 async def calibrate_tone_set(
     crs, tune, tone_set, status = None, verbose = True, progress = None,
-    **target_sweep_kwargs
+    notes = '', **target_sweep_kwargs
 ):
     """
     Take a calibration sweep of one tone set of a tuning and save it as
-    the tuning's next ``cal{j}`` (raw; attrs ``tone_set`` and ``tones``,
-    plus the sweep's own, e.g. ``nsamps`` and ``complete``).
+    the tuning's next ``cal{j}`` (raw; attrs ``tone_set``, ``tones``, and
+    ``notes``, plus the sweep's own, e.g. ``nsamps`` and ``complete``).
 
     A set is calibrated once, and every timestream of it after that uses
     the calibration (``stream_tone_sets`` saves the streams under it), so
@@ -637,6 +637,8 @@ async def calibrate_tone_set(
     verbose (bool): If True (default), show progress bars.
     progress (callable or None): ``progress(done, total)`` in points (see
         ``stitched_target_sweep``). Default None.
+    notes (str): free-form notes saved with the calibration (attr
+        ``notes``). Default ''.
     **target_sweep_kwargs: sweep settings (``target_sweep``:
         ``npoints_fine``, ``npoints_gain``, ``nsamps``, ...).
 
@@ -654,7 +656,7 @@ async def calibrate_tone_set(
     if not len(idx):
         raise ValueError(f'{tune.basename} has no tone set {s}')
     grp, j = dl.new_indexed_group(tune, dl.CAL_PREFIX, 'raw', attrs = dict(
-        tone_set = s, tones = tune['tones'].path))
+        tone_set = s, tones = tune['tones'].path, notes = str(notes)))
     say(f'Tone set {s}: calibration sweep of {len(idx)} tones, saved as '
         f'{grp.basename}')
     try:
@@ -856,6 +858,48 @@ async def stream_tone_sets(
     n = dl.register_stream_run(tune, record)
     ts_name = set_name(n, dl.TS_PREFIX)
     paths, used = [], {}
+    try:
+        await _stream_sets(crs, tune, root, t, sets, cals, written, name,
+                           notes, duration_s, dec_stage, n, ts_name, paths,
+                           used, say, status, verbose, progress,
+                           target_sweep_kwargs)
+    except BaseException:
+        # A run that saved nothing leaves no record behind
+        if not paths:
+            dl.remove_stream_run(tune, n)
+        raise
+    if not keep_tones:
+        await crs.clear_tones()
+        written.clear()
+    more = dict(calibration = used[str(sets[0])]) if len(sets) == 1 \
+        else dict(calibrations = used)
+    dl.update_stream_run(tune, n, paths = paths, complete = True, **more)
+    say(f'{name}: done as ts{n} ({len(paths)} streams)')
+    return paths
+
+async def _stream_sets(
+    crs, tune, root, t, sets, cals, written, name, notes, duration_s,
+    dec_stage, n, ts_name, paths, used, say, status, verbose, progress,
+    target_sweep_kwargs
+):
+    """
+    Stream the tone sets of a run (``stream_tone_sets``), one after
+    another, on their calibrations.
+
+    Parameters:
+    crs, tune, written, name, notes, duration_s, dec_stage, status,
+        verbose, progress: see ``stream_tone_sets``.
+    root (zarr.Group): the store root, writable.
+    t (dict): the tuning's tones (``daq_layout.load_tones``).
+    sets (list of int): the tone sets to stream.
+    cals (dict): tone set: its calibration (group or path), if chosen.
+    n (int): the run's index.
+    ts_name (str): the run's stream group name ('ts{n}').
+    paths (list of str): the streams taken, appended to as they are.
+    used (dict): tone set (str): calibration path used, filled in.
+    say (callable): status reporter.
+    target_sweep_kwargs (dict): settings of a calibration sweep.
+    """
     for s in sets:
         idx = np.flatnonzero(t['tone_set'] == s)
         cal = cals.get(s)
@@ -874,8 +918,11 @@ async def stream_tone_sets(
         chunks = plan_stream_chunks(t['tone_module'][idx], dec_stage)
         for c_i, rows in enumerate(chunks):
             part = f' {c_i + 1}/{len(chunks)}' if len(chunks) > 1 else ''
+            # Tones put on the board without a write group (a preview)
+            # get one now
             if tones_written(written, s, rows, cal.path) and \
-                    written.get('write') in root:
+                    written.get('write') is not None and \
+                    written['write'] in root:
                 say(f'Tone set {s}: tones{part} already written')
                 write = root[written['write']]
             else:
@@ -898,14 +945,6 @@ async def stream_tone_sets(
             await crs.stream(duration_s, dec_stage, grp, verbose = verbose,
                              **({} if progress is None else
                                 dict(progress = progress)))
-    if not keep_tones:
-        await crs.clear_tones()
-        written.clear()
-    more = dict(calibration = used[str(sets[0])]) if len(sets) == 1 \
-        else dict(calibrations = used)
-    dl.update_stream_run(tune, n, paths = paths, complete = True, **more)
-    say(f'{name}: done as ts{n} ({len(paths)} streams)')
-    return paths
 
 ################################################################################
 ################################# VNA sweeps ###################################

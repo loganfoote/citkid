@@ -38,6 +38,7 @@ It also provides window helpers shared by all citkid GUIs:
   report the window as not responding.
 """
 
+import math as _math
 import sys as _sys
 import threading as _threading
 import warnings as _warnings
@@ -918,3 +919,86 @@ def scale_plot_fonts(ui_scale, *plot_items):
             ax.setStyle(tickFont=tick_font)
             ax.label.setFont(label_font)
         plot.titleLabel.item.setFont(label_font)
+
+
+class PlainAxisItem(_pg.AxisItem):
+    """
+    Axis whose ticks are plain numbers: no SI prefix scaling of the label
+    (pyqtgraph's "(x0.001)"), fixed notation while the ticks are between
+    1e-4 and 1e4 in size (0.2, 0.4, ...), and scientific notation
+    (1.2e5, 3e-5) beyond that. Log mode is pyqtgraph's.
+
+    Use it for an axis of a quantity without units, e.g.
+    ``addPlot(axisItems = {'left': PlainAxisItem('left')})``.
+    """
+    # Tick sizes (largest |tick|) formatted in fixed notation
+    FIXED_MIN = 1e-4
+    FIXED_MAX = 1e4
+
+    def __init__(self, orientation, **kwargs):
+        """
+        Make the axis.
+
+        Parameters:
+        orientation (str): 'left', 'right', 'top', or 'bottom'.
+        **kwargs: ``pg.AxisItem`` arguments.
+        """
+        super().__init__(orientation, **kwargs)
+        self.enableAutoSIPrefix(False)
+
+    def tickStrings(self, values, scale, spacing):
+        """
+        Format the tick values (pyqtgraph calls this).
+
+        Parameters:
+        values (list of float): tick values.
+        scale (float): pyqtgraph's scale factor (1 without SI prefixes).
+        spacing (float): spacing between the ticks.
+
+        Returns:
+        strings (list of str): one per value.
+        """
+        if self.logMode or not values:
+            return super().tickStrings(values, scale, spacing)
+        vals = [v * scale for v in values]
+        spacing = spacing * scale
+        if not _math.isfinite(spacing) or spacing <= 0:
+            return [f'{v:g}' for v in vals]
+        size = max(abs(v) for v in vals)
+        if size and (size >= self.FIXED_MAX or size < self.FIXED_MIN):
+            # Mantissa decimals down to the spacing's decade, so that
+            # neighbouring ticks differ (1.0e4, 1.2e4; 1e5, 2e5)
+            digits = max(0, _decade(size) - _decade(spacing))
+            return [format_sci(v, digits) for v in vals]
+        places = max(0, int(_math.ceil(-_math.log10(spacing) - 1e-9)))
+        return [f'{v:.{places}f}' for v in vals]
+
+
+def format_sci(value, digits):
+    """
+    Format a number in short scientific notation: 1.2e5, 3e-5, 0.
+
+    Parameters:
+    value (float): the number.
+    digits (int): decimals of the mantissa.
+
+    Returns:
+    text (str): the number.
+    """
+    if value == 0:
+        return '0'
+    mantissa, exponent = f'{value:.{digits}e}'.split('e')
+    return f'{mantissa}e{int(exponent)}'
+
+
+def _decade(value):
+    """
+    Return the decade of a positive number: floor(log10(value)).
+
+    Parameters:
+    value (float): the number, > 0.
+
+    Returns:
+    decade (int): e.g. 5 for 2e5, -5 for 2e-5.
+    """
+    return int(_math.floor(_math.log10(value) + 1e-9))

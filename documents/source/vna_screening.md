@@ -71,18 +71,15 @@ The window has these controls:
 - **Plan**: shows the number of points, bands, and passes, the points per
   channel, and the time the sweep will take.
 - **Sweep** (Ctrl+R): takes the sweep with a progress bar, and plots
-  |S21| and phase with the band edges marked. If "Count resonances after
-  sweeping" is checked, the resonances are counted with a matched filter
-  (a rough count) and marked on the plot. **Count now** counts the
-  resonances of the last sweep without taking new data.
+  |S21| and phase with the band edges marked.
 - **Cancel** (Esc): stops the running sweep at its next point (nothing of
   it is kept), clears the tones on the board, and shows "Cancelled" in
   the status line. The settings can then be changed and the sweep run
   again. The button is enabled only while a sweep runs.
 
 With `--no-gui` (for example, over ssh without a display), the script
-takes one sweep with the settings, prints the resonance count, and saves
-the sweep as a CSV if `--csv` is given.
+takes one sweep with the settings and saves the sweep as a CSV if
+`--csv` is given.
 
 ## Settings
 

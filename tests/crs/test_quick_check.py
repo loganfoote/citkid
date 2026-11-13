@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from pyqtgraph.Qt import QtCore, QtWidgets
 from citkid.crs.quick_check import (
-    AsyncWorker, QuickCheckWindow, rough_resonances, sweep_plan_text
+    AsyncWorker, QuickCheckWindow, sweep_plan_text
 )
 from citkid.crs.sim import SimulatedCRS
 from citkid.vna import simulate as sim
@@ -147,14 +147,7 @@ def make_window(crs, **kwargs):
     return win
 
 
-def test_rough_resonances_and_plan_text():
-    f = 1e9 * np.exp(np.arange(200000) * 2e-6)
-    z = np.ones_like(f, complex)
-    for fr in (1.05e9, 1.2e9):
-        z *= 1 - 0.5 / (1 + 2j * 2e4 * (f - fr) / fr)
-    z += 1e-3 * np.random.default_rng(0).standard_normal(len(f))
-    fr = rough_resonances(f, z)
-    assert len(fr) == 2 and np.allclose(fr, [1.05e9, 1.2e9], rtol = 1e-4)
+def test_sweep_plan_text():
     text = sweep_plan_text(100e6, 2.5e9, 500e6, [1], 2e-5, 10)
     assert 'points' in text and 'passes' in text and ' s,' in text
     with pytest.raises(ValueError):
@@ -198,14 +191,13 @@ def test_window_sweeps_on_connect(qapp, tmp_path):
     win = make_window(crs, amplitude = -40., nsamps = 7,
                       sweep_on_start = True)
     wait_for(lambda: win.result is not None)
-    f, z, bands, fr = win.result
+    f, z, bands = win.result
     assert 100e6 - 50 <= f[0] and f[-1] < 2.5e9
-    assert len(fr) == 3 and 'About 3 resonances' in win.status.text()
+    assert f'{len(f):,} points.' == win.status.text()
     call = crs.sweep_calls[0]
     assert np.all(call['ares'] == -40.) and call['nsamps'] == 7
-    # Band edges are marked on both plots, resonances on |S21|
+    # Band edges are marked on both plots
     assert len(win._band_lines) == 2 * (len(bands['chunk_ncos']) - 1)
-    assert len(win.markers.data) == 3
     assert win.sweep_btn.isEnabled() and win.save_btn.isEnabled()
     assert win.save_csv(tmp_path / 'p.csv')
     saved = np.genfromtxt(tmp_path / 'p.csv', delimiter = ',', names = True)
@@ -216,7 +208,7 @@ def test_window_sweeps_on_connect(qapp, tmp_path):
 
 def test_window_progress_bar(qapp):
     crs = FakeVnaCRS(modules = (1, 2))
-    win = make_window(crs, sweep_on_start = False, count = False)
+    win = make_window(crs, sweep_on_start = False)
     # Hidden when idle (never shown while connecting)
     assert win.progress.isHidden()
     reports = []
@@ -252,7 +244,7 @@ def test_window_progress_bar(qapp):
 def test_window_settings_and_plan(qapp):
     crs = FakeVnaCRS(modules = (1,))
     # By default the window waits for the Sweep button once connected
-    win = make_window(crs, count = False)
+    win = make_window(crs)
     assert crs.sweep_calls == [] and win.sweep_btn.isEnabled()
     assert 'Press Sweep (Ctrl+R)' in win.status.text()
     # Choosing a zone sets the range
@@ -275,8 +267,8 @@ def test_window_settings_and_plan(qapp):
     assert win.sweep_btn.isEnabled()
     win.sweep()
     wait_for(lambda: win.result is not None)
-    f, _, bands, fr = win.result
-    assert fr is None and f[0] >= 4e9 - 50 and f[-1] < 4.5e9
+    f, _, bands = win.result
+    assert f[0] >= 4e9 - 50 and f[-1] < 4.5e9
     assert set(bands['chunk_zones']) == {2}
     close(win)
 
@@ -288,7 +280,7 @@ def test_window_cancel_sweep(qapp):
     sweep runs with changed settings.
     """
     crs = make_simulated_crs(slow = True)
-    win = make_window(crs, count = False, nsamps = 1)
+    win = make_window(crs, nsamps = 1)
     # Nothing to cancel while idle or connecting
     assert not win.cancel_btn.isEnabled() and not win.sweeping
     win.cancel()
@@ -343,10 +335,10 @@ def test_window_connect_and_sweep_errors(qapp):
     close(win)
 
 
-def test_window_modules_and_count(qapp):
+def test_window_modules(qapp):
     calls = []
     crs = FakeVnaCRS(modules = (1, 2), fres = (1.0e9, 1.6e9))
-    win = QuickCheckWindow(connector(crs, calls = calls), [1], count = False,
+    win = QuickCheckWindow(connector(crs, calls = calls), [1],
                            pts_per_lw = 1.)
     wait_for(lambda: win.crs is not None)
     assert calls == [[1]] and win.modules.text() == '1'
@@ -360,16 +352,9 @@ def test_window_modules_and_count(qapp):
         win._on_connect_clicked()
         assert 'Modules must be' in win.status.text() and len(calls) == 2
     win.modules.setText('1 2')
-    # Sweep without counting, then count without new data
-    assert not win.count_btn.isEnabled()
     win.sweep()
     wait_for(lambda: win.result is not None and not win.worker.busy)
-    assert win.result[3] is None and win.count_btn.isEnabled()
-    n_sweeps = len(crs.sweep_calls)
-    win.count_resonances()
-    wait_for(lambda: win.result[3] is not None and not win.worker.busy)
-    assert len(win.result[3]) == 2 and len(crs.sweep_calls) == n_sweeps
-    assert 'About 2 resonances' in win.status.text()
+    assert len(win.result) == 3 and win.save_btn.isEnabled()
     close(win)
 
 
@@ -381,7 +366,7 @@ def test_window_sweep_connects_typed_modules(qapp):
     """
     calls = []
     crs = FakeVnaCRS(modules = (1, 2), fres = (1.0e9, 1.6e9))
-    win = QuickCheckWindow(connector(crs, calls = calls), [1], count = False,
+    win = QuickCheckWindow(connector(crs, calls = calls), [1],
                            pts_per_lw = 1.)
     wait_for(lambda: win.crs is not None)
     assert calls == [[1]]

@@ -62,10 +62,12 @@ class SimulatedCRS:
         (the streamed tones' rows of the stream).
     """
 
+    nco_state_dir = None    # no NCO state file unless set (tests)
+
     def __init__(
         self, truth, gain, module_idxs = (1,), snr_db = 40., p_ref = -55.,
         seam_db = 0.05, seam_deg = 0.5, seed = 0, serial_number = SIM_SERIAL,
-        global_control = False, pulses = None
+        global_control = False, pulses = None, board = None
     ):
         """
         Set up the simulated board.
@@ -87,6 +89,12 @@ class SimulatedCRS:
         pulses (dict, bool, or None): photon pulses and cosmic rays in
             streams. True: ``DEFAULT_PULSES``; a dict overrides some of
             its keys. None or False (default): no pulses.
+        board (dict or None): the simulated hardware's NCO state, module:
+            (frequency, gain step), shared between sessions on the same
+            board to simulate a restart: ``set_nco`` writes it and
+            ``attach`` reads it (``recover_nco_state``, with the NCO
+            state file ``nco_state_dir`` as the CRS). Default None: this
+            session's own.
         """
         self.truth, self.gain = truth, gain
         if pulses is True:
@@ -118,6 +126,7 @@ class SimulatedCRS:
         self.sample_freq = 625e6 / (256 * 64 * 2 ** 6)
         self.module_cfg = {m: dict(DEFAULT_MODULE_CFG) for m in module_idxs}
         self.nco_freqs, self.nco_ids, self._seam = {}, {}, {}
+        self.board = {} if board is None else board
 
     @uses_board
     async def configure_system(
@@ -151,13 +160,36 @@ class SimulatedCRS:
     @uses_board
     async def attach(self, full_scale_dbm = 7, verbose = True):
         """
-        Attach to the board: default module settings with this full scale.
+        Attach to the board: default module settings with this full scale,
+        and the NCO settings of an earlier session that the board still
+        has (``recover_nco_state``).
 
         Parameters:
         full_scale_dbm (float): DAC full scale.
         verbose (bool): ignored.
         """
         await self.configure_modules(full_scale_dbm = full_scale_dbm)
+        await self.recover_nco_state()
+
+    async def recover_nco_state(self):
+        """
+        Take over the NCO settings the simulated board still has from an
+        earlier session, as the CRS: where the board's NCO frequency is
+        the one in the NCO state file (``nco_state_dir``), the frequency,
+        the setting's id, and the gain step are adopted.
+
+        Returns:
+        found (list of int): the modules recovered.
+        """
+        path = util.nco_state_path(self.serial_number, self.nco_state_dir)
+        state = util.load_nco_state(path)
+        board = {m: self.board[m][0] for m in self.active_module_idxs
+                 if m in self.board}
+        found = util.recover_nco_ids(state, board)
+        for m, (f, i) in found.items():
+            self.nco_freqs[m], self.nco_ids[m] = f, i
+            self._seam[m] = self.board[m][1]
+        return sorted(found)
 
     async def configure_modules(
         self, full_scale_dbm = 7, adc_attenuation_db = 0, nyquist_zone = 1,
@@ -205,7 +237,11 @@ class SimulatedCRS:
             self.nco_ids[m] = uuid.uuid4().hex[:12]
             self._seam[m] = 10 ** (self.rng.normal(0, self.seam_db) / 20) * \
                 np.exp(1j * np.radians(self.rng.normal(0, self.seam_deg)))
+            self.board[m] = (float(nco), self._seam[m])
             changed.append(m)
+        util.save_nco_state(
+            util.nco_state_path(self.serial_number, self.nco_state_dir),
+            self.nco_freqs, self.nco_ids, changed)
         return changed
 
     @uses_board

@@ -1,6 +1,6 @@
 ---
 title: "Tuning and timestreams"
-subtitle: "03_tune, 04_stream, 05_calibrate_streams, 06_find_photons"
+subtitle: "03_tune, 04_stream, store_browser, 05_calibrate_streams, 06_find_photons"
 ---
 
 # Overview
@@ -14,6 +14,7 @@ photon pulses in them are found.
 |---|---|---|
 | `03_tune.py` | Plans the tones, sweeps the tone power, and finds each tone's optimal power and frequency (with two interactive windows) | `tune{k}` |
 | `04_stream.py` | Opens a window for previewing timestreams and taking named timestream runs | `ts{n}` |
+| `store_browser.py` | Any time: browses a store in a window (groups, attributes, notes, the list of timestream runs) | Nothing |
 | `05_calibrate_streams.py` | Calibrates selected timestreams, first in an interactive window, then in batch | `ts_cal{c}` |
 | `06_find_photons.py` | Finds the photon pulses and cosmic rays in calibrated timestreams, with a window for choosing the thresholds | `ts_photons{p}` |
 
@@ -29,7 +30,9 @@ takes a calibration target sweep of it (`cal{j}`). The tones written to
 the board for streaming are saved under that sweep (`write{w}`), and each
 stream of those tones is saved under the write (`ts{n}`). A timestream
 run, `ts{n}`, is one named timestream, usually of one tone set; the
-tuning's run list (`streams`) records each run, with its streams.
+tuning's run list (`streams`) records each run, with its streams. A run
+that fails before saving any stream is dropped from the list again; one
+that fails later stays, marked incomplete.
 
 ```text
 <device>.zarr/
@@ -159,18 +162,31 @@ that has tuned tones). The window has three parts:
 
 - **Calibration** (saved): Choose a tone set and the sweep settings (fine
   and gain sweep points, samples per point, gain sweep span; the defaults
-  are the settings below) and press Calibrate. This takes a target sweep
-  of the tone set and saves it as the tuning's next `cal{j}`. A
-  calibration takes minutes, so each tone set is calibrated once, and
-  every preview and run of the set after that uses the calibration. The
-  list shows the set's saved calibrations; the latest usable one is
-  chosen, and you can choose another.
+  are the settings below), type any notes for this calibration in the
+  Notes box (empty by default; saved with the sweep as its `notes`
+  attribute, and emptied once the sweep is taken), and press Calibrate.
+  This takes a target sweep of the tone set and saves it as the tuning's
+  next `cal{j}`. A calibration takes minutes, so each tone set is
+  calibrated once, and every preview and run of the set after that uses
+  the calibration. The list shows the set's saved calibrations, with
+  their notes; the latest usable one is chosen, and you can choose
+  another.
 
   A calibration is only valid while the NCO frequencies stay as they were
   when it was taken. Calibrating or streaming another tone set sets other
   NCO frequencies, after which the earlier calibrations are marked as
   stale and can't be used. So work one tone set at a time: calibrate it,
   then preview and run as often as needed, then go on to the next set.
+  Restarting the script does not lose the calibrations: each session
+  records the NCO settings it makes (in `~/.citkid`, per board), and the
+  next session takes them over when the board still has those
+  frequencies, so it doesn't set the NCOs again. It can't tell when
+  something else set an NCO to the same frequency in between (other
+  software, or crs_init.py after a power cycle, which usually changes the
+  frequency anyway); calibrate again in that case. (Whether a setting to
+  the same frequency really changes the frame can be measured with
+  `nco_phase_check.py`, which compares the tones' phases before and after
+  such a setting against readings with no setting.)
 - **Preview** (not saved): Capture writes the calibration's tones and
   streams for a few seconds (`PREVIEW_S`) at the chosen decimation stage.
   Select a tone to plot its timestream, either as the fractional
@@ -186,6 +202,14 @@ that has tuned tones). The window has three parts:
   list. At fast decimation stages, a tone set with too many tones to
   stream at once is streamed in several writes, with the same NCO
   frequencies. The window lists the runs taken with this tuning.
+- **View run**: select a run in the list and press View run (or
+  double-click it) to read its first zarr chunks from the store (the box
+  next to the button says how many; the label gives the chunk length)
+  and show them in the plots like a capture, with the calibration loop
+  the run was taken on. A set streamed in several writes shows the
+  stream holding the selected tone. The next capture or view replaces
+  it. The progress bar below the list follows calibrations, captures,
+  and runs, and stays in place while idle, so the panel doesn't move.
 
 Tones stay written on the board between captures and runs. A capture or
 run of the same tones with the same calibration streams them without
@@ -221,6 +245,47 @@ pulses at decimation stages 0 and 1.
 ## Command line
 
 {{help:04_stream.py}}
+
+# store_browser.py: look around a store
+
+This script opens a store in a window, to see what is in it: which
+sweeps, resonator lists, tunings, calibrations, timestreams, stream
+calibrations, and photon results it holds, and what their names, notes,
+and settings are. It is handy before `05_calibrate_streams.py` and
+`06_find_photons.py`, to remind yourself which timestreams were taken.
+It does not need the CRS, saves nothing, and opens the store read-only,
+so it can be used while another script is writing to the store (press
+**F5** to reread it).
+
+- The tree on the left lists the store's groups and arrays, with each
+  group's kind and a one-line summary: a timestream's name, stage,
+  length, and notes; a calibration's tone set and notes; a tuning's
+  number of tones; an array's shape. A group's contents are read when it
+  is expanded.
+- **Attributes** shows the selected item as it is saved: its attributes
+  (name and notes first, then the settings) or, for an array, its shape,
+  dtype, chunks, and first values.
+- **Timestream runs** lists every run of every tuning (name, notes,
+  stage, length, tone set, calibration, tuning, chunks, creation time).
+  Typing in the box above it keeps the runs whose columns contain the
+  text. Double-click a run to select its stream in the tree.
+- **Open** (Ctrl+O) chooses another store in a file dialog (pick the
+  `.zarr` directory).
+
+The store to open is named by the settings or options like in the other
+scripts; with `PICK` / `--pick`, or when that store does not exist, the
+file dialog chooses it instead. Zipped archives (`archive_store.py`)
+open with `--store archive.zip`. With `--runs`, the script prints the
+timestream runs instead of opening the window (the same list
+`05_calibrate_streams.py` prints when `CALIBRATE` is empty).
+
+## Settings
+
+{{settings:store_browser.py}}
+
+## Command line
+
+{{help:store_browser.py}}
 
 # 05_calibrate_streams.py: calibrate timestreams
 
@@ -299,34 +364,95 @@ Each tone is searched with an optimal filter that is built iteratively:
 2. **Optimal filter**: the selected pulses are averaged into a template,
    the noise spectrum is measured away from the pulses, and the optimal
    filter is built from the two. The filtered timestream gives each pulse
-   a height in units of the mean photon pulse, so the thresholds don't
-   depend on the tone's responsivity. The pulses with heights between
-   `HMIN` and `HMAX` are used for the next template. This is repeated
+   a height in kHz/GHz (the fractional frequency shift x times 1e6), so
+   the thresholds are in the units you think about the data in, and mean
+   the same shift on every tone. The pulses with heights between `HMIN`
+   and `HMAX` are used for the next template. This is repeated
    `OF_ITERATIONS` times. Optionally, `HMIN` is chosen automatically
    (`HMIN_FALSE_FRAC`) as the lowest height at which few of the accepted
    pulses are expected to be noise.
 
+   Only isolated pulses go into a template: a pulse with another filter
+   peak within the template length (pile-up, which would put the rise of
+   the next pulse into the template's tail) is left out, and so is any
+   pulse within the filter length of a large one (above `HMAX`), since
+   the filter's side lobes around a cosmic ray can look like pulses of
+   their own and would put the cosmic ray's edges into the template.
+   Without this, a template could change a lot from one iteration to the
+   next, and the height histogram with it. The filter itself is built
+   from the first `FILTER_POST_S` of the template after its maximum (a
+   few decay times), so that it does not reach into the next pulse; the
+   whole template (`TEMPLATE_POST_S`) is kept for the mean pulse shown and
+   saved, and for the decay-time fit. The mean pulse plot marks where the
+   filter's template ends.
+
+`HMAX` does not stop pulses from being found: every filter peak above
+`HMIN` (and, for the coincidences, above `COINC_NSIGMA` times the filter
+noise) is kept, saved in `pulses/` with its height, and used for the
+cosmic rays. `HMAX` only keeps the large pulses out of the template and
+out of the mean photon pulse (`in_window` and `used` in `pulses/`); the
+rate reported per tone counts the pulses in the window. The template the
+final filter was built from is saved as `template`, with its amplitude
+`amp_ph` as the unit of every height; the mean pulse of the pulses
+finally accepted (height window, isolated, no coincidence) is
+`avg_pulse`.
+
 ## Choosing the thresholds
 
 When searching from scratch, a window opens after the detection of each
-timestream (skip it with `INTERACTIVE = False` or `--no-gui`). The left side lists the tones
-with their number of pulses and their rate. The plots show, for the
-selected tone or for all tones together:
+timestream (skip it with `INTERACTIVE = False` or `--no-gui`). The left
+side lists the tones with their number of pulses and their rate. The
+plots show, for the selected tone or for all tones together:
 
 - the first-pass peak heights, in units of their median, with the
   `INIT_HMAX` cut;
-- the heights of the filtered pulses in units of the mean photon, with the
+- the heights of the filtered pulses in kHz/GHz, with the
   expected number of noise peaks overlaid (measured from the filter output
   with the sign flipped, which contains noise but no pulses), and the
   `HMIN` and `HMAX` lines;
-- the mean pulse of the selected tone.
+- the mean pulse of the selected tone, with the end of the filter's
+  template marked;
+- a snippet of the selected tone's data: the detection timestream (gray)
+  and the optimal filter's output (blue), both in kHz/GHz, with `HMIN` and
+  `HMAX` as horizontal lines and the filter peaks
+  marked (green circles in the height window, red crosses below `HMIN`,
+  orange triangles above `HMAX`, drawn at the top edge when they are off
+  the scale: the heights shown reach a little above `HMAX`, so a cosmic
+  ray doesn't flatten the photons). This shows what the histogram's heights
+  look like in the data, so a threshold that is off is easy to spot. The
+  snippet opens on the tone's first pulse; set its length, drag the
+  slider along the record, or press Prev/Next peak to move between the
+  filter peaks. The horizontal lines can be dragged like the vertical
+  ones.
+
+Heights and the thresholds are in kHz/GHz. The status line gives the tone's
+mean photon (the template amplitude) in kHz/GHz, which tells how the window
+sits relative to a single photon on that tone. To compare tones of
+different responsivity, set **Heights in** to photons: the height
+histogram, the mean pulse, the snippet, and the threshold lines are
+drawn in units of each tone's mean photon; the threshold boxes stay in
+kHz/GHz, and the lines show where they fall for the selected tone. **R** (or
+Rescale plots) fits every plot to its data again after zooming.
+
+The thresholds can also be set with the mouse (the plots don't pan or
+zoom with the mouse; R rescales them): a **click** on a histogram moves
+its nearer line to the click (the `INIT_HMAX` line on the first-pass
+histogram), and a drag there carries that line along; a click on the
+snippet moves the nearer of hmin and hmax to the click's height, and a
+**drag** on the snippet sets hmin and hmax from the bottom and top of
+the drag, so a window can be drawn around the pulses themselves.
 
 Drag the lines or type the values, then press Rerun (Ctrl+R). With "Apply
-to all tones", the values become the global thresholds, and every tone
-without its own thresholds is run again. With "Apply to this tone", the
-selected tone gets its own thresholds (marked with `*` in the list). "Use
-the global thresholds" removes them. Close the window (or press Done) to
-continue.
+to this tone" (the default), the selected tone gets its own thresholds
+(marked with `*` in the list). With "Apply to all tones", the values
+become the global thresholds, and every tone without its own thresholds
+is run again. **A** and **D** (or the Prev and Next buttons) move to the
+previous and next tone; thresholds changed but not rerun are applied
+before moving on, so nothing is lost. **Revert tone to defaults**
+(Ctrl+D) puts the thresholds the window opened with, the script's, back
+on the selected tone and reruns it. The snippet opens long enough for
+about ten pulses at the tones' median rate. Close the window (or press
+Done) to continue.
 
 ## Reusing a previous result
 
@@ -343,7 +469,7 @@ set (or, if it has none, its first one). The window doesn't open.
 - `'filter'`: the reference's optimal filter for each tone (matched by
   resonator index), built from its mean pulse and noise spectrum, and its
   thresholds. The filter is applied without iterating, and the pulse
-  heights are in units of the reference's mean photon. Tones that the
+  heights are in kHz/GHz as always. Tones that the
   reference has no filter for are detected from scratch. The timestreams
   must have the reference's decimation stage.
 
@@ -358,7 +484,10 @@ cosmic ray on other tones are also found.
 
 - **Photons**: each tone's mean photon pulse averages the pulses with
   heights between `HMIN` and `HMAX` that are not coincident with any
-  other tone. Its decay time is fit.
+  other tone. Its decay time is fit with an exponential from `TAU_SKIP` samples
+  after the maximum (where the rise and the filter ringing are over)
+  out to `TAU_LIFETIMES` decay times, and shown with the mean pulse in
+  the threshold window.
 - **Cosmic rays**: the pulses of all tones in a write are grouped into
   events. An event starts at the earliest pulse not yet in an event and
   includes every pulse up to 2 × `COINC_WIN` samples later. Events seen by
@@ -380,16 +509,17 @@ ts_photons{p}/          attributes: source (ts_cal{c}), timestreams,
                         writes, samples, sample period, how it was
                         detected, thresholds, settings
                         per tone: res_idxs, status (empty if detected),
-                        hmin, hmax, sigma_y, amp_ph (the height unit,
-                        in x), amp_ph_own (this timestream's mean photon
-                        height), rate, n_used, tau, template,
+                        hmin, hmax, sigma_y (kHz/GHz), amp_ph (the filter
+                        template's amplitude, in x), amp_ph_own (this
+                        timestream's mean photon height, x), rate,
+                        n_used, tau, template,
                         avg_pulse (mean photon pulse), psd, filter
     pulses/             every pulse found: tone, sample, height, raw peak,
                         candidate (at least hmin), in_window, mult
                         (number of tones), used (in the mean photon pulse)
     cosmic/events/      t0 (sample), time_s, mult, tone write
     cosmic/hits/        one row per tone of each event: tone, sample,
-                        height (photons and x), raw peak
+                        height (kHz/GHz and x), raw peak
 ```
 
 ## Settings

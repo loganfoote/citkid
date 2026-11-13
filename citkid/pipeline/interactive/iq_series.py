@@ -70,6 +70,7 @@ from ..framework import LazyAttr
 # SeriesXYFit is re-exported.
 from ..series_xy_fit import SeriesXYFit, SeriesXYFitStore  # noqa: F401
 from ...qt_compat import (
+    PlainAxisItem,
     TITLE_BAR_MARGIN,
     Qt as _Qt,
     available_screen_geometry,
@@ -1038,8 +1039,13 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         gw = pg.GraphicsLayoutWidget()
         gw.setMinimumWidth(380)
 
-        # Top: y vs x scatter
-        self._plot_series = gw.addPlot(row=0, col=0, title='Series')
+        # Top: y vs x scatter. Plain tick numbers: no SI prefix scaling of
+        # the label ("(x0.001)"), scientific notation only beyond 1e4 and
+        # 1e-4.
+        self._plot_series = gw.addPlot(
+            row=0, col=0, title='Series',
+            axisItems={'left': PlainAxisItem('left'),
+                       'bottom': PlainAxisItem('bottom')})
         self._plot_series.setLabel('left', self._y_name)
         self._plot_series.setLabel('bottom', self._x_name)
         self._plot_series.showGrid(x=True, y=True, alpha=0.3)

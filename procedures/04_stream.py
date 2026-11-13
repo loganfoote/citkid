@@ -5,10 +5,11 @@ Opens ``crs.stream_gui`` on a tuning (``tune{k}`` with ``tones``, from
 03_tune.py; the latest by default):
 
 - Calibration: calibrate a tone set once (a target sweep with the
-  settings below, which the window lets you change), saved as the
-  tuning's ``cal{j}``; pick which saved calibration to use when there are
-  several. A calibration takes long (minutes per set at ``NSAMPS``
-  samples per point), so it is never repeated by a run.
+  settings below, which the window lets you change, and optional notes
+  typed in the window), saved as the tuning's ``cal{j}``; pick which
+  saved calibration to use when there are several. A calibration takes
+  long (minutes per set at ``NSAMPS`` samples per point), so it is never
+  repeated by a run.
 - Preview: capture a few seconds (``PREVIEW_S``) of the chosen
   calibration's tones at a decimation stage, and look at one tone's
   timestream as x (projected onto the IQ loop's tangent at the tone),
@@ -19,12 +20,17 @@ Opens ``crs.stream_gui`` on a tuning (``tune{k}`` with ``tones``, from
   that put its tones on the board (``tune{k}/cal{j}/write{w}/ts{n}``),
   in chunks at fast stages where the tones don't all stream at once, and
   the run (``ts{n}``) is listed in the tuning's run list
-  (``tune{k}/streams``). Repeat for the next timestream. Tones stay
+  (``tune{k}/streams``); View run shows a listed run's first chunks in
+  the plots, as a capture. Repeat for the next timestream. Tones stay
   written on the board between captures and runs, so streams of the same
   tones don't write them again; Write tones writes the set again on
   purpose. For another tone set, select and calibrate it: setting its
   NCO starts a new phase frame, so the sets calibrated before need a new
-  calibration when you come back to them.
+  calibration when you come back to them. Restarting this script keeps
+  the calibrations usable: the session takes over the NCO settings the
+  board still has from the last one (kept in ``~/.citkid``), unless
+  something else set the NCOs in between (a power cycle, crs_init.py,
+  other software).
 
 Streaming needs the board's whole network bandwidth, so this script
 takes the board for itself (``citkid.crs.board_lock``) for as long as its

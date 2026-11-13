@@ -1,6 +1,7 @@
 import contextlib
 import multiprocessing
 import numpy as np
+import json
 import os
 import queue as queue_module
 import rfmux
@@ -1260,3 +1261,95 @@ def _validate_ch_map(ch_map):
             except Exception as e:
                 raise ValueError(f'ch_map could not be converted to int32')
     return ch_map
+
+################################################################################
+############################## NCO state across sessions #######################
+################################################################################
+# Where a session keeps the NCO settings it made, per board (``CRS.set_nco``),
+# so that the next session can tell whether the board still measures in the
+# phase frame of a saved calibration (``CRS.recover_nco_state``)
+NCO_STATE_DIR = '~/.citkid'
+
+def nco_state_path(serial, state_dir = NCO_STATE_DIR):
+    """
+    Return the file holding a board's NCO state.
+
+    Parameters:
+    serial (int): board serial number.
+    state_dir (str or None): the directory. None: no file.
+
+    Returns:
+    path (str or None): the file, or None without a directory.
+    """
+    if state_dir is None:
+        return None
+    return os.path.join(os.path.expanduser(str(state_dir)),
+                        f'nco_state_crs{int(serial):04d}.json')
+
+def load_nco_state(path):
+    """
+    Read a board's NCO state.
+
+    Parameters:
+    path (str or None): the file (``nco_state_path``).
+
+    Returns:
+    state (dict): module (int): dict with ``freq`` (Hz), ``id`` (the
+        setting's id) and ``set`` (when). Empty without a readable file.
+    """
+    if path is None or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding = 'utf-8') as fh:
+            data = json.load(fh)
+        return {int(m): dict(v) for m, v in data.get('modules', {}).items()}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
+
+def save_nco_state(path, nco_freqs, nco_ids, modules):
+    """
+    Record some modules' NCO settings in a board's NCO state file (the
+    other modules' entries stay).
+
+    Parameters:
+    path (str or None): the file (``nco_state_path``). None: nothing.
+    nco_freqs (dict): module: NCO frequency in Hz.
+    nco_ids (dict): module: id of its setting.
+    modules (list of int): the modules to record.
+    """
+    if path is None:
+        return
+    state = load_nco_state(path)
+    for m in modules:
+        state[int(m)] = dict(freq = float(nco_freqs[m]), id = nco_ids[m],
+                             set = time.strftime('%Y-%m-%d %H:%M:%S'))
+    os.makedirs(os.path.dirname(path) or '.', exist_ok = True)
+    tmp = f'{path}.{os.getpid()}.tmp'
+    with open(tmp, 'w', encoding = 'utf-8') as fh:
+        json.dump(dict(modules = {str(m): v for m, v in state.items()}), fh,
+                  indent = 1)
+    os.replace(tmp, path)
+
+def recover_nco_ids(state, board_freqs, atol = 1.):
+    """
+    Find the saved NCO settings the board still has: modules whose NCO
+    frequency on the board is the saved one (within ``atol``), so that
+    their phase frame is the saved setting's (unless something else set
+    the NCO to the same frequency since, which can't be told).
+
+    Parameters:
+    state (dict): saved settings (``load_nco_state``).
+    board_freqs (dict): module: NCO frequency read from the board, Hz.
+    atol (float): tolerance in Hz. Default 1.
+
+    Returns:
+    found (dict): module: (frequency, id) of each recovered setting.
+    """
+    found = {}
+    for m, f in board_freqs.items():
+        entry = state.get(int(m))
+        if entry is None or f is None or not np.isfinite(f):
+            continue
+        if np.isclose(f, float(entry['freq']), atol = atol, rtol = 0.):
+            found[int(m)] = (float(f), entry['id'])
+    return found

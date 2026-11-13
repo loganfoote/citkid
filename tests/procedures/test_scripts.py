@@ -84,7 +84,7 @@ def test_vna_quick_check_no_gui(monkeypatch, tmp_path):
     fake = FakeVnaCRS(modules = (1, 2), fres = (1.0e9, 1.6e9, 2.1e9))
     made = fake_factory(monkeypatch, m, fake)
     csv = tmp_path / 'q.csv'
-    f, z, n = m.main(m.parse_args(
+    f, z = m.main(m.parse_args(
         ['--modules', '1', '2', '--csv', str(csv), '--no-gui']))
     assert made[0]['module_idxs'] == [1, 2]
     assert made[0]['global_control'] is False
@@ -99,16 +99,15 @@ def test_vna_quick_check_no_gui(monkeypatch, tmp_path):
     assert saved.dtype.names == ('f', 'i', 'q')
     assert np.allclose(saved['f'], f, rtol = 0, atol = 1e-6)
     assert np.allclose(saved['i'] + 1j * saved['q'], z, rtol = 1e-8)
-    assert n == 3
     # Nothing is saved to zarr
     assert not any(p.suffix == '.zarr' for p in tmp_path.iterdir())
 
 
-def test_vna_quick_check_no_count(monkeypatch, tmp_path):
+def test_vna_quick_check_no_csv(monkeypatch, tmp_path):
     m = load_script('vna_quick_check.py')
     fake_factory(monkeypatch, m, FakeVnaCRS())
-    _, _, n = m.main(m.parse_args(['--no-count', '--no-gui']))
-    assert n is None
+    f, z = m.main(m.parse_args(['--no-gui']))
+    assert len(f) == len(z) > 0
     assert not list(tmp_path.iterdir())
 
 
@@ -118,9 +117,9 @@ def test_vna_quick_check_nyquist(monkeypatch, nyquist, lo, hi):
     m = load_script('vna_quick_check.py')
     fake = FakeVnaCRS(modules = (1, 2))
     fake_factory(monkeypatch, m, fake)
-    f, _, _ = m.main(m.parse_args(
+    f, _ = m.main(m.parse_args(
         ['--modules', '1', '2', '--nyquist', nyquist, '--qr-median', '1e4',
-         '--pts-per-lw', '1', '--no-gui', '--no-count']))
+         '--pts-per-lw', '1', '--no-gui']))
     # Nothing within the 10 MHz guard band around 2.5 GHz is swept
     start = lo + 10e6 if lo == 2.5e9 else lo
     assert start - 50 <= f[0] < start * (1 + 1e-4)
@@ -161,10 +160,10 @@ def test_vna_quick_check_gui(monkeypatch):
 
     monkeypatch.setattr(m, 'run_quick_check', fake_run)
     out = m.main(m.parse_args(['--modules', '2', '--nyquist', 'both',
-                               '--amplitude', '-45', '--no-count']))
+                               '--amplitude', '-45']))
     assert out == 'closed' and seen['crs'] is fake
     assert seen['module_idxs'] == [2] and seen['nyquist'] == 'both'
-    assert seen['amplitude'] == -45. and seen['count'] is False
+    assert seen['amplitude'] == -45. and 'count' not in seen
     assert seen['qr_median'] == m.QR_MEDIAN
     assert seen['pts_per_lw'] == m.PTS_PER_LW
     assert made[0]['global_control'] is False
@@ -205,7 +204,7 @@ def test_vna_view_script(monkeypatch, tmp_path):
 @pytest.mark.parametrize('script', [
     '01_vna_sweep.py', '02_find_resonances.py', '03_tune.py', '04_stream.py',
     '05_calibrate_streams.py', '06_find_photons.py', 'archive_store.py',
-    'vna_view.py', 'vna_report.py'])
+    'vna_view.py', 'vna_report.py', 'store_browser.py'])
 def test_store_path_suffix(script, tmp_path):
     """
     Every procedure names the store <device>_<suffix>.zarr, or
@@ -221,6 +220,54 @@ def test_store_path_suffix(script, tmp_path):
         str(tmp_path / 'cd1' / 'devA_warm.zarr')
     assert m.store_path(m.parse_args(base + ['--suffix', ''])) == \
         str(tmp_path / 'cd1' / 'devA.zarr')
+
+
+def test_store_browser_script(monkeypatch, tmp_path, capsys):
+    """
+    The script opens the browser on the store it is given, or prints the
+    runs with --runs.
+    """
+    m = load_script('store_browser.py')
+    seen = []
+
+    def fake_browser(path):
+        """
+        Record the path and pretend the user picked a store.
+
+        Parameters:
+        path (str or None): the path given.
+
+        Returns:
+        path (str): the store shown.
+        """
+        seen.append(path)
+        return path or '/picked.zarr'
+
+    monkeypatch.setattr(m, 'run_store_browser', fake_browser)
+    store = tmp_path / 'cd1' / 'devA_warm.zarr'
+    dl.create_store(store, 'devA', 'cd1')
+    base = ['--data-dir', str(tmp_path), '--cooldown', 'cd1', '--device',
+            'devA', '--suffix', 'warm']
+    assert m.main(m.parse_args(base)) == str(store)
+    # The dialog chooses the store with --pick, or when it doesn't exist
+    assert m.main(m.parse_args(base + ['--pick'])) == '/picked.zarr'
+    assert m.main(m.parse_args(base[:-2])) == '/picked.zarr'
+    assert seen == [str(store), None, None]
+    assert 'does not exist' in capsys.readouterr().out
+    path = tmp_path / 'r.zarr'
+    root = dl.create_store(path, 'devA', 'cd1')
+    dl.save_resonators(root, 0, [1e9], 2e4, 'x')
+    tune, _ = dl.new_tuning(root, 0)
+    dl.register_stream_run(tune, dict(
+        name = 'dark', notes = 'lights off', dec_stage = 6, duration_s = 2.,
+        tuning = 'tune0', tone_set = 0, calibration = 'tune0/cal0',
+        paths = []))
+    assert m.main(m.parse_args(['--store', str(path), '--runs'])) == \
+        str(path)
+    out = capsys.readouterr().out
+    assert len(seen) == 3
+    assert '2 top-level groups' in out and 'ts0: dark, tune0' in out
+    assert 'lights off' in out
 
 
 def test_vna_view_script_window(tmp_path):
@@ -877,19 +924,19 @@ def check_photons(grp, log, dt):
 
 def check_override(g):
     """
-    Check the thresholds made in the stand-in window: hmax 2 for every tone,
-    hmin 0.6 for one resonator of tone set 0.
+    Check the thresholds made in the stand-in window (kHz/GHz): hmax 3.5 for
+    every tone, hmin 1.2 for one resonator of tone set 0.
 
     Parameters:
     g (zarr.Group): a ``timestream{j}`` group.
     """
     th = g.attrs['thresholds']
-    assert th['hmax'] == 2. and list(th['overrides'].values()) == \
-        [dict(hmin = 0.6)]
+    assert th['hmax'] == 3.5 and list(th['overrides'].values()) == \
+        [dict(hmin = 1.2)]
     r0 = int(next(iter(th['overrides'])))
     np.testing.assert_allclose(g['hmin'][:], np.where(
-        g['res_idxs'][:] == r0, 0.6, 0.5))
-    np.testing.assert_allclose(g['hmax'][:], 2.)
+        g['res_idxs'][:] == r0, 1.2, 1.))
+    np.testing.assert_allclose(g['hmax'][:], 3.5)
 
 
 def test_06_find_photons(photon_store, monkeypatch, capsys):
@@ -910,7 +957,8 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
         "3: ts1, 'dark0b', set 1" in out and 'Previous results' in out
     windows = []
 
-    def fake_window(ts, results, thresholds, rerun, title = ''):
+    def fake_window(ts, results, thresholds, rerun, data = None,
+                    settings = None, title = ''):
         """
         Stand in for the threshold window: widen hmax for all tones, give
         one tone its own hmin, and rerun them all (as the window does).
@@ -920,17 +968,24 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
         results (dict): its results.
         thresholds (Thresholds): its thresholds.
         rerun (callable): reruns tones.
+        data (callable): a tone's detection timestream, for the snippet.
+        settings (DetectionSettings): the detection settings.
         title (str): window title.
 
         Returns:
         thresholds, results: as the window.
         """
         windows.append(ts['run'])
-        thresholds.hmax = 2.
+        # The window gets the data for its snippet and the tau settings
+        d = data(int(ts['rows'][0]))
+        assert isinstance(d, np.ndarray) and len(d) == ts['stop'] - ts['start']
+        assert settings.tau_skip == 2 and settings.tau_lifetimes == 5.
+        # Thresholds are in kHz/GHz; the simulated photons are 2 kHz/GHz
+        thresholds.hmax = 3.5
         r0 = int(ts['rows'][0])
-        thresholds.overrides[int(ts['res_idxs'][0])] = dict(hmin = 0.6)
+        thresholds.overrides[int(ts['res_idxs'][0])] = dict(hmin = 1.2)
         results = {**results, **rerun(ts['rows'], thresholds)}
-        assert results[r0]['hmin'] == 0.6 and results[r0]['hmax'] == 2.
+        assert results[r0]['hmin'] == 1.2 and results[r0]['hmax'] == 3.5
         return thresholds, results
 
     monkeypatch.setattr(pt, 'run_photon_thresholds', fake_window)
@@ -984,3 +1039,69 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
              for _, v in root[grp].members(max_depth = None)
              if isinstance(v, zarr.Array) and v.shape]
     assert max(sizes) < nsamples / 10
+
+
+class FakeNcoCRS:
+    """
+    Fake board for nco_phase_check.py: tones read a fixed phase per
+    frequency, rotated by a frame angle that every forced NCO setting
+    changes by ``step_deg``.
+    """
+
+    def __init__(self, step_deg = 30.):
+        self.step_deg = step_deg
+        self.frame = 0.
+        self.calls = []
+        self.nco_freqs = {}
+
+    async def attach(self, **kw):
+        self.calls.append(('attach', kw))
+
+    async def set_nco(self, nco_freqs, verbose = True, force = False):
+        self.calls.append(('set_nco', dict(nco_freqs), force))
+        self.nco_freqs.update(nco_freqs)
+        if force:
+            self.frame += self.step_deg
+        return sorted(nco_freqs)
+
+    async def sweep(self, frequencies, ares, nsamps, verbose = True):
+        f = np.asarray(frequencies, float)
+        self.calls.append(('sweep', f.shape, int(nsamps)))
+        phase = np.radians(self.frame) + 1e-9 * f
+        return f, 0.5 * np.exp(1j * phase)
+
+    async def clear_tones(self):
+        self.calls.append(('clear_tones',))
+
+
+def test_nco_phase_check(monkeypatch, capsys):
+    m = load_script('nco_phase_check.py')
+    fake = FakeNcoCRS(step_deg = 30.)
+    made = fake_factory(monkeypatch, m, fake)
+    out = m.main(m.parse_args(['--module', '2', '--nco', '6.5e8',
+                               '--repeats', '2', '--nsamps', '50']))
+    assert made == [dict(serial_number = m.SERIAL_NUMBER,
+                         interface = m.INTERFACE, module_idxs = [2],
+                         global_control = False)]
+    assert fake.calls[0][0] == 'attach' and fake.calls[-1] == \
+        ('clear_tones',)
+    # Every NCO setting is forced, at the NCO or the away frequency
+    sets = [c for c in fake.calls if c[0] == 'set_nco']
+    assert all(c[2] for c in sets)
+    assert {c[1][2] for c in sets} == {6.5e8, 6.5e8 + m.AWAY_HZ}
+    assert len(out) == 2 and set(out[0]) == {'a', 'b', 'c', 'd'}
+    # The control shows no change; the same setting shows the frame step,
+    # away and back twice that, common to all tones
+    dphi, ratio = m.phase_changes(out[0]['a'], out[0]['b'])
+    assert np.allclose(dphi, 0.) and np.allclose(ratio, 1.)
+    assert np.allclose(m.phase_changes(out[0]['b'], out[0]['c'])[0], 30.)
+    assert np.allclose(m.phase_changes(out[0]['c'], out[0]['d'])[0], 60.)
+    text = capsys.readouterr().out
+    assert 'Control (no NCO setting)' in text
+    assert 'common change +30.00 deg, spread across tones 0.00 deg' in text
+    assert 'common change +60.00 deg' in text
+    # The analysis wraps the phase and describes a tone-dependent change
+    dphi, _ = m.phase_changes([1., 1j], [-1j, -1.])
+    assert np.allclose(dphi, [-90., 90.])
+    desc = m.describe('x', [1e6, 2e6], [1., 1.], [np.exp(0.5j), np.exp(1j)])
+    assert 'spread across tones 14.32 deg' in desc

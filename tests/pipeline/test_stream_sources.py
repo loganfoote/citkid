@@ -260,3 +260,65 @@ def test_execute_remaining(streamed):
     assert len(AR.missing_rows()) == 0
     np.testing.assert_array_equal(np.asarray(AR.DS.xt[0]), x0)
     assert len(AR.execute_remaining(verbose = False)) == 0
+
+
+def test_open_calibration_needs_current_datasets(streamed):
+    """
+    A stream calibration without a DataSet for a tone set its selection
+    needs (made by an earlier version, one DataSet per stage) is refused
+    with a clear message instead of being read as empty.
+    """
+    from citkid.pipeline.stream_sources import open_calibration
+    root, tune = streamed
+    cal = dl.create_group(root, 'ts_cal7', 'analysis', attrs = dict(
+        selection = [dict(name = 'slow2', chunks = 1)]))
+    cal.create_group('stage6_n1192')
+    with pytest.raises(KeyError, match = "no DataSet 'set1' for tone set 1 "
+                       r"\(it has \['stage6_n1192'\]\).*05_calibrate"):
+        open_calibration(root, 'ts_cal7')
+    assert sorted(cal.group_keys()) == ['stage6_n1192']
+    with pytest.raises(KeyError, match = 'no selection'):
+        open_calibration(root, dl.create_group(root, 'ts_cal8', 'analysis'))
+    del root['ts_cal7'], root['ts_cal8']
+
+
+def test_rounded_tone_frequencies_warn(streamed):
+    """
+    A source whose tones were written at other frequencies than the first
+    source's (the board rounding the same request differently) is loaded
+    with a warning naming both streams, the difference, and the x offset.
+    """
+    import warnings
+    root, tune = streamed
+    a = source_of(root, 0, 1, 0, 20)
+    c = source_of(root, 2, 1, 0, 20)
+    fres = root[c['group']][c['writes'][0]]['fres']
+    saved = fres[:]
+    fres[:] = saved + 60.
+    try:
+        steps = {s.name: s for s in stream_sources_steps(
+            root, [a, c], 'resonators0/fres_all', 'resonators0/qres_all')}
+        with pytest.warns(UserWarning) as record:
+            steps['load_global_res_data'].func()
+    finally:
+        fres[:] = saved
+    text = [str(w.message) for w in record
+            if 'written up to' in str(w.message)]
+    assert len(text) == 1
+    # (The simulated runs' own rounding differs by a few tens of Hz too,
+    # so the size is at least the 60 Hz added)
+    head, _, rest = text[0].partition(' was streamed with tones written up to ')
+    assert head == f"{c['group']}/{c['writes'][0]}/{c['stream']}"
+    hz, _, rest = rest.partition(' Hz away from those of ')
+    assert float(hz) >= 60
+    assert rest.startswith(f"{a['group']}/{a['writes'][0]}/{a['stream']} ")
+    assert 'offsets x by up to' in text[0]
+    # A source of the first source's own run has the same tones: no
+    # warning about them
+    steps = {s.name: s for s in stream_sources_steps(
+        root, [a, source_of(root, 0, 1, 20, 40)], 'resonators0/fres_all',
+        'resonators0/qres_all')}
+    with warnings.catch_warnings(record = True) as record:
+        warnings.simplefilter('always')
+        steps['load_global_res_data'].func()
+    assert not [w for w in record if 'written up to' in str(w.message)]

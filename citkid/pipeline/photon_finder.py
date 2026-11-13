@@ -238,8 +238,8 @@ class Thresholds:
     resonator.
 
     Attributes:
-    hmin, hmax (float): height window of the filter output, in units of the
-        mean photon.
+    hmin, hmax (float): height window of the filter output, in kHz/GHz (the
+        fractional frequency shift x times 1e6).
     init_hmax (float or None): first-pass upper cut, in units of the median
         first-pass peak height (None: no cut).
     overrides (dict): res_idx: dict with any of 'hmin', 'hmax',
@@ -423,7 +423,8 @@ def finish_timestream(
         except ValueError:
             continue
         avg[r], peak[r], used[r] = a, p, u
-        tau[r] = ph.fit_tau(a, p, data.dt)[0]
+        tau[r] = ph.fit_tau(a, p, data.dt, settings.tau_skip,
+                            settings.tau_lifetimes)[0]
 
     def cat(parts, dtype):
         """
@@ -458,8 +459,9 @@ def save_timestream(
 
     Layout of ``grp``: attrs describe the timestream and settings; per tone
     (in the order of ``ts['rows']``): ``rows``, ``res_idxs``, ``status``
-    ('' if detected, else the error), ``hmin``, ``hmax``, ``init_hmax``,
-    ``sigma_y``, ``amp_ph`` (the height unit, in x), ``amp_ph_own`` (this
+    ('' if detected, else the error), ``hmin``, ``hmax`` (kHz/GHz),
+    ``init_hmax``, ``sigma_y`` (kHz/GHz), ``amp_ph`` (the filter template's
+    amplitude, in x: the mean photon), ``amp_ph_own`` (this
     timestream's mean photon amplitude, x), ``rate`` (pulses in
     the height window per second), ``n_used`` (pulses averaged), ``tau``,
     ``p`` (index of the maximum of ``avg_pulse``), ``template_p`` (of
@@ -467,7 +469,7 @@ def save_timestream(
     window, x),
     ``avg_pulse`` (mean photon pulse: height window and multiplicity 1, x),
     ``psd``, ``filter``; ``pulses/`` (every coincidence candidate: ``row``,
-    ``idx`` (sample in the window), ``h`` (height, units of ``amp_ph``),
+    ``idx`` (sample in the window), ``h`` (height, kHz/GHz),
     ``raw`` (raw peak, x), ``candidate`` (at or above hmin),
     ``in_window`` (in [hmin, hmax]), ``mult``, ``used`` (averaged)); and
     ``cosmic/events`` and ``cosmic/hits`` (``finish_timestream``).
@@ -497,7 +499,8 @@ def save_timestream(
         settings = dataclasses.asdict(settings), coinc_win = coinc_win,
         cosmic_min_mult = cosmic_min_mult,
         pre = None if ref is None else ref['pre'],
-        post = None if ref is None else ref['post'])))
+        post = None if ref is None else ref['post'],
+        filter_post = None if ref is None else ref['filter_post'])))
 
     def per_tone(key, default = np.nan):
         """
@@ -610,10 +613,10 @@ def load_reference(grp, settings = None):
     Returns:
     thresholds (Thresholds): its thresholds (with the per-tone ones).
     reference (dict): res_idx: dict for ``detect_with_filter``
-        (``template``, ``p``, ``pre``, ``post``, ``sign``, ``amp_ph``,
-        ``psd``, ``nfft``, ``hmin``, ``hmax``, ``dt``), for the tones it
-        detected. The filter is normalized to that timestream's own mean
-        photon, which becomes the height unit.
+        (``template``, ``p``, ``pre``, ``post``, ``filter_post``,
+        ``sign``, ``amp_ph``, ``psd``, ``nfft``, ``hmin``, ``hmax``,
+        ``dt``), for the tones it detected. The filter is normalized to
+        that timestream's own mean photon, which becomes the height unit.
     """
     a = dict(grp.attrs)
     th = a['thresholds']
@@ -635,7 +638,9 @@ def load_reference(grp, settings = None):
             continue
         reference[int(r)] = dict(
             template = template[i], p = int(p[i]), pre = int(a['pre']),
-            post = int(a['post']), sign = sign, amp_ph = float(amp[i]),
+            post = int(a['post']),
+            filter_post = int(a.get('filter_post') or a['post']),
+            sign = sign, amp_ph = float(amp[i]),
             psd = psd[i], nfft = nfft, hmin = float(hmin[i]),
             hmax = float(hmax[i]), dt = float(a['dt']))
     return thresholds, reference

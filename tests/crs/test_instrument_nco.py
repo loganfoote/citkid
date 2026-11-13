@@ -674,3 +674,54 @@ async def test_disable_modules_not_owned_raises(mock_crs_for_disable_modules):
         await crs.disable_modules([1, 5])
     crs._clear_channels.assert_not_called()
     assert len(crs.nco_freqs) == 4
+
+
+@pytest.mark.asyncio
+async def test_set_nco_saves_state_and_attach_recovers_it(
+    mock_crs_for_set_nco, tmp_path, monkeypatch
+):
+    """
+    set_nco records each setting in the board's NCO state file, and
+    recover_nco_state (attach) takes the settings over when the board
+    still has the frequencies, module by module.
+    """
+    from citkid.crs import util
+    from citkid.crs.instrument import CRS
+    crs = mock_crs_for_set_nco
+    monkeypatch.setattr(CRS, 'nco_state_dir', str(tmp_path))
+    mock_modules = MagicMock()
+    mock_modules._set_nco = AsyncMock()
+    with patch.object(crs, '_clear_channels', new_callable = AsyncMock), \
+         patch('citkid.crs.instrument.util.get_modules',
+               return_value = mock_modules):
+        await crs.set_nco({1: 1e9, 2: 2e9}, verbose = False)
+    ids = dict(crs.nco_ids)
+    state = util.load_nco_state(util.nco_state_path(1, tmp_path))
+    assert {m: (v['freq'], v['id']) for m, v in state.items()} == \
+        {1: (1e9, ids[1]), 2: (2e9, ids[2])}
+    # A new session: the board still has module 1's NCO, module 2's was
+    # changed by something else
+    fresh = CRS(serial_number = 1, interface = 'eth0')
+    fresh.d = crs.d
+    fresh.analog_bank_high = False
+    fresh.d.get_nco_frequency = AsyncMock(
+        side_effect = lambda module: {1: 1e9 + 0.2, 2: 2.1e9}[module])
+    assert await fresh.recover_nco_state() == [1]
+    assert fresh.nco_freqs == {1: 1e9 + 0.2} and fresh.nco_ids == \
+        {1: ids[1]}
+    # Nothing to recover without a file; a board that can't be read is
+    # warned about
+    monkeypatch.setattr(CRS, 'nco_state_dir', str(tmp_path / 'none'))
+    assert await fresh.recover_nco_state() == []
+    monkeypatch.setattr(CRS, 'nco_state_dir', str(tmp_path))
+    fresh.d.get_nco_frequency = AsyncMock(side_effect = RuntimeError('x'))
+    with pytest.warns(UserWarning, match = 'could not read'):
+        assert await fresh.recover_nco_state() == []
+    # Forgetting a module's NCO forgets its id too
+    crs._forget_modules([1], forget_ncos = True)
+    assert 1 not in crs.nco_ids and 2 in crs.nco_ids
+    # A state file that can't be written only warns
+    monkeypatch.setattr(CRS, 'nco_state_dir', str(tmp_path / 'f.json'))
+    (tmp_path / 'f.json').write_text('')
+    with pytest.warns(UserWarning, match = 'could not save'):
+        crs._save_nco_state([2])
