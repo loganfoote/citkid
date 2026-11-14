@@ -203,7 +203,8 @@ def test_vna_view_script(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize('script', [
     '01_vna_sweep.py', '02_find_resonances.py', '03_tune.py', '04_stream.py',
-    '05_calibrate_streams.py', '06_find_photons.py', 'archive_store.py',
+    '05_calibrate_streams.py', '06_find_photons.py', '07_psds.py',
+    'archive_store.py',
     'vna_view.py', 'vna_report.py', 'store_browser.py'])
 def test_store_path_suffix(script, tmp_path):
     """
@@ -1105,3 +1106,144 @@ def test_nco_phase_check(monkeypatch, capsys):
     assert np.allclose(dphi, [-90., 90.])
     desc = m.describe('x', [1e6, 2e6], [1., 1.], [np.exp(0.5j), np.exp(1j)])
     assert 'spread across tones 14.32 deg' in desc
+
+
+def test_07_psds(photon_store, monkeypatch, capsys):
+    """
+    List the timestreams of every calibration; analyze a set of them into
+    one group (reduced frequencies shared, common modes removed per tone
+    write); then without common-mode removal, with peak deglitching, and
+    with the pulses found by a photon result's filters. No timestream is
+    saved.
+    """
+    from citkid.pipeline import psds
+    path, _ = photon_store
+    m = load_script('07_psds.py')
+    argv = ['--store', str(path)]
+    monkeypatch.setattr(m, 'TIMESTREAMS', [])
+    assert m.main(m.parse_args(argv)) is None
+    out = capsys.readouterr().out
+    assert "0: ts0, 'dark0', set 0" in out and 'ts_cal0/set1' in out
+    assert 'Previous results' in out
+    # Run 0's tone set 0 and both tone sets of run 1
+    monkeypatch.setattr(m, 'TIMESTREAMS', [0, 'dark0b'])
+    res = m.main(m.parse_args(argv))
+    assert sorted(res) == ['timestream0', 'timestream1', 'timestream2']
+    root = dl.open_store(path)
+    g = root['ts_psd0']
+    assert g.attrs['kind'] == 'analysis' and g.attrs['reference'] is None
+    assert g.attrs['timestreams'] == [0, 'dark0b']
+    assert g.attrs['settings']['cn_remove'] is True
+    # 1.5 s at stage 0: 6.7 Hz to 954 Hz
+    np.testing.assert_array_equal(g['f_reduced'][:], [10., 30., 100., 300.])
+    dt = g['timestream0'].attrs['dt']
+    nsamples = g['timestream0'].attrs['stop']
+    levels = {}
+    for j, (run, tone_set) in enumerate([('ts0', 0), ('ts1', 0),
+                                         ('ts1', 1)]):
+        t = g[f'timestream{j}']
+        a = t.attrs
+        assert a['run'] == run and a['tone_set'] == tone_set
+        assert a['calibration'] == 'ts_cal0' and a['cn_removed'] is True
+        assert a['fmin'] == pytest.approx(10 / (nsamples * dt))
+        assert a['cn_lowpass_hz'] == pytest.approx(0.05 / dt)
+        assert a['cn_highpass_hz'] == pytest.approx(a['fmin'])
+        n = len(t['res_idxs'][:])
+        assert all(s == '' for s in t['status'][:])
+        assert t['valid_reduced'][:].all()
+        nb = len(t['f_binned'][:])
+        assert 50 < nb < 100 + 20
+        for key in ('sxx_binned', 'sxx_binned_cn'):
+            assert t[key].shape == (n, nb)
+            assert np.isfinite(t[key][:]).all()
+        for key in ('sxx_reduced', 'sxx_reduced_cn'):
+            assert t[key].shape == (n, 4) and np.isfinite(t[key][:]).all()
+        assert t['cn_weights'].shape[0] == n
+        np.testing.assert_array_equal(t['n_glitches'][:], 0)
+        assert np.all(t['write_idx'][:] >= 0)
+        # The simulated noise is white (plus photon pulses): the reduced
+        # values are flat and alike across tones
+        sxx = t['sxx_reduced'][:]
+        assert np.all(sxx < 3 * np.median(sxx))
+        assert np.all(sxx > np.median(sxx) / 3)
+        # The same tones in the two runs: the same level
+        if tone_set in levels:
+            np.testing.assert_allclose(np.median(sxx), levels[tone_set],
+                                       rtol = 0.5)
+        levels[tone_set] = np.median(sxx)
+        # Uncorrelated tones: removing modes lowers the spectra a little
+        # and never raises them much
+        ratio = t['sxx_reduced_cn'][:] / sxx
+        assert np.all(ratio < 1.3) and np.median(ratio) < 1.
+        cm = t['common_modes']
+        writes = sorted(cm.group_keys())
+        assert len(writes) == (2 if tone_set == 1 else 1)
+        for w in writes:
+            wg = cm[w]
+            k = wg.attrs['n_comp']
+            assert 0 < k <= 3 and k < len(wg['rows'][:])
+            assert wg['sxx_binned'].shape == (k, nb)
+            assert wg['sigma_iter'].shape == (5, len(wg['rows'][:]))
+        np.testing.assert_array_equal(
+            np.sort(np.concatenate([cm[w]['rows'][:] for w in writes])),
+            np.arange(n))
+    loaded = psds.load_group(root, 0)
+    assert len(loaded['timestreams']) == 3
+    assert loaded['timestreams'][2]['common_modes'][1]['n_comp'] > 0
+    assert 'common modes 3 modes' in psds.describe_results(root)
+    # Without common-mode removal: no cn arrays
+    monkeypatch.setattr(m, 'TIMESTREAMS', [dict(name = 'dark0b',
+                                                tone_sets = [0], cal = 0)])
+    m.main(m.parse_args(argv + ['--no-cn']))
+    t = dl.open_store(path)['ts_psd1/timestream0']
+    assert t.attrs['cn_removed'] is False and 'sxx_binned_cn' not in t
+    assert 'common_modes' not in t and t.attrs['run'] == 'ts1'
+    assert dl.open_store(path)['ts_psd1'].attrs['timestreams'] == \
+        [dict(name = 'dark0b', tone_sets = [0], cal = 0)]
+    # Peak deglitching finds the simulated pulses (about 30 photons/s per
+    # tone plus cosmic rays)
+    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    m.main(m.parse_args(argv + ['--deglitch', 'peaks']))
+    t = dl.open_store(path)['ts_psd2/timestream0']
+    assert t.attrs['deglitch'] == 'peaks'
+    ng = t['n_glitches'][:]
+    # About 45 pulses per tone, found in proportion to each tone's
+    # pulse signal-to-noise
+    assert np.all(ng > 0) and 60 < ng.sum() < 600
+    assert np.all(t['glitch_frac'][:] > 0)
+    assert np.all(t['glitch_frac'][:] < 0.3)
+    # With the pulses deglitched, the low-frequency spectrum is lower
+    raw = dl.open_store(path)['ts_psd0/timestream0/sxx_reduced'][:, 0]
+    assert np.median(t['sxx_reduced'][:, 0] / raw) < 0.7
+    # A photon result's filters: cosmic rays only (a few per second), or
+    # every pulse
+    with pytest.raises(ValueError, match = 'PHOTONS'):
+        m.main(m.parse_args(argv + ['--deglitch', 'photons']))
+    root = dl.open_store(path, mode = 'a')
+    if not dl.list_indices(root, 'ts_photons'):
+        m6 = load_script('06_find_photons.py')
+        monkeypatch.setattr(m6, 'TIMESTREAMS', [0])
+        m6.main(m6.parse_args(argv + ['--no-gui']))
+    p = dl.list_indices(dl.open_store(path), 'ts_photons')[0]
+    m.main(m.parse_args(argv + ['--deglitch', 'photons', '--photons',
+                                str(p)]))
+    root = dl.open_store(path)
+    g = root['ts_psd3']
+    assert g.attrs['reference'] == f'ts_photons{p}'
+    t = g['timestream0']
+    n_cosmic = t['n_glitches'][:]
+    assert np.all(n_cosmic >= 0) and np.all(n_cosmic < 30)
+    assert n_cosmic.sum() > 0
+    monkeypatch.setattr(m, 'GLITCH_PULSES', 'all')
+    m.main(m.parse_args(argv + ['--deglitch', 'photons', '--photons',
+                                str(p)]))
+    t = dl.open_store(path)['ts_psd4/timestream0']
+    assert np.all(t['n_glitches'][:] > n_cosmic)
+    assert np.all(t['n_glitches'][:] > 20)
+    # No timestream is saved
+    nsamples = g['timestream0'].attrs['stop']
+    sizes = [max(v.shape)
+             for q in dl.list_indices(root, 'ts_psd')
+             for _, v in root[f'ts_psd{q}'].members(max_depth = None)
+             if isinstance(v, zarr.Array) and v.shape]
+    assert max(sizes) < nsamples / 10

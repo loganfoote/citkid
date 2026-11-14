@@ -1,14 +1,14 @@
 ---
 title: "Tuning and timestreams"
-subtitle: "03_tune, 04_stream, store_browser, 05_calibrate_streams, 06_find_photons"
+subtitle: "03_tune, 04_stream, store_browser, 05_calibrate_streams, 06_find_photons, 07_psds"
 ---
 
 # Overview
 
 After VNA screening (see the VNA screening document), the tuning procedure
 finds the optimal tone power and frequency for each resonator.
-Timestreams are then taken with the tuned tones and calibrated, and the
-photon pulses in them are found.
+Timestreams are then taken with the tuned tones and calibrated, the
+photon pulses in them are found, and their noise spectra are computed.
 
 | Script | What it does | Saves |
 |---|---|---|
@@ -17,6 +17,7 @@ photon pulses in them are found.
 | `store_browser.py` | Any time: browses a store in a window (groups, attributes, notes, the list of timestream runs) | Nothing |
 | `05_calibrate_streams.py` | Calibrates selected timestreams, first in an interactive window, then in batch | `ts_cal{c}` |
 | `06_find_photons.py` | Finds the photon pulses and cosmic rays in calibrated timestreams, with a window for choosing the thresholds | `ts_photons{p}` |
+| `07_psds.py` | Computes the noise spectra of calibrated timestreams, before and after removing the common modes, with optional glitch removal | `ts_psd{p}` |
 
 Before running the measurement scripts, make sure the board is
 configured with `crs_init.py`. The "Getting started" document describes
@@ -46,6 +47,7 @@ that fails later stays, marked incomplete.
                         calibration, and streams
   ts_cal{c}/            stream calibrations (05)
   ts_photons{p}/        photon results (06)
+  ts_psd{p}/            noise spectra (07)
 ```
 
 Calibrated timestreams are never saved. `05_calibrate_streams.py` saves
@@ -529,3 +531,104 @@ ts_photons{p}/          attributes: source (ts_cal{c}), timestreams,
 ## Command line
 
 {{help:06_find_photons.py}}
+
+# 07_psds.py: noise spectra
+
+Choose timestreams in `TIMESTREAMS`. Each timestream is one tone set of
+one run, over the whole run, with a stream calibration that covers its
+tone set. The script lists every combination of run, tone set and
+calibration (run it with `TIMESTREAMS` empty to see the list), so each
+chosen timestream can use a different calibration. A timestream is
+chosen by its index in the list, by run name (every tone set of the
+latest run with that name, each with the latest calibration that covers
+it), or with a dict naming the run, the tone sets and the calibration.
+
+The timestreams chosen in one run of the script go together: they are
+saved in one group, `ts_psd{p}`, with one grid of reduced frequencies
+for all of them, so they are plotted and compared as a set. For another
+set, run the script again (or keep a copy of it with other settings).
+
+## What is computed
+
+For each timestream, tone write by tone write (the tones streamed
+together), the calibrated timestream x of every tone is computed in
+memory and:
+
+1. **Glitches are optionally taken out** (`DEGLITCH`). With `'peaks'`,
+   each tone's peaks above `GLITCH_NSTD` standard deviations are found
+   after subtracting a slow baseline (`GLITCH_BASELINE_S`). With
+   `'photons'`, the optimal filters of a result of `06_find_photons.py`
+   (`PHOTONS`) are applied to the tones they were made for, and the
+   cosmic rays (events seen by at least `COSMIC_MIN_MULT` tones within
+   `COINC_WIN` samples) are taken out; `GLITCH_PULSES = 'all'` takes
+   out every pulse instead. Either way, the samples from `GLITCH_PRE_S`
+   before to `GLITCH_POST_S` after each glitch are replaced with
+   Gaussian noise of the tone's own level. This happens before the
+   common modes are found, since cosmic rays are seen by many tones at
+   once.
+2. **Each tone's spectrum** $S_{xx}$ is computed over the whole run and
+   kept in two reduced forms. The reduced values are the mean of
+   $S_{xx}$ within 20% of each frequency of the grid 0.1, 0.3, 1, 3,
+   10, 30, ... Hz, over the part of the grid that the run allows: from
+   `FMIN_MULT` (10) times the lowest frequency of the spectrum (one over
+   the duration) up to half the Nyquist frequency divided by `FMAX_DIV`
+   (10). The edges of the spectrum are left out on purpose. The binned
+   spectrum has `NBINS` logarithmic bins from `FMIN_MULT` over the
+   duration up to the Nyquist frequency; the frequencies below the first
+   bin are kept unbinned. The pulse tube harmonics can be filtered out
+   before binning (`FILTER_PT_N`, `PT_FREQUENCY`).
+3. **The common modes are removed** (`CN_REMOVE`). The common modes of
+   the tones of each write are found with the iterative algorithm of
+   `citkid.xcal.corr.calc_cm` (`CN_N_COMP` components, `CN_N_ITER`
+   iterations). While the weights are found, the timestreams are
+   highpass filtered at `CN_HIGHPASS_HZ` (by default the lowest binned
+   frequency), so that the lowest 1/f noise does not dominate the
+   weights, and the modes are lowpass filtered at `CN_LOWPASS_HZ` (by
+   default a tenth of the Nyquist frequency) to make the iteration
+   converge. The modes that are removed are not filtered. Step 2 is
+   then repeated on the cleaned tones, and the modes themselves get
+   binned spectra.
+
+A write with fewer tones than `CN_N_COMP` + 1 uses fewer components (a
+single tone keeps its spectrum as it is). The tones of a write are held
+in memory together, so `MEMORY_GB` limits the size of a run that can be
+analyzed.
+
+## What is saved
+
+Each run of the script makes a new `ts_psd{p}` group at the store root,
+with the chosen timestreams, the settings, and the reduced frequencies
+of the set (`f_reduced`), and one `timestream{j}` group per timestream:
+
+```text
+ts_psd{p}/              attributes: timestreams, settings, reference
+                        (the photon result used for deglitching)
+                        f_reduced: the set's reduced frequencies, Hz
+  timestream{j}/        attributes: run, tone set, calibration, source
+                        sweep and writes, samples, sample period,
+                        duration, the lowest binned frequency, bins,
+                        deglitching, common-mode settings used
+                        f_binned: binned frequencies, Hz
+                        valid_reduced: which of f_reduced this
+                        timestream covers
+                        per tone: res_idxs, write_idx, status (empty if
+                        analyzed), n_glitches, glitch_frac,
+                        sxx_reduced, sxx_binned (1/Hz), and with the
+                        common modes removed: sxx_reduced_cn,
+                        sxx_binned_cn, cn_weights
+    common_modes/       per tone write: the tones (rows), the modes'
+      write{k}/         binned spectra (sxx_binned), and the residual
+                        sigma of each tone after each iteration
+                        (sigma_iter)
+```
+
+`citkid.pipeline.psds.load_group(root, p)` reads a result back as
+dicts of arrays.
+
+## Settings
+
+{{settings:07_psds.py}}
+
+## Command line
+
+{{help:07_psds.py}}
