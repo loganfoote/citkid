@@ -20,6 +20,7 @@ from ...qt_compat import (
     get_qapp, widget_font_stylesheet
 )
 from .marks import ask_note, ask_reason, mark_label, record, registry
+from .photon_thresholds import _message_box
 
 # Histograms shown
 N_HIST = 3
@@ -303,12 +304,13 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
 
     def outside_limits(self):
         """
-        Find the tones outside the review limits or without a value.
+        Find the tones outside the review limits or without a value, and
+        the tones marked bad.
 
         Returns:
         outside (set of int): indices in ``rows``.
         """
-        outside = set()
+        outside = {i for i, r in enumerate(self.res_idxs) if r in self.bad}
         for k in range(N_HIST):
             v = self.values(k)
             lim = self.limits.get(self._key(k))
@@ -326,8 +328,12 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         (unset limits at the edges of the data), and list the tones.
         """
         self._updating = True
+        # The histograms leave out the tones marked bad (the list keeps
+        # them, flagged)
+        keep = np.array([r not in self.bad for r in self.res_idxs],
+                        dtype = bool)
         for k in range(N_HIST):
-            v = self.values(k)
+            v = self.values(k)[keep]
             v = v[np.isfinite(v)]
             key = self._key(k)
             lim = self.limits.get(key)
@@ -527,7 +533,8 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
                 return
             self.bad[r] = reason
             record(self.root, r, 'bad', reason, self.stage)
-        self._fill_list()
+        # The histograms change too: the tone leaves or rejoins them
+        self.refresh()
         self.select(i)
 
     def add_note(self):
@@ -543,6 +550,39 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
             record(self.root, self.res_idxs[i], 'note', note, self.stage)
             self.select(i)
 
+
+def ask_existing_psd(path, description):
+    """
+    Ask what to do with a saved set of spectra that a run would make
+    again: a new set (the default), compute it again with its saved
+    review, or overwrite it, which asks once more to be sure.
+
+    Parameters:
+    path (str): the set's path (``ts_psd{p}``).
+    description (str): the set, as ``psds.describe_group``.
+
+    Returns:
+    choice (str or None): 'new', 'load', 'overwrite', or None to stop
+        (Cancel, or closing a box).
+    """
+    choice = _message_box(
+        f'{path} exists',
+        f'{path} is already saved:\n\n{description}\n\n'
+        'New: another set, with the window opening on its limits. '
+        'Load: compute it again with its settings, bad marks and limits, '
+        'without the window. Overwrite: replace it.',
+        ['New', 'Load', 'Overwrite', 'Cancel'], 'New')
+    if choice in ('New', 'Load'):
+        return choice.lower()
+    if choice != 'Overwrite':
+        return None
+    sure = _message_box(
+        f'Overwrite {path}?',
+        f'Overwrite {path}? Its spectra, bad marks, limits and notes are '
+        'lost.',
+        ['Overwrite', 'Cancel'], 'Cancel',
+        icon = QtWidgets.QMessageBox.Icon.Warning)
+    return 'overwrite' if sure == 'Overwrite' else None
 
 def run_psd_overview(
     ts, result, f_reduced, bad = None, limits = None, root = None,

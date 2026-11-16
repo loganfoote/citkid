@@ -227,11 +227,17 @@ def test_window_thresholds(qapp, tones):
     assert win.current() == other
     ov._on_item(ov.outside_list.item(0))
     assert win.current() == low_tone
-    # Bad tones show in the overview list too
+    # A tone marked bad is flagged in the overview list and left out of
+    # the histograms
+    assert ov.curves[key].getData()[1].sum() == 2
     win._ask_reason = lambda: 'high noise'
     win.toggle_bad()
-    assert ov.outside_list.item(0).text().startswith('x res')
+    assert win.current() in win.outside_limits()
+    assert any(ov.outside_list.item(i).text().startswith('x res')
+               for i in range(ov.outside_list.count()))
+    assert ov.curves[key].getData()[1].sum() == 1
     win.toggle_bad()
+    assert ov.curves[key].getData()[1].sum() == 2
     ov.close()
     # Selecting a tone shows its thresholds
     win.tone_list.setCurrentRow(0)

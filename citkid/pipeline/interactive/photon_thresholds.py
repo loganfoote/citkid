@@ -1483,7 +1483,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
     def outside_limits(self, values = None):
         """
         Find the tones outside the overview's review limits (or without a
-        value, e.g. a failed detection or fit).
+        value, e.g. a failed detection or fit), and the tones marked bad.
 
         Parameters:
         values (dict or None): ``overview_values`` output. Default None:
@@ -1493,7 +1493,8 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         outside (set of int): indices in ``rows``.
         """
         values = self.overview_values() if values is None else values
-        outside = set()
+        outside = {i for i, r in enumerate(self.res_idxs)
+                   if self.thresholds.is_bad(r)}
         for key, _ in OVERVIEW:
             v = values[key]
             lim = self.thresholds.limits.get(key)
@@ -1642,10 +1643,14 @@ class ToneOverviewWindow(QtWidgets.QDialog):
         edges of the data.
         """
         self._values = self.main.overview_values()
+        # The histograms leave out the tones marked bad (the list keeps
+        # them, flagged)
+        keep = np.array([not self.main.thresholds.is_bad(r)
+                         for r in self.main.res_idxs], dtype = bool)
         self._updating = True
         for key, _ in self.items:
             k = 1e6 if key == 'tau' else 1.
-            raw = self._values[key]
+            raw = self._values[key][keep]
             raw = raw[np.isfinite(raw)]
             lim = self.main.thresholds.limits.get(key)
             if lim is None:

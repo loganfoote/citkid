@@ -25,6 +25,7 @@ noise spectra. Run them in this order:
 | 12 | `06b_cosmic_rays.py`: lifetimes from cosmic rays | Tuning and timestreams |
 | 13 | `07_psds.py`: noise spectra | Tuning and timestreams |
 | 14 | `08_report.py`: lifetimes and spectra as plain files | Tuning and timestreams |
+| 15 | `09_report_site.py`: browsable pages of every device | Tuning and timestreams |
 
 # The environment
 

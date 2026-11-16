@@ -15,7 +15,31 @@ def calc_sig(x):
     sig (np.array, (N, 1)): sqrt(sum(x ** 2) / T) for each timestream.
     """
     x = np.asarray(x)
-    return np.sqrt(np.sum(x ** 2, axis = 1)[:, np.newaxis] / x.shape[1])
+    # The sum of squares without a squared copy of x
+    return np.sqrt(np.einsum('ij,ij->i', x, x)[:, np.newaxis] / x.shape[1])
+
+def _filter_rows(filt, x, dt, f_cutoff, order, out = None):
+    """
+    Apply a filter to each row of x, so that the filter's working copies
+    are one row long rather than the whole array.
+
+    Parameters:
+    filt (callable): ``lowpass_filter`` or ``highpass_filter``.
+    x (np.array, (N, T)): the timestreams.
+    dt (float): sample time in s.
+    f_cutoff (float): cutoff frequency in Hz.
+    order (int): filter order.
+    out (np.array, (N, T) or None): where to put the filtered rows; may
+        be ``x`` itself. None (default): a new array.
+
+    Returns:
+    out (np.array, (N, T)): the filtered timestreams.
+    """
+    if out is None:
+        out = np.empty(x.shape, dtype = np.result_type(x, np.float64))
+    for i in range(x.shape[0]):
+        out[i] = filt(x[i], dt, f_cutoff, order)
+    return out
 
 def pca(x, N_comp, sig = None, highpass_params = None):
     """
@@ -25,8 +49,8 @@ def pca(x, N_comp, sig = None, highpass_params = None):
     where a_kc are scaling factors, A_ct are the common components, and n_kt are
     white noise timestreams. k is the detector index (max N), t is the time
     index (max T), and c is the component index (max N_comp).
-    The first N_comp eigenvectors, sorted by eigenvalue, of the covariance 
-    matrix of the normalized timestreams are used to calculate the common 
+    The first N_comp eigenvectors, sorted by eigenvalue, of the covariance
+    matrix of the normalized timestreams are used to calculate the common
     components.
 
     Parameters:
@@ -47,19 +71,19 @@ def pca(x, N_comp, sig = None, highpass_params = None):
     a (array-like, (N, N_comp)): Scaling factors from A -> x.
     A (array-like, (N_comp, T)): Common modes.
     """
-    # Input validation 
+    # Input validation
     x = np.asarray(x)
     N, T = x.shape
     if not (0 <= N_comp <= N):
         raise ValueError("N_comp must be between 0 and N")
-    
+
     # Apply highpass filter if specified
     if highpass_params is not None:
         if len(highpass_params) != 3:
             raise ValueError("highpass_params must be (dt, frequency, order)")
-        x_filt = highpass_filter(x, *highpass_params)
+        x_filt = _filter_rows(highpass_filter, x, *highpass_params)
     else:
-        x_filt = x.copy()
+        x_filt = x
 
     # Calculate sigma if not provided
     if sig is None:
@@ -67,15 +91,16 @@ def pca(x, N_comp, sig = None, highpass_params = None):
     else:
         if sig.shape != (x.shape[0], 1):
             raise ValueError("sig must have shape (N, 1)")
-        
-    # Perform PCA
-    x0 = x_filt / sig
-    C = x0 @ x0.T / T
+
+    # PCA of the timestreams normalized by sig. The normalization is
+    # folded into the covariance and the projection, so no scaled copy
+    # of the timestreams is made
+    C = (x_filt @ x_filt.T) / (sig * sig.T) / T
     eigval, eigvec = np.linalg.eig(C)
     eigval, eigvec = np.real(eigval), np.real(eigvec)
     v = eigvec[:, np.flip(np.argsort(eigval))[:N_comp]]
     a = sig * v
-    A = a.T @ (x / sig**2)
+    A = (a / sig ** 2).T @ x
     return a, A
 
 def calc_a(x, A):
@@ -182,17 +207,20 @@ def calc_cm(x, N_comp, N_iter, dt, lowpass_params, highpass_params):
         else:
             a, A0 = pca(x, N_comp, sig, pca_highpass)
         A = lowpass_filter(A0, dt, *lowpass_params)
-        y = x - a @ A
+        # The residual x - a @ A in one array, highpassed row by row
+        y = a @ A
+        np.subtract(x, y, out = y)
         if highpass_params is not None:
-            y = highpass_filter(y, dt, *highpass_params)
+            _filter_rows(highpass_filter, y, dt, *highpass_params, out = y)
         sig = calc_sig(y)
         sig_iter[i] = sig
+        del y
     return a, A0, sig_iter, a_full
 
 def calc_cm_complex(z, theta = None, *calc_cm_params):
     """
     Calculate the complex scaling factors and common modes of complex
-    timestreams for independent real/imaginary components using the iterative 
+    timestreams for independent real/imaginary components using the iterative
     common mode algorithm.
 
     Parameters:
@@ -214,21 +242,21 @@ def calc_cm_complex(z, theta = None, *calc_cm_params):
     theta (array-like, (N,)): Rotation angles used to rotate each timestream to
         the real axis.
     """
-    # Input validation 
+    # Input validation
     z = np.asarray(z, dtype = np.complex128)
 
     # Rotate each timestream median to real axis
     if theta is None:
         theta = np.angle(np.median(z, axis = 1))
-    z = z * np.exp(-1j * theta[:, np.newaxis]) 
+    z = z * np.exp(-1j * theta[:, np.newaxis])
 
     # Calculate real and imaginary common modes
     aI, AI, sigI_iter, aI_full =\
         calc_cm(z.real, *calc_cm_params)
-    
+
     aQ, AQ, sigQ_iter, aQ_full =\
         calc_cm(z.imag, *calc_cm_params)
-    
+
     return aI, aQ, AI, AQ, sigI_iter, sigQ_iter, aI_full, aQ_full, theta
 
 ################################################################################
@@ -237,14 +265,14 @@ def calc_cm_complex(z, theta = None, *calc_cm_params):
 def remove_cm(x, a, A, idx):
     """
     Remove common modes from a timestream.
-    
+
     Parameters:
     x (array-like, (T,) or (N, T)): Single timestream data of length T, or
         (N, T) for N timestreams.
     a (array-like, (N, C)): Scaling factors from A -> x.
     A (array-like, (C, T)): Common modes.
     idx (array-like, (M,) or int): Indices into a corresponding to x.
-    
+
     Returns:
     y (array-like, (N, T)): Timestreams with common modes removed.
     """
@@ -277,16 +305,20 @@ def remove_cm(x, a, A, idx):
         raise ValueError("a and A shape mismatch")
     if A.shape[1] != T:
         raise ValueError("A and x shape mismatch")
-    
-    # Remove common modes 
-    y = x - a[idx, :] @ A
+
+    # Remove the common modes, in the array holding their sum
+    y = a[idx, :] @ A
+    if np.can_cast(np.result_type(x, y), y.dtype):
+        np.subtract(x, y, out = y)
+    else:
+        y = x - y
     return y
 
 def remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta = None):
     """
     Remove common modes from complex timestreams. Rotates z to the real axis,
     then undoes the rotation after removing the common modes.
-    
+
     Parameters:
     z (array-like, (T,) or (N, T)): Single complex timestream data of length T,
         or (N, T) for N timestreams.
@@ -330,11 +362,11 @@ def remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta = None):
     # Calculate common modes
     y_real = remove_cm(z.real, aI, AI, idx)
     y_imag = remove_cm(z.imag, aQ, AQ, idx)
-    y = y_real + 1j * y_imag 
+    y = y_real + 1j * y_imag
 
     # Undo rotation
     y = y * np.exp(1j * theta)
-    
+
     # Format theta for return
     if theta.ndim == 2:
         theta = theta[:, 0]

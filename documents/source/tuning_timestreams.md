@@ -1,6 +1,6 @@
 ---
 title: "Tuning and timestreams"
-subtitle: "03_tune, 04_stream, store_browser, 05_calibrate_streams, 06a_find_photons, 06b_cosmic_rays, 07_psds, 08_report"
+subtitle: "03_tune, 04_stream, store_browser, 05_calibrate_streams, 06a_find_photons, 06b_cosmic_rays, 07_psds, 08_report, 09_report_site, set_notes"
 ---
 
 # Overview
@@ -13,12 +13,14 @@ board with `crs_init.py` first (see "Getting started").
 |---|---|---|
 | `03_tune.py` | Plans the tones, sweeps the power, chooses each tone's power and frequency (two windows) | `tune{k}` |
 | `04_stream.py` | Window for calibrating, previewing and taking named timestream runs | `ts{n}` |
-| `store_browser.py` | Any time: browse a store (groups, attributes, runs, tone marks) | Nothing |
+| `store_browser.py` | Any time: browse a store (groups, attributes, runs, tone marks, notes) | Notes, if edited |
 | `05_calibrate_streams.py` | Calibrates timestreams, in a window and then in batch | `ts_cal{c}` |
 | `06a_find_photons.py` | Finds photons and cosmic rays, with a threshold window | `photons/<name>` |
 | `06b_cosmic_rays.py` | Fits cosmic-ray tails pulse by pulse, with a threshold window | `cosmic/<name>` |
 | `07_psds.py` | Noise spectra before and after common-mode removal | `ts_psd{p}` |
 | `08_report.py` | Lifetimes and noise spectra as figures, tables and text | Files in a folder |
+| `09_report_site.py` | Browsable pages of every device: what was taken, the figures, one page per resonator | Files in a folder |
+| `set_notes.py` | Any time: add notes to the store or a group, shown on the pages | `notes` attributes |
 
 ```text
 <device>.zarr/
@@ -162,9 +164,14 @@ adds photons and cosmic rays to it.
 Opens a store read-only (another script can keep writing; **F5**
 rereads): a tree of its groups with one-line summaries, the selected
 item's attributes, the timestream runs (filter by typing, double-click
-to find the stream) and the tone marks. **Open** (Ctrl+O) chooses
-another store; `--pick` starts with the dialog; `--runs` prints the runs
-instead of opening the window.
+to find the stream), the tone marks, and the notes. The Notes tab
+lists everything the report site shows notes for (the store, the VNA
+sweeps, tunings, calibration sweeps, runs, stream calibrations and
+results); select a row and edit its notes below, which are
+saved when you move to another row or tab or close the window (the one
+thing the browser writes). **Open** (Ctrl+O) chooses another store;
+`--pick` starts with the dialog; `--runs` prints the runs instead of
+opening the window.
 
 ## Settings
 
@@ -197,10 +204,11 @@ the tone.
 | `CALIBRATE` | Runs to calibrate: `name` (the latest run with it) or `run = n`; `chunks` (`None`: all, `n`: the first n, `(first, stop)`); `tone_sets` (`None`: all) |
 | `F_AVG` | Fine sweep points averaged together |
 | `INTERACTIVE` | Review in the window before the batch |
+| `FIT_IQ` | Also fit each resonance (nonlinear IQ fit): an IQ fit panel in the window, the rest in batch; the fits go to the report |
 
 ## Command line
 
-`--new`, `--no-gui`.
+`--new`, `--fit-iq`, `--no-gui`.
 
 # 06a_find_photons.py: find photons
 
@@ -377,12 +385,16 @@ cosmic/<name>/          attrs: run, tone set, calibration, events,
 tone sets and calibration; empty lists them). The timestreams of one run
 of the script are saved together in `ts_psd{p}` with one grid of reduced
 frequencies, named by `NAME`. Tones marked bad, and `BAD_TONES`, are
-left out.
+left out. When a set with that name exists (without a name: one with the
+same `TIMESTREAMS`), a popup offers a new set (default; the window opens
+with the saved limits), computing it again with its saved settings, bad
+marks and limits without the window, or overwriting it (asks again);
+with `--no-gui`, `--new`, `--load` or `--overwrite` decide.
 
 | Step | What it does |
 |---|---|
 | Deglitch (optional) | `'peaks'`: each tone's peaks above `GLITCH_NSTD` sigma; `'photons'`: a photon result's filters (`PHOTONS`) and its cosmic rays (`GLITCH_PULSES = 'all'`: every pulse); `GLITCH_PRE_S` to `GLITCH_POST_S` around each glitch is replaced with noise |
-| Spectra | $S_{xx}$ per tone: reduced values (the mean within 20% of 0.1, 0.3, 1, 3, 10, ... Hz, from `FMIN_MULT` / duration to Nyquist / 2 / `FMAX_DIV`) and `NBINS` logarithmic bins; also the spectra of the loop components, along the loop ($r\theta$) and across it ($A$), and their ratio in dB at the reduced frequencies, the s-factor |
+| Spectra | $S_{xx}$ per tone: reduced values (the mean within 20% of 0.1, 0.3, 1, 3, 10, ... Hz, from `FMIN_MULT` / duration to Nyquist / 2 / `FMAX_DIV`) and `NBINS` logarithmic bins; also the spectra of the loop components, parallel to the loop ($r\theta$, dissipation) and perpendicular to it ($A$, amplitude), and their ratio in dB at the reduced frequencies, the s-factor. The droop of the CRS decimation filters is undone (the rfmux transfer function), and the spectra end at 0.8 of the Nyquist frequency |
 | Common modes | Per tone write, `CN_N_COMP` modes by `citkid.xcal.corr.calc_cm` (`CN_N_ITER` iterations; highpass `CN_HIGHPASS_HZ` while finding the weights, lowpass `CN_LOWPASS_HZ` on the modes while iterating; the removed modes are unfiltered), then the spectra again on the cleaned tones, and the modes' spectra |
 | Review | The overview window on the raw spectra, before the common modes (skip it with `INTERACTIVE = False` or `--no-gui`); tones marked bad there stay out of the common-mode fit |
 
@@ -439,7 +451,8 @@ or name.
 
 ## Command line
 
-`--name`, `--no-gui`, `--no-cn`, `--deglitch photons --photons name`.
+`--name`, `--new`, `--load`, `--overwrite`, `--no-gui`, `--no-cn`,
+`--deglitch photons --photons name`.
 
 # 08_report.py: results in plain files
 
@@ -448,9 +461,11 @@ Writes every timestream result of a store to a folder, after
 
 | File | Contents |
 |---|---|
-| `<device>_lifetime_<kind>_<name>.png` | One per photon and cosmic-ray result: pulse height (photons: the mean pulse's optimal-filter height) and decay time against resonant frequency, with histograms at the side; bad tones hollow |
-| `<device>_lifetime_<kind>_<name>.csv` | One row per tone: res_idx, fres, height, tau, n_used, status, bad, bad_reason |
-| `<device>_psd<p>.png` | One per PSD group, over the tones of all its timestreams: the Sxx mean with the 1st to 99th percentile shaded, before and after common-mode removal (off-resonance tones dashed, if any); Sxx against resonant frequency at 0.1, 1, 10 and 100 Hz (those the group has) with histograms at the side; the same for the loop components and the s-factor |
+| `<device>_lifetime_<kind>_<name>.png` | One per photon and cosmic-ray result: pulse height (photons: the mean pulse's optimal-filter height), decay time (us) and pulses per second against resonant frequency (MHz), with histograms at the side; tones marked bad are left out; outliers sit at the edge as arrows with their values |
+| `<device>_lifetime_<kind>_<name>.csv` | One row per tone: res_idx, fres, height, tau, rate, n_used, status, bad, bad_reason |
+| `<device>_multiplicity_<kind>_<name>.png` | One per result with coincident events: how many tones each event hit (log counts), and events per second over the run in 5 s bins |
+| `<device>_multiplicity_<kind>_<name>.csv` | One row per coincident event: time_s, mult |
+| `<device>_psd<p>.png` | One per PSD group, over the tones of all its timestreams: the Sxx mean with the 1st to 99th percentile shaded, before and after correlated noise removal (off-resonance tones dashed, if any); Sxx against resonant frequency (MHz) at 0.1, 1, 10 and 100 Hz (those the group has) with histograms at the side; the same for the amplitude and dissipation noise (perpendicular and parallel to the loop) and the s-factor. Tones marked bad are left out; outliers sit at the edge as arrows with their values |
 | `<device>_psd<p>.csv` | One row per tone: timestream, run, res_idx, fres, status, bad, and Sxx (raw and common modes removed) and s-factor at every reduced frequency |
 | `<device>_psd<p>_spectra.csv` | The mean and range of every spectrum kind at every binned frequency |
 | `<device>_timestreams.txt` | What each result holds: tones, bad tones with reasons, medians and ranges |
@@ -467,3 +482,56 @@ Writes every timestream result of a store to a folder, after
 ## Command line
 
 `--out folder`, `--pick` (choose the store in a dialog).
+
+# 09_report_site.py: browsable pages
+
+Builds a static site (plain HTML, opens from the drive): one page per
+device store, from the results in the store, and a top page of every
+device built so far. Each run builds one store (`STORE`, `--store`, or
+a dialog). The store browser opens first on its Notes tab: edit the
+notes of any item, or **Attach file...** to copy a file (a photo, a
+plot, a PDF) into the site next to that item, linked from the page and
+never put in the store; close the browser to build. A store that has
+not changed is left alone. A report that exists is not replaced
+without asking: a popup offers to keep the attached files and
+`notes.md` (rebuilding the pages), to overwrite everything, or to stop;
+without the window, `--update` or `--overwrite` decide. Only reduced
+results are copied; timestreams and pulses stay in the store, which
+every item names by path.
+
+| Page | Contents |
+|---|---|
+| `index.html` | Every cooldown and device (wafer, die, store suffix, counts); type under a heading to filter, click one to sort. No file paths, so the site can move |
+| `<cooldown>/<device>/index.html` | What was taken (sweeps, tunings, calibration sweeps, runs with their settings, calibrations, results), with notes and store paths; the VNA, tuning (chosen powers), stream calibration (the IQ fits, with `FIT_IQ`), photon, cosmic-ray and noise figures (every version in a dropdown, latest first, with its notes); a sortable table of the resonators; the tone marks |
+| `<cooldown>/<device>/res/res<r>.html` | One per resonator: its IQ loop at the chosen power, calibration sweep, mean photon and cosmic-ray pulses, and spectra; its numbers from every step and result |
+| `<cooldown>/<device>/figures/`, `data/` | The figures (PNG) and tables (CSV) |
+| `<cooldown>/<device>/notes.md` | Written by hand; shown at the top of the device page and never overwritten |
+| `<cooldown>/<device>/attachments/` | Files attached in the store browser, by item, linked from the page |
+
+Each section of the device page folds (click its heading); the
+resonator and tone-mark tables start folded, with a filter box. A
+device folder is self-contained: copy it into another site's
+`<cooldown>` folder and run `09_report_site.py --index-only` there to
+list it.
+
+Notes come from the store: the `notes` of the store itself, the VNA
+sweep, tuning, runs and results, set when they are taken or later in
+the store browser's Notes tab or with `set_notes.py`
+(`python set_notes.py --store <store> --path photons/dark "text"`;
+without text it lists the notes).
+
+## Settings
+
+{{settings:09_report_site.py}}
+
+| Setting | Meaning |
+|---|---|
+| `STORE` | The store; `None`: a dialog |
+| `OUT_DIR` | The site folder |
+| `RES_PAGES` | One page per resonator (about 100 kB each) |
+| `INTERACTIVE` | Open the store browser on its Notes tab first |
+
+## Command line
+
+`--store path`, `--update`, `--overwrite`, `--force` (rebuild an
+unchanged store), `--no-res-pages`, `--no-gui`, `--index-only`.

@@ -1022,6 +1022,115 @@ MARK_KINDS = ('bad', 'note', 'clear')
 BAD_REASONS = ('double resonance', 'no resonance', 'weird pulse shape',
                'low or no pulses', 'high noise', 'bad fit', 'other')
 
+def set_notes(root, path, text):
+    """
+    Set the notes of the store or of one group (attribute ``notes``),
+    which the report site shows.
+
+    Parameters:
+    root (zarr.Group): the store root (writable).
+    path (str): the group, e.g. 'photons/dark' or 'tune0'; '' for the
+        store itself.
+    text (str): the notes; blank removes them.
+
+    The group's ``notes_updated`` attribute records when (the report site
+    rebuilds a device whose notes changed).
+
+    Returns:
+    grp (zarr.Group): the group written.
+    """
+    grp = root[path] if path else root
+    if text and text.strip():
+        grp.attrs['notes'] = text.strip()
+    elif 'notes' in grp.attrs:
+        del grp.attrs['notes']
+    grp.attrs['notes_updated'] = _now()
+    return grp
+
+def set_run_notes(root, tuning, n, text):
+    """
+    Set a timestream run's notes: in the tuning's run list and on each
+    of its stream groups.
+
+    Parameters:
+    root (zarr.Group): the store root (writable).
+    tuning (str): the tuning, e.g. 'tune0'.
+    n (int): the run's index in that tuning's run list.
+    text (str): the notes.
+
+    Returns:
+    record (dict): the run's record afterwards.
+    """
+    tune = root[tuning]
+    update_stream_run(tune, int(n), notes = text.strip())
+    grp = tune[STREAMS_GROUP]
+    grp.attrs['notes_updated'] = _now()
+    record = grp.attrs['runs'][int(n)]
+    for path in record.get('paths', []):
+        if path in root:
+            root[path].attrs['notes'] = text.strip()
+    return record
+
+def notes_entries(root):
+    """
+    List everything notes can be kept on, which is what the report site
+    shows notes for: the store, the VNA sweeps, the tunings and their
+    calibration sweeps, the stream calibrations, the photon, cosmic-ray
+    and PSD results, and every timestream run (the notes in its run
+    record).
+
+    Parameters:
+    root (zarr.Group): the store root.
+
+    Returns:
+    entries (list of dict): per item, the store first and then in path
+        order: ``path`` (the group; a run's first stream group),
+        ``label`` ('(store)', the path, or 'ts{n} name' for a run),
+        ``kind`` ('store', the group's kind, or 'timestream run'),
+        ``notes`` (str) and ``run`` (None, or (tuning, n) for a run).
+    """
+    entries = [dict(path = '', label = '(store)', kind = 'store',
+                    notes = str(root.attrs.get('notes') or ''), run = None)]
+    groups = []
+    for name in root.group_keys():
+        g = root[name]
+        if name.startswith(('vna', 'ts_cal', 'ts_psd')):
+            groups.append(g)
+        elif name.startswith('tune'):
+            groups.append(g)
+            groups += [g[sub] for sub in g.group_keys()
+                       if sub.startswith('cal')]
+        elif name in ('photons', 'cosmic'):
+            groups += [g[sub] for sub in g.group_keys()]
+    for g in groups:
+        entries.append(dict(path = g.path, label = g.path,
+                            kind = str(g.attrs.get('kind')),
+                            notes = str(g.attrs.get('notes') or ''),
+                            run = None))
+    for run in stream_runs(root):
+        if not run.get('paths') or not run.get('tuning'):
+            continue
+        entries.append(dict(
+            path = run['paths'][0], label = f"{run['group']} {run['name']}",
+            kind = 'timestream run', notes = str(run.get('notes') or ''),
+            run = (run['tuning'], int(run['run']))))
+    entries[1:] = sorted(entries[1:], key = lambda e: _natural(e['path']))
+    return entries
+
+def list_notes(root):
+    """
+    List the notes of the store, its groups and its runs.
+
+    Parameters:
+    root (zarr.Group): the store root.
+
+    Returns:
+    notes (list of tuple): (label, text) for every ``notes_entries``
+        item with notes, the store first ('' label).
+    """
+    return [('' if e['kind'] == 'store' else e['label'], e['notes'])
+            for e in notes_entries(root) if e['notes']]
+
 def tone_marks_group(root, create = False):
     """
     Return the tone-marks group at the store root.

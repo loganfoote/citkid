@@ -3,6 +3,7 @@ Tests for the store browser window (``citkid.daq_browser``), on a small
 store in the current layout.
 """
 import numpy as np
+import os
 import pytest
 from pyqtgraph.Qt import QtWidgets
 from citkid import daq_layout as dl
@@ -145,6 +146,73 @@ def test_window(qapp, store):
     names = [top.child(i).text(0) for i in range(top.childCount())]
     assert names == ['resonators0', 'ts_cal0', 'tune0']
     assert top.child(1).text(2) == '1 selected'
+    # The notes tab lists the store, every step and result, and every
+    # run; the editor holds the selected row's notes and saves them by
+    # itself on a row change, a tab change, or closing
+    labels = [win.notes_table.item(i, 0).text()
+              for i in range(win.notes_table.rowCount())]
+    assert labels == ['(store)', 'ts_cal0', 'tune0', 'tune0/cal0',
+                      'ts0 dark0', 'tune0/cal1', 'ts1 dark1']
+    kinds = [win.notes_table.item(i, 1).text()
+             for i in range(win.notes_table.rowCount())]
+    assert kinds[0] == 'store' and kinds[4] == 'timestream run'
+    assert win.notes_table.item(3, 2).text() == 'after warm-up'
+    assert win.notes_table.item(6, 2).text() == 'lights off ...'
+    win.tabs.setCurrentIndex(3)
+    win.notes_table.setCurrentCell(2, 0)
+    assert 'Notes of tune0' in win.notes_label.text()
+    win.notes_edit.setPlainText('retuned after warm-up')
+    win.notes_table.setCurrentCell(0, 0)
+    assert dl.open_store(store)['tune0'].attrs['notes'] == \
+        'retuned after warm-up'
+    assert win.notes_table.item(2, 2).text() == 'retuned after warm-up'
+    win.notes_edit.setPlainText('cooled on Monday')
+    win.tabs.setCurrentIndex(0)
+    assert dl.open_store(store).attrs['notes'] == 'cooled on Monday'
+    assert dl.list_notes(dl.open_store(store))[0] == ('', 'cooled on Monday')
+    # A run's notes go to its record and its stream group; saved on close
+    win.notes_table.setCurrentCell(6, 0)
+    win.notes_edit.setPlainText('lights on')
+    win.close()
+    root = dl.open_store(store)
+    assert dl.stream_runs(root)[1]['notes'] == 'lights on'
+    assert root['tune0/cal1/write0/ts1'].attrs['notes'] == 'lights on'
+    assert ('ts1 dark1', 'lights on') in dl.list_notes(root)
+
+
+def test_attachments(qapp, store, tmp_path):
+    """
+    With a site folder, a file can be attached to the selected item: it
+    is copied into the site's device folder and listed, never into the
+    store.
+    """
+    from citkid.pipeline import site
+    site_dir = tmp_path / 'site'
+    win = StoreBrowserWindow(store, title = 't', site_dir = str(site_dir))
+    win.show()
+    qapp.processEvents()
+    assert not win.attach_btn.isEnabled()
+    win.tabs.setCurrentIndex(3)
+    win.notes_table.setCurrentCell(2, 0)         # tune0
+    assert win.attach_btn.isEnabled()
+    f = tmp_path / 'wiring.txt'
+    f.write_text('photo of the wiring')
+    rel = win.attach_file(str(f))
+    dev = site_dir / 'cd1' / 'devA'
+    assert rel == 'attachments/tune0/wiring.txt'
+    assert (dev / rel).read_text() == 'photo of the wiring'
+    assert site.load_attachments(str(dev)) == {'tune0': [rel]}
+    assert 'attached: wiring.txt' in win.notes_label.text()
+    # Again: not listed twice; another name beside it; the store itself
+    assert win.attach_file(str(f)) == rel
+    assert site.load_attachments(str(dev)) == {'tune0': [rel]}
+    g = tmp_path / 'other.txt'
+    g.write_text('x')
+    assert win.attach_file(str(g)) == 'attachments/tune0/other.txt'
+    win.notes_table.setCurrentCell(0, 0)
+    assert win.attach_file(str(g)) == 'attachments/store/other.txt'
+    assert win.attachments('') == ['other.txt']
+    assert 'attachments' not in os.listdir(store)
     win.close()
 
 

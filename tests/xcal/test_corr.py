@@ -452,3 +452,81 @@ def test_remove_cm_complex_rotates_each_row_by_its_theta(T):
 def test_remove_cm_complex_invalid(z, aI, aQ, AI, AQ, idx, theta):
     with pytest.raises(Exception):
         corr.remove_cm_complex(z, aI, aQ, AI, AQ, idx, theta)
+
+
+def _calc_cm_reference(x, N_comp, N_iter, dt, lowpass_params,
+                       highpass_params):
+    """
+    The common-mode iteration written out plainly, with full copies at
+    every step, to check the memory-trimmed ``calc_cm`` against.
+    """
+    x = x - np.mean(x, axis = 1)[:, np.newaxis]
+    sig = np.sqrt(np.sum(x ** 2, axis = 1)[:, np.newaxis] / x.shape[1])
+    for i in range(N_iter):
+        xf = x if highpass_params is None else \
+            corr.highpass_filter(x, dt, *highpass_params)
+        x0 = xf / sig
+        C = x0 @ x0.T / x.shape[1]
+        eigval, eigvec = np.linalg.eig(C)
+        eigval, eigvec = np.real(eigval), np.real(eigvec)
+        order = np.flip(np.argsort(eigval))
+        a_full = sig * eigvec[:, order]
+        a = a_full[:, :N_comp]
+        A0 = (a.T @ (x / sig ** 2))
+        A = corr.lowpass_filter(A0, dt, *lowpass_params)
+        y = x - a @ A
+        if highpass_params is not None:
+            y = corr.highpass_filter(y, dt, *highpass_params)
+        sig = np.sqrt(np.sum(y ** 2, axis = 1)[:, np.newaxis] / x.shape[1])
+    return a, A0, sig, a_full
+
+
+@pytest.mark.parametrize('highpass_params', [(0.5, 2), None])
+def test_calc_cm_matches_plain_algebra(highpass_params):
+    """
+    The trimmed calc_cm (filters row by row, the normalization folded
+    into the covariance, the residual formed in place) gives the plainly
+    written algebra's result, and leaves its input unchanged.
+    """
+    rng = np.random.default_rng(5)
+    T, dt = 4000, 0.01
+    modes = rng.normal(size = (2, T))
+    x = rng.normal(size = (6, 2)) @ modes + 0.5 * rng.normal(size = (6, T))
+    x += rng.normal(size = (6, 1))
+    before = x.copy()
+    a, A0, sig_iter, a_full = corr.calc_cm(x, 2, 3, dt, (1.0, 4),
+                                           highpass_params)
+    np.testing.assert_array_equal(x, before)
+    a_r, A0_r, sig_r, a_full_r = _calc_cm_reference(x, 2, 3, dt, (1.0, 4),
+                                                    highpass_params)
+    # Eigenvectors are defined up to a sign
+    sign = np.sign(np.sum(a * a_r, axis = 0))
+    np.testing.assert_allclose(a * sign, a_r, rtol = 1e-8, atol = 1e-10)
+    np.testing.assert_allclose(A0 * sign[:, None], A0_r, rtol = 1e-8,
+                               atol = 1e-10)
+    np.testing.assert_allclose(sig_iter[-1][:, :1], sig_r, rtol = 1e-10)
+    assert a_full.shape == a_full_r.shape
+    # The modes removed reproduce the plain subtraction
+    y = corr.remove_cm(x, a, A0, np.arange(6))
+    np.testing.assert_array_equal(x, before)
+    np.testing.assert_allclose(y, x - a @ A0, rtol = 1e-12)
+    assert y is not x
+
+
+def test_pca_and_remove_cm_leave_inputs_alone():
+    """
+    pca and remove_cm never write into their inputs, with or without the
+    highpass, and remove_cm handles a complex input.
+    """
+    rng = np.random.default_rng(6)
+    x = rng.normal(size = (4, 500))
+    before = x.copy()
+    a, A = corr.pca(x, 2, highpass_params = (0.01, 1.0, 2))
+    np.testing.assert_array_equal(x, before)
+    a2, A2 = corr.pca(x, 2)
+    np.testing.assert_array_equal(x, before)
+    assert np.allclose(x, *[v @ w for v, w in [corr.pca(x, 4)]])
+    z = x + 1j * rng.normal(size = x.shape)
+    y = corr.remove_cm(z, a2, A2, np.arange(4))
+    np.testing.assert_allclose(y, z - a2 @ A2)
+    assert y.dtype == np.complex128

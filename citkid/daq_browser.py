@@ -210,7 +210,7 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
     closed = QtCore.Signal(str)
 
     def __init__(self, root = None, path = None, title = 'Store browser',
-                 ui_scale = 1.0):
+                 ui_scale = 1.0, site_dir = None):
         """
         Build the window, on a store if given.
 
@@ -222,8 +222,13 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
             None: from ``root`` if it is a path.
         title (str): window title. Default 'Store browser'.
         ui_scale (float): font size multiplier. Default 1.0.
+        site_dir (str or None): the report site's root folder: the Notes
+            tab can then attach files to an item (copied into the site's
+            device folder, never into the store). Default None: no
+            attaching.
         """
         super().__init__()
+        self.site_dir = site_dir
         self.root, self.path = None, None
         self.runs, self._shown_runs = [], []
         self._title = title
@@ -323,7 +328,208 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         self.marks.setFont(QtGui.QFontDatabase.systemFont(
             QtGui.QFontDatabase.FixedFont))
         self.tabs.addTab(self.marks, 'Tone marks')
+        self.tabs.addTab(self._build_notes(), 'Notes')
         return self.tabs
+
+    def _build_notes(self):
+        """
+        Build the notes panel: everything notes can be kept on (the
+        store, every step and result, every run) with an editor for the
+        selected row. Edits are saved by themselves: on a row change, a
+        tab change, a refresh, and when the window closes.
+
+        Returns:
+        page (QWidget): the panel.
+        """
+        page = QtWidgets.QWidget()
+        vbox = QtWidgets.QVBoxLayout(page)
+        self.notes_table = QtWidgets.QTableWidget()
+        self.notes_table.setColumnCount(3)
+        self.notes_table.setHorizontalHeaderLabels(['Item', 'Kind', 'Notes'])
+        self.notes_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.notes_table.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectRows)
+        self.notes_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SingleSelection)
+        self.notes_table.verticalHeader().setVisible(False)
+        self.notes_table.horizontalHeader().setStretchLastSection(True)
+        self.notes_table.currentCellChanged.connect(self._on_notes_row)
+        vbox.addWidget(self.notes_table, stretch = 1)
+        row = QtWidgets.QHBoxLayout()
+        self.notes_label = QtWidgets.QLabel()
+        row.addWidget(self.notes_label, stretch = 1)
+        self.attach_btn = QtWidgets.QPushButton('Attach file...')
+        self.attach_btn.setToolTip('Copy a file into the report site next '
+                                   "to this item's notes (not into the "
+                                   'store)')
+        self.attach_btn.clicked.connect(self._on_attach)
+        self.attach_btn.setEnabled(False)
+        row.addWidget(self.attach_btn)
+        vbox.addLayout(row)
+        self.notes_edit = QtWidgets.QPlainTextEdit()
+        self.notes_edit.setFixedHeight(110)
+        self.notes_edit.setPlaceholderText('Notes of the selected item')
+        self.notes_edit.textChanged.connect(self._on_notes_edited)
+        vbox.addWidget(self.notes_edit)
+        self._notes = []            # dl.notes_entries of the store shown
+        self._notes_row = None      # the row the editor holds
+        self._notes_dirty = {}      # row: edited text, not saved yet
+        self._notes_loading = False
+        self.tabs.currentChanged.connect(lambda _i: self.flush_notes())
+        return page
+
+    def _fill_notes(self):
+        """
+        List everything notes can be kept on, keeping the selected row.
+        """
+        self._notes_loading = True
+        current = self._notes_row
+        self._notes = dl.notes_entries(self.root) if self.root is not None \
+            else []
+        self.notes_table.setRowCount(len(self._notes))
+        for i, e in enumerate(self._notes):
+            for j, text in enumerate((e['label'], e['kind'],
+                                      first_line(e['notes'], 120))):
+                self.notes_table.setItem(i, j, QtWidgets.QTableWidgetItem(
+                    text))
+        self.notes_table.resizeColumnToContents(0)
+        self.notes_table.resizeColumnToContents(1)
+        self._notes_dirty = {}
+        self._notes_row = None
+        writable = bool(self.path) and not str(self.path).endswith('.zip')
+        self.notes_edit.setReadOnly(not writable)
+        if current is not None and current < len(self._notes):
+            self.notes_table.setCurrentCell(current, 0)
+        self._notes_loading = False
+        self._on_notes_row(self.notes_table.currentRow(), 0, -1, -1)
+
+    def _on_notes_row(self, row, _column = 0, _prev_row = -1, _prev_col = -1):
+        """
+        Put the selected item's notes in the editor, saving an edit of
+        the row before.
+
+        Parameters:
+        row (int): the table row (-1: none).
+        _column, _prev_row, _prev_col (int): unused.
+        """
+        if self._notes_loading:
+            return
+        self.flush_notes(refresh = False)
+        self._notes_loading = True
+        if 0 <= row < len(self._notes):
+            e = self._notes[row]
+            self._notes_row = row
+            self.notes_edit.setPlainText(e['notes'])
+            what = 'the store' if e['kind'] == 'store' else e['label']
+            text = f'Notes of {what}' + (
+                '' if not self.notes_edit.isReadOnly()
+                else ' (read-only store)')
+            files = self.attachments(e['path'])
+            if files:
+                text += '; attached: ' + ', '.join(files)
+            self.notes_label.setText(text)
+        else:
+            self._notes_row = None
+            self.notes_edit.setPlainText('')
+            self.notes_label.setText('Select an item to see or edit its '
+                                     'notes')
+        self.attach_btn.setEnabled(self.site_dir is not None and
+                                   self._notes_row is not None and
+                                   self.root is not None)
+        self._notes_loading = False
+
+    def attachments(self, item):
+        """
+        Return the files attached to an item in the report site.
+
+        Parameters:
+        item (str): the item's path ('' for the store).
+
+        Returns:
+        names (list of str): file names (none without a site folder).
+        """
+        if self.site_dir is None or self.root is None:
+            return []
+        from .pipeline import site
+        out_dir = site.device_dir(self.site_dir, self.root)
+        return [n for n, _ in site.attachment_links(
+            site.load_attachments(out_dir), item)]
+
+    def attach_file(self, source):
+        """
+        Attach a file to the selected item: copied into the report
+        site's device folder and linked from the pages next to the
+        item's notes.
+
+        Parameters:
+        source (str): the file.
+
+        Returns:
+        rel (str or None): the copy's path relative to the device folder,
+            or None if nothing is selected or there is no site folder.
+        """
+        if self.site_dir is None or self._notes_row is None or \
+                self.root is None:
+            return None
+        from .pipeline import site
+        e = self._notes[self._notes_row]
+        out_dir = site.device_dir(self.site_dir, self.root)
+        rel = site.add_attachment(out_dir, e['path'], source)
+        files = self.attachments(e['path'])
+        what = 'the store' if e['kind'] == 'store' else e['label']
+        self.notes_label.setText(f'Notes of {what}; attached: '
+                                 + ', '.join(files))
+        return rel
+
+    def _on_attach(self):
+        """
+        Choose a file to attach to the selected item (the button).
+        """
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, 'Attach a file to the report', os.path.expanduser('~'))
+        if path:
+            self.attach_file(path)
+
+    def _on_notes_edited(self):
+        """
+        Remember an edit of the shown item's notes, to save later.
+        """
+        if self._notes_loading or self._notes_row is None or \
+                self.notes_edit.isReadOnly():
+            return
+        self._notes_dirty[self._notes_row] = self.notes_edit.toPlainText()
+
+    def flush_notes(self, refresh = True):
+        """
+        Save the edited notes to the store (the Notes tab saves by itself:
+        on a row or tab change, a refresh, and when the window closes).
+
+        Parameters:
+        refresh (bool): If True (default), reread the store afterwards
+            when something was saved.
+
+        Returns:
+        saved (list of str): the labels of the items written.
+        """
+        if not self._notes_dirty or not self.path:
+            return []
+        root = dl.open_store(self.path, mode = 'a')
+        saved = []
+        for row, text in list(self._notes_dirty.items()):
+            e = self._notes[row]
+            if e['run'] is not None:
+                dl.set_run_notes(root, e['run'][0], e['run'][1], text)
+            else:
+                dl.set_notes(root, e['path'], text)
+            e['notes'] = text.strip()
+            self.notes_table.item(row, 2).setText(
+                first_line(e['notes'], 120))
+            saved.append(e['label'])
+        self._notes_dirty = {}
+        if refresh:
+            self.refresh()
+        return saved
 
     ############################################################################
     def open_path(self, root, path = None):
@@ -342,6 +548,7 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         """
         if not isinstance(root, zarr.Group):
             path = os.path.expanduser(str(root)) if path is None else path
+        self.flush_notes(refresh = False)
         new_root = dl.open_store(root)
         self.root, self.path = new_root, path
         name = os.path.basename(os.path.normpath(path)) if path \
@@ -378,6 +585,7 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         Reread the store: rebuild the tree (keeping the selection where
         it still exists) and the runs table.
         """
+        self.flush_notes(refresh = False)
         current = self.current_path()
         self.tree.blockSignals(True)
         self.tree.clear()
@@ -389,6 +597,7 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
             self.marks.setPlainText('')
             self.runs = []
             self._fill_runs()
+            self._fill_notes()
             return
         self.root = dl.open_store(self.path if self.path else self.root)
         self.info.setText(store_label(self.root, self.path))
@@ -398,6 +607,7 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         self.runs = dl.stream_runs(self.root)
         self._fill_runs()
         self.marks.setPlainText(dl.describe_tone_marks(self.root))
+        self._fill_notes()
         if not (current and self.select_path(current)):
             self.attrs.setPlainText(describe_item(self.root))
 
@@ -542,11 +752,13 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event):
         """
-        Report the store shown when the window closes.
+        Save edited notes and report the store shown when the window
+        closes.
 
         Parameters:
         event (QCloseEvent): the close event.
         """
+        self.flush_notes(refresh = False)
         self.closed.emit(self.path or '')
         super().closeEvent(event)
 
@@ -570,8 +782,43 @@ def choose_store(start = None):
         os.path.expanduser(start or '~'), QtWidgets.QFileDialog.ShowDirsOnly)
     return path or None
 
+def ask_existing_report(out_dir):
+    """
+    Ask what to do with a report that exists: replace it, rebuild it
+    keeping its attached files and notes.md, or stop.
+
+    Parameters:
+    out_dir (str): the device's folder in the report site.
+
+    Returns:
+    choice (str or None): 'overwrite', 'update', or None (Cancel, or
+        closing the box).
+    """
+    get_qapp()
+    box = QtWidgets.QMessageBox()
+    box.setWindowTitle('The report exists')
+    box.setIcon(QtWidgets.QMessageBox.Icon.Question)
+    box.setText(f'{out_dir} already holds a report of this store.')
+    box.setInformativeText(
+        'Keep attachments: rebuild the pages, keeping the attached files '
+        'and notes.md. Overwrite: replace everything, attached files '
+        'included.')
+    keep = box.addButton('Keep attachments',
+                         QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+    over = box.addButton('Overwrite',
+                         QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+    box.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+    box.setDefaultButton(keep)
+    box.exec() if hasattr(box, 'exec') else box.exec_()
+    clicked = box.clickedButton()
+    if clicked is keep:
+        return 'update'
+    if clicked is over:
+        return 'overwrite'
+    return None
+
 def run_store_browser(path = None, title = 'Store browser',
-                      ui_scale = 1.0):
+                      ui_scale = 1.0, site_dir = None, tab = None):
     """
     Open the browser and wait until the window is closed.
 
@@ -581,13 +828,22 @@ def run_store_browser(path = None, title = 'Store browser',
     title (str): window title (the store's name is added). Default
         'Store browser'.
     ui_scale (float): font size multiplier. Default 1.0.
+    site_dir (str or None): the report site's folder, to attach files
+        from the Notes tab. Default None.
+    tab (str or None): the tab to open on, e.g. 'Notes'. Default None:
+        the first.
 
     Returns:
     path (str or None): the path of the store shown last, or None if
         none was opened.
     """
     app = get_qapp(title)
-    win = StoreBrowserWindow(path, title = title, ui_scale = ui_scale)
+    win = StoreBrowserWindow(path, title = title, ui_scale = ui_scale,
+                             site_dir = site_dir)
+    if tab is not None:
+        for i in range(win.tabs.count()):
+            if win.tabs.tabText(i) == tab:
+                win.tabs.setCurrentIndex(i)
     delete_on_close(win)
     fit_window_to_screen(win)
     win.show()

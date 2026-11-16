@@ -776,7 +776,7 @@ class CosmicTailWindow(QtWidgets.QMainWindow):
     def outside_limits(self, values = None):
         """
         Find the tones outside the overview's review limits (or without
-        a value).
+        a value), and the tones marked bad.
 
         Parameters:
         values (dict or None): ``overview_values`` output. Default None:
@@ -786,7 +786,8 @@ class CosmicTailWindow(QtWidgets.QMainWindow):
         outside (set of int): indices in ``rows``.
         """
         values = self.overview_values() if values is None else values
-        outside = set()
+        outside = {i for i, r in enumerate(self.res_idxs)
+                   if self.thresholds.is_bad(r)}
         for key, _ in OVERVIEW:
             v = values[key]
             lim = self.thresholds.limits.get(key)

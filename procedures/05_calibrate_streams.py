@@ -11,7 +11,7 @@ import argparse
 import os
 from citkid import daq_layout as dl
 from citkid.pipeline.analysis import AnalysisRunner
-from citkid.pipeline.interactive import run_ts_analysis
+from citkid.pipeline.interactive import run_iq_ts_analysis, run_ts_analysis
 from citkid.pipeline.stream_sources import (
     open_stream_dataset, plan_stream_datasets
 )
@@ -28,6 +28,7 @@ CALIBRATE = [
 ]
 F_AVG = 1
 INTERACTIVE = True
+FIT_IQ = False
 
 NOTES = """
 """
@@ -56,6 +57,9 @@ def parse_args(argv = None):
                    help = 'store path (instead of data dir/cooldown/device)')
     p.add_argument('--new', action = 'store_true',
                    help = 'start a new ts_cal group')
+    p.add_argument('--fit-iq', action = 'store_true', default = FIT_IQ,
+                   help = 'also fit each resonance (nonlinear IQ fit) in '
+                   'the window and in batch, for the report')
     p.add_argument('--no-gui', action = 'store_true',
                    help = 'calibrate in batch only')
     p.add_argument('--notes', default = NOTES,
@@ -117,6 +121,26 @@ def cal_group(root, selection, new, notes = None):
     print(f'Calibrating into {cal.path}')
     return cal
 
+def fit_resonances(AR, grp):
+    """
+    Fit the resonances (``fit_iq``, the nonlinear IQ fit) of the rows
+    the window did not fit, and record that the DataSet has the fits.
+
+    Parameters:
+    AR (AnalysisRunner): the DataSet's runner (after the calibration).
+    grp (zarr.Group): the DataSet's group (attribute ``iq_fit``).
+
+    Returns:
+    rows (np.array): the rows fit here.
+    """
+    import numpy as np
+    step = next(s for s in AR.analysis_steps if s.name == 'fit_iq')
+    rows = np.flatnonzero(~AR.DS.saved_row_mask('iq_popt'))
+    if len(rows):
+        AR.execute_step(step, data_idx = rows, user_params = {'iq_mask': None})
+    grp.attrs['iq_fit'] = True
+    return rows
+
 def main(args):
     """
     Calibrate the chosen streams, or list the runs.
@@ -150,8 +174,14 @@ def main(args):
         nrows = len(DS.res_idxs[:])
         print(f'{name}: {nrows} rows from {len(g["sources"])} sources')
         if INTERACTIVE and not args.no_gui:
-            run_ts_analysis(AR, title = f'Calibrate {cal.path}/{name}')
+            title = f'Calibrate {cal.path}/{name}'
+            if args.fit_iq:
+                run_iq_ts_analysis(AR, title = title)
+            else:
+                run_ts_analysis(AR, title = title)
         AR.execute_remaining(verbose = True)
+        if args.fit_iq:
+            fit_resonances(AR, grp)
         has_cal_tones = any(
             (root[s['group']]['res_idxs'][:] < 0).any() for s in g['sources'])
         if has_cal_tones:

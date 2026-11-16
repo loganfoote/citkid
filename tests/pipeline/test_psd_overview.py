@@ -126,10 +126,14 @@ def test_window(qapp):
     assert len(win.spec_curve.getData()[0]) == 40
     assert len(win.spec_cn_curve.getData()[0]) == 40
     assert 'res 107: analyzed' in win.status.text()
-    # Mark bad with a reason: the result's dict and the store's marks
+    # Mark bad with a reason: the result's dict and the store's marks;
+    # the tone leaves the histograms and is flagged in the list
+    n_hist = win.curves[0].getData()[1].sum()
     win._ask_reason = lambda: 'high noise'
     win.toggle_bad()
     assert win.bad[107] == 'high noise'
+    assert win.curves[0].getData()[1].sum() == n_hist - 1
+    assert 7 in win.outside_limits()
     assert set(dl.bad_tones(root)) == {107}
     assert dl.tone_marks(root, 107)[0]['stage'] == 'ts_psd0/timestream0'
     assert win.status.text().startswith('BAD: high noise')
@@ -160,3 +164,23 @@ def test_window_without_cn(qapp):
     win.toggle_bad()
     assert win.bad[100] == 'bad fit'
     win.close()
+
+
+def test_ask_existing_psd(monkeypatch):
+    """
+    New and Load answer at once; Overwrite asks again; Cancel or closing
+    a box gives None.
+    """
+    import citkid.pipeline.interactive.psd_overview as po
+    answers = []
+    monkeypatch.setattr(po, '_message_box',
+                        lambda *a, **k: answers.pop(0))
+    for answer, want in [('New', 'new'), ('Load', 'load'),
+                         ('Cancel', None), (None, None)]:
+        answers.append(answer)
+        assert po.ask_existing_psd('ts_psd0', 'desc') == want
+    answers += ['Overwrite', 'Cancel']
+    assert po.ask_existing_psd('ts_psd0', 'desc') is None
+    answers += ['Overwrite', 'Overwrite']
+    assert po.ask_existing_psd('ts_psd0', 'desc') == 'overwrite'
+    assert answers == []

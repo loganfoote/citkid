@@ -695,6 +695,28 @@ def test_05_calibrate_streams(tmp_path, monkeypatch, capsys):
     m.main(m.parse_args(argv[:2]))
     # One window per tone set
     assert len(opened) == 2 and all('ts_cal1' in t for t in opened)
+    # FIT_IQ: the window with the IQ fit panel, then every row fit in
+    # batch; the DataSet records it
+    iq_opened = []
+    monkeypatch.setattr(m, 'run_iq_ts_analysis',
+                        lambda AR, title = '': iq_opened.append(title))
+    monkeypatch.setattr(m, 'FIT_IQ', True)
+    ds = m.main(m.parse_args(argv[:2] + ['--new']))
+    assert len(iq_opened) == 2 and not opened[2:]
+    root = dl.open_store(tmp_path / 's.zarr')
+    c = dl.list_indices(root, 'ts_cal')[-1]
+    for name in ('set0', 'set1'):
+        d = ds[name]
+        assert d.saved_row_mask('iq_popt').all()
+        popt = np.asarray(d.iq_popt[:], float)
+        assert popt.shape[1] == 8 and np.all(popt[:, 1] > 0)
+        assert root[f'ts_cal{c}/{name}'].attrs['iq_fit'] is True
+    # Fitting again does nothing to the rows already fit
+    from citkid.pipeline.analysis import AnalysisRunner
+    assert len(m.fit_resonances(
+        AnalysisRunner(ds['set0'], analysis_yaml_path = 'ts'),
+        dl.open_store(tmp_path / 's.zarr', mode = 'a')[f'ts_cal{c}/set0'])
+           ) == 0
 
 
 def test_03_tune_keep_stronger(tmp_path, monkeypatch):
@@ -1664,9 +1686,14 @@ def test_07_psds(photon_store, monkeypatch, capsys):
         assert t['valid_reduced'][:].all()
         nb = len(t['f_binned'][:])
         assert 50 < nb < 100 + 20
+        # The spectra end at 0.8 of the Nyquist frequency
+        fb = t['f_binned'][:]
+        kept = fb <= 0.8 * 0.5 / dt
+        assert kept.sum() > 50 and not kept.all()
         for key in ('sxx_binned', 'sxx_binned_cn'):
             assert t[key].shape == (n, nb)
-            assert np.isfinite(t[key][:]).all()
+            assert np.isfinite(t[key][:][:, kept]).all()
+            assert np.isnan(t[key][:][:, ~kept]).all()
         for key in ('sxx_reduced', 'sxx_reduced_cn'):
             assert t[key].shape == (n, 4) and np.isfinite(t[key][:]).all()
         assert t['cn_weights'].shape[0] == n
@@ -1734,14 +1761,14 @@ def test_07_psds(photon_store, monkeypatch, capsys):
     # A photon result's filters: cosmic rays only (a few per second), or
     # every pulse
     with pytest.raises(ValueError, match = 'PHOTONS'):
-        m.main(m.parse_args(argv + ['--deglitch', 'photons']))
+        m.main(m.parse_args(argv + ['--deglitch', 'photons', '--new']))
     root = dl.open_store(path, mode = 'a')
     if 'photons' not in root or 'dark0_set0' not in root['photons']:
         m6 = load_script('06a_find_photons.py')
         monkeypatch.setattr(m6, 'TIMESTREAMS', [0])
         m6.main(m6.parse_args(argv + ['--no-gui']))
     m.main(m.parse_args(argv + ['--deglitch', 'photons', '--photons',
-                                'dark0_set0']))
+                                'dark0_set0', '--new']))
     root = dl.open_store(path)
     g = root['ts_psd4']
     assert g.attrs['reference'] == 'photons/dark0_set0'
@@ -1753,7 +1780,7 @@ def test_07_psds(photon_store, monkeypatch, capsys):
     assert n_cosmic[has].sum() > 0
     monkeypatch.setattr(m, 'GLITCH_PULSES', 'all')
     m.main(m.parse_args(argv + ['--deglitch', 'photons', '--photons',
-                                'dark0_set0']))
+                                'dark0_set0', '--new']))
     t = dl.open_store(path)['ts_psd5/timestream0']
     assert np.all(t['n_glitches'][:][has] > n_cosmic[has])
     assert np.all(t['n_glitches'][:][has] > 20)
@@ -1764,6 +1791,79 @@ def test_07_psds(photon_store, monkeypatch, capsys):
              for _, v in root[f'ts_psd{q}'].members(max_depth = None)
              if isinstance(v, zarr.Array) and v.shape]
     assert max(sizes) < nsamples / 10
+    # A set that exists: without the window it is skipped unless --new,
+    # --load or --overwrite; with the window the popup decides
+    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    assert m.main(m.parse_args(argv + ['--name', 'marks', '--no-gui'])) \
+        is None
+    assert 'ts_psd1 exists: skipped' in capsys.readouterr().out
+    assert dl.list_indices(dl.open_store(path), 'ts_psd') == list(range(6))
+    # --load: computed again in place with the saved review, no window
+    calls = []
+    monkeypatch.setattr(po, 'run_psd_overview',
+                        lambda *a, **k: calls.append(k) or ({}, {}))
+    created = dl.open_store(path)['ts_psd1'].attrs['created']
+    monkeypatch.setattr(m, 'CN_N_COMP', 2)
+    res = m.main(m.parse_args(argv + ['--name', 'marks', '--load']))
+    assert calls == [] and sorted(res) == ['timestream0']
+    assert 'Computing ts_psd1 again' in capsys.readouterr().out
+    root = dl.open_store(path)
+    assert dl.list_indices(root, 'ts_psd') == list(range(6))
+    g1 = root['ts_psd1']
+    assert g1.attrs['created'] == created
+    # The saved settings, not the script's
+    assert g1.attrs['settings']['cn_n_comp'] == 3
+    t0 = g1['timestream0']
+    assert t0['bad'][:].tolist() == [True] + [False] * 5
+    assert list(t0['bad_reason'][:]) == ['high noise'] + [''] * 5
+    assert t0.attrs['limits'] == {'10 Hz': [1e-17, 1e-15]}
+    assert t0['status'][:][0] == 'marked bad: high noise'
+    assert np.isnan(t0['sxx_reduced_cn'][:][0]).all()
+    assert 'New' not in psds.describe_group(g1)
+    assert '1 marked bad, limits at 1 frequencies' in \
+        psds.describe_group(g1)
+    # The popup: Cancel stops; New makes another set, with the window
+    # opening on the saved limits
+    answers = []
+    monkeypatch.setattr(po, 'ask_existing_psd',
+                        lambda path_, desc: answers.pop(0))
+    answers.append(None)
+    assert m.main(m.parse_args(argv + ['--name', 'marks'])) is None
+    assert 'Skipped ts_psd1' in capsys.readouterr().out
+    answers.append('new')
+    m.main(m.parse_args(argv + ['--name', 'marks']))
+    assert [c['limits'] for c in calls] == [{'10 Hz': [1e-17, 1e-15]}]
+    root = dl.open_store(path)
+    assert dl.list_indices(root, 'ts_psd') == list(range(7))
+    assert root['ts_psd6'].attrs['name'] == 'marks'
+    assert root['ts_psd6'].attrs['settings']['cn_n_comp'] == 2
+    assert not root['ts_psd6/timestream0/bad'][:].any()
+    # --overwrite replaces the latest set with that name in place
+    answers.append('overwrite')
+    m.main(m.parse_args(argv + ['--name', 'marks', '--notes', 'again']))
+    root = dl.open_store(path)
+    assert dl.list_indices(root, 'ts_psd') == list(range(7))
+    assert root['ts_psd6'].attrs['notes'] == 'again'
+    assert root['ts_psd1'].attrs['settings']['cn_n_comp'] == 3
+    assert psds.matching_group(root, 'marks', [0]).path == 'ts_psd6'
+    # Without a name, a set matches on its timestreams
+    assert psds.matching_group(root, None, [0]).path == 'ts_psd5'
+    assert psds.matching_group(root, None, [1]) is None
+    assert psds.matching_group(root, 'none', [0]) is None
+    # A run that fails leaves no empty set behind; a failed --load keeps
+    # the saved spectra
+    monkeypatch.setattr(m, 'MEMORY_GB', 1e-9)
+    answers.append('new')
+    with pytest.raises(MemoryError):
+        m.main(m.parse_args(argv + ['--name', 'marks']))
+    root = dl.open_store(path)
+    assert dl.list_indices(root, 'ts_psd') == list(range(7))
+    assert 'ts_psd7 removed' in capsys.readouterr().out
+    with pytest.raises(MemoryError):
+        m.main(m.parse_args(argv + ['--name', 'marks', '--load']))
+    root = dl.open_store(path)
+    assert 'f_reduced' in root['ts_psd6']
+    assert 'sxx_reduced' in root['ts_psd6/timestream0']
 
 
 def test_07_psds_uncalibrated(photon_store, monkeypatch, capsys):
@@ -1790,7 +1890,8 @@ def test_07_psds_uncalibrated(photon_store, monkeypatch, capsys):
     assert g['sxx_reduced'].shape[0] == 5 and g['write_idx'].tolist() == \
         [0] * 5
     assert all(s == '' for s in g['status'])
-    assert np.isfinite(g['sxx_binned']).all()
+    cols = np.isfinite(g['sxx_binned']).any(axis = 0)
+    assert cols.sum() > 50 and np.isfinite(g['sxx_binned'][:, cols]).all()
     assert np.isfinite(g['sxx_reduced'][:, g['valid_reduced']]).all()
 
 
@@ -1890,9 +1991,16 @@ def test_08_report(photon_store, monkeypatch, capsys):
         assert os.path.getsize(paths[key]) > 10000
         t = pd.read_csv(paths[key + '_csv'])
         assert set(t.columns) >= {'res_idx', 'fres', 'height', 'tau',
-                                  'n_used', 'bad', 'bad_reason'}
+                                  'rate', 'n_used', 'bad', 'bad_reason'}
         assert len(t) == 6 and np.isfinite(t['fres']).all()
         assert 0.9e9 < t['fres'].min() and t['fres'].max() < 10e9
+        assert np.isfinite(t['rate']).any()
+    # The coincident events of each result: a figure and a table
+    for key in [n.replace('lifetime', 'multiplicity') for n in names]:
+        assert os.path.getsize(paths[key]) > 10000
+        ev = pd.read_csv(paths[key + '_csv'])
+        assert list(ev.columns) == ['time_s', 'mult'] and len(ev) > 0
+        assert (ev['mult'] >= 1).all() and (ev['time_s'] >= 0).all()
     ph = pd.read_csv(paths['lifetime_photons_dark0_set0_csv'])
     # Every tone has a height; the tones not marked bad have a decay time
     good = ph[~ph['bad']]
@@ -1924,7 +2032,225 @@ def test_08_report(photon_store, monkeypatch, capsys):
     assert 'Skipped (saved incompletely): ' in text and \
         'photons/partial' in text
     assert f'ts_psd{p} (report)' in text and 'Sxx at 10 Hz' in text
+    # A PSD set saved incompletely (no timestream) is skipped and named
+    dl.create_group(dl.open_store(path, mode = 'a'), 'ts_psd99', 'analysis')
+    monkeypatch.setattr(m, 'PSDS', [p, 99])
+    paths = m.main(m.parse_args(argv + ['--out', str(out)]))
+    assert 'psd99' not in paths and key in paths
+    text = open(paths['info'], encoding = 'utf-8').read()
+    assert 'ts_psd99' in text.split('Skipped (saved incompletely): ')[1]
+    monkeypatch.setattr(m, 'PSDS', [p])
     # --pick with a cancelled dialog writes nothing
     import citkid.daq_browser as db
     monkeypatch.setattr(db, 'choose_store', lambda start = None: None)
     assert m.main(m.parse_args(['--pick', '--out', str(out)])) is None
+
+
+def test_add_loop_psds(photon_store, monkeypatch, capsys):
+    """
+    The temporary script adds the loop-component spectra to a PSD group
+    saved without them, in place, giving what 07 computes itself.
+    """
+    import citkid.pipeline.interactive.psd_overview as po
+    path, _ = photon_store
+    argv = ['--store', str(path)]
+    m7 = load_script('07_psds.py')
+    monkeypatch.setattr(po, 'run_psd_overview', lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(m7, 'TIMESTREAMS', [0])
+    m7.main(m7.parse_args(argv + ['--name', 'loop']))
+    root = dl.open_store(path, mode = 'a')
+    p = dl.list_indices(root, 'ts_psd')[-1]
+    t = root[f'ts_psd{p}/timestream0']
+    saved = {k: t[k][:] for k in ('spar_binned', 'sper_binned',
+                                  'sfactor_reduced')}
+    for k in saved:
+        del t[k]
+    m = load_script('add_loop_psds.py')
+    done = m.main(m.parse_args(argv + ['--psd', str(p)]))
+    assert done == [f'ts_psd{p}/timestream0']
+    t = dl.open_store(path)[f'ts_psd{p}/timestream0']
+    for k, v in saved.items():
+        np.testing.assert_allclose(t[k][:], v, rtol = 1e-6, equal_nan = True)
+    # A group that has them is skipped unless --redo
+    assert m.main(m.parse_args(argv + ['--psd', str(p)])) == []
+    assert 'already' in capsys.readouterr().out
+    assert m.main(m.parse_args(argv + ['--psd', str(p), '--redo'])) == \
+        [f'ts_psd{p}/timestream0']
+
+
+def test_device_parts():
+    """
+    A device name splits into the wafer (a 'p' between digits read as a
+    period) and the die.
+    """
+    from citkid.pipeline.site import device_parts
+    assert device_parts('L261022p1-die7') == ('L261022.1', '7')
+    assert device_parts('Be260916-die2') == ('Be260916', '2')
+    assert device_parts('devA') == ('devA', '')
+    assert device_parts('p1p2-die12') == ('p1.2', '12')
+
+
+def test_09_report_site(photon_store, monkeypatch, capsys, tmp_path):
+    """
+    The site: a device page with the figures and tables, one page per
+    resonator, a manifest and the top index; a store that has not
+    changed is left alone unless --force; notes.md is shown; set_notes.py
+    changes a group's notes, which the next build picks up.
+    """
+    import json
+    import citkid.pipeline.interactive.psd_overview as po
+    from citkid.pipeline import cosmic_finder as cf
+    from citkid.pipeline import photon_finder as pf
+    path, _ = photon_store
+    root = dl.open_store(path)
+    store_argv = ['--store', str(path)]
+    if 'dark0_set0' not in pf.list_results(root):
+        m6 = load_script('06a_find_photons.py')
+        monkeypatch.setattr(m6, 'TIMESTREAMS', [0])
+        m6.main(m6.parse_args(store_argv + ['--no-gui']))
+    if 'dark0_set0' not in cf.list_results(root):
+        m6b = load_script('06b_cosmic_rays.py')
+        monkeypatch.setattr(m6b, 'TIMESTREAMS', [0])
+        m6b.main(m6b.parse_args(store_argv + ['--no-gui']))
+    if not dl.list_indices(root, 'ts_psd'):
+        m7 = load_script('07_psds.py')
+        monkeypatch.setattr(po, 'run_psd_overview',
+                            lambda *a, **k: ({}, {}))
+        monkeypatch.setattr(m7, 'TIMESTREAMS', [0])
+        m7.main(m7.parse_args(store_argv + ['--name', 'site']))
+    root = dl.open_store(path)
+    device, cooldown = root.attrs['device'], root.attrs['cooldown']
+    m = load_script('09_report_site.py')
+    out = tmp_path / 'reports'
+    argv = ['--store', str(path), '--out', str(out), '--no-gui',
+            '--update']
+    built = m.main(m.parse_args(argv))
+    dev = out / cooldown / device
+    assert built == [str(dev)]
+    assert (out / 'index.html').exists() and (dev / 'index.html').exists()
+    manifest = json.loads((dev / 'manifest.json').read_text('utf-8'))
+    assert manifest['device'] == device and manifest['res_pages'] is True
+    assert len(manifest['runs']) >= 2 and manifest['tunings']
+    assert manifest['photons'] and manifest['cosmic'] and manifest['psds']
+    n_tones = len(root['tune0/tones/res_idxs'][:])
+    pages = sorted((dev / 'res').glob('res*.html'))
+    assert len(pages) == n_tones
+    assert len(list((dev / 'res').glob('res*.png'))) == n_tones
+    figs = os.listdir(dev / 'figures')
+    assert any(f.endswith('_tuning.png') for f in figs)
+    assert 'Stream calibrations' in (dev / 'index.html').read_text('utf-8')
+    assert any('lifetime_photons' in f for f in figs)
+    assert any(f.startswith(f'{device}_psd') for f in figs)
+    data = os.listdir(dev / 'data')
+    assert f'{device}_resonators.csv' in data and \
+        f'{device}_tune0_tuning.csv' in data
+    page = (dev / 'index.html').read_text('utf-8')
+    assert 'What was taken' in page and 'select class="versions"' in page
+    assert 'res/res' in page and 'Tone marks' in page
+    text = pages[0].read_text('utf-8')
+    assert 'Tuning' in text and 'Device page' in text
+    top = (out / 'index.html').read_text('utf-8')
+    assert f'{cooldown}/{device}/index.html' in top
+    assert '<th>die</th>' in top and '<th>suffix</th>' in top
+    assert 'input class="colfilter"' in top and str(path) not in top
+    assert '<details' in page and 'input class="rowfilter"' in page
+    assert str(path) not in page
+    # --index-only rebuilds the top page alone
+    (out / 'index.html').unlink()
+    assert m.main(m.parse_args(['--out', str(out), '--index-only'])) == []
+    assert (out / 'index.html').exists()
+    # Up to date: nothing rebuilt
+    assert m.main(m.parse_args(argv)) == []
+    assert m.main(m.parse_args(argv[:-1])) is None     # no --update
+    assert 'up to date' in capsys.readouterr().out
+    # notes.md is shown; --force rebuilds
+    (dev / 'notes.md').write_text('Hand-written notes here', 'utf-8')
+    assert m.main(m.parse_args(argv + ['--force', '--no-res-pages'])) == \
+        [str(dev)]
+    page = (dev / 'index.html').read_text('utf-8')
+    assert 'Hand-written notes here' in page and 'res/res' not in page
+    assert (dev / 'notes.md').exists()
+    # Notes on a group change the store, so the site rebuilds
+    sn = load_script('set_notes.py')
+    notes = sn.main(sn.parse_args(['--store', str(path), '--path',
+                                   'tune0', 'retuned after warm-up']))
+    assert ('tune0', 'retuned after warm-up') in notes
+    assert 'tune0: retuned' in capsys.readouterr().out
+    assert sn.main(sn.parse_args(['--store', str(path), '--path',
+                                  'tune0', ''])) == [
+        n for n in notes if n[0] != 'tune0']
+    sn.main(sn.parse_args(['--store', str(path), '--path', 'tune0',
+                           'retuned']))
+    assert m.main(m.parse_args(argv + ['--no-res-pages'])) == [str(dev)]
+    assert 'retuned' in (dev / 'index.html').read_text('utf-8')
+    # With no store, a dialog chooses one; cancelled, nothing is built
+    import citkid.daq_browser as db
+    monkeypatch.setattr(db, 'choose_store', lambda start = None: None)
+    assert m.main(m.parse_args(['--out', str(out), '--no-gui'])) is None
+    monkeypatch.setattr(db, 'choose_store', lambda start = None: str(path))
+    assert m.main(m.parse_args(['--out', str(out), '--force', '--update',
+                                '--no-res-pages', '--no-gui'])) == [str(dev)]
+    # A report that exists: without the window, --update or --overwrite
+    # is needed; with the window, a popup decides. Overwrite drops the
+    # attachments, update keeps them
+    (dev / 'attachments').mkdir(exist_ok = True)
+    (dev / 'attachments' / 'keep.txt').write_text('x')
+    assert m.main(m.parse_args(['--store', str(path), '--out', str(out),
+                                '--no-gui'])) is None
+    assert 'exists' in capsys.readouterr().out
+    assert m.main(m.parse_args(['--store', str(path), '--out', str(out),
+                                '--no-gui', '--update', '--force',
+                                '--no-res-pages'])) == [str(dev)]
+    assert (dev / 'attachments' / 'keep.txt').exists()
+    answers = []
+    monkeypatch.setattr(db, 'ask_existing_report',
+                        lambda out_dir: answers.pop(0))
+    monkeypatch.setattr(db, 'run_store_browser',
+                        lambda path_, **k: path_)
+    answers.append(None)
+    assert m.main(m.parse_args(['--store', str(path), '--out', str(out)])) \
+        is None
+    assert (dev / 'attachments' / 'keep.txt').exists()
+    answers.append('overwrite')
+    assert m.main(m.parse_args(['--store', str(path), '--out', str(out),
+                                '--no-res-pages'])) == [str(dev)]
+    assert not (dev / 'attachments').exists()
+    assert (dev / 'index.html').exists()
+    # With the window, the store browser opens on its Notes tab first,
+    # with the site folder for attachments; the store shown last is
+    # built. An attached file is linked from the page and makes the
+    # device out of date
+    from citkid.pipeline import site
+    opened = []
+
+    def fake_browser(path_, title = '', ui_scale = 1., site_dir = None,
+                     tab = None):
+        """
+        Stand in for the browser: attach a file to the tuning.
+
+        Parameters:
+        path_ (str): the store.
+        title (str): window title.
+        ui_scale (float): font scale.
+        site_dir (str): the site folder.
+        tab (str): the tab opened.
+
+        Returns:
+        path_ (str): the store shown.
+        """
+        opened.append((path_, site_dir, tab))
+        f = tmp_path / 'wiring.txt'
+        f.write_text('wiring')
+        site.add_attachment(site.device_dir(site_dir, dl.open_store(path_)),
+                            'tune0', str(f))
+        return path_
+
+    monkeypatch.setattr(db, 'run_store_browser', fake_browser)
+    assert m.main(m.parse_args(['--out', str(out), '--no-res-pages',
+                                '--update'])) == [str(dev)]
+    assert opened == [(str(path), str(out), 'Notes')]
+    page = (dev / 'index.html').read_text('utf-8')
+    assert 'attachments/tune0/wiring.txt' in page and 'Attached files' in page
+    assert page.count('attachments/tune0/wiring.txt') >= 3
+    assert (dev / 'attachments' / 'tune0' / 'wiring.txt').exists()
+    assert m.main(m.parse_args(argv + ['--no-res-pages'])) == []

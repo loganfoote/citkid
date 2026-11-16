@@ -25,6 +25,7 @@ only reduced results are saved (``save_timestream``). Per write:
    step 2 is repeated on the cleaned tones, and the common modes get
    binned spectra of their own.
 """
+import json
 import numpy as np
 from .. import daq_layout as dl
 from ..signal import deglitch as dg
@@ -199,6 +200,57 @@ def union_freqs(timestreams, lo_mult = 10., hi_div = 10.):
 ################################################################################
 ################################### Spectra ####################################
 ################################################################################
+# The spectra are kept up to this fraction of the Nyquist frequency: the
+# CRS decimation filters roll off above it (the correction grows large)
+SPECTRUM_CUTOFF = 0.8
+
+def dec_stage_from_dt(dt):
+    """
+    Return the CRS decimation stage of a sample period.
+
+    Parameters:
+    dt (float): sample period, s.
+
+    Returns:
+    stage (int or None): the stage (0-6), or None if the period is not a
+        CRS one (e.g. another instrument's).
+    """
+    from rfmux.core.transferfunctions import decimation_to_sampling
+    for stage in range(7):
+        if abs(1 / dt - decimation_to_sampling(stage)) < 1e-3 / dt:
+            return stage
+    return None
+
+def cic_correction(f, dt, cutoff = SPECTRUM_CUTOFF):
+    """
+    Return the factor that undoes the CRS decimation filters' droop in a
+    PSD (``rfmux.core.transferfunctions.compensate_psd_for_cics``), NaN
+    above the cutoff. The filters act on the streamed I and Q; the noise
+    is small, so the calibrated timestreams (x, the loop components) are
+    linear in it and their PSDs take the same factor.
+
+    Parameters:
+    f (np.array): frequencies, Hz.
+    dt (float): sample period, s. A period that is not a CRS stage's
+        gives a factor of 1 everywhere.
+    cutoff (float): fraction of the Nyquist frequency kept. Default
+        ``SPECTRUM_CUTOFF``.
+
+    Returns:
+    factor (np.array): per frequency (multiply the PSD by it).
+    """
+    f = np.asarray(f, dtype = float)
+    stage = dec_stage_from_dt(dt)
+    if stage is None or not len(f):
+        return np.ones(len(f))
+    from rfmux.core.transferfunctions import compensate_psd_for_cics
+    _, factor = compensate_psd_for_cics(f, np.ones(len(f)),
+                                        dec_stage = stage,
+                                        spectrum_cutoff = 1.0)
+    factor = np.asarray(factor, dtype = float)
+    factor[f > cutoff * 0.5 / dt] = np.nan
+    return factor
+
 def psd_summary(x, dt, freqs, valid = None, nbins = 100, fmin = None):
     """
     Reduce and bin the PSD of each of several timestreams.
@@ -216,6 +268,10 @@ def psd_summary(x, dt, freqs, valid = None, nbins = 100, fmin = None):
     fmin (float or None): lowest binned frequency, Hz; below it the PSD is
         kept unbinned. None (default): 10 / duration.
 
+    The CRS decimation filters' droop is undone (``cic_correction``) and
+    the spectra end at ``SPECTRUM_CUTOFF`` of the Nyquist frequency (NaN
+    above it).
+
     Returns:
     f_binned (np.array): binned frequencies, Hz (empty if no row is
         finite).
@@ -231,10 +287,11 @@ def psd_summary(x, dt, freqs, valid = None, nbins = 100, fmin = None):
     f = np.fft.rfftfreq(T, d = dt)
     reduced = np.full((n, len(freqs)), np.nan)
     f_binned, binned = np.zeros(0), None
+    corr = cic_correction(f, dt)
     for i in range(n):
         if not np.isfinite(x[i]).all():
             continue
-        psd = get_psd(x[i], dt)
+        psd = get_psd(x[i], dt) * corr
         for j in np.flatnonzero(valid):
             try:
                 reduced[i, j] = get_sxx_reduced(f, psd, freqs[j])
@@ -280,19 +337,29 @@ def remove_common_modes(x, dt, n_comp, n_iter, lowpass, highpass):
     fit_rows = np.flatnonzero(ok)
     m = len(fit_rows)
     k = max(0, min(int(n_comp), m - 1))
-    y = x.copy()
-    y[~ok] = np.nan
     a = np.full((n, k), np.nan)
     sigma_iter = np.full((int(n_iter), n), np.nan)
     A = np.zeros((0, T))
     if k:
-        a_fit, A, sig_iter, _ = calc_cm(x[ok], k, int(n_iter), dt,
+        # The rows used, without a copy when every row is finite
+        xf = x if ok.all() else x[ok]
+        a_fit, A, sig_iter, _ = calc_cm(xf, k, int(n_iter), dt,
                                         tuple(lowpass),
                                         None if highpass is None
                                         else tuple(highpass))
-        y[ok] = remove_cm(x[ok], a_fit, A, np.arange(m))
+        yf = remove_cm(xf, a_fit, A, np.arange(m))
+        del xf
+        if ok.all():
+            y = yf
+        else:
+            y = np.full((n, T), np.nan)
+            y[ok] = yf
+        del yf
         a[ok] = a_fit
         sigma_iter[:, ok] = sig_iter[:, :, 0]
+    else:
+        y = x.copy()
+        y[~ok] = np.nan
     return dict(y = y, a = a, A = np.asarray(A), sigma_iter = sigma_iter,
                 n_comp = k, fit_rows = fit_rows)
 
@@ -553,7 +620,10 @@ def analyze_timestream(
     for w, name, rows in pf.tone_writes(root, ts):
         rows = np.asarray(rows, dtype = np.int64)
         idx = np.array([pos[int(r)] for r in rows], dtype = np.int64)
-        need = 7 * len(rows) * T * 8
+        # About 4 float64 arrays of the write's timestreams at the peak
+        # (the calibration's three outputs plus a stream chunk, or the
+        # common-mode removal's working copies)
+        need = 4 * len(rows) * T * 8
         if need > float(s['memory_gb']) * 1e9:
             raise MemoryError(
                 f"{ts['run']} write {name}: {len(rows)} tones of {T} "
@@ -569,7 +639,8 @@ def analyze_timestream(
         # The loop components: r theta along the loop, A across it (no
         # deglitching, no common-mode removal)
         radius = np.asarray(DS.circ_radius[rows.tolist()], dtype = float)
-        along = cal['thetat'] * radius[:, None]
+        along = cal['thetat']
+        along *= radius[:, None]
         across = cal['At']
         del cal
         out['write_idx'][idx] = w
@@ -771,6 +842,82 @@ def find_group(root, p):
             raise KeyError(f'the store has no {PREFIX} result named {p!r}')
         p = named[-1]
     return root[dl.set_name(int(p), PREFIX)]
+
+def matching_group(root, name, timestreams):
+    """
+    Find the latest result of 07_psds.py that a run would make again.
+
+    Parameters:
+    root (zarr.Group): the store root.
+    name (str or None): the run's name (attribute ``name``). None: the
+        run has no name, and a result matches when it has none and the
+        same ``timestreams``.
+    timestreams (list): the run's ``TIMESTREAMS``.
+
+    Returns:
+    grp (zarr.Group or None): the latest matching result, or None.
+    """
+    want = json.loads(json.dumps(dl.to_jsonable(timestreams)))
+    for q in reversed(dl.list_indices(root, PREFIX)):
+        g = root[dl.set_name(q, PREFIX)]
+        if name is not None:
+            if g.attrs.get('name') == name:
+                return g
+        elif g.attrs.get('name') is None and \
+                g.attrs.get('timestreams') == want:
+            return g
+    return None
+
+def saved_review(grp):
+    """
+    Read the overview window's review back from a result of 07_psds.py.
+
+    Parameters:
+    grp (zarr.Group): the result (``ts_psd{p}``).
+
+    Returns:
+    review (dict): timestream group name ('timestream{j}'): tuple
+        (bad, limits): the tones marked bad (res_idx: reason) and the
+        review limits (as ``save_timestream`` took them).
+    """
+    out = {}
+    for t in grp.group_keys():
+        if not t.startswith('timestream'):
+            continue
+        g = grp[t]
+        res_idxs = g['res_idxs'][:].tolist()
+        flags = g['bad'][:].tolist() if 'bad' in g else [False] * len(res_idxs)
+        reasons = g['bad_reason'][:].tolist() if 'bad_reason' in g else \
+            [''] * len(res_idxs)
+        bad = {int(r): str(s) for r, b, s in zip(res_idxs, flags, reasons)
+               if b}
+        out[t] = (bad, dict(g.attrs.get('limits', {})))
+    return out
+
+def describe_group(grp):
+    """
+    Describe a result of 07_psds.py: its timestreams, review and notes.
+
+    Parameters:
+    grp (zarr.Group): the result.
+
+    Returns:
+    text (str): one line per timestream, and the notes if any.
+    """
+    s = grp.attrs.get('settings', {})
+    cn = f"{s.get('cn_n_comp')} modes" if s.get('cn_remove') else 'kept'
+    lines = [f"{grp.path}: {grp.attrs.get('name')!r}; deglitch "
+             f"{s.get('deglitch')}; common modes {cn}"]
+    for t, (bad, limits) in sorted(saved_review(grp).items()):
+        a = grp[t].attrs
+        lines.append(f"  {t}: {a['run']} set {a['tone_set']} "
+                     f"({a['calibration']}), "
+                     f"{grp[t]['res_idxs'].shape[0]} tones, "
+                     f'{len(bad)} marked bad, limits at {len(limits)} '
+                     'frequencies')
+    if grp.attrs.get('notes'):
+        lines.append(f"  notes: {grp.attrs['notes']}")
+    return '\n'.join(lines)
 
 def load_group(root, p):
     """

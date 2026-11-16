@@ -102,23 +102,197 @@ def lifetime_table(root, grp, kind):
     Returns:
     table (pd.DataFrame): ``res_idx``, ``fres`` (Hz), ``height`` (the mean
         pulse's optimal-filter height, kHz/GHz; NaN for cosmic rays),
-        ``tau`` (s), ``n_used``, ``status``, ``bad``, ``bad_reason``.
+        ``tau`` (s), ``rate`` (pulses per second), ``n_used``,
+        ``status``, ``bad``, ``bad_reason``.
     """
     bad, reason = _bad(grp)
     height = np.asarray(grp['amp_ph'][:], dtype = float) * PPM \
         if kind == 'photons' else np.full(len(bad), np.nan)
+    rate = np.asarray(grp['rate'][:], dtype = float) if 'rate' in grp \
+        else np.full(len(bad), np.nan)
     return pd.DataFrame(dict(
         res_idx = np.asarray(grp['res_idxs'][:], dtype = int),
         fres = tone_frequencies(root, grp), height = height,
-        tau = np.asarray(grp['tau'][:], dtype = float),
+        tau = np.asarray(grp['tau'][:], dtype = float), rate = rate,
         n_used = np.asarray(grp['n_used'][:], dtype = int),
         status = np.asarray(grp['status'][:], dtype = str), bad = bad,
         bad_reason = reason))
 
-def _scatter_with_hist(fig, gs, row, table, column, label, log = False):
+def multiplicity_table(grp, kind):
     """
-    Draw one quantity against resonant frequency, with a histogram of it
-    at the side sharing the y axis; bad tones hollow.
+    Tabulate the coincident events of a photon or cosmic-ray result.
+
+    Parameters:
+    grp (zarr.Group): ``photons/<name>`` or ``cosmic/<name>``.
+    kind (str): 'photons' or 'cosmic'.
+
+    Returns:
+    table (pd.DataFrame): per event: ``time_s`` (since the start of the
+        run) and ``mult`` (tones hit). Empty if the result has none.
+    """
+    ev = grp.get('cosmic/events' if kind == 'photons' else 'events')
+    if ev is None or 'mult' not in ev or 'time_s' not in ev:
+        return pd.DataFrame(dict(time_s = np.zeros(0), mult = np.zeros(0,
+                                                                     int)))
+    return pd.DataFrame(dict(
+        time_s = np.asarray(ev['time_s'][:], dtype = float),
+        mult = np.asarray(ev['mult'][:], dtype = int)))
+
+def plot_multiplicity(table, duration, title = '', bin_s = 5.):
+    """
+    Plot the coincident events of a result: how many tones each hit, and
+    their rate over the run.
+
+    Parameters:
+    table (pd.DataFrame): ``multiplicity_table`` output.
+    duration (float): length of the run, s.
+    title (str): figure title. Default ''.
+    bin_s (float): time bin, s. Default 5.
+
+    Returns:
+    fig (Figure): the figure.
+    """
+    import matplotlib.pyplot as plt
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize = (12, 3.6),
+                                   gridspec_kw = dict(width_ratios = [2, 3]))
+    mult = table['mult'].to_numpy()
+    if len(mult):
+        values, counts = np.unique(mult, return_counts = True)
+        ax1.bar(values, counts, width = 0.8, color = 'C0')
+        ax1.set_yscale('log')
+    ax1.set_xlabel('Tones hit per event')
+    ax1.set_ylabel('Events')
+    ax1.set_title(f'{len(mult)} events', fontsize = 10)
+    ax1.grid(alpha = 0.3)
+    edges = np.arange(0., max(duration, bin_s) + bin_s / 2, bin_s)
+    t = table['time_s'].to_numpy()
+    counts, _ = np.histogram(t, edges)
+    ax2.stairs(counts / bin_s, edges, color = 'C0')
+    ax2.set_xlabel('Time since the start of the run (s)')
+    ax2.set_ylabel('Events per second')
+    ax2.set_ylim(bottom = 0)
+    ax2.grid(alpha = 0.3)
+    fig.suptitle(title)
+    fig.tight_layout()
+    return fig
+
+def _format_axes(ax, x_mhz = True):
+    """
+    Put thousands separators on an axis's tick labels.
+
+    Parameters:
+    ax (Axes): the axes.
+    x_mhz (bool): If True (default), the x axis too.
+    """
+    from matplotlib.ticker import FuncFormatter
+    fmt = FuncFormatter(lambda v, _: f'{v:,.10g}')
+    ax.yaxis.set_major_formatter(fmt)
+    if x_mhz:
+        ax.xaxis.set_major_formatter(fmt)
+
+def outliers(v, log = False, k = 3.):
+    """
+    Flag the outliers of some values: beyond ``k`` interquartile ranges
+    from the quartiles (of log10 of the values when ``log``).
+
+    Parameters:
+    v (np.array): the values (NaN ignored).
+    log (bool): If True, in log10. Default False.
+    k (float): the distance, in interquartile ranges. Default 3.
+
+    Returns:
+    out (np.array, bool): True where an outlier (False where NaN).
+    """
+    v = np.asarray(v, dtype = float)
+    with np.errstate(invalid = 'ignore', divide = 'ignore'):
+        w = np.where(v > 0, np.log10(v), np.nan) if log else v
+    ok = np.isfinite(w)
+    if ok.sum() < 4:
+        return np.zeros(len(v), bool)
+    q1, q3 = np.percentile(w[ok], [25, 75])
+    iqr = q3 - q1
+    if iqr == 0:
+        return np.zeros(len(v), bool)
+    out = np.zeros(len(v), bool)
+    out[ok] = (w[ok] < q1 - k * iqr) | (w[ok] > q3 + k * iqr)
+    return out
+
+def _draw_outliers(ax, x, v, lo, hi, color, log = False, placed = None):
+    """
+    Draw outliers at the edge of the y range as arrows with their values.
+
+    Parameters:
+    ax (Axes): the axes.
+    x, v (np.array): the outliers' x and values.
+    lo, hi (float): the y range shown.
+    color (str): color.
+    log (bool): If True, the y axis is logarithmic. Default False.
+    placed (list or None): labels drawn so far at the same edges, tuples
+        (x, up, step), so that labels of several series close in x step
+        away from each other. Updated in place. None (default): a new
+        list.
+
+    Returns:
+    placed (list): the labels drawn, including this call's.
+    """
+    if placed is None:
+        placed = []
+    xlo, xhi = ax.get_xlim()
+    near = 0.04 * (xhi - xlo)
+    order = np.argsort(np.asarray(x, dtype = float))
+    for xi, vi in zip(np.asarray(x)[order], np.asarray(v)[order]):
+        up = vi > hi
+        if log:
+            y = hi / 1.15 if up else lo * 1.15
+        else:
+            y = hi - 0.05 * (hi - lo) if up else lo + 0.05 * (hi - lo)
+        ax.plot([xi], [y], marker = '^' if up else 'v', color = color,
+                markersize = 8, linestyle = 'none')
+        # Labels of arrows close in x step away from the edge so they
+        # stay readable
+        taken = {s for px, pu, s in placed
+                 if pu == up and abs(px - xi) < near}
+        step = 0
+        while step in taken:
+            step += 1
+        placed.append((xi, up, step))
+        text = f'{vi:.2e}' if log else \
+            (f'{vi:,.0f}' if abs(vi) >= 100 else f'{vi:,.3g}')
+        ax.annotate(text, (xi, y), textcoords = 'offset points',
+                    xytext = (4, -9 * step if up else 9 * step),
+                    fontsize = 7, color = color, va = 'center')
+    return placed
+
+def _hist_side(hx, vals, color, log = False, nbins = None):
+    """
+    Draw a horizontal histogram at the side of a scatter plot.
+
+    Parameters:
+    hx (Axes): the histogram axes (sharing y with the scatter).
+    vals (np.array): the values (log10 of them when ``log``).
+    color (str): color.
+    log (bool): If True, the y axis is logarithmic. Default False.
+    nbins (int or None): bins. Default None: from the count.
+    """
+    if not len(vals):
+        return
+    lo, hi = vals.min(), vals.max()
+    if lo == hi:
+        lo, hi = lo - 0.5, hi + 0.5
+    n = max(6, min(20, len(vals) // 6 + 6)) if nbins is None else nbins
+    edges = np.linspace(lo, hi, n + 1)
+    counts, _ = np.histogram(vals, edges)
+    centers = 0.5 * (edges[1:] + edges[:-1])
+    hx.barh(10. ** centers if log else centers, counts,
+            height = np.diff(10. ** edges) if log else np.diff(edges),
+            color = color, alpha = 0.5)
+
+def _scatter_with_hist(fig, gs, row, table, column, label):
+    """
+    Draw one quantity against resonant frequency (MHz), with a histogram
+    of it at the side sharing the y axis. Tones marked bad are left out;
+    outliers are drawn at the edge as arrows with their values and left
+    out of the histogram and the y range.
 
     Parameters:
     fig (Figure): the figure.
@@ -127,7 +301,6 @@ def _scatter_with_hist(fig, gs, row, table, column, label, log = False):
     table (pd.DataFrame): with ``fres``, ``bad`` and the column.
     column (str): the quantity.
     label (str): y label.
-    log (bool): If True, log y. Default False.
 
     Returns:
     ax (Axes): the scatter axes.
@@ -135,28 +308,23 @@ def _scatter_with_hist(fig, gs, row, table, column, label, log = False):
     import matplotlib.pyplot as plt
     ax = fig.add_subplot(gs[row, 0])
     hx = fig.add_subplot(gs[row, 1], sharey = ax)
-    v = table[column].to_numpy(dtype = float)
-    f = table['fres'].to_numpy(dtype = float) / 1e9
-    ok = np.isfinite(v) & (v > 0 if log else True)
-    good = ok & ~table['bad'].to_numpy()
-    ax.scatter(f[good], v[good], s = 14, color = 'C0', label = 'tones')
-    ax.scatter(f[ok & ~good], v[ok & ~good], s = 14, facecolors = 'none',
-               edgecolors = 'C3', label = 'marked bad')
-    if log:
-        ax.set_yscale('log')
+    keep = ~table['bad'].to_numpy()
+    v = table[column].to_numpy(dtype = float)[keep]
+    f = table['fres'].to_numpy(dtype = float)[keep] / 1e6
+    ok = np.isfinite(v)
+    out = outliers(v)
+    good = ok & ~out
+    ax.scatter(f[good], v[good], s = 14, color = 'C0')
     if good.any():
-        vals = np.log10(v[good]) if log else v[good]
-        edges = np.linspace(vals.min(), vals.max() or vals.min() + 1,
-                            max(8, min(40, good.sum() // 3 + 8)))
-        if vals.min() == vals.max():
-            edges = np.linspace(vals.min() - 0.5, vals.max() + 0.5, 9)
-        counts, _ = np.histogram(vals, edges)
-        centers = 0.5 * (edges[1:] + edges[:-1])
-        heights = np.diff(10. ** edges) if log else np.diff(edges)
-        hx.barh(10. ** centers if log else centers, counts, height = heights,
-                color = 'C0', alpha = 0.6)
+        lo, hi = v[good].min(), v[good].max()
+        pad = 0.08 * (hi - lo) or 0.1 * abs(hi) or 1.
+        lo, hi = lo - pad, hi + pad
+        ax.set_ylim(lo, hi)
+        _draw_outliers(ax, f[out], v[out], lo, hi, 'C3')
+        _hist_side(hx, v[good], 'C0')
     ax.set_ylabel(label)
     ax.grid(True, alpha = 0.3)
+    _format_axes(ax)
     hx.set_xlabel('tones')
     plt.setp(hx.get_yticklabels(), visible = False)
     hx.grid(True, alpha = 0.3)
@@ -164,8 +332,8 @@ def _scatter_with_hist(fig, gs, row, table, column, label, log = False):
 
 def plot_lifetimes(table, title = ''):
     """
-    Plot pulse height and decay time against resonant frequency, each
-    with a histogram at the side.
+    Plot pulse height and decay time (us) against resonant frequency
+    (MHz), each with a histogram at the side.
 
     Parameters:
     table (pd.DataFrame): ``lifetime_table`` output.
@@ -180,15 +348,18 @@ def plot_lifetimes(table, title = ''):
     table = table.assign(tau_us = table['tau'] * 1e6)
     if np.isfinite(table['height']).any():
         rows.insert(0, ('height', 'Pulse height (kHz/GHz)'))
+    if 'rate' in table and np.isfinite(table['rate']).any():
+        rows.append(('rate', 'Pulses per second'))
     fig = plt.figure(figsize = (12, 3.6 * len(rows)))
     gs = GridSpec(len(rows), 2, width_ratios = [4, 1], figure = fig,
                   wspace = 0.05, hspace = 0.3)
     for k, (col, label) in enumerate(rows):
         ax = _scatter_with_hist(fig, gs, k, table, col, label)
         if k == 0:
-            ax.legend(loc = 'upper right')
-            ax.set_title(title)
-    ax.set_xlabel('Resonant frequency (GHz)')
+            n_bad = int(table['bad'].sum())
+            ax.set_title(title + (f' ({n_bad} tones marked bad left out)'
+                                  if n_bad else ''))
+    ax.set_xlabel('Resonant frequency (MHz)')
     return fig
 
 ################################################################################
@@ -250,9 +421,14 @@ def psd_group_tables(root, grp):
         fb = np.asarray(t['f_binned'][:], dtype = float)
         if f is None:
             f = fb
+        # Groups saved before the spectra ended below the Nyquist
+        # frequency are cut the same way here
+        cut = fb > psds.SPECTRUM_CUTOFF * 0.5 / float(t.attrs['dt'])
         for key, arr in keys.items():
             s = np.asarray(t[arr][:], dtype = float) if arr in t else \
                 np.full((n, len(fb)), np.nan)
+            s = s.copy()
+            s[:, cut] = np.nan
             spectra[key].append(s if np.array_equal(fb, f) and s.shape[1]
                                 == len(f) else _interp_log(f, fb, s))
         bad, reason = _bad(t)
@@ -331,8 +507,10 @@ def _band(ax, f, stats, kind, color, label, style = '-'):
 
 def _points_with_hist(fig, gs, row, points, prefix, freqs, label, log):
     """
-    Draw a reduced quantity against resonant frequency at several
-    frequencies, with histograms at the side sharing the y axis.
+    Draw a reduced quantity against resonant frequency (MHz) at several
+    frequencies, with histograms at the side sharing the y axis. Tones
+    marked bad are left out; outliers are drawn at the edge as arrows
+    with their values and left out of the histograms and the y range.
 
     Parameters:
     fig (Figure): the figure.
@@ -350,36 +528,51 @@ def _points_with_hist(fig, gs, row, points, prefix, freqs, label, log):
     import matplotlib.pyplot as plt
     ax = fig.add_subplot(gs[row, 0])
     hx = fig.add_subplot(gs[row, 1], sharey = ax)
-    f = points['fres'].to_numpy(dtype = float) / 1e9
-    bad = points['bad'].to_numpy()
-    all_vals = []
+    keep = ~points['bad'].to_numpy()
+    f = points['fres'].to_numpy(dtype = float)[keep] / 1e6
+    series = []
     for k, fr in enumerate(freqs):
-        v = points[f'{prefix}_{fr:g}'].to_numpy(dtype = float)
+        v = points[f'{prefix}_{fr:g}'].to_numpy(dtype = float)[keep]
         ok = np.isfinite(v) & ((v > 0) if log else True)
-        good = ok & ~bad
+        out = outliers(np.where(ok, v, np.nan), log = log)
+        good = ok & ~out
         ax.scatter(f[good], v[good], s = 12, color = f'C{k}',
                    label = f'{fr:g} Hz')
-        ax.scatter(f[ok & ~good], v[ok & ~good], s = 12, facecolors = 'none',
-                   edgecolors = f'C{k}')
-        all_vals.append((k, np.log10(v[good]) if log else v[good]))
+        series.append((k, f[out], v[out], v[good]))
     if log:
         ax.set_yscale('log')
-    vals = np.concatenate([v for _, v in all_vals]) if all_vals else \
-        np.zeros(0)
-    if len(vals):
-        lo, hi = vals.min(), vals.max()
-        if lo == hi:
-            lo, hi = lo - 0.5, hi + 0.5
-        edges = np.linspace(lo, hi, max(8, min(40, len(vals) // 4 + 8)))
-        for k, v in all_vals:
-            counts, _ = np.histogram(v, edges)
+    good_all = np.concatenate([g for _, _, _, g in series]) if series \
+        else np.zeros(0)
+    if len(good_all):
+        lo, hi = good_all.min(), good_all.max()
+        if log:
+            lo, hi = lo / 1.5, hi * 1.5
+        else:
+            pad = 0.08 * (hi - lo) or 0.1 * abs(hi) or 1.
+            lo, hi = lo - pad, hi + pad
+        ax.set_ylim(lo, hi)
+        placed = []
+        for k, fo, vo, g in series:
+            _draw_outliers(ax, fo, vo, lo, hi, f'C{k}', log, placed)
+        vals = np.log10(good_all) if log else good_all
+        vlo, vhi = vals.min(), vals.max()
+        if vlo == vhi:
+            vlo, vhi = vlo - 0.5, vhi + 0.5
+        n = max(6, min(20, len(vals) // 8 + 6))
+        edges = np.linspace(vlo, vhi, n + 1)
+        for k, _, _, g in series:
+            counts, _ = np.histogram(np.log10(g) if log else g, edges)
             centers = 0.5 * (edges[1:] + edges[:-1])
             hx.barh(10. ** centers if log else centers, counts,
                     height = np.diff(10. ** edges) if log else np.diff(edges),
                     color = f'C{k}', alpha = 0.45)
     ax.set_ylabel(label)
     ax.grid(True, alpha = 0.3)
-    ax.legend(loc = 'upper right', fontsize = 8, ncol = len(freqs))
+    ax.legend(loc = 'upper right', fontsize = 8, ncol = max(len(freqs), 1))
+    _format_axes(ax, x_mhz = True)
+    if log:
+        from matplotlib.ticker import LogFormatterSciNotation
+        ax.yaxis.set_major_formatter(LogFormatterSciNotation())
     hx.set_xlabel('tones')
     plt.setp(hx.get_yticklabels(), visible = False)
     hx.grid(True, alpha = 0.3)
@@ -408,10 +601,11 @@ def point_freqs(f_reduced, points):
 def plot_psd_group(points, spectra, stats, f_reduced, title = ''):
     """
     Plot a PSD group: the Sxx mean and range over the tones (before and
-    after common-mode removal; on- and off-resonance tones apart), then
-    Sxx against resonant frequency at a few frequencies with histograms
-    at the side; and the same for the loop components (along and across
-    the loop) and the s-factor.
+    after correlated noise removal; on- and off-resonance tones apart),
+    then Sxx against resonant frequency at a few frequencies with
+    histograms at the side; and the same for the loop components
+    (parallel and perpendicular to the loop: amplitude and dissipation
+    noise) and the s-factor.
 
     Parameters:
     points (pd.DataFrame): ``psd_group_tables`` points.
@@ -437,10 +631,10 @@ def plot_psd_group(points, spectra, stats, f_reduced, title = ''):
     for which, style in (('on', '-'), ('off', '--')):
         if which not in stats:
             continue
-        s = stats[which]
         tag = '' if which == 'on' else ' (off resonance)'
-        _band(ax, f, s, 'sxx', 'C7', 'raw' + tag, style)
-        _band(ax, f, s, 'sxx_cn', 'C0', 'common modes removed' + tag, style)
+        _band(ax, f, stats[which], 'sxx', 'C7', 'raw' + tag, style)
+        _band(ax, f, stats[which], 'sxx_cn', 'C0',
+              'correlated noise removed' + tag, style)
     ax.set_xscale('log')
     ax.set_yscale('log')
     ax.set_ylabel('Sxx (1/Hz)')
@@ -451,10 +645,13 @@ def plot_psd_group(points, spectra, stats, f_reduced, title = ''):
     ax.legend(loc = 'upper right', fontsize = 8)
     on = points[~points['offres']] if len(points) else points
     if freqs and len(on):
-        ax = _points_with_hist(fig, gs, 1, on, 'sxx_cn' if np.isfinite(
-            on[[f'sxx_cn_{fr:g}' for fr in freqs]]).any().any() else 'sxx',
-            freqs, 'Sxx (1/Hz)', True)
-        ax.set_xlabel('Resonant frequency (GHz)')
+        prefix = 'sxx_cn' if np.isfinite(
+            on[[f'sxx_cn_{fr:g}' for fr in freqs]]).any().any() else 'sxx'
+        ax = _points_with_hist(fig, gs, 1, on, prefix, freqs,
+                               'Sxx (1/Hz)' + (', correlated noise removed'
+                                               if prefix == 'sxx_cn'
+                                               else ''), True)
+        ax.set_xlabel('Resonant frequency (MHz)')
     if not has_loop:
         return fig
     ax = fig.add_subplot(gs[2, :])
@@ -462,21 +659,21 @@ def plot_psd_group(points, spectra, stats, f_reduced, title = ''):
         if which not in stats:
             continue
         tag = '' if which == 'on' else ' (off resonance)'
-        _band(ax, f, stats[which], 'spar', 'C1', 'along the loop (r theta)'
-              + tag, style)
-        _band(ax, f, stats[which], 'sper', 'C2', 'across the loop (A)' + tag,
-              style)
+        _band(ax, f, stats[which], 'spar', 'C1',
+              'parallel (dissipation)' + tag, style)
+        _band(ax, f, stats[which], 'sper', 'C2',
+              'perpendicular (amplitude)' + tag, style)
     ax.set_xscale('log')
     ax.set_yscale('log')
     ax.set_ylabel('PSD (1/Hz)')
     ax.set_xlabel('Frequency (Hz)')
-    ax.set_title('Loop components')
+    ax.set_title('Amplitude / dissipation noise')
     ax.grid(True, alpha = 0.3, which = 'both')
     ax.legend(loc = 'upper right', fontsize = 8)
     if freqs and len(on):
         ax = _points_with_hist(fig, gs, 3, on, 'sfactor', freqs,
                                's-factor (dB)', False)
-        ax.set_xlabel('Resonant frequency (GHz)')
+        ax.set_xlabel('Resonant frequency (MHz)')
     return fig
 
 ################################################################################
@@ -513,6 +710,14 @@ def report_text(root, lifetimes, groups):
             if np.isfinite(good['height']).any():
                 lines.append(f"  pulse height: median "
                              f"{np.nanmedian(good['height']):.3g} kHz/GHz")
+            if 'rate' in good and np.isfinite(good['rate']).any():
+                lines.append(f"  pulses per second: median "
+                             f"{np.nanmedian(good['rate']):.3g}")
+        events = multiplicity_table(grp, kind)
+        if len(events):
+            m = events['mult'].to_numpy()
+            lines.append(f"  coincident events: {len(m)}, tones hit "
+                         f"median {int(np.median(m))}, most {int(m.max())}")
         for _, r in t[t['bad']].iterrows():
             lines.append(f"  res {r['res_idx']} bad: {r['bad_reason']}")
     for p, points, stats in groups:
@@ -588,10 +793,29 @@ def export_timestream_report(
             paths[key + '_csv'] = f'{stem}_{key}.csv'
             table.to_csv(paths[key + '_csv'], index = False)
             lifetimes.append((kind, name, table))
+            events = multiplicity_table(grp, kind)
+            if len(events):
+                a = grp.attrs
+                duration = (int(a['stop']) - int(a['start'])) * float(a['dt'])
+                fig = plot_multiplicity(
+                    events, duration,
+                    f'{device} {kind}/{name}: coincident events')
+                key = f'multiplicity_{kind}_{name}'
+                paths[key] = f'{stem}_{key}.png'
+                fig.savefig(paths[key], dpi = dpi, bbox_inches = 'tight')
+                plt.close(fig)
+                paths[key + '_csv'] = f'{stem}_{key}.csv'
+                events.to_csv(paths[key + '_csv'], index = False)
     ps = dl.list_indices(root, psds.PREFIX) if groups is None else \
         [int(p) for p in groups]
     for p in ps:
         grp = root[f'ts_psd{p}']
+        if 'f_reduced' not in grp or not any(
+                n.startswith('timestream') and 'res_idxs' in grp[n]
+                for n in grp.group_keys()):
+            # Saved incompletely (an interrupted run)
+            skipped.append(f'ts_psd{p}')
+            continue
         points, spectra, f_reduced = psd_group_tables(root, grp)
         keep = ~points['bad'].to_numpy() if len(points) else \
             np.zeros(0, bool)

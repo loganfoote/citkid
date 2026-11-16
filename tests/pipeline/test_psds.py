@@ -39,6 +39,26 @@ def test_union_freqs():
     assert len(psds.union_freqs([])) == 0
 
 
+def test_cic_correction():
+    """
+    The CRS decimation droop is undone up to the cutoff: a factor of 1
+    at low frequency, growing towards the Nyquist frequency, NaN above
+    the cutoff; a period that is not a CRS stage's gives 1 everywhere.
+    """
+    dt = 2.62144e-05       # stage 0
+    assert psds.dec_stage_from_dt(dt) == 0
+    assert psds.dec_stage_from_dt(dt * 64) == 6
+    assert psds.dec_stage_from_dt(1e-3) is None
+    f = np.array([10., 1000., 5000., 10000., 0.79 * 0.5 / dt,
+                  0.81 * 0.5 / dt])
+    c = psds.cic_correction(f, dt)
+    assert c[0] == pytest.approx(1., abs = 1e-6)
+    assert 1. < c[1] < 1.02 and 1.1 < c[2] < 1.3 and 1.8 < c[3] < 2.3
+    assert np.isfinite(c[4]) and np.isnan(c[5])
+    np.testing.assert_array_equal(psds.cic_correction(f, 1e-3), 1.)
+    assert psds.cic_correction(np.zeros(0), dt).shape == (0,)
+
+
 def test_psd_summary_white_noise():
     """
     White noise of sigma s has a one-sided PSD of 2 s^2 dt; the reduced
@@ -174,3 +194,22 @@ def test_select_timestreams():
                 [dict(name = 'light', tone_sets = [1])]):
         with pytest.raises(KeyError):
             psds.select_timestreams(lst, bad)
+
+
+def test_remove_common_modes_leaves_input_alone():
+    """
+    With every row finite the input is used without a copy, and still
+    not written into; the output is a new array.
+    """
+    rng = np.random.default_rng(7)
+    x = rng.normal(size = (5, 3000)) + rng.normal(size = (1, 3000))
+    before = x.copy()
+    out = psds.remove_common_modes(x, 1e-3, 1, 2, (50., 2), (1., 2))
+    np.testing.assert_array_equal(x, before)
+    assert out['y'] is not x and out['y'].shape == x.shape
+    assert out['n_comp'] == 1 and np.isfinite(out['y']).all()
+    # A NaN row: the others are fit, the row stays NaN
+    x[2] = np.nan
+    out = psds.remove_common_modes(x, 1e-3, 1, 2, (50., 2), (1., 2))
+    assert np.isnan(out['y'][2]).all() and np.isfinite(out['y'][[0, 1, 3, 4]]).all()
+    assert out['fit_rows'].tolist() == [0, 1, 3, 4]
