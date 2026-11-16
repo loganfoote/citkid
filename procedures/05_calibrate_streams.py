@@ -1,44 +1,11 @@
 """
-05: calibrate timestreams.
-
-Choose the streams in ``CALIBRATE`` (below): each entry is a timestream
-run of 04_stream.py (``ts{n}`` in a tuning's run list, its streams under
-the calibration sweep they belong to) by name (the latest run with that
-name) or index (``run = n``), a window of zarr chunks along time
-(``chunks``: all of it by default, n for the first n chunks, or (first,
-stop)), and optionally some tone sets. Loading only a few chunks keeps
-loading fast. With ``CALIBRATE`` empty, the script lists the runs (name,
-tuning, stage, length, tone sets, chunks, notes) and stops.
-
-The chosen streams are loaded into one DataSet per tone set
-(``pipeline.stream_sources``): each row is one tone, and its timestream is
-its windows from every chosen run, one after another (``source_bounds``
-says where each run's samples are; ``write_idx`` says which tones were
-streamed together, for common-mode removal). So the calibration is done
-once, on everything chosen, whatever the runs' decimation stages: it
-takes no spectra (the 'ts_cal' path: gain fit, IQ circle fit, x
-calibration), first in the interactive window, then in batch for the
-rows not done there. Calibration tones (res_idxs < 0), if the runs have any,
-get their own DataSet with the 'ts_offres' path, in batch.
-
-The calibration is applied to whole runs by the scripts that come after
-this one (e.g. 06_find_photons.py), with
-``pipeline.stream_sources.apply_stream_calibration``: every tone's x (or
-other outputs) over a run's whole length, chunk by chunk, with the run's
-own sample period, in memory. Calibrated timestreams are never saved.
-
-Everything goes in ``ts_cal{c}`` at the store root (an analysis group:
-delete it to start over). Running again with the same ``CALIBRATE``
-continues in the same ``ts_cal{c}``; a different choice, or ``--new``, starts
-the next one.
-No CRS is needed.
+05: calibrate timestreams (gain, IQ circle, x), first in a window, then
+in batch, into ts_cal{c}. With CALIBRATE empty, lists the runs. No CRS
+needed.
 
 Usage:
     python 05_calibrate_streams.py --device deviceA
     python 05_calibrate_streams.py --device deviceA --no-gui
-
-Edit the settings below; the command-line options override them for one
-run.
 """
 import argparse
 import os
@@ -53,26 +20,15 @@ from citkid.zarr_util import to_jsonable
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-DATA_DIR = '~/data'         # stores are in
-                            # DATA_DIR/COOLDOWN/DEVICE[_SUFFIX].zarr
-COOLDOWN = 'cooldown'       # cooldown name
-DEVICE = 'device'           # device name
-SUFFIX = ''                 # store name suffix: the store is
-                            # DEVICE_SUFFIX.zarr ('': DEVICE.zarr)
-# Timestreams to calibrate. Each entry selects a run by name (the latest
-# run with that name) or by run (its index n in ts{n}); chunks, the zarr
-# chunks to load (None: all; n: the first n; (first, stop): a range); and
-# tone_sets (None: all). Leave the list empty to list the runs.
+DATA_DIR = '~/data'
+COOLDOWN = 'cooldown'
+DEVICE = 'device'
+SUFFIX = ''
 CALIBRATE = [
-    # dict(name = 'dark_dec6', chunks = 1),
-    # dict(name = 'dark_dec0', chunks = 2),
 ]
-F_AVG = 1                   # number of fine sweep points averaged together
-INTERACTIVE = True          # review in the interactive window before the
-                            # batch calibration
+F_AVG = 1
+INTERACTIVE = True
 
-# Notes saved with the data this script makes (attribute 'notes'), e.g.
-# the filters and attenuators on the DAC and ADC lines. Multi-line is fine.
 NOTES = """
 """
 

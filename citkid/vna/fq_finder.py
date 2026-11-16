@@ -58,6 +58,7 @@ from ..qt_compat import (
 )
 from ..res.fres import update_fres as _update_fres
 from .gain import normalize_edges
+from ..pipeline.interactive import marks as _marks
 
 # QEvent.KeyPress moved to QEvent.Type.KeyPress in PyQt6 / some PySide6 builds.
 _QEVENT_KEY_PRESS = getattr(
@@ -687,6 +688,15 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         self._reject_label.setMinimumWidth(_text_width("✓ Not rejected  xx"))
         reject_row.addWidget(self._reject_label)
 
+        self._note_btn = QtWidgets.QPushButton("Add note (N)")
+        self._note_btn.setToolTip(
+            "Record a note on this resonator in the store's tone marks; "
+            "the tone is kept")
+        self._note_btn.clicked.connect(self._add_note)
+        reject_row.addWidget(self._note_btn)
+        self._marks_label = QtWidgets.QLabel("")
+        reject_row.addWidget(self._marks_label)
+
         reject_row.addStretch()
         vbox.addLayout(reject_row)
 
@@ -696,7 +706,8 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             "Shift+scroll → fine Δqres  |  "
             "Ctrl+scroll → coarse Δqres  |  "
             "←/A → back  |  →/D → next / save  |  "
-            "R → rescale  |  Z → reset to initial  |  H → help"
+            "R → rescale  |  Z → reset to initial  |  N → note  |  "
+            "H → help"
         )
         hint.setStyleSheet("color: #aaa;")
         hint.setFont(widget_font)
@@ -858,6 +869,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             f"Resonator {int(res_idx)}   "
             f"({self._cursor + 1}/{n_tot})"
         )
+        self._update_marks_label()
 
         # Block spinbox signals while updating programmatically
         self._fres_spin.blockSignals(True)
@@ -1028,6 +1040,57 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             self._qres_spin.blockSignals(False)
             self._update_overlay(self._f[ri], self._z[ri], np.nan, np.nan)
         self._update_reject_label()
+        # The store's tone marks: a rejected tone is bad there too, and
+        # un-rejecting clears it
+        if text == "not rejected":
+            self._record('clear', 'not rejected in fq_finder')
+        else:
+            self._record('bad', self._reject_reasons[ri])
+        self._update_marks_label()
+
+    def _record(self, kind, text):
+        """
+        Write a mark on the current resonator to the store's tone marks
+        (``marks.record``), if the group is in a store.
+
+        Parameters:
+        kind (str): 'bad', 'note' or 'clear'.
+        text (str): the reason or note.
+
+        Returns:
+        written (bool): True if an entry was written.
+        """
+        root, stage = _marks.registry(self._zg)
+        return _marks.record(root, int(self._res_idxs[self._ri]), kind, text,
+                             stage)
+
+    def _add_note(self):
+        """
+        Record a note on the current resonator in the store's tone marks
+        (the Add note button, N). The tone is kept.
+        """
+        note = self._ask_note()
+        if note:
+            self._record('note', note)
+            self._update_marks_label()
+
+    def _ask_note(self):
+        """
+        Ask for a note on the current resonator (``marks.ask_note``).
+
+        Returns:
+        note (str or None): the note, or None if cancelled.
+        """
+        return _marks.ask_note(
+            self, f"Note on res {int(self._res_idxs[self._ri])}")
+
+    def _update_marks_label(self):
+        """
+        Show the current resonator's tone marks (bad reason, notes).
+        """
+        root, _ = _marks.registry(self._zg)
+        self._marks_label.setText(
+            _marks.mark_label(root, int(self._res_idxs[self._ri])))
         self.setFocus()
 
     def _on_reason_edit_finished(self):
@@ -1138,6 +1201,8 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             "<li><b>R:</b> Auto-scale both plots</li>"
             "<li><b>Z:</b> Reset fres/qres to initial values for this "
             "resonator</li>"
+            "<li><b>N:</b> Add a note on this resonator to the store's tone "
+            "marks (the tone is kept)</li>"
             "<li><b>H:</b> Toggle this help panel</li>"
             "</ul>"
             "<p><b>Rejection</b></p>"
@@ -1451,6 +1516,9 @@ class FqFinderWindow(QtWidgets.QMainWindow):
                 return True
             if key == _Qt.Key_R:
                 self._autoscale_plots()
+                return True
+            if key == _Qt.Key_N:
+                self._add_note()
                 return True
         return super().eventFilter(obj, event)
 

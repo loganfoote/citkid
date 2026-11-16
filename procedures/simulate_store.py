@@ -1,19 +1,9 @@
 """
-Make a device store with a VNA sweep of a simulated device (not a
-numbered step: for trying the analysis steps and for example notebooks).
-
-The sweep is taken by ``crs.procedures.vna_sweep_to_store`` with a
-simulated CRS (``crs.sim``), so it is saved exactly like a real one
-(``vna0``). The device's true parameters are saved in the store's
-``simulation`` group; ``crs.sim.load_truth`` loads them and
-``vna.simulate.compare_to_truth`` compares a fit with them.
+Make a store with a VNA sweep of a simulated device, for trying the
+analysis scripts (02_find_resonances.py --store ...).
 
 Usage:
     python simulate_store.py --store ~/data/sim/simdevice.zarr
-    python 02_find_resonances.py --store ~/data/sim/simdevice.zarr
-
-Edit the settings below; the command-line options override them for one
-run.
 """
 import argparse
 import asyncio
@@ -25,18 +15,15 @@ from citkid.crs.sim import simulate_vna_store
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-STORE = '~/data/sim/simdevice.zarr'   # new store path
-SEED = 0                    # device, gain, and noise seed
-NYQUIST = '1'               # '1' (100-2500 MHz), '2' (2500-5000), 'both'
-AMPLITUDE = -55.            # tone power, dBm
-QR_MEDIAN = 2e4             # expected median Qr (sets the step)
-PTS_PER_LW = 25.            # points per linewidth at QR_MEDIAN
-NSAMPS = 100                # samples averaged per point
-SNR_DB = 40.                # signal-to-noise ratio per quadrature at
-                            # -55 dBm with 100 samples averaged
+STORE = '~/data/sim/simdevice.zarr'
+SEED = 0
+NYQUIST = '1'
+AMPLITUDE = -55.
+QR_MEDIAN = 2e4
+PTS_PER_LW = 25.
+NSAMPS = 100
+SNR_DB = 40.
 
-# Notes saved with the data this script makes (attribute 'notes'), e.g.
-# the filters and attenuators on the DAC and ADC lines. Multi-line is fine.
 NOTES = """
 """
 

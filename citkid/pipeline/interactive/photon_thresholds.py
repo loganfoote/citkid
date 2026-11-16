@@ -13,7 +13,9 @@ tone or for all tones together:
   whole record) and the height window [hmin, hmax];
 - the tone's mean pulse in the height window, with the fit of its decay
   (``signal.photons.fit_tau``: from ``tau_skip`` samples after the
-  maximum, over ``tau_lifetimes`` decay times) and the decay time;
+  maximum, over the next ``tau_fit_s`` seconds; the "Decay fit" box sets
+  them for the selected tone or for all tones, without any detection)
+  and the decay time;
 - a snippet of the tone's data (``data`` given): the detection timestream
   and the optimal filter's output, both in units of the mean photon, with
   the height window as horizontal lines and the filter peaks marked
@@ -40,23 +42,33 @@ thresholds either
 to the selected tone (the default: an override for that resonator) or to
 all tones (the global values, used by every tone without an override),
 and runs the detection again for the tones they change, through the
-``rerun`` callable (``pipeline.photon_finder.detect_timestream``). A and
+``rerun`` callable (``pipeline.photon_finder.detect_timestream``). After
+applying to all tones, the scope goes back to the selected tone. A and
 D (or the buttons) move to the previous and next tone; thresholds changed
 but not rerun are applied before moving on. "Revert tone to defaults"
 puts the thresholds the window opened with (the script's) back on the
-selected tone. Close the window (or press Done) to keep the thresholds
-and results.
+selected tone. "Mark tone bad" (B) marks the selected tone bad, with a
+reason (``x`` in the list; ``Thresholds.bad``): it is left out of the
+coincidences, cosmic rays and mean pulses, and is not used as a
+reference. "Tone overview" (O) opens ``ToneOverviewWindow``: histograms
+over all tones of the mean photon height, the fitted decay time and the
+pulse rate, each with draggable review limits (``Thresholds.limits``),
+and a list of the tones outside them; clicking a tone there selects it
+here, and "show only tones outside the limits" filters the list here.
+Close the window (or press Done) to keep the thresholds and results.
 """
 import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtGui, QtWidgets
 from ...qt_compat import (
-    PlainAxisItem, Qt, delete_on_close, fit_window_to_screen, get_qapp,
-    hint_label, run_responsive, widget_font_stylesheet
+    PlainAxisItem, Qt, delete_on_close, fit_window_to_screen, forward_keys,
+    freeze_heights, get_qapp, run_responsive, widget_font_stylesheet
 )
 from ...signal.photons import (
     PPM, DetectionSettings, OptimalFilter, fit_tau
 )
+from ... import daq_layout as dl
+from .marks import ask_note, ask_reason, mark_label
 
 # Default snippet: long enough for this many pulses at the median rate of
 # the tones, at least this long, or this many samples if that is longer
@@ -65,6 +77,11 @@ SNIPPET_S = 0.2
 SNIPPET_SAMPLES = 400
 # Slider steps over the record
 SLIDER_STEPS = 1000
+# Reasons offered when a tone is marked bad (the registry's list)
+BAD_REASONS = dl.BAD_REASONS
+# The overview's quantities: key, label, per-tone value from the window
+OVERVIEW = (('height', 'Mean photon height (kHz/GHz)'),
+            ('tau', 'Decay time (us)'), ('rate', 'Pulse rate (1/s)'))
 # Height units offered: label, and whether heights are in kHz/GHz (x
 # times 1e6, the thresholds' units) rather than in each tone's mean photon
 UNITS = (('kHz/GHz', True), ('photons', False))
@@ -179,7 +196,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
 
     def __init__(
         self, ts, results, thresholds, rerun, data = None, settings = None,
-        title = 'Photon thresholds', ui_scale = 1.0
+        title = 'Photon thresholds', ui_scale = 1.0, root = None, stage = ''
     ):
         """
         Build the window.
@@ -195,17 +212,24 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
             timestream (np.array), or None or an error message (str) if
             there is none, for the data snippet. Default None: no
             snippet.
-        settings (DetectionSettings or None): for the decay-time fit of
-            the mean pulse (``tau_skip``, ``tau_lifetimes``). Default
-            None: the defaults.
+        settings (DetectionSettings or None): detection settings (kept
+            for the snippet; the decay fit uses the thresholds' values).
+            Default None: the defaults.
         title (str): window title. Default 'Photon thresholds'.
         ui_scale (float): font size multiplier. Default 1.0.
+        root (zarr.Group or None): the store root, writable, for the
+            tone-marks registry (``daq_layout.add_tone_mark``): bad
+            marks and notes are recorded there too. Default None: no
+            registry.
+        stage (str): the result's path, recorded with the marks, e.g.
+            'photons/dark'. Default ''.
         """
         super().__init__()
         self.setWindowTitle(title)
         self._ui_scale = float(ui_scale) if ui_scale else 1.0
         if ui_scale and ui_scale != 1.0:
             self.setStyleSheet(widget_font_stylesheet(ui_scale))
+        self.root, self.stage = root, stage
         self.results = dict(results)
         self.thresholds = thresholds
         self.rows = [int(r) for r in ts['rows']]
@@ -225,6 +249,12 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         self.snippet = None
         self._updating = False
         self._drag_box = None       # the box a histogram drag moves
+        self._list_rows = []        # tone index of each list row
+        self._only_outside = False  # list only the tones outside limits
+        self.overview = None
+        self._ask_reason = self.ask_bad_reason
+        self._ask_note = lambda: ask_note(
+            self, f'Note on res {self.res_idxs[self.current()]}')
         self._build_controls()
         self._build_plots()
         central = QtWidgets.QWidget()
@@ -247,7 +277,10 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         lay = QtWidgets.QVBoxLayout(self._panel)
         self.tone_list = QtWidgets.QListWidget()
         self.tone_list.currentRowChanged.connect(self._on_row_changed)
-        lay.addWidget(QtWidgets.QLabel('Tones (* : own thresholds)'))
+        # The shortcuts keep working while the list has the focus
+        forward_keys(self.tone_list, self)
+        self.list_label = QtWidgets.QLabel('Tones (* : reviewed, x : bad)')
+        lay.addWidget(self.list_label)
         lay.addWidget(self.tone_list, stretch = 1)
         row = QtWidgets.QHBoxLayout()
         self.prev_tone_btn = QtWidgets.QPushButton('< Prev (A)')
@@ -303,6 +336,35 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         self.rerun_btn = QtWidgets.QPushButton('Rerun (Ctrl+R)')
         self.rerun_btn.clicked.connect(self.rerun)
         QtWidgets.QShortcut(QtGui.QKeySequence('Ctrl+R'), self, self.rerun)
+        lay.addWidget(self.rerun_btn)
+        # Decay fit of the mean pulse: no detection, so it applies at once
+        fit_box = QtWidgets.QGroupBox('Decay fit')
+        fit_lay = QtWidgets.QVBoxLayout(fit_box)
+        fit_form = QtWidgets.QFormLayout()
+        self.tau_skip_box = QtWidgets.QSpinBox()
+        self.tau_skip_box.setRange(0, 1000)
+        self.tau_skip_box.setToolTip('Samples after the maximum left out '
+                                     '(the rise and the filter ringing)')
+        self.tau_fit_box = QtWidgets.QDoubleSpinBox()
+        self.tau_fit_box.setRange(0.01, 1000.)
+        self.tau_fit_box.setDecimals(2)
+        self.tau_fit_box.setSingleStep(0.1)
+        self.tau_fit_box.setToolTip('Length of the fit after the skipped '
+                                    'samples')
+        fit_form.addRow('skip (samples)', self.tau_skip_box)
+        fit_form.addRow('fit length (ms)', self.tau_fit_box)
+        fit_lay.addLayout(fit_form)
+        self.fit_scope_tone = QtWidgets.QRadioButton('Apply to this tone')
+        self.fit_scope_all = QtWidgets.QRadioButton('Apply to all tones')
+        self.fit_scope_tone.setChecked(True)
+        fit_lay.addWidget(self.fit_scope_tone)
+        fit_lay.addWidget(self.fit_scope_all)
+        self.fit_btn = QtWidgets.QPushButton('Apply fit (Ctrl+F)')
+        self.fit_btn.clicked.connect(self.apply_fit)
+        QtWidgets.QShortcut(QtGui.QKeySequence('Ctrl+F'), self,
+                            self.apply_fit)
+        fit_lay.addWidget(self.fit_btn)
+        lay.addWidget(fit_box)
         self.reset_btn = QtWidgets.QPushButton(
             'Revert tone to defaults (Ctrl+D)')
         self.reset_btn.setToolTip("Put the thresholds the window opened "
@@ -311,16 +373,43 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         self.reset_btn.clicked.connect(self.reset_tone)
         QtWidgets.QShortcut(QtGui.QKeySequence('Ctrl+D'), self,
                             self.reset_tone)
+        self.bad_btn = QtWidgets.QPushButton('Mark tone bad (B)')
+        self.bad_btn.setToolTip('Leave this tone out of the coincidences, '
+                                'cosmic rays and mean pulses, with a '
+                                'reason (press again to clear the mark)')
+        self.bad_btn.clicked.connect(self.toggle_bad)
+        self.note_btn = QtWidgets.QPushButton('Add note (T)')
+        self.note_btn.setToolTip('Record a note on this tone in the '
+                                 'store\'s tone marks (the tone is kept)')
+        self.note_btn.clicked.connect(self.add_note)
+        self.overview_btn = QtWidgets.QPushButton('Tone overview (O)')
+        self.overview_btn.setToolTip('Histograms of every tone\'s photon '
+                                     'height, decay time and pulse rate, '
+                                     'with review limits')
+        self.overview_btn.clicked.connect(self.open_overview)
         self.rescale_btn = QtWidgets.QPushButton('Rescale plots (R)')
         self.rescale_btn.clicked.connect(self.rescale)
         self.done_btn = QtWidgets.QPushButton('Done')
         self.done_btn.clicked.connect(self.close)
-        for b in (self.rerun_btn, self.reset_btn, self.rescale_btn,
-                  self.done_btn):
+        for b in (self.reset_btn, self.bad_btn, self.note_btn,
+                  self.overview_btn, self.rescale_btn, self.done_btn):
             lay.addWidget(b)
         self.status = QtWidgets.QLabel()
         self.status.setWordWrap(True)
+        self.status.setToolTip('')
+        # Fixed height (about four lines), so the panel does not shift
+        # when the text changes; the detection log is in the tooltip
+        self.status.setFixedHeight(int(80 * self._ui_scale))
+        self.status.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         lay.addWidget(self.status)
+        # Shown while tones are rerun; keeps its place when hidden
+        self.progress = QtWidgets.QProgressBar()
+        self.progress.setTextVisible(True)
+        self.progress.hide()
+        lay.addWidget(self.progress)
+        # Nothing in the panel moves after this: the tone list takes the
+        # stretch, everything else keeps its height
+        freeze_heights(lay, skip = (self.tone_list,))
 
     def _build_plots(self):
         """
@@ -348,7 +437,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         self.pulse_plot = self.plots.addPlot(row = 2, col = 0,
                                              viewBox = ThresholdViewBox())
         self.pulse_plot.setLabel('bottom', 'Time (ms)')
-        self.pulse_plot.setLabel('left', 'Mean pulse (kHz/GHz)')
+        self.pulse_plot.setLabel('left', self._x_label('kHz/GHz'))
         self.init_curve = self.init_plot.plot(stepMode = 'center')
         self.h_curve = self.h_plot.plot(stepMode = 'center', name = 'peaks')
         self.noise_curve = self.h_plot.plot(
@@ -403,7 +492,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
             viewBox = ThresholdViewBox(on_click = self._click_snippet,
                                        on_drag = self._drag_snippet))
         self.snippet_plot.setLabel('bottom', 'Time (s)')
-        self.snippet_plot.setLabel('left', 'Height (kHz/GHz)')
+        self.snippet_plot.setLabel('left', self._x_label('kHz/GHz'))
         self.snippet_plot.addLegend(offset = (-10, 10))
         self.raw_curve = self.snippet_plot.plot(
             pen = pg.mkPen((150, 150, 150)), name = 'data')
@@ -458,74 +547,145 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         self.snip_label = QtWidgets.QLabel()
         self.snip_label.setWordWrap(True)
         vbox.addWidget(self.snip_label)
-        vbox.addWidget(hint_label(
-            'Snippet: the detection timestream (gray) and the filter '
-            'output (blue), in kHz/GHz unless Heights in says photons. '
-            'Drag the green lines, click to move the nearer one, or drag '
-            'on the plot to set hmin and hmax from the bottom and top of '
-            'the drag (a click on a histogram moves its nearer line too); '
-            'the slider moves along the record, Prev/Next to the '
-            'neighbouring filter peaks. The plots do not pan or zoom; R '
-            'rescales them.'))
 
     ############################################################################
     def _fill_list(self):
         """
-        Fill the tone list from the results.
+        Fill the tone list from the results: every tone, or only the tones
+        outside the overview's limits (``set_only_outside``), keeping the
+        selection.
         """
-        current = self.tone_list.currentRow()
+        selected = self._list_rows[self.tone_list.currentRow()] \
+            if self._list_rows and self.tone_list.currentRow() >= 0 else None
+        outside = self.outside_limits() if self._only_outside else None
+        # The selected tone stays listed until you move on, even when a
+        # change brought it inside the limits (so applying to it does not
+        # jump to another tone)
+        if outside is not None and selected is not None:
+            outside = set(outside) | {selected}
         self.tone_list.blockSignals(True)
         self.tone_list.clear()
-        for row, r_idx in zip(self.rows, self.res_idxs):
+        self._list_rows = []
+        for i, (row, r_idx) in enumerate(zip(self.rows, self.res_idxs)):
+            if outside is not None and i not in outside:
+                continue
             res = self.results.get(row)
-            mark = '*' if r_idx in self.thresholds.overrides else ' '
-            if isinstance(res, dict):
+            mark = 'x' if self.thresholds.is_bad(r_idx) else \
+                '*' if r_idx in self.thresholds.reviewed else ' '
+            if self.thresholds.is_bad(r_idx):
+                text = (f'{mark} res {r_idx}: bad'
+                        + (f" ({self.thresholds.bad[int(r_idx)]})"
+                           if self.thresholds.bad[int(r_idx)] else ''))
+            elif isinstance(res, dict):
                 text = (f"{mark} res {r_idx}: {len(res['events'])} pulses, "
                         f"{res['rate']:.3g}/s")
             else:
                 text = f'{mark} res {r_idx}: failed'
             self.tone_list.addItem(text)
+            self._list_rows.append(i)
         self.tone_list.blockSignals(False)
-        if current >= 0:
-            self.tone_list.setCurrentRow(current)
+        n = len(self._list_rows)
+        self.list_label.setText(
+            f'Tones (* : reviewed, x : bad)' if outside is None else
+            f'Tones outside the limits: {n} of {len(self.rows)}')
+        if selected in self._list_rows:
+            self.tone_list.setCurrentRow(self._list_rows.index(selected))
+        elif n:
+            self.tone_list.setCurrentRow(0)
 
     def current(self):
         """
         Return the selected tone.
 
         Returns:
-        i (int): its index in ``rows``.
+        i (int): its index in ``rows`` (the tone shown last if the list
+            is empty).
         """
-        return max(self.tone_list.currentRow(), 0)
+        li = self.tone_list.currentRow()
+        if 0 <= li < len(self._list_rows):
+            return self._list_rows[li]
+        return self._row or 0
 
-    def _on_row_changed(self, i):
+    def _on_row_changed(self, li):
         """
         Show the tone chosen in the list, first applying thresholds that
         were changed for the tone shown before but not rerun.
 
         Parameters:
-        i (int): index in ``rows`` (negative: nothing chosen).
+        li (int): list row (negative: nothing chosen).
         """
-        if i < 0:
+        if li < 0 or li >= len(self._list_rows):
             return
+        i = self._list_rows[li]
         prev = self._row
         if prev is not None and prev != i and self.pending(prev):
             self.apply(prev)
+        if prev is not None and prev != i:
+            self._set_reviewed(prev)
         self._row = i
         self.select(i)
 
+    def _set_reviewed(self, i):
+        """
+        Mark a tone reviewed (looked at and left, or given its own
+        values) and show the ``*`` in the list.
+
+        Parameters:
+        i (int): index in ``rows``.
+        """
+        self.thresholds.mark_reviewed(self.res_idxs[i])
+        if i in self._list_rows:
+            item = self.tone_list.item(self._list_rows.index(i))
+            if item is not None and item.text().startswith(' '):
+                item.setText('*' + item.text()[1:])
+
+    def closeEvent(self, event):
+        """
+        Count the tone shown as reviewed, then close.
+
+        Parameters:
+        event (QCloseEvent): the close event.
+        """
+        if self._row is not None:
+            self._set_reviewed(self._row)
+        super().closeEvent(event)
+
     def step_tone(self, step):
         """
-        Move to another tone (the A and D keys, the Prev and Next
-        buttons), rerunning the current one first if its thresholds were
-        changed.
+        Move to another tone of the list (the A and D keys, the Prev and
+        Next buttons), rerunning the current one first if its thresholds
+        were changed.
 
         Parameters:
         step (int): -1 for the previous tone, +1 for the next.
         """
-        i = self.current() + step
-        if 0 <= i < len(self.rows):
-            self.tone_list.setCurrentRow(i)
+        li = self.tone_list.currentRow() + step
+        if 0 <= li < len(self._list_rows):
+            self.tone_list.setCurrentRow(li)
+
+    def select_tone(self, i):
+        """
+        Select a tone by its index (e.g. from the overview), listing every
+        tone again if it is filtered out.
+
+        Parameters:
+        i (int): index in ``rows``.
+        """
+        if i not in self._list_rows:
+            self.set_only_outside(False)
+        if i in self._list_rows:
+            self.tone_list.setCurrentRow(self._list_rows.index(i))
+
+    def set_only_outside(self, only):
+        """
+        List every tone, or only the tones outside the overview's review
+        limits.
+
+        Parameters:
+        only (bool): True for only the tones outside.
+        """
+        self._only_outside = bool(only)
+        self._fill_list()
 
     def pending(self, i):
         """
@@ -573,15 +733,48 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
             return
         th = self.thresholds.for_tone(self.res_idxs[i])
         self._set_values(th['hmin'], th['hmax'], th['init_hmax'])
+        self.tau_skip_box.setValue(int(th['tau_skip']))
+        self.tau_fit_box.setValue(1000. if th['tau_fit_s'] is None
+                                  else th['tau_fit_s'] * 1e3)
         res = self.results.get(self.rows[i])
+        bad = self.thresholds.is_bad(self.res_idxs[i])
+        self.bad_btn.setText('Clear bad mark (B)' if bad
+                             else 'Mark tone bad (B)')
+        head = ('MARKED BAD: ' + (self.thresholds.bad[int(self.res_idxs[i])]
+                                  or 'no reason given') + '\n') if bad \
+            else ''
+        marks = mark_label(self.root, self.res_idxs[i])
+        if marks and not bad:
+            head += marks + '\n'
+        elif marks and 'note' in marks:
+            head += marks.split(', ')[-1] + '\n'
         if isinstance(res, dict):
+            log = list(res['log'])
             self.status.setText(
-                f"mean photon: {res['amp_ph'] * 1e6:.3g} kHz/GHz (1 photon = "
-                f"{res['amp_ph']:.3g} in x)\n" + '\n'.join(res['log']))
+                head + f"mean photon: {res['amp_ph'] * 1e6:.3g} kHz/GHz "
+                f"(1 photon = {res['amp_ph']:.3g} in x); "
+                f"{len(res['events'])} pulses, {res['rate']:.3g}/s\n"
+                + (log[-1] if log else ''))
+            self.status.setToolTip('\n'.join(log))
         else:
-            self.status.setText(f'Detection failed: {res}')
+            self.status.setText(head + f'Detection failed: {res}')
+            self.status.setToolTip(str(res))
         self.update_plots()
         self._show_first_event()
+
+    def _x_label(self, unit):
+        """
+        Return the y-axis label of the pulse and snippet plots: x, or -x
+        when the pulses' sign is flipped so they go up, in the unit shown.
+
+        Parameters:
+        unit (str): 'kHz/GHz' or 'photons'.
+
+        Returns:
+        label (str): e.g. '-x (kHz/GHz)'.
+        """
+        sign = int(getattr(self._settings, 'pulse_sign', -1))
+        return f"{'-x' if sign < 0 else 'x'} ({unit})"
 
     def in_khz(self):
         """
@@ -617,8 +810,8 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         """
         unit = 'kHz/GHz' if self.in_khz() else 'photons'
         self.h_plot.setLabel('bottom', f'Filter height ({unit})')
-        self.pulse_plot.setLabel('left', f'Mean pulse ({unit})')
-        self.snippet_plot.setLabel('left', f'Height ({unit})')
+        self.pulse_plot.setLabel('left', self._x_label(unit))
+        self.snippet_plot.setLabel('left', self._x_label(unit))
         self.update_plots()
         self._updating = True
         self._sync_lines()
@@ -647,6 +840,9 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         typing = isinstance(self.focusWidget(), (QtWidgets.QLineEdit,
                                                  QtWidgets.QAbstractSpinBox))
         keys = {Qt.Key_R: self.rescale,
+                Qt.Key_B: self.toggle_bad,
+                Qt.Key_T: self.add_note,
+                Qt.Key_O: self.open_overview,
                 Qt.Key_A: lambda: self.step_tone(-1),
                 Qt.Key_D: lambda: self.step_tone(1)}
         if event.key() in keys and not typing:
@@ -857,23 +1053,45 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
             self.filter_end_line.setValue(
                 res.get('filter_post', res['post']) * self.dt * 1e3)
             self.filter_end_line.show()
-            self._fit_pulse(res)
+            self._fit_pulse(res, self.res_idxs[self.current()])
         else:
             self.pulse_curve.setData([], [])
             self.fit_curve.setData([], [])
             self.filter_end_line.hide()
             self.pulse_plot.setTitle('')
 
-    def _fit_pulse(self, res):
+    def tau_of(self, i):
         """
-        Fit the mean pulse's decay and draw the fit over its range.
+        Fit the decay time of a tone's mean pulse with its fit values.
+
+        Parameters:
+        i (int): index in ``rows``.
+
+        Returns:
+        tau (float): decay time, s (NaN without a result or if the fit
+            fails).
+        popt (np.array): fit parameters (``fit_tau``).
+        n (int): samples fitted.
+        """
+        res = self.results.get(self.rows[i])
+        if not isinstance(res, dict) or not len(res['template']):
+            return np.nan, np.full(3, np.nan), 0
+        fit = self.thresholds.for_tone(self.res_idxs[i])
+        return fit_tau(res['template'], res['p'], self.dt, fit['tau_skip'],
+                       fit['tau_fit_s'])
+
+    def _fit_pulse(self, res, r_idx):
+        """
+        Fit the mean pulse's decay with the tone's fit values and draw the
+        fit over its range.
 
         Parameters:
         res (dict): the tone's result (``template``, ``p``, ``amp_ph``).
+        r_idx (int): its resonator index.
         """
-        s = self._settings
+        fit = self.thresholds.for_tone(r_idx)
         tau, popt, n = fit_tau(res['template'], res['p'], self.dt,
-                               s.tau_skip, s.tau_lifetimes)
+                               fit['tau_skip'], fit['tau_fit_s'])
         if not np.isfinite(tau):
             self.fit_curve.setData([], [])
             self.pulse_plot.setTitle('Mean pulse: decay fit failed')
@@ -881,10 +1099,40 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         t = np.arange(n) * self.dt
         y = (popt[0] * np.exp(-t / popt[1]) + popt[2]) * PPM \
             * self._scale(res)
-        self.fit_curve.setData((t + int(s.tau_skip) * self.dt) * 1e3, y)
+        self.fit_curve.setData((t + int(fit['tau_skip']) * self.dt) * 1e3,
+                               y)
         self.pulse_plot.setTitle(
             f'Mean pulse: tau = {tau * 1e6:.3g} us (fit from '
-            f'{s.tau_skip} samples after the peak, {n} samples)')
+            f"{fit['tau_skip']} samples after the peak, {n} samples = "
+            f'{n * self.dt * 1e3:.3g} ms)')
+
+    def fit_values(self):
+        """
+        Return the decay-fit values in the boxes.
+
+        Returns:
+        tau_skip (int): samples skipped.
+        tau_fit_s (float): fit length, s.
+        """
+        return int(self.tau_skip_box.value()), \
+            float(self.tau_fit_box.value()) * 1e-3
+
+    def apply_fit(self):
+        """
+        Apply the decay-fit boxes to the selected tone (its own values) or
+        to all tones (every tone's, dropping their own), and draw the fit
+        again (the Apply fit button). No detection is run.
+        """
+        skip, fit_s = self.fit_values()
+        if self.fit_scope_tone.isChecked():
+            self.thresholds.set_fit(self.res_idxs[self.current()], skip,
+                                    fit_s)
+        else:
+            self.thresholds.set_fit_all(skip, fit_s)
+            self.fit_scope_tone.setChecked(True)
+        self._fill_list()
+        self.update_plots()
+        self._refresh_overview()
 
     ############################################################################
     def _tone_data(self):
@@ -897,12 +1145,12 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         """
         row = self.rows[self.current()]
         res = self.results.get(row)
-        if self._data is None or not isinstance(res, dict):
+        if self._data is None:
             return None, None
         if self._d[0] != row:
             d = self._data(row)
             self._d = (row, d if isinstance(d, np.ndarray) else None)
-        return self._d[1], res
+        return self._d[1], res if isinstance(res, dict) else None
 
     def _snippet_range(self, d):
         """
@@ -928,7 +1176,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         d, res = self._tone_data()
         self.snip_pos.blockSignals(True)
         self.snip_pos.setValue(0)
-        if d is not None and len(res['events']):
+        if d is not None and res is not None and len(res['events']):
             self._center_on(int(res['events'][0]), d)
         self.snip_pos.blockSignals(False)
         self.update_snippet()
@@ -994,15 +1242,27 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
                 curve.setData([], [])
             self._mark_snippet()
             self.snip_label.setText(
-                'No data for the snippet' if self._data is None or
-                not isinstance(res, dict) else 'The tone has no detection '
-                'timestream')
+                'No data for the snippet' if self._data is None else
+                'The tone has no detection timestream')
             return
         start, stop = self._snippet_range(d)
-        raw = int(res['sign']) * np.asarray(d[start:stop], dtype = float) \
-            * PPM
-        y = filter_snippet(d, res, start, stop)
+        sign = int(res['sign']) if res is not None else \
+            int(self._settings.pulse_sign)
+        raw = sign * np.asarray(d[start:stop], dtype = float) * PPM
         t = np.arange(start, stop) * self.dt
+        if res is None:
+            # A failed detection: the raw timestream alone, to see why
+            self.snippet = None
+            self.raw_curve.setData(t, raw)
+            self.y_curve.setData([], [])
+            self._mark_snippet()
+            self.snip_label.setText(
+                f'{start * self.dt:.4g}-{stop * self.dt:.4g} s of '
+                f'{len(d) * self.dt:.4g} s: the detection failed, raw '
+                'timestream only')
+            self._range_snippet()
+            return
+        y = filter_snippet(d, res, start, stop)
         # Kept in kHz/GHz; drawn in the chosen units
         self.snippet = dict(row = self.rows[self.current()], start = start,
                             stop = stop, y = y, raw = raw)
@@ -1094,17 +1354,43 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         th = self.thresholds
         if self.scope_tone.isChecked():
             th.overrides[self.res_idxs[i]] = vals
+            th.mark_reviewed(self.res_idxs[i])
             rows = [self.rows[i]]
         else:
             th.hmin, th.hmax = vals['hmin'], vals['hmax']
             th.init_hmax = vals['init_hmax']
             rows = [r for r, ri in zip(self.rows, self.res_idxs)
-                    if ri not in th.overrides]
-        self.status.setText(f'Running {len(rows)} tones...')
-        new = run_responsive(self._rerun, rows, th)
-        self.results.update(new)
+                    if not th.has_own(ri)]
+            # Back to the default scope, so the next rerun is not applied
+            # to every tone by accident
+            self.scope_tone.setChecked(True)
+        self._run_rows(rows, th)
         self._fill_list()
+        self._refresh_overview()
         return rows
+
+    def _run_rows(self, rows, th):
+        """
+        Run the detection again on some tones, one at a time in a worker
+        thread (``run_responsive``), showing the progress bar and which
+        tone is running, and keep the new results.
+
+        Parameters:
+        rows (list of int): DataSet rows.
+        th (Thresholds): thresholds.
+        """
+        res_of = dict(zip(self.rows, self.res_idxs))
+        n = len(rows)
+        self.progress.setRange(0, n)
+        self.progress.setValue(0)
+        self.progress.setVisible(n > 1)
+        for k, row in enumerate(rows):
+            self.status.setText(f'Running tone {k + 1} of {n} '
+                                f'(res {res_of.get(row, row)})...')
+            self.progress.setValue(k)
+            self.results.update(run_responsive(self._rerun, [row], th))
+        self.progress.setValue(n)
+        self.progress.hide()
 
     def rerun(self):
         """
@@ -1113,6 +1399,132 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         """
         self.apply()
         self.select(self.current())
+
+    def toggle_bad(self):
+        """
+        Mark the selected tone bad, asking for a reason, or clear its mark
+        (the button, or B).
+        """
+        i = self.current()
+        if i < 0:
+            return
+        r_idx = self.res_idxs[i]
+        if self.thresholds.is_bad(r_idx):
+            self.thresholds.clear_bad(r_idx)
+            self._record('clear', '')
+        else:
+            reason = self._ask_reason()
+            if reason is None:
+                return
+            self.thresholds.set_bad(r_idx, reason)
+            self._record('bad', reason)
+        self._fill_list()
+        self.select(i)
+        self._refresh_overview()
+
+    def add_note(self):
+        """
+        Record a note on the selected tone in the tone-marks registry
+        (the button, or T). The tone is kept.
+        """
+        i = self.current()
+        if i < 0:
+            return
+        note = self._ask_note()
+        if note:
+            self._record('note', note)
+            self.select(i)
+
+    def _record(self, kind, text):
+        """
+        Write a mark on the selected tone to the registry, if there is
+        one.
+
+        Parameters:
+        kind (str): 'bad', 'note' or 'clear'.
+        text (str): the reason or note.
+        """
+        if self.root is not None:
+            dl.add_tone_mark(self.root, self.res_idxs[self.current()], kind,
+                             text, self.stage)
+
+    def ask_bad_reason(self):
+        """
+        Ask why the selected tone is bad: one of ``BAD_REASONS``, or
+        typed.
+
+        Returns:
+        reason (str or None): the reason, or None if cancelled.
+        """
+        return ask_reason(self, f'Mark res {self.res_idxs[self.current()]} '
+                          'bad')
+
+    ############################################################################
+    def overview_values(self):
+        """
+        Return every tone's values for the overview: mean photon height,
+        fitted decay time, and pulse rate.
+
+        Returns:
+        values (dict): 'height' (kHz/GHz), 'tau' (s), 'rate' (1/s):
+            np.array per tone, NaN for tones without a result.
+        """
+        n = len(self.rows)
+        out = {k: np.full(n, np.nan) for k, _ in OVERVIEW}
+        for i, row in enumerate(self.rows):
+            res = self.results.get(row)
+            if not isinstance(res, dict):
+                continue
+            out['height'][i] = res['amp_ph'] * PPM
+            out['rate'][i] = res['rate']
+            out['tau'][i] = self.tau_of(i)[0]
+        return out
+
+    def outside_limits(self, values = None):
+        """
+        Find the tones outside the overview's review limits (or without a
+        value, e.g. a failed detection or fit).
+
+        Parameters:
+        values (dict or None): ``overview_values`` output. Default None:
+            computed.
+
+        Returns:
+        outside (set of int): indices in ``rows``.
+        """
+        values = self.overview_values() if values is None else values
+        outside = set()
+        for key, _ in OVERVIEW:
+            v = values[key]
+            lim = self.thresholds.limits.get(key)
+            bad = ~np.isfinite(v)
+            if lim is not None:
+                # A hair of tolerance: the lines show scaled values
+                tol = [1e-9 * max(abs(x), 1e-300) for x in lim]
+                bad |= (v < lim[0] - tol[0]) | (v > lim[1] + tol[1])
+            outside |= set(np.flatnonzero(bad).tolist())
+        return outside
+
+    def open_overview(self):
+        """
+        Open the tone overview window, or bring it to the front (the
+        button, or O).
+        """
+        if self.overview is None:
+            self.overview = ToneOverviewWindow(self)
+        self.overview.refresh()
+        self.overview.show()
+        self.overview.raise_()
+        self.overview.activateWindow()
+
+    def _refresh_overview(self):
+        """
+        Refresh the overview window if it is open.
+        """
+        if self.overview is not None and self.overview.isVisible():
+            self.overview.refresh()
+        if self._only_outside:
+            self._fill_list()
 
     def reset_tone(self):
         """
@@ -1124,26 +1536,286 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         r_idx, row = self.res_idxs[i], self.rows[i]
         th = self.thresholds
         glob = dict(hmin = th.hmin, hmax = th.hmax, init_hmax = th.init_hmax)
+        own = th.overrides.get(r_idx, {})
         if glob == self._defaults:
-            if th.overrides.pop(r_idx, None) is None and not self.pending(i):
+            if not th.has_own(r_idx) and not self.pending(i):
                 return
+            for key in self._defaults:
+                own.pop(key, None)
+            if not own:
+                th.overrides.pop(r_idx, None)
         else:
-            th.overrides[r_idx] = dict(self._defaults)
-        self.status.setText('Running 1 tone...')
-        self.results.update(run_responsive(self._rerun, [row], th))
+            th.overrides[r_idx] = dict(own, **self._defaults)
+        self._run_rows([row], th)
         self._fill_list()
         self.select(i)
 
+class ToneOverviewWindow(QtWidgets.QDialog):
+    """
+    Histograms over all tones of a threshold window: the mean photon
+    height, the fitted decay time, and the pulse rate, each with a low
+    and a high review limit (draggable lines, kept in
+    ``Thresholds.limits``), and the list of the tones outside the limits
+    (or without a value). Clicking a tone in the list, or near its value
+    in a histogram, selects it in the threshold window; the check box
+    lists only those tones there. The limits mark tones for review and
+    change nothing else.
+
+    Attributes:
+    main (PhotonThresholdWindow): the threshold window.
+    plots (dict): key: PlotItem.
+    lines (dict): key: (low, high) InfiniteLines.
+    outside_list (QListWidget): the tones outside the limits.
+    """
+
+    def __init__(self, main, items = OVERVIEW):
+        """
+        Build the window.
+
+        Parameters:
+        main (PhotonThresholdWindow): the threshold window (or another
+            window with ``rows``, ``res_idxs``, ``thresholds.limits``,
+            ``overview_values``, ``outside_limits``, ``select_tone``,
+            ``set_only_outside``, ``_only_outside``, ``_fill_list`` and
+            ``_ui_scale``).
+        items (tuple): the quantities, (key, axis label) each; the key
+            'tau' is in s and shown in us. Default ``OVERVIEW``.
+        """
+        super().__init__(main)
+        self.main = main
+        self.items = tuple(items)
+        self.setWindowTitle('Tone overview')
+        self.setModal(False)
+        self._values = None
+        self._updating = False
+        lay = QtWidgets.QHBoxLayout(self)
+        self.plots_widget = pg.GraphicsLayoutWidget()
+        self.plots, self.lines, self.curves = {}, {}, {}
+        for k, (key, label) in enumerate(self.items):
+            plot = self.plots_widget.addPlot(row = k, col = 0)
+            plot.setLabel('bottom', label)
+            plot.setLabel('left', 'tones')
+            # The histograms are a metric, not a plot to roam in
+            plot.setMouseEnabled(False, False)
+            plot.hideButtons()
+            curve = pg.PlotCurveItem(np.array([0., 1.]), np.array([0.]),
+                                     stepMode = 'center', fillLevel = 0,
+                                     brush = (100, 100, 250, 120),
+                                     pen = pg.mkPen((100, 100, 250)))
+            plot.addItem(curve)
+            pair = []
+            for which in ('low', 'high'):
+                line = pg.InfiniteLine(angle = 90, movable = True,
+                                       pen = pg.mkPen('r', width = 2),
+                                       label = which,
+                                       labelOpts = dict(position = 0.9))
+                line.sigPositionChangeFinished.connect(self._on_line)
+                plot.addItem(line)
+                pair.append(line)
+            plot.scene().sigMouseClicked.connect(
+                lambda ev, key = key: self._on_click(ev, key))
+            self.plots[key] = plot
+            self.curves[key] = curve
+            self.lines[key] = tuple(pair)
+        lay.addWidget(self.plots_widget, stretch = 1)
+        side = QtWidgets.QVBoxLayout()
+        self.only_outside = QtWidgets.QCheckBox(
+            'Show only tones outside the limits in the tone list')
+        self.only_outside.setChecked(main._only_outside)
+        self.only_outside.toggled.connect(main.set_only_outside)
+        side.addWidget(self.only_outside)
+        self.count_label = QtWidgets.QLabel()
+        side.addWidget(self.count_label)
+        self.outside_list = QtWidgets.QListWidget()
+        self.outside_list.itemClicked.connect(self._on_item)
+        side.addWidget(self.outside_list, stretch = 1)
+        panel = QtWidgets.QWidget()
+        panel.setLayout(side)
+        panel.setFixedWidth(int(300 * main._ui_scale))
+        lay.addWidget(panel)
+        self.resize(int(900 * main._ui_scale), int(700 * main._ui_scale))
+
+    def refresh(self):
+        """
+        Draw the histograms and list the tones outside the limits from the
+        threshold window's current results, placing unset limits at the
+        edges of the data.
+        """
+        self._values = self.main.overview_values()
+        self._updating = True
+        for key, _ in self.items:
+            k = 1e6 if key == 'tau' else 1.
+            raw = self._values[key]
+            raw = raw[np.isfinite(raw)]
+            lim = self.main.thresholds.limits.get(key)
+            if lim is None:
+                lim = [float(raw.min()), float(raw.max())] if len(raw) \
+                    else [0., 1.]
+                self.main.thresholds.limits[key] = lim
+            v = raw * k
+            self.lines[key][0].setValue(lim[0] * k)
+            self.lines[key][1].setValue(lim[1] * k)
+            if len(v):
+                lo, hi = min(v.min(), lim[0] * k), max(v.max(), lim[1] * k)
+                span = (hi - lo) or max(abs(hi), 1e-9)
+                edges = np.linspace(lo - 0.05 * span, hi + 0.05 * span,
+                                    max(10, min(60, len(v) // 2 + 10)))
+                counts, _ = np.histogram(v, edges)
+                self.curves[key].setData(edges, counts)
+                self.plots[key].setXRange(edges[0], edges[-1], padding = 0)
+                self.plots[key].setYRange(0, max(counts.max(), 1) * 1.1,
+                                          padding = 0)
+            else:
+                self.curves[key].setData(np.array([0., 1.]), np.array([0.]))
+        self._updating = False
+        self._fill_outside()
+
+    def _fill_outside(self):
+        """
+        List the tones outside the limits, with what is outside.
+        """
+        values = self._values
+        outside = sorted(self.main.outside_limits(values))
+        self.outside_list.clear()
+        self._listed = outside
+        for i in outside:
+            r_idx = self.main.res_idxs[i]
+            parts = []
+            for key, _ in self.items:
+                v = values[key][i]
+                lim = self.main.thresholds.limits.get(key)
+                if not np.isfinite(v):
+                    parts.append(f'no {key}')
+                elif lim is not None and (v < lim[0] or v > lim[1]):
+                    shown = v * 1e6 if key == 'tau' else v
+                    parts.append(f'{key} {shown:.3g}')
+            mark = 'x ' if self.main.thresholds.is_bad(r_idx) else ''
+            self.outside_list.addItem(f"{mark}res {r_idx}: {', '.join(parts)}")
+        self.count_label.setText(f'{len(outside)} of {len(self.main.rows)} '
+                                 'tones outside the limits')
+
+    def _on_line(self):
+        """
+        Keep the limits where the lines were dragged, and list the tones
+        outside again.
+        """
+        if self._updating:
+            return
+        for key, _ in self.items:
+            k = 1e-6 if key == 'tau' else 1.
+            lo, hi = sorted(float(ln.value()) * k for ln in self.lines[key])
+            self.main.thresholds.limits[key] = [lo, hi]
+        self._fill_outside()
+        if self.main._only_outside:
+            self.main._fill_list()
+
+    def _on_click(self, ev, key):
+        """
+        Select the tone nearest to a clicked value in a histogram.
+
+        Parameters:
+        ev (MouseClickEvent): the click.
+        key (str): the histogram's quantity.
+        """
+        plot = self.plots[key]
+        if self._values is None or not plot.sceneBoundingRect().contains(
+                ev.scenePos()):
+            return
+        x = plot.vb.mapSceneToView(ev.scenePos()).x()
+        v = self._values[key] * (1e6 if key == 'tau' else 1.)
+        if not np.isfinite(v).any():
+            return
+        i = int(np.nanargmin(np.abs(v - x)))
+        self.main.select_tone(i)
+
+    def _on_item(self, item):
+        """
+        Select the tone clicked in the list.
+
+        Parameters:
+        item (QListWidgetItem): the item.
+        """
+        li = self.outside_list.row(item)
+        if 0 <= li < len(self._listed):
+            self.main.select_tone(self._listed[li])
+
+def _message_box(title, text, buttons, default, icon = None):
+    """
+    Show a modal message box and return the button that was clicked.
+
+    Parameters:
+    title (str): window title.
+    text (str): the message.
+    buttons (list of str): button labels, left to right.
+    default (str): the label of the default button.
+    icon (QMessageBox.Icon or None): the icon. None (default): question.
+
+    Returns:
+    label (str or None): the clicked button's label, or None if the box
+        was closed.
+    """
+    get_qapp()
+    box = QtWidgets.QMessageBox()
+    box.setWindowTitle(title)
+    box.setIcon(icon or QtWidgets.QMessageBox.Icon.Question)
+    box.setText(text)
+    made = {}
+    for label in buttons:
+        role = QtWidgets.QMessageBox.ButtonRole.RejectRole \
+            if label == 'Cancel' else \
+            QtWidgets.QMessageBox.ButtonRole.ActionRole
+        made[label] = box.addButton(label, role)
+    box.setDefaultButton(made[default])
+    box.setEscapeButton(made.get('Cancel', made[default]))
+    (getattr(box, 'exec', None) or box.exec_)()
+    for label, btn in made.items():
+        if box.clickedButton() is btn:
+            return label
+    return None
+
+def ask_existing_result(name, description):
+    """
+    Ask what to do with a saved photon result that a run would replace:
+    continue from it (the default), or overwrite it, which asks once
+    more to be sure.
+
+    Parameters:
+    name (str): the result's name (``photons/<name>``).
+    description (str): the result, as ``photon_finder.describe_result``.
+
+    Returns:
+    choice (str or None): 'continue', 'overwrite', or None to skip the
+        timestream (Cancel, or closing a box).
+    """
+    choice = _message_box(
+        f'photons/{name} exists',
+        f'photons/{name} is already saved:\n\n{description}\n\n'
+        'Continue from it (its thresholds, per-tone values, bad marks and '
+        'decay fits open in the window), or overwrite it with a new '
+        'detection?',
+        ['Continue', 'Overwrite', 'Cancel'], 'Continue')
+    if choice == 'Continue':
+        return 'continue'
+    if choice != 'Overwrite':
+        return None
+    sure = _message_box(
+        f'Overwrite photons/{name}?',
+        f'Overwrite photons/{name}? Its thresholds, per-tone values, bad '
+        'marks and decay fits are lost.',
+        ['Overwrite', 'Cancel'], 'Cancel',
+        icon = QtWidgets.QMessageBox.Icon.Warning)
+    return 'overwrite' if sure == 'Overwrite' else None
+
 def run_photon_thresholds(
     ts, results, thresholds, rerun, data = None, settings = None,
-    title = 'Photon thresholds', ui_scale = 1.0
+    title = 'Photon thresholds', ui_scale = 1.0, root = None, stage = ''
 ):
     """
     Open the photon threshold window and wait until it is closed.
 
     Parameters:
-    ts, results, thresholds, rerun, data, settings, title, ui_scale: see
-        ``PhotonThresholdWindow``.
+    ts, results, thresholds, rerun, data, settings, title, ui_scale, root,
+        stage: see ``PhotonThresholdWindow``.
 
     Returns:
     thresholds (Thresholds): the chosen thresholds.
@@ -1152,7 +1824,8 @@ def run_photon_thresholds(
     app = get_qapp(title)
     win = PhotonThresholdWindow(ts, results, thresholds, rerun, data = data,
                                 settings = settings, title = title,
-                                ui_scale = ui_scale)
+                                ui_scale = ui_scale, root = root,
+                                stage = stage)
     delete_on_close(win)
     fit_window_to_screen(win)
     win.show()

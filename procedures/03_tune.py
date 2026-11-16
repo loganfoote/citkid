@@ -1,48 +1,13 @@
 """
-03: tune a device: choose tones, find each tone's power and frequency, and
-save the final tone list.
-
-Steps, in a tuning ``tune{k}`` of the device store:
-
-1. plan: start from a resonator list (``resonators{j}``, from step 02),
-   drop close tones (``tone_plan.select_isolated``) and the ones outside
-   ``FMIN``-``FMAX`` (if set), split the rest into tone sets
-   (``tone_plan.plan_tone_sets``), and save ``tones_init`` and
-   ``crs_config`` (with each tone set's NCOs);
-2. power_sweep: a target sweep at each power in ``POWERS``, stitched over
-   the tone sets (``power_sweep/set{i}``);
-3. power_fits: fit the IQ loops of every power in the IQ series window,
-   with a fit of a_nl vs power per resonator; the window marks the power
-   where a_nl reaches ``ANL``, and Shift+click (or dragging the line) picks
-   another one. The chosen powers, with the median of the others where
-   there is none, and then clipped to ``ARES_LIMITS``, are saved in
-   ``power_choice``;
-4. fq_sweep: a stitched target sweep at the chosen powers;
-5. fq_finder: set each tone's frequency and span (or reject it) in the
-   fq_finder window;
-6. tones: save the final tone list in ``tones`` (``fres``, ``qres``,
-   ``ares``, ``res_idxs``, ``tone_set``, ``tone_module``). With the
-   tuning's ``crs_config`` and resonator list, this is everything
-   ``daq_layout.port_tuning`` copies to measure with the tuning in another
-   store.
-
-Steps already done are skipped, so the script picks up where it stopped
-(an interrupted power sweep continues at the next power). ``--redo``
-repeats one of the analysis steps (power_fits, fq_finder, tones) and the
-ones after it; the sweeps are raw data and are never redone in place: use
-``--new`` for a new tuning.
-
-The sweep steps attach to this session's modules of a board configured by
-crs_init.py; the window steps need no CRS. ``--simulate`` sweeps the
-simulated device of a store made by simulate_store.py instead.
+03: tune a device: plan the tones, sweep the power, choose each tone's
+power and frequency in two windows, and save the tuned tones (tune{k}).
+Steps already done are skipped; --redo repeats an analysis step, --new
+starts a new tuning. Needs crs_init.py first.
 
 Usage:
     python 03_tune.py --device deviceA --modules 1
     python 03_tune.py --device deviceA --modules 1 --redo power_fits
     python 03_tune.py --device deviceA --modules 1 --new
-
-Edit the settings below for your setup; the command-line options override
-them for one run.
 """
 import argparse
 import asyncio
@@ -61,76 +26,42 @@ from citkid.vna.fq_finder import run_fqfinder
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-SERIAL_NUMBER = 46          # CRS serial number
-INTERFACE = 'enp5s0'        # Ethernet interface connected to the CRS
-DATA_DIR = '~/data'         # stores are in
-                            # DATA_DIR/COOLDOWN/DEVICE[_SUFFIX].zarr
-COOLDOWN = 'cooldown'       # cooldown name
-DEVICE = 'device'           # device name
-SUFFIX = ''                 # store name suffix: the store is
-                            # DEVICE_SUFFIX.zarr ('': DEVICE.zarr)
-MODULES = [1]               # modules connected to this device
-# Tones
-RESONATORS = None           # resonator list index (None: the latest)
-MIN_SEP_LW = 5.             # remove tones within this many linewidths of
-                            # another resonance
-# For close pairs: 'drop_both' removes both tones; 'keep_stronger' keeps
-# the tone of the deeper resonance (dip depth measured by 02)
+SERIAL_NUMBER = 46
+INTERFACE = 'enp5s0'
+DATA_DIR = '~/data'
+COOLDOWN = 'cooldown'
+DEVICE = 'device'
+SUFFIX = ''
+MODULES = [1]
+RESONATORS = None
+MIN_SEP_LW = 5.
 PAIRS = 'drop_both'
-EDGE_MARGIN = 10e6          # minimum distance from a tone to the edge of
-                            # its NCO window, Hz
-# Fastest decimation stage that will be used for streaming. Each module
-# gets at most as many tones per tone set as can be streamed at once at
-# this stage (currently 128 at stages 0-1 and 1024 at stages 2-6), so the
-# NCO frequencies never change during streaming
+EDGE_MARGIN = 10e6
 STREAM_DEC = 6
-# Number of off-resonance calibration tones (res_idxs < 0) per NCO window.
-# They are placed in the middles of the widest gaps between resonances,
-# and their timestreams are calibrated with the 'ts_offres' path
 N_CAL_TONES = 0
-CAL_MIN_SEP_LW = 10.        # minimum distance from a calibration tone to
-                            # any resonance, in linewidths
-# NCO windows to use (indices in frequency order, as printed by
-# --list-windows), to measure only part of the array. None: all windows.
-# For example, STREAM_DEC = 0 and WINDOWS = [2] gives the (up to 128)
-# tones of one window
+CAL_MIN_SEP_LW = 10.
 WINDOWS = None
-# Frequency range of the tones, Hz (None: no limit), to leave out
-# resonances found by 02 that you don't want to measure, e.g. a few
-# stragglers far above the main band. Resonances outside the range still
-# count as neighbours for MIN_SEP_LW. For example, FMAX = 1.5e9 keeps the
-# tones below 1.5 GHz
 FMIN = None
 FMAX = None
-# Sweeps
-POWERS = np.arange(-60., -35., 3)   # power sweep, dBm
-SHUFFLE = False             # randomize the order of each tone's powers
-SEED = 0                    # random seed for SHUFFLE
-NPOINTS_FINE = 1000         # fine sweep points per tone
-NPOINTS_GAIN = 50           # gain sweep points per tone
-NPOINTS_ROUGH = None        # rough sweep points per tone (None: no rough
-                            # sweep)
-GAIN_SPAN_FACTOR = 10       # gain sweep span = 10 x fine sweep span
-NSAMPS = 200                # samples averaged per point
-# Power choice
-F_AVG = 4                   # number of fine sweep points averaged together
-                            # in the fits
-A_FIT_RANGE = (0.05, 0.8)   # a_nl range used in the a_nl vs power fits
-ANL = 0.5                   # target nonlinearity parameter a_nl
-# Resonators whose fit never reaches ANL get the median of the other chosen
-# powers. All chosen powers are then clipped to ARES_LIMITS (dBm)
+POWERS = np.arange(-60., -35., 3)
+SHUFFLE = False
+SEED = 0
+NPOINTS_FINE = 1000
+NPOINTS_GAIN = 50
+NPOINTS_ROUGH = None
+GAIN_SPAN_FACTOR = 10
+NSAMPS = 200
+F_AVG = 4
+A_FIT_RANGE = (0.05, 0.8)
+ANL = 0.5
 ARES_LIMITS = (-55., -35.)
-# fq_finder
-FRES_UPDATE_METHOD = 'spacing'  # 'none', 'spacing', 'minS21', 'distance'
-RMV_GAIN_SIMPLE = True      # apply a simple gain correction to the
-                            # displayed data
+FRES_UPDATE_METHOD = 'spacing'
+RMV_GAIN_SIMPLE = True
 
 STEPS = ('plan', 'power_sweep', 'power_fits', 'fq_sweep', 'fq_finder',
          'tones')
 REDOABLE = ('power_fits', 'fq_finder', 'tones')
 
-# Notes saved with the data this script makes (attribute 'notes'), e.g.
-# the filters and attenuators on the DAC and ADC lines. Multi-line is fine.
 NOTES = """
 """
 
@@ -299,6 +230,14 @@ def plan(root, args, path):
                               min_sep_lw = MIN_SEP_LW, pairs = PAIRS,
                               strength = strength)
     n_close = int((~keep).sum())
+    # Record the close tones in the store's tone marks, as notes (the
+    # tone may be measurable later, with another rule)
+    for r in res['res_idxs_all'][~keep].tolist():
+        marks = dl.tone_marks(root, r)
+        note = f'dropped by the plan of {name}: too close to another ' \
+            'resonance'
+        if not (marks and marks[-1]['text'] == note):
+            dl.add_tone_mark(root, r, 'note', note, f'{name}/tones_init')
     in_range = frequency_range(res['fres_all'], args.fmin, args.fmax)
     n_out = int((keep & ~in_range).sum())
     keep &= in_range
@@ -592,6 +531,16 @@ def tones(tune, args):
     """
     fq, name = tune['fq_sweep'], tune.basename
     keep = (fq['reject_reason'][:] == '') & np.isfinite(fq['fres_opt'][:])
+    # Tones marked bad in the store's tone marks (any stage, not cleared
+    # since) are left out of the tuned set
+    root = dl.store_root(tune)
+    bad = dl.bad_tones(root)
+    marked = np.array([int(r) in bad for r in fq['res_idxs'][:]])
+    if (keep & marked).any():
+        print(f"{int((keep & marked).sum())} tones marked bad in the store's "
+              'tone marks are left out: res '
+              f'{fq["res_idxs"][:][keep & marked].tolist()}')
+    keep &= ~marked
     fres = fq['fres_opt'][:][keep]
     tone_set = fq['tone_set'][:][keep]
     tone_module = fq['tone_module'][:][keep]

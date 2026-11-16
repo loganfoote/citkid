@@ -1534,3 +1534,33 @@ def test_write_resonator_changes_only_its_reject_reason(basic_win):
     assert reasons[1] == "too noisy"
     assert reasons[:1] + reasons[2:] == [f"r{i}" for i in range(n) if i != 1]
     assert w._zg["fres_opt"][1] == 5e9
+
+
+def test_tone_marks_follow_rejection(basic_win):
+    """
+    Rejecting a resonator marks it bad in the store's tone marks (once,
+    whatever the saves), un-rejecting clears it, and a note is recorded
+    with N.
+    """
+    from citkid import daq_layout as dl
+    w = basic_win
+    root = w._zg
+    ri = w._ri
+    res_idx = int(w._res_idxs[ri])
+    w._reason_combo.setCurrentText("bifurcated")
+    w._reject_current()
+    w._reject_current()
+    assert set(dl.bad_tones(root)) == {res_idx}
+    assert len(dl.tone_marks(root, res_idx)) == 1
+    assert dl.tone_marks(root, res_idx)[0]['text'] == 'bifurcated'
+    assert w._marks_label.text().startswith('BAD: bifurcated')
+    w._reason_combo.setCurrentText("not rejected")
+    assert dl.bad_tones(root) == {}
+    assert [e['kind'] for e in dl.tone_marks(root, res_idx)] == \
+        ['bad', 'clear']
+    w._ask_note = lambda: 'odd shape'
+    w._add_note()
+    assert dl.tone_marks(root, res_idx)[-1] == dict(
+        kind = 'note', text = 'odd shape', stage = '',
+        created = dl.tone_marks(root, res_idx)[-1]['created'])
+    assert w._marks_label.text() == '1 note'

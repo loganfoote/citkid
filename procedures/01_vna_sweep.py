@@ -1,32 +1,10 @@
 """
-01: full VNA sweep of one device, saved to its store.
-
-Sweeps the first Nyquist zone (100-2500 MHz), the second (2500-5000
-MHz), or both with this session's modules, leaving a 10 MHz guard band on
-each side of 2500 MHz (the point nearest it glitches), in several passes
-if the range is wider than the modules cover at once, on a geometric grid
-(constant df/f, from the expected median Qr: 25 points per linewidth
-there by default; every channel sweeps downward), and saves the stitched
-sweep as the next ``vna{k}`` of the device store
-``<DATA_DIR>/<COOLDOWN>/<DEVICE>[_<SUFFIX>].zarr`` (created if needed; see
-``documents/procedures/vna_screening.pdf``). With ``VIEW`` (or
-``--view``), it then opens the sweep in a window (|S21| and phase versus
-frequency; ``vna_view.py`` opens the same window later). The next step
-finds the resonances on it.
-
-Needs the board configured by crs_init.py. This session attaches to
-its modules only, so several of these can run at once, one per device.
-Before sweeping, it checks that the CRS (serial number, firmware, rfmux)
-is the one the store was measured with; the other CRS settings may differ
-between acquisitions and are saved with the sweep.
+01: take a full VNA sweep of one device and save it as the next vna{k}
+of the device store. Needs crs_init.py first.
 
 Usage:
-    python 01_vna_sweep.py --device deviceA --modules 1
-    python 01_vna_sweep.py --device deviceA --modules 1 2 3 4 --nyquist both
+    python 01_vna_sweep.py --device deviceA --modules 1 --nyquist both
     python 01_vna_sweep.py --device deviceA --modules 1 --view
-
-Edit the settings below for your setup; the command-line options override
-them for one run.
 """
 import argparse
 import asyncio
@@ -39,31 +17,22 @@ from citkid.vna.view import run_vna_view
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-SERIAL_NUMBER = 46          # CRS serial number
-INTERFACE = 'enp5s0'        # Ethernet interface connected to the CRS
-DATA_DIR = '~/data'         # stores go in
-                            # DATA_DIR/COOLDOWN/DEVICE[_SUFFIX].zarr
-COOLDOWN = 'cooldown'       # cooldown name
-DEVICE = 'device'           # device name
-SUFFIX = ''                 # store name suffix: the store is
-                            # DEVICE_SUFFIX.zarr ('': DEVICE.zarr)
-# Free-form description saved with a new store (fridge channel,
-# attenuators, filters, ...)
+SERIAL_NUMBER = 46
+INTERFACE = 'enp5s0'
+DATA_DIR = '~/data'
+COOLDOWN = 'cooldown'
+DEVICE = 'device'
+SUFFIX = ''
 SETUP = dict(fridge_ch = None, dac_attenuation = None, dac_filters = None,
              adc_filters = None)
-MODULES = [1]               # modules connected to this device
-NYQUIST = '1'               # '1' (100-2500 MHz), '2' (2500-5000), 'both'
-AMPLITUDE = -55.            # tone power, dBm
-QR_MEDIAN = 2e4             # expected median Qr
-# Points per linewidth at QR_MEDIAN (25 gives df/f = 2e-6); more than 10
-# is best for fitting
+MODULES = [1]
+NYQUIST = '1'
+AMPLITUDE = -55.
+QR_MEDIAN = 2e4
 PTS_PER_LW = 25.
-NSAMPS = 100                # samples averaged per point
-VIEW = False                # open the sweep in a window when done
-                            # (vna_view.py shows it again later)
+NSAMPS = 100
+VIEW = False
 
-# Notes saved with the data this script makes (attribute 'notes'), e.g.
-# the filters and attenuators on the DAC and ADC lines. Multi-line is fine.
 NOTES = """
 """
 

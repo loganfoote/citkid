@@ -64,6 +64,7 @@ from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
 from ..analysis import AnalysisRunner
 from ..dataset import DataSet, _io_lock_for, _retry_io, reopen_group
+from . import marks as _marks
 from ...res.mask import nearby_tone_mask
 from ...res.util import qi_qc
 from ..framework import LazyAttr
@@ -904,10 +905,32 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
         mark_all_series_bad_btn = QtWidgets.QPushButton('Mark All Series Bad')
         mark_all_series_bad_btn.setToolTip(
-            'Mark all series indices for the current resonator as bad (Shift+B)'
+            'Mark all series indices for the current resonator as bad '
+            '(Shift+B); asks whether to keep the tone or remove it from '
+            'the tuned set'
         )
         mark_all_series_bad_btn.clicked.connect(self._mark_all_series_bad)
         row2.addWidget(mark_all_series_bad_btn)
+
+        tone_bad_btn = QtWidgets.QPushButton('Mark Tone Bad')
+        tone_bad_btn.setToolTip(
+            "Record this resonator as bad in the store's tone marks, with "
+            'a reason: it is removed from the tuned set (Ctrl+M)'
+        )
+        tone_bad_btn.clicked.connect(self._mark_tone_bad)
+        QtGui.QShortcut(QtGui.QKeySequence('Ctrl+M'), self,
+                        activated=self._mark_tone_bad)
+        row2.addWidget(tone_bad_btn)
+
+        note_btn = QtWidgets.QPushButton('Add Note')
+        note_btn.setToolTip(
+            "Record a note on this resonator in the store's tone marks; "
+            'the tone is kept (Ctrl+T)'
+        )
+        note_btn.clicked.connect(self._add_note)
+        QtGui.QShortcut(QtGui.QKeySequence('Ctrl+T'), self,
+                        activated=self._add_note)
+        row2.addWidget(note_btn)
 
         if self._MARK_BAD_ABOVE:
             mark_bad_above_btn = QtWidgets.QPushButton('Mark Bad Above')
@@ -1913,9 +1936,100 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
     def _mark_all_series_bad(self):
         """
         Mark every panel's outputs as NaN for all series points at the
-        current data_idx.
+        current data_idx, after asking whether to keep the resonator (at
+        the fallback value, with a note) or remove it from the tuned set
+        (marked bad in the store's tone marks), ``_ask_all_bad``.
         """
+        choice, text = self._ask_all_bad()
+        if choice is None:
+            return
         self._mark_series_bad(range(self._n_series))
+        if choice == 'remove':
+            self._record('bad', text or 'every fit point marked bad')
+        elif text:
+            self._record('note', text)
+
+    def _ask_all_bad(self):
+        """
+        Ask whether to keep or remove the resonator whose fit points are
+        all being marked bad (``marks.ask_all_bad``).
+
+        Returns:
+        choice (str or None): 'keep', 'remove', or None if cancelled.
+        text (str): the note or reason.
+        """
+        return _marks.ask_all_bad(
+            self, f'Mark every point of res {self._res_idx()} bad')
+
+    def _mark_tone_bad(self):
+        """
+        Record the current resonator as bad in the store's tone marks,
+        with a reason (the Mark Tone Bad button, Ctrl+M). It is then
+        removed from the tuned set.
+        """
+        reason = self._ask_reason()
+        if reason is None:
+            return
+        if self._record('bad', reason):
+            self._apply_status_label.setText('Tone marked bad')
+        else:
+            self._apply_status_label.setText('No tone marks (no store)')
+
+    def _ask_reason(self):
+        """
+        Ask why the current resonator is bad (``marks.ask_reason``).
+
+        Returns:
+        reason (str or None): the reason, or None if cancelled.
+        """
+        return _marks.ask_reason(self, f'Mark res {self._res_idx()} bad')
+
+    def _add_note(self):
+        """
+        Record a note on the current resonator in the store's tone marks
+        (the Add Note button, Ctrl+T). The tone is kept.
+        """
+        note = self._ask_note()
+        if note and self._record('note', note):
+            self._apply_status_label.setText('Note saved')
+
+    def _ask_note(self):
+        """
+        Ask for a note on the current resonator (``marks.ask_note``).
+
+        Returns:
+        note (str or None): the note, or None if cancelled.
+        """
+        return _marks.ask_note(self, f'Note on res {self._res_idx()}')
+
+    def _res_idx(self):
+        """
+        Return the current resonator's index in the store's resonator
+        list.
+
+        Returns:
+        res_idx (int or None): the index, or None if the datasets have
+            none.
+        """
+        try:
+            return int(np.asarray(self._ARs[0].DS.res_idxs[:])[self._data_idx])
+        except Exception:
+            return None
+
+    def _record(self, kind, text):
+        """
+        Write a mark on the current resonator to the store's tone marks
+        (``marks.record``), if the datasets are in a store.
+
+        Parameters:
+        kind (str): 'bad', 'note' or 'clear'.
+        text (str): the reason or note.
+
+        Returns:
+        written (bool): True if an entry was written.
+        """
+        root, stage = _marks.registry(getattr(self._ARs[0].DS, 'root', None))
+        return _marks.record(root, self._res_idx(), kind, text, stage)
 
     def _mark_bad_above(self):
         """

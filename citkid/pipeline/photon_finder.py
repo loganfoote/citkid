@@ -25,10 +25,17 @@ For one timestream:
    the cosmic rays (``cosmic_events``), and per tone the mean photon pulse
    of the pulses in the height window with multiplicity 1
    (``average_pulse``) and its decay time (``fit_tau``).
-4. ``save_timestream`` saves the results in one group, from which
-   ``load_reference`` reads a later run's thresholds or filters.
+4. ``save_timestream`` saves the results in one group,
+   ``photons/<name>`` at the store root (``result_name``: the run's
+   name, with the tone set when the run has several), replaced when the
+   timestream is analyzed again; ``load_reference`` reads a later run's
+   thresholds or filters from it, and ``load_results`` its results, to
+   continue in the window. ``migrate_results`` moves results saved by
+   earlier versions (``ts_photons{p}/timestream{j}``) into this layout.
 """
 import dataclasses
+import os
+import warnings
 import numpy as np
 from tqdm.auto import tqdm
 from .. import daq_layout as dl
@@ -37,6 +44,8 @@ from .stream_sources import apply_stream_calibration
 
 # What a run takes from a previous result (``load_reference``)
 REUSE_OPTIONS = ('settings', 'filter')
+# The results' group at the store root, one child per timestream
+PHOTONS_GROUP = 'photons'
 
 ################################################################################
 ################################## Timestreams #################################
@@ -56,8 +65,10 @@ def list_timestreams(root, datasets):
         ('ts{n}'), ``run_index`` (n), ``name``, ``tone_set``, ``dataset``
         (DataSet name), ``source`` (the run's tone set, whole, as
         ``daq_layout.select_streams`` makes it), ``start``, ``stop``
-        (samples), ``dt``, ``rows`` (the DataSet's rows, np.array),
-        ``res_idxs`` (their resonator indices).
+        (samples), ``dt``, ``rows`` (the DataSet's calibrated rows,
+        np.array: tones whose x calibration failed are left out,
+        ``calibrated_rows``), ``res_idxs`` (their resonator indices),
+        ``n_uncalibrated`` (tones left out).
     """
     by_set = {(int(info['tone_set']), info['resonators']): name
               for name, info in datasets.items()}
@@ -76,6 +87,7 @@ def list_timestreams(root, datasets):
                 continue
             DS = datasets[dname]['DS']
             res_idxs = np.asarray(DS.res_idxs[:])
+            rows = calibrated_rows(DS)
             stream = root[src['group']][src['writes'][0]][
                 src.get('stream', dl.STREAM_NAME)]
             out.append(dict(
@@ -84,8 +96,213 @@ def list_timestreams(root, datasets):
                 source = src, start = int(src['start']),
                 stop = int(src['stop']),
                 dt = float(np.asarray(stream['dt'][...])),
-                rows = np.arange(len(res_idxs)), res_idxs = res_idxs))
+                rows = rows, res_idxs = res_idxs[rows],
+                n_uncalibrated = len(res_idxs) - len(rows)))
     return out
+
+def calibrated_rows(DS):
+    """
+    Return the rows of a stream DataSet whose x calibration succeeded
+    (``poly_x`` saved and finite), so that uncalibrated tones are left
+    out of the analyses rather than listed as failed. Rows whose
+    calibration failed without saving anything count as uncalibrated.
+
+    Parameters:
+    DS (DataSet): the DataSet, calibrated.
+
+    Returns:
+    rows (np.array, int): the calibrated rows.
+    """
+    n = len(np.asarray(DS.res_idxs[:]))
+    try:
+        saved = np.asarray(DS.saved_row_mask('poly_x'), dtype = bool)
+    except Exception:
+        saved = np.ones(n, dtype = bool)
+    rows = np.flatnonzero(saved)
+    if not len(rows):
+        return rows
+    try:
+        poly = np.asarray(DS.poly_x[rows.tolist()], dtype = float)
+    except Exception as exc:
+        warnings.warn(f'poly_x cannot be read ({exc}): no tone is '
+                      'calibrated')
+        return np.zeros(0, dtype = int)
+    ok = np.zeros(n, dtype = bool)
+    ok[rows] = np.isfinite(poly.reshape(len(rows), -1)).all(axis = 1)
+    return np.flatnonzero(ok)
+
+def result_name(ts, timestreams):
+    """
+    Return the name of a timestream's result: its run's name, with the
+    tone set (``<name>_set<s>``) when the listing has several timestreams
+    of that run.
+
+    Parameters:
+    ts (dict): the timestream.
+    timestreams (list of dict): ``list_timestreams`` output.
+
+    Returns:
+    name (str): the name.
+    """
+    same_run = [t for t in timestreams if t['run'] == ts['run']]
+    name = str(ts['name'] or ts['run'])
+    return name if len(same_run) <= 1 else f"{name}_set{ts['tone_set']}"
+
+def results_group(root):
+    """
+    Return the store's photon results group (``photons/``), making it if
+    needed.
+
+    Parameters:
+    root (zarr.Group): the store root, writable.
+
+    Returns:
+    grp (zarr.Group): the group.
+    """
+    return dl.require_group(root, PHOTONS_GROUP, 'analysis')
+
+def list_results(root):
+    """
+    List the saved photon results.
+
+    Parameters:
+    root (zarr.Group): the store root.
+
+    Returns:
+    names (list of str): result names, sorted.
+    """
+    if PHOTONS_GROUP not in root:
+        return []
+    return sorted(root[PHOTONS_GROUP].group_keys())
+
+def describe_results(root):
+    """
+    Describe the saved photon results, one line each.
+
+    Parameters:
+    root (zarr.Group): the store root.
+
+    Returns:
+    text (str): the description.
+    """
+    lines = ['Previous results (photons/<name>: run, tone set, '
+             'calibration, mode, created):']
+    for name in list_results(root):
+        a = root[PHOTONS_GROUP][name].attrs
+        n_bad = len(a.get('thresholds', {}).get('bad', []))
+        lines.append(f"  {name}: {a.get('run')} set {a.get('tone_set')}, "
+                     f"{a.get('calibration', a.get('source'))}, "
+                     f"{a.get('mode')}, "
+                     f"{a.get('created')}"
+                     + (f', {n_bad} bad' if n_bad else ''))
+    old = dl.list_indices(root, 'ts_photons')
+    if old:
+        lines.append('  earlier layout, not listed: '
+                     + ', '.join(f'ts_photons{p}' for p in old)
+                     + ' (photon_finder.migrate_results moves them)')
+    if len(lines) == 1:
+        lines.append('  none')
+    return '\n'.join(lines)
+
+def apply_tone_marks(root, ts, thresholds):
+    """
+    Mark the tones the store's tone-marks registry says are bad
+    (``daq_layout.bad_tones``) bad in a result's thresholds, with the
+    registry's reason, unless they are marked already.
+
+    Parameters:
+    root (zarr.Group): the store root.
+    ts (dict): the timestream.
+    thresholds (Thresholds or TailThresholds): the thresholds (changed in
+        place).
+
+    Returns:
+    marked (list of int): the resonators marked by this call.
+    """
+    bad = dl.bad_tones(root)
+    marked = []
+    for r in ts['res_idxs'].tolist():
+        if int(r) in bad and not thresholds.is_bad(r):
+            thresholds.set_bad(r, dl.bad_reason(bad[int(r)]))
+            marked.append(int(r))
+    return marked
+
+def describe_result(grp):
+    """
+    Describe one saved photon result in a few lines: when and how it was
+    made, and how much of it was set by hand.
+
+    Parameters:
+    grp (zarr.Group): the result (``photons/<name>``).
+
+    Returns:
+    text (str): the description.
+    """
+    a = grp.attrs
+    th = Thresholds.from_dict(a.get('thresholds', {}))
+    n = grp['res_idxs'].shape[0] if 'res_idxs' in grp else 0
+    own = sum(1 for r in th.overrides if th.has_own(r))
+    fits = sum(1 for r, o in th.overrides.items()
+               if 'tau_skip' in o or 'tau_fit_s' in o)
+    return (f"{a.get('run')} tone set {a.get('tone_set')}, {n} tones\n"
+            f"created {a.get('created')}, {a.get('mode')}\n"
+            f"{own} tones with their own thresholds, {fits} with their "
+            f"own decay fit, {len(th.bad)} marked bad")
+
+def migrate_results(root, which = None, verbose = True):
+    """
+    Move photon results saved by earlier versions (``ts_photons{p}``,
+    one ``timestream{j}`` per timestream) into the current layout
+    (``photons/<name>``), by renaming their directories on disk (a local
+    store) and merging the run-level attributes (``source``,
+    ``reference``, ``reuse``, ``continued_from``) into each result's.
+    A result whose name is taken is left where it is.
+
+    Parameters:
+    root (zarr.Group): the store root, writable, on a local store.
+    which (list of int or None): the ``ts_photons{p}`` indices to move.
+        Default None: all.
+    verbose (bool): If True (default), print what moved.
+
+    Returns:
+    moved (dict): new name: the old path, for the results moved.
+    """
+    base = str(root.store.root)
+    results_group(root)
+    moved = {}
+    for p in dl.list_indices(root, 'ts_photons'):
+        if which is not None and p not in [int(q) for q in which]:
+            continue
+        old = root[dl.set_name(p, 'ts_photons')]
+        run_attrs = {k: old.attrs.get(k) for k in
+                     ('source', 'reference', 'reuse', 'continued_from')}
+        names = sorted((t for t in old.group_keys()
+                        if t.startswith('timestream')),
+                       key = lambda t: int(t[len('timestream'):]))
+        runs = [old[t].attrs.get('name') for t in names]
+        left = []
+        for t, run in zip(names, runs):
+            g = old[t]
+            name = str(run or g.attrs.get('run'))
+            if runs.count(run) > 1:
+                name = f"{name}_set{g.attrs.get('tone_set')}"
+            if name in root[PHOTONS_GROUP]:
+                left.append(t)
+                if verbose:
+                    print(f'{old.path}/{t} not moved: photons/{name} exists')
+                continue
+            src = os.path.join(base, old.path, t)
+            dst = os.path.join(base, PHOTONS_GROUP, name)
+            os.rename(src, dst)
+            new = root[PHOTONS_GROUP][name]
+            new.attrs.update(dl.to_jsonable(dict(
+                run_attrs, migrated_from = f'{old.path}/{t}')))
+            moved[name] = f'{old.path}/{t}'
+            if verbose:
+                print(f'{old.path}/{t} -> photons/{name}')
+        if not left:
+            del root[old.basename]
+    return moved
 
 def describe_timestreams(timestreams):
     """
@@ -101,10 +318,12 @@ def describe_timestreams(timestreams):
              'DataSet):']
     for t in timestreams:
         n = t['stop'] - t['start']
+        left_out = t.get('n_uncalibrated', 0)
         lines.append(
             f"  {t['index']}: {t['run']}, {t['name']!r}, set "
             f"{t['tone_set']}, {n * t['dt']:.3g} s, {len(t['rows'])} "
-            f"tones, {t['dataset']}")
+            f"tones" + (f' ({left_out} uncalibrated left out)' if left_out
+                        else '') + f", {t['dataset']}")
     return '\n'.join(lines)
 
 def select_timestreams(timestreams, choice):
@@ -187,9 +406,17 @@ class TimestreamData:
             need = [r for r in part if r not in self._kept]
             fresh = {}
             if need:
-                x = apply_stream_calibration(self._DS, self._root,
-                                             self._ts['source'],
-                                             rows = need)['xt']
+                try:
+                    x = apply_stream_calibration(self._DS, self._root,
+                                                 self._ts['source'],
+                                                 rows = need)['xt']
+                except Exception as exc:
+                    # A tone without a usable calibration is skipped, not
+                    # fatal (its result says why)
+                    for r in need:
+                        fresh[r] = f'the calibration cannot be applied: {exc}'
+                        self._keep(r, fresh[r])
+                    x = []
                 for r, xr in zip(need, x):
                     fresh[r] = self._detection(xr)
                     self._keep(r, fresh[r])
@@ -242,13 +469,114 @@ class Thresholds:
         fractional frequency shift x times 1e6).
     init_hmax (float or None): first-pass upper cut, in units of the median
         first-pass peak height (None: no cut).
+    tau_skip (int): the decay-time fit of a mean pulse starts this many
+        samples after its maximum. Default 2.
+    tau_fit_s (float or None): the fit covers this long, s. Default 1 ms.
+        None: the whole template after the maximum.
     overrides (dict): res_idx: dict with any of 'hmin', 'hmax',
-        'init_hmax'.
+        'init_hmax', 'tau_skip', 'tau_fit_s'.
+    bad (dict): res_idx: reason, for the tones marked bad (in the
+        threshold window): left out of the coincidences, cosmic rays and
+        mean pulses, and not used as a reference.
+    limits (dict): review limits of the tone overview window: 'height',
+        'tau', 'rate': [low, high] (kHz/GHz, s, 1/s), or None when unset.
+        They mark tones for review and change nothing else.
+    reviewed (set of int): resonators the user reviewed in the window
+        (``mark_reviewed``), shown with ``*`` in its list.
     """
     hmin: float = 0.5
     hmax: float = 1.6
     init_hmax: float = 3.
+    tau_skip: int = 2
+    tau_fit_s: float = 1e-3
     overrides: dict = dataclasses.field(default_factory = dict)
+    bad: dict = dataclasses.field(default_factory = dict)
+    limits: dict = dataclasses.field(default_factory = dict)
+    reviewed: set = dataclasses.field(default_factory = set)
+
+    def mark_reviewed(self, res_idx):
+        """
+        Record that the user reviewed a resonator in the window: gave it
+        its own values, or looked at it and moved on. Applying values to
+        every tone does not count.
+
+        Parameters:
+        res_idx (int): resonator index.
+        """
+        self.reviewed.add(int(res_idx))
+
+    def is_bad(self, res_idx):
+        """
+        Return whether a resonator is marked bad.
+
+        Parameters:
+        res_idx (int): resonator index.
+
+        Returns:
+        bad (bool): True if marked bad.
+        """
+        return int(res_idx) in self.bad
+
+    def set_bad(self, res_idx, reason = ''):
+        """
+        Mark a resonator bad.
+
+        Parameters:
+        res_idx (int): resonator index.
+        reason (str): why. Default ''.
+        """
+        self.bad[int(res_idx)] = str(reason)
+
+    def clear_bad(self, res_idx):
+        """
+        Clear a resonator's bad mark, if any.
+
+        Parameters:
+        res_idx (int): resonator index.
+        """
+        self.bad.pop(int(res_idx), None)
+
+    def set_fit(self, res_idx, tau_skip, tau_fit_s):
+        """
+        Give one resonator its own decay-fit values.
+
+        Parameters:
+        res_idx (int): resonator index.
+        tau_skip (int): samples skipped after the maximum.
+        tau_fit_s (float or None): fit length, s.
+        """
+        o = self.overrides.setdefault(int(res_idx), {})
+        o['tau_skip'] = int(tau_skip)
+        o['tau_fit_s'] = None if tau_fit_s is None else float(tau_fit_s)
+
+    def set_fit_all(self, tau_skip, tau_fit_s):
+        """
+        Set the decay-fit values of every resonator, dropping their own.
+
+        Parameters:
+        tau_skip (int): samples skipped after the maximum.
+        tau_fit_s (float or None): fit length, s.
+        """
+        self.tau_skip = int(tau_skip)
+        self.tau_fit_s = None if tau_fit_s is None else float(tau_fit_s)
+        for r in list(self.overrides):
+            for key in ('tau_skip', 'tau_fit_s'):
+                self.overrides[r].pop(key, None)
+            if not self.overrides[r]:
+                del self.overrides[r]
+
+    def has_own(self, res_idx, keys = ('hmin', 'hmax', 'init_hmax')):
+        """
+        Say whether a resonator has its own value of any of some keys.
+
+        Parameters:
+        res_idx (int): resonator index.
+        keys (sequence of str): override keys. Default: the thresholds.
+
+        Returns:
+        own (bool): True if it has one.
+        """
+        return bool(set(keys) & set(self.overrides.get(int(res_idx), {})))
 
     def for_tone(self, res_idx):
         """
@@ -258,10 +586,12 @@ class Thresholds:
         res_idx (int): resonator index.
 
         Returns:
-        values (dict): 'hmin', 'hmax', 'init_hmax'.
+        values (dict): 'hmin', 'hmax', 'init_hmax', 'tau_skip',
+            'tau_fit_s'.
         """
         out = dict(hmin = self.hmin, hmax = self.hmax,
-                   init_hmax = self.init_hmax)
+                   init_hmax = self.init_hmax, tau_skip = self.tau_skip,
+                   tau_fit_s = self.tau_fit_s)
         out.update(self.overrides.get(int(res_idx), {}))
         return out
 
@@ -270,13 +600,44 @@ class Thresholds:
         Return the thresholds as JSON-ready values.
 
         Returns:
-        values (dict): 'hmin', 'hmax', 'init_hmax', 'overrides' (keys as
-            strings).
+        values (dict): 'hmin', 'hmax', 'init_hmax', 'tau_skip',
+            'tau_fit_s', 'overrides' (keys as strings), 'bad' (keys as
+            strings), 'limits', 'reviewed' (sorted list).
         """
         return dict(hmin = self.hmin, hmax = self.hmax,
-                    init_hmax = self.init_hmax,
+                    init_hmax = self.init_hmax, tau_skip = self.tau_skip,
+                    tau_fit_s = self.tau_fit_s,
                     overrides = {str(k): dict(v)
-                                 for k, v in self.overrides.items()})
+                                 for k, v in self.overrides.items()},
+                    bad = {str(k): str(v) for k, v in self.bad.items()},
+                    limits = dict(self.limits),
+                    reviewed = sorted(int(r) for r in self.reviewed))
+
+    @classmethod
+    def from_dict(cls, values):
+        """
+        Rebuild thresholds from ``to_dict`` output (also the output of
+        earlier versions, without fit values, reasons or limits).
+
+        Parameters:
+        values (dict): the saved values.
+
+        Returns:
+        thresholds (Thresholds): the thresholds.
+        """
+        bad = values.get('bad', [])
+        if isinstance(bad, list):
+            bad = {int(r): '' for r in bad}
+        return cls(
+            hmin = values['hmin'], hmax = values['hmax'],
+            init_hmax = values['init_hmax'],
+            tau_skip = int(values.get('tau_skip', 2)),
+            tau_fit_s = values.get('tau_fit_s', 1e-3),
+            overrides = {int(k): dict(v)
+                         for k, v in values.get('overrides', {}).items()},
+            bad = {int(k): str(v) for k, v in bad.items()},
+            limits = dict(values.get('limits', {})),
+            reviewed = {int(r) for r in values.get('reviewed', [])})
 
 ################################################################################
 ################################### Detection ##################################
@@ -362,23 +723,28 @@ def tone_writes(root, ts):
 
 def finish_timestream(
     root, ts, data, results, settings, coinc_win = 2, cosmic_min_mult = 3,
-    progress = True
+    progress = True, thresholds = None
 ):
     """
     Find coincidences and cosmic rays per tone write, and average each
-    tone's photon pulses (height window, multiplicity 1).
+    tone's photon pulses (height window, multiplicity 1). Tones marked
+    bad are left out, like tones whose detection failed.
 
     Parameters:
     root (zarr.Group): the store root.
     ts (dict): the timestream.
     data (TimestreamData): its detection timestreams.
     results (dict): ``detect_timestream`` output for all its tones.
-    settings (DetectionSettings): for ``baseline_gap``.
+    settings (DetectionSettings): for ``baseline_gap`` (and the decay fit
+        without ``thresholds``).
     coinc_win (int): coincidence window, samples: a pulse at t is
         coincident with other tones' pulses in [t - win, t + win].
         Default 2.
     cosmic_min_mult (int): fewest tones of a cosmic ray. Default 3.
     progress (bool): If True (default), show a progress bar.
+    thresholds (Thresholds or None): for the bad marks and each tone's
+        decay-fit values. Default None: no bad tones, the settings' fit
+        values.
 
     Returns:
     summary (dict): ``mult`` (row: multiplicity of each pulse candidate),
@@ -393,9 +759,12 @@ def finish_timestream(
     hit_cols = {k: [] for k in ('event', 'row', 'res_idx', 'idx', 'h', 'x',
                                 'raw')}
     n_events = 0
+    bad = set() if thresholds is None else {int(r) for r in thresholds.bad}
+    res_of_row = dict(zip(ts['rows'].tolist(), ts['res_idxs'].tolist()))
     for w, _, rows in tone_writes(root, ts):
         good = [int(r) for r in rows if isinstance(results.get(int(r)),
-                                                   dict)]
+                                                   dict)
+                and res_of_row[int(r)] not in bad]
         res = [results[r] for r in good]
         if not res:
             continue
@@ -423,8 +792,12 @@ def finish_timestream(
         except ValueError:
             continue
         avg[r], peak[r], used[r] = a, p, u
-        tau[r] = ph.fit_tau(a, p, data.dt, settings.tau_skip,
-                            settings.tau_lifetimes)[0]
+        if thresholds is None:
+            skip, fit_s = settings.tau_skip, settings.tau_fit_s
+        else:
+            fit = thresholds.for_tone(res_of_row[r])
+            skip, fit_s = fit['tau_skip'], fit['tau_fit_s']
+        tau[r] = ph.fit_tau(a, p, data.dt, skip, fit_s)[0]
 
     def cat(parts, dtype):
         """
@@ -468,11 +841,21 @@ def save_timestream(
     ``template``), ``template`` (mean pulse of the pulses in the height
     window, x),
     ``avg_pulse`` (mean photon pulse: height window and multiplicity 1, x),
-    ``psd``, ``filter``; ``pulses/`` (every coincidence candidate: ``row``,
-    ``idx`` (sample in the window), ``h`` (height, kHz/GHz),
-    ``raw`` (raw peak, x), ``candidate`` (at or above hmin),
-    ``in_window`` (in [hmin, hmax]), ``mult``, ``used`` (averaged)); and
-    ``cosmic/events`` and ``cosmic/hits`` (``finish_timestream``).
+    ``psd``, ``filter``, ``bad`` and ``bad_reason`` (marked bad in the
+    window), ``tau_skip`` and ``tau_fit_s`` (the decay fit's values);
+    ``pulses/``
+    (every coincidence candidate: ``row``, ``idx`` (sample in the window),
+    ``h`` (height, kHz/GHz), ``raw`` (raw peak, x), ``candidate`` (at or
+    above hmin), ``in_window`` (in [hmin, hmax]), ``mult``, ``used``
+    (averaged)); ``cosmic/events`` and ``cosmic/hits``
+    (``finish_timestream``); and ``detail/``, the rest of each tone's
+    detection result, so that ``load_results`` can rebuild it for the
+    threshold window: tables ``events`` (``row``, ``idx``), ``init``
+    (``row``, ``idx``, ``h``: first-pass peaks), ``neg`` (``row``,
+    ``h``: inverted candidates), ``template_idx`` (``row``, ``idx``),
+    per tone ``n_vetoed``, ``init_hmax_abs``, ``clean_frac``,
+    ``filter_p``, ``n_history``, ``history`` ((ntones, iterations, M),
+    NaN-padded) and ``log`` ((ntones, lines), ''-padded).
 
     Parameters:
     grp (zarr.Group): the (new, empty) group.
@@ -550,6 +933,16 @@ def save_timestream(
     dl.write_array(grp, 'init_hmax', np.array(
         [thresholds.for_tone(ri)['init_hmax'] or np.nan
          for ri in ts['res_idxs']], dtype = float))
+    dl.write_array(grp, 'bad', np.array(
+        [thresholds.is_bad(ri) for ri in ts['res_idxs']], dtype = bool))
+    dl.write_array(grp, 'bad_reason', np.array(
+        [thresholds.bad.get(int(ri), '') for ri in ts['res_idxs']]))
+    dl.write_array(grp, 'tau_skip', np.array(
+        [thresholds.for_tone(ri)['tau_skip'] for ri in ts['res_idxs']],
+        dtype = np.int64))
+    dl.write_array(grp, 'tau_fit_s', np.array(
+        [thresholds.for_tone(ri)['tau_fit_s'] or np.nan
+         for ri in ts['res_idxs']], dtype = float))
     dl.write_array(grp, 'n_used', per_tone(
         lambda r, res: len(summary['used'].get(r, [])), 0))
     dl.write_array(grp, 'tau', per_tone(
@@ -598,6 +991,195 @@ def save_timestream(
         g = dl.create_group(cosmic, part, 'analysis')
         for k, v in summary['cosmic'][part].items():
             dl.write_array(g, k, v)
+    _save_detail(dl.create_group(grp, 'detail', 'analysis'), rows, ok,
+                 results, M)
+
+def _save_detail(grp, rows, ok, results, M):
+    """
+    Save the parts of each tone's detection result that the other arrays
+    don't hold (``save_timestream``'s ``detail/``).
+
+    Parameters:
+    grp (zarr.Group): the (new, empty) group.
+    rows (list of int): DataSet rows.
+    ok (list of bool): whether each row's detection succeeded.
+    results (dict): ``detect_timestream`` output.
+    M (int): template length.
+    """
+    def table(name, columns):
+        """
+        Save one concatenated per-tone table with a ``row`` column.
+
+        Parameters:
+        name (str): group name.
+        columns (dict): column: (result key or callable, dtype).
+        """
+        g = dl.create_group(grp, name, 'analysis')
+        parts = {k: [] for k in ('row', *columns)}
+        for r, good in zip(rows, ok):
+            if not good:
+                continue
+            res = results[r]
+            vals = {k: np.asarray(key(res) if callable(key) else res[key])
+                    for k, (key, _) in columns.items()}
+            n = len(next(iter(vals.values())))
+            parts['row'].append(np.full(n, r, dtype = np.int64))
+            for k, v in vals.items():
+                parts[k].append(v)
+        for k, v in parts.items():
+            dtype = np.int64 if k == 'row' else columns[k][1]
+            dl.write_array(g, k, np.concatenate(v).astype(dtype) if v
+                           else np.zeros(0, dtype))
+
+    table('events', dict(idx = ('events', np.int64)))
+    table('init', dict(idx = ('init_idx', np.int64),
+                       h = ('init_h', np.float32)))
+    table('neg', dict(h = ('neg_h', np.float32)))
+    table('template_idx', dict(idx = ('template_idx', np.int64)))
+    n_hist = [len(results[r]['history']) if good else 0
+              for r, good in zip(rows, ok)]
+    n_log = [len(results[r]['log']) if good else 0
+             for r, good in zip(rows, ok)]
+    history = np.full((len(rows), max(n_hist, default = 0), M), np.nan)
+    log = np.full((len(rows), max(n_log, default = 0)), '', dtype = object)
+    for i, (r, good) in enumerate(zip(rows, ok)):
+        if not good:
+            continue
+        h = np.asarray(results[r]['history'], dtype = float)
+        if h.size:
+            history[i, :len(h), :h.shape[1]] = h
+        log[i, :n_log[i]] = [str(line) for line in results[r]['log']]
+    for key, default in (('n_vetoed', 0), ('init_hmax_abs', np.nan),
+                         ('clean_frac', np.nan), ('filter_p', -1)):
+        dl.write_array(grp, key, np.array(
+            [results[r].get(key, default) if good else default
+             for r, good in zip(rows, ok)], dtype = float))
+    dl.write_array(grp, 'n_history', np.asarray(n_hist, dtype = np.int64))
+    dl.write_array(grp, 'history', history)
+    dl.write_array(grp, 'log', log.astype(str))
+
+def load_results(grp, settings = None):
+    """
+    Read a saved photon result (``save_timestream``) back as detection
+    results and thresholds, to continue choosing thresholds in the window
+    (06a_find_photons.py's ``CONTINUE``) without running the detection
+    again.
+
+    Parameters:
+    grp (zarr.Group): a ``ts_photons{p}/timestream{j}`` group.
+    settings (DetectionSettings or None): for the pulse sign. None: the
+        saved settings' sign.
+
+    Returns:
+    results (dict): row: the detection result (the keys of
+        ``run_detection``, plus ``res_idx``), or the saved error message
+        for tones whose detection failed.
+    thresholds (Thresholds): the saved thresholds, overrides and bad
+        marks.
+
+    Raises:
+    KeyError: if the result has no ``detail/`` group (saved by an earlier
+        version: run the detection again instead).
+    """
+    if 'detail' not in grp:
+        raise KeyError(f'{grp.path} holds no detection detail (saved by an '
+                       'earlier version): it cannot be continued')
+    a = dict(grp.attrs)
+    thresholds, _ = load_reference(grp, settings)
+    sign = int(a['settings']['pulse_sign']) if settings is None else \
+        int(settings.pulse_sign)
+    rows = grp['rows'][:]
+    status = grp['status'][:]
+    res_idxs = grp['res_idxs'][:]
+    d = grp['detail']
+    pulses = grp['pulses']
+    p_row, p_idx, p_h = pulses['row'][:], pulses['idx'][:], pulses['h'][:]
+    p_raw, p_cand = pulses['raw'][:], pulses['candidate'][:]
+    tables = {name: {k: d[name][k][:] for k in d[name].array_keys()}
+              for name in ('events', 'init', 'neg', 'template_idx')}
+    per_tone = {k: grp[k][:] for k in ('hmin', 'hmax', 'sigma_y', 'amp_ph',
+                                       'amp_ph_own', 'rate', 'template_p',
+                                       'template', 'psd', 'filter')}
+    detail = {k: d[k][:] for k in ('n_vetoed', 'init_hmax_abs',
+                                   'clean_frac', 'filter_p', 'n_history',
+                                   'history', 'log')}
+    results = {}
+    for i, (row, r_idx) in enumerate(zip(rows, res_idxs)):
+        row = int(row)
+        if str(status[i]) != '':
+            results[row] = str(status[i])
+            continue
+        sel = p_row == row
+        t = {name: {k: v[tab['row'] == row] for k, v in tab.items()
+                    if k != 'row'} for name, tab in tables.items()}
+        n_hist = int(detail['n_history'][i])
+        res = dict(
+            cand_idx = p_idx[sel & p_cand], cand_h = p_h[sel & p_cand],
+            events = t['events']['idx'], template = per_tone['template'][i],
+            template_idx = t['template_idx']['idx'],
+            p = int(per_tone['template_p'][i]), pre = int(a['pre']),
+            post = int(a['post']),
+            filter_post = int(a.get('filter_post') or a['post']),
+            amp_ph = float(per_tone['amp_ph'][i]),
+            amp_ph_own = float(per_tone['amp_ph_own'][i]), sign = sign,
+            hmin = float(per_tone['hmin'][i]),
+            hmax = float(per_tone['hmax'][i]),
+            sigma_y = float(per_tone['sigma_y'][i]),
+            rate = float(per_tone['rate'][i]), psd = per_tone['psd'][i],
+            nfft = int(per_tone['filter'].shape[1]),
+            filter = per_tone['filter'][i],
+            history = detail['history'][i, :n_hist],
+            neg_h = t['neg']['h'], clean_frac = float(detail['clean_frac'][i]),
+            coinc_idx = p_idx[sel], coinc_h = p_h[sel], coinc_raw = p_raw[sel],
+            init_idx = t['init']['idx'], init_h = t['init']['h'],
+            init_hmax_abs = float(detail['init_hmax_abs'][i]),
+            n_vetoed = int(detail['n_vetoed'][i]), dt = float(a['dt']),
+            log = [str(line) for line in detail['log'][i] if line != ''],
+            res_idx = int(r_idx))
+        if detail['filter_p'][i] >= 0:
+            res['filter_p'] = int(detail['filter_p'][i])
+        results[row] = res
+    return results, thresholds
+
+def refit_tau(grp, tau_skip, tau_fit_s):
+    """
+    Fit the decay times of a saved result's mean photon pulses again
+    (``signal.photons.fit_tau``) with other fit values for every tone,
+    replacing its ``tau``, ``tau_skip`` and ``tau_fit_s`` arrays and
+    recording the values in its settings and thresholds.
+
+    Parameters:
+    grp (zarr.Group): a ``ts_photons{p}/timestream{j}`` group, writable.
+    tau_skip (int): samples after the maximum to skip.
+    tau_fit_s (float or None): length of the fit, s (None: the whole
+        template after the maximum).
+
+    Returns:
+    tau (np.array): the new decay times, s (NaN where there is no mean
+        pulse or the fit fails).
+    """
+    avg, p, dt = grp['avg_pulse'][:], grp['p'][:], float(grp.attrs['dt'])
+    tau = np.full(len(p), np.nan)
+    for i in range(len(p)):
+        if np.isfinite(p[i]) and np.isfinite(avg[i]).any():
+            pulse = np.where(np.isfinite(avg[i]), avg[i], 0.)
+            tau[i] = ph.fit_tau(pulse, int(p[i]), dt, tau_skip,
+                                tau_fit_s)[0]
+    for name, value in (('tau', tau),
+                        ('tau_skip', np.full(len(p), int(tau_skip))),
+                        ('tau_fit_s', np.full(len(p), np.nan if tau_fit_s
+                                              is None else tau_fit_s))):
+        if name in grp:
+            del grp[name]
+        dl.write_array(grp, name, value)
+    settings = dict(grp.attrs.get('settings', {}))
+    settings.update(tau_skip = int(tau_skip), tau_fit_s = tau_fit_s)
+    th = Thresholds.from_dict(grp.attrs['thresholds'])
+    th.set_fit_all(tau_skip, tau_fit_s)
+    grp.attrs.update(dl.to_jsonable(dict(
+        settings = settings, thresholds = th.to_dict(),
+        tau_refit = dl._now())))
+    return tau
 
 def load_reference(grp, settings = None):
     """
@@ -619,10 +1201,7 @@ def load_reference(grp, settings = None):
         that timestream's own mean photon, which becomes the height unit.
     """
     a = dict(grp.attrs)
-    th = a['thresholds']
-    thresholds = Thresholds(
-        hmin = th['hmin'], hmax = th['hmax'], init_hmax = th['init_hmax'],
-        overrides = {int(k): dict(v) for k, v in th['overrides'].items()})
+    thresholds = Thresholds.from_dict(a['thresholds'])
     sign = int(a['settings']['pulse_sign']) if settings is None else \
         int(settings.pulse_sign)
     status = grp['status'][:]
@@ -634,7 +1213,8 @@ def load_reference(grp, settings = None):
     hmin, hmax = grp['hmin'][:], grp['hmax'][:]
     reference = {}
     for i, r in enumerate(res_idxs):
-        if str(status[i]) != '' or not np.isfinite(amp[i]):
+        if str(status[i]) != '' or not np.isfinite(amp[i]) or \
+                thresholds.is_bad(r):
             continue
         reference[int(r)] = dict(
             template = template[i], p = int(p[i]), pre = int(a['pre']),

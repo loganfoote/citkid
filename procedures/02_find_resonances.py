@@ -1,37 +1,12 @@
 """
-02: find and fit the resonances of a VNA sweep, and save the resonator
-list for tuning.
-
-Steps, on ``vna{k}`` of the device store (the latest sweep by default):
-
-1. find: the CNN finder (default; ``vna.res_finder_cnn``, which needs
-   PyTorch: ``uv sync --extra cnn``, else it raises an ImportError saying
-   so) or the interactive auto finder (``--finder auto``) writes
-   ``fres_auto``;
-2. manual: check and edit the list in the manual finder
-   (``vna.res_finder_manual``), which writes ``fres_manual``;
-3. fit: fit every listed resonance (``vna.full_sweep``), print a
-   description of the sweep, and save ``full_sweep_fit`` with each
-   resonance's flags and which parameters are reliable (``valid_fr``,
-   ``valid_Qi``, ``valid_Qc``, ``valid_phi``; Qr and amp are as reliable
-   as Qc);
-4. resonators: save the list for tuning as ``resonators{k}``
-   (``vna.full_sweep.resonator_list``): fitted fr, Qr where reliable, and
-   span factors Qr / 5.
-
-Steps already done are skipped, so the script picks up where it stopped;
-``--redo`` repeats a step and the ones after it. A resonator list that a
-tuning uses is never replaced.
-
-No CRS is needed: this runs on the saved sweep.
+02: find and fit the resonances of a VNA sweep (vna{k}, the latest by
+default) and save the resonator list for tuning (resonators{k}). Steps
+already done are skipped; --redo repeats one. No CRS needed.
 
 Usage:
     python 02_find_resonances.py --device deviceA
-    python 02_find_resonances.py --device deviceA --sweep 1 --finder auto
+    python 02_find_resonances.py --device deviceA --finder auto
     python 02_find_resonances.py --device deviceA --redo fit
-
-Edit the settings below for your setup; the command-line options override
-them for one run.
 """
 import argparse
 import os
@@ -44,20 +19,15 @@ from citkid.vna.full_sweep import (
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-DATA_DIR = '~/data'         # stores are in
-                            # DATA_DIR/COOLDOWN/DEVICE[_SUFFIX].zarr
-COOLDOWN = 'cooldown'       # cooldown name
-DEVICE = 'device'           # device name
-SUFFIX = ''                 # store name suffix: the store is
-                            # DEVICE_SUFFIX.zarr ('': DEVICE.zarr)
-FINDER = 'cnn'              # 'cnn' (automatic; needs PyTorch, see the
-                            # README) or 'auto' (interactive)
-SPAN_LW = 5.                # target sweep span, linewidths (qres = Qr/SPAN_LW)
+DATA_DIR = '~/data'
+COOLDOWN = 'cooldown'
+DEVICE = 'device'
+SUFFIX = ''
+FINDER = 'cnn'
+SPAN_LW = 5.
 
 STEPS = ('find', 'manual', 'fit', 'resonators')
 
-# Notes saved with the data this script makes (attribute 'notes'), e.g.
-# the filters and attenuators on the DAC and ADC lines. Multi-line is fine.
 NOTES = """
 """
 

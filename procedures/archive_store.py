@@ -1,19 +1,10 @@
 """
-Zip a finished device store into one file (not a numbered step: run it
-when a device's measurements are done).
-
-The zip is uncompressed (zarr already compressed the data), opens
-read-only without unpacking (``daq_layout.open_store``), and can be ported
-from (``daq_layout.port_tuning``). It is checked against the store after
-writing. An existing zip is never overwritten, and the store itself is
-left in place: delete it yourself once the zip is safely stored.
+Zip a finished device store into one file (uncompressed, opens read-only
+without unpacking). The store is left in place.
 
 Usage:
     python archive_store.py --device deviceA
     python archive_store.py --store ~/data/cd1/deviceA.zarr --zip /mnt/a.zip
-
-Edit the settings below for your setup; the command-line options override
-them for one run.
 """
 import argparse
 import os
@@ -22,12 +13,10 @@ from citkid import daq_layout as dl
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-DATA_DIR = '~/data'         # stores are in
-                            # DATA_DIR/COOLDOWN/DEVICE[_SUFFIX].zarr
-COOLDOWN = 'cooldown'       # cooldown name
-DEVICE = 'device'           # device name
-SUFFIX = ''                 # store name suffix: the store is
-                            # DEVICE_SUFFIX.zarr ('': DEVICE.zarr)
+DATA_DIR = '~/data'
+COOLDOWN = 'cooldown'
+DEVICE = 'device'
+SUFFIX = ''
 
 ################################################################################
 ################################### Script #####################################

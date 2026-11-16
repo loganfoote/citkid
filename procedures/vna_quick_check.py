@@ -1,36 +1,10 @@
 """
-Quick VNA check of one device (not a numbered step: use it whenever
-a quick look helps).
-
-Opens a window (``citkid.crs.quick_check``) with the settings below,
-connects to this session's modules, and waits for the Sweep button
-(Ctrl+R). A sweep covers the first Nyquist zone (100-2500 MHz), the second
-(2500-5000 MHz), or both, on a geometric grid (constant df/f), leaving a
-10 MHz guard band on each side of 2500 MHz (the point nearest it
-glitches), with a progress bar, and plots |S21| and phase. A running
-sweep can be cancelled (Cancel, Esc); it stops at the next point and
-clears the board's tones. The settings can be changed in the window and
-the sweep run again; the modules too (type them, e.g. "1 2" for a device
-split over two modules, and press Connect, or just Sweep: it connects to
-the typed modules first). Nothing is saved to zarr; the sweep can be
-saved as a CSV (columns f in Hz, i, q). Use it to check the wiring,
-power levels, and that resonances are there before the full sweep
-(01_vna_sweep.py).
-
-With --no-gui (e.g. over ssh without a display), it sweeps once with the
-settings below and saves the sweep with --csv.
-
-Needs the board configured by crs_init.py. This session attaches to
-its modules only, so several of these (or other module scripts) can run at
-once on different modules.
+Quick VNA sweeps of one device in a window (wiring, power, resonances),
+saved only as a CSV if asked. Needs crs_init.py first.
 
 Usage:
     python vna_quick_check.py --modules 1
-    python vna_quick_check.py --modules 1 2 --nyquist both
     python vna_quick_check.py --modules 1 --no-gui --csv quick.csv
-
-Edit the settings below for your setup; the command-line options override
-them for one run.
 """
 import argparse
 import asyncio
@@ -41,14 +15,14 @@ from citkid.crs.quick_check import run_quick_check, save_sweep_csv
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-SERIAL_NUMBER = 46          # CRS serial number
-INTERFACE = 'enp5s0'        # Ethernet interface connected to the CRS
-MODULES = [1]               # modules connected to this device
-NYQUIST = '1'               # '1' (100-2500 MHz), '2' (2500-5000), 'both'
-AMPLITUDE = -50.            # tone power, dBm
-QR_MEDIAN = 2e4             # expected median Qr
-PTS_PER_LW = 5.             # points per linewidth at QR_MEDIAN (df/f = 1e-5)
-NSAMPS = 10                 # samples averaged per point
+SERIAL_NUMBER = 46
+INTERFACE = 'enp5s0'
+MODULES = [1]
+NYQUIST = '1'
+AMPLITUDE = -50.
+QR_MEDIAN = 2e4
+PTS_PER_LW = 5.
+NSAMPS = 10
 
 ################################################################################
 ################################### Script #####################################

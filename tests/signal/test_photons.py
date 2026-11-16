@@ -72,13 +72,14 @@ def test_detection_rate_and_tau():
     of = ph.OptimalFilter.from_kernel(res['filter'], res['p'], res['nfft'])
     y = of.apply(d, res['sign']) * ph.PPM
     np.testing.assert_allclose(y[res['cand_idx']], res['cand_h'], rtol = 1e-5)
-    tau, popt, n_fit = ph.fit_tau(res['template'], res['p'], DT)
+    tau, popt, n_fit = ph.fit_tau(res['template'], res['p'], DT,
+                                  fit_s = 5 * TAU)
     assert tau == pytest.approx(TAU, rel = 0.1)
-    # The fit covers 5 decay times from 2 samples after the peak; without
-    # the limit, the whole decay
-    assert n_fit == pytest.approx(5 * TAU / DT, abs = 2)
+    # The fit covers the given length from 2 samples after the peak;
+    # without a length, the whole decay
+    assert n_fit == pytest.approx(5 * TAU / DT, abs = 1)
     tau_all, _, n_all = ph.fit_tau(res['template'], res['p'], DT,
-                                   n_skip = 1, lifetimes = None)
+                                   n_skip = 1)
     assert n_all == len(res['template']) - res['p'] - 1
     assert tau_all == pytest.approx(TAU, rel = 0.1)
     assert len(res['history']) == ph.DetectionSettings().of_iterations

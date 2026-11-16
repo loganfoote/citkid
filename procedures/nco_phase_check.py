@@ -1,38 +1,11 @@
 """
-Check whether setting a module's NCO to the frequency it already has
-changes the board's phase frame (not a numbered step: a diagnostic).
-
-A calibration sweep is only usable while the board measures in the same
-phase frame it was taken in, and citkid assumes that every NCO setting
-starts a new frame. If a setting to the same frequency turns out to keep
-the phase, a restarted session could set the NCOs again without going
-stale. This script measures it:
-
-1. writes a few tones around the NCO (``OFFSETS_HZ`` from ``NCO_HZ``,
-   through the device: off-resonance tones are fine) and reads their
-   complex S21 twice without touching the NCO (the control: the
-   measurement's own phase noise and drift);
-2. sets the NCO to the same frequency again (forced) and reads them again;
-3. sets the NCO away by ``AWAY_HZ`` and back, and reads them again;
-
-and repeats this ``REPEATS`` times. For each step it reports the phase
-change of every tone against the reading before it, in degrees, and the
-spread of that change across the tones: a change common to all tones is a
-rotation of the frame, one growing with the offset from the NCO is a
-delay. If the changes after the NCO settings look like the control, the
-frame is kept.
-
-The session attaches to one module (it needs the board configured by
-crs_init.py), writes tones to it, and leaves them cleared. Nothing is
-saved. Close 04_stream.py and other scripts using the module first: the
-NCO settings here would put their calibrations out of frame.
+Diagnostic: does setting a module's NCO to the frequency it already has
+change the board's phase frame? Reads a few tones' phases before and
+after NCO settings and prints the changes. Nothing is saved. Close
+04_stream.py first.
 
 Usage:
-    python nco_phase_check.py
     python nco_phase_check.py --module 2 --nco 6.5e8 --repeats 5
-
-Edit the settings below for your setup; the command-line options override
-them for one run.
 """
 import argparse
 import asyncio
@@ -43,16 +16,15 @@ from citkid.crs.instrument import CRS
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-SERIAL_NUMBER = 1           # CRS serial number
-INTERFACE = 'enp2s0'        # Ethernet interface connected to the CRS
-MODULE = 1                  # module to test
-NCO_HZ = 6.5e8              # NCO frequency, Hz (e.g. a tone set's)
-# Tone frequencies relative to the NCO, Hz
+SERIAL_NUMBER = 1
+INTERFACE = 'enp2s0'
+MODULE = 1
+NCO_HZ = 6.5e8
 OFFSETS_HZ = [-150e6, -50e6, -10e6, -1e6, 1e6, 10e6, 50e6, 150e6]
-ARES = -50.                 # tone power, dBm
-NSAMPS = 200                # samples averaged per reading
-REPEATS = 3                 # rounds of the four readings
-AWAY_HZ = 1e6               # the away-and-back setting moves the NCO by
+ARES = -50.
+NSAMPS = 200
+REPEATS = 3
+AWAY_HZ = 1e6
 
 ################################################################################
 ################################### Script #####################################

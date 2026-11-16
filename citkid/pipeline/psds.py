@@ -199,10 +199,7 @@ def union_freqs(timestreams, lo_mult = 10., hi_div = 10.):
 ################################################################################
 ################################### Spectra ####################################
 ################################################################################
-def psd_summary(
-    x, dt, freqs, valid = None, nbins = 100, fmin = None,
-    filter_pt_n = None, pt_frequency = 1.39296
-):
+def psd_summary(x, dt, freqs, valid = None, nbins = 100, fmin = None):
     """
     Reduce and bin the PSD of each of several timestreams.
 
@@ -218,9 +215,6 @@ def psd_summary(
     nbins (int): bins (``signal.psd.bin_psd``). Default 100.
     fmin (float or None): lowest binned frequency, Hz; below it the PSD is
         kept unbinned. None (default): 10 / duration.
-    filter_pt_n (int or None): pulse tube harmonics to filter before
-        binning. None (default): no filtering.
-    pt_frequency (float): pulse tube frequency, Hz. Default 1.39296.
 
     Returns:
     f_binned (np.array): binned frequencies, Hz (empty if no row is
@@ -246,9 +240,7 @@ def psd_summary(
                 reduced[i, j] = get_sxx_reduced(f, psd, freqs[j])
             except ValueError:
                 pass
-        fb, sb = bin_psd(f, [f, psd], nbins = nbins, fmin = fmin,
-                         filter_pt_n = filter_pt_n,
-                         pt_frequency = pt_frequency)
+        fb, sb = bin_psd(f, [f, psd], nbins = nbins, fmin = fmin)
         if binned is None:
             f_binned, binned = fb, np.full((n, len(fb)), np.nan)
         binned[i] = sb
@@ -372,37 +364,22 @@ def deglitch_peaks(
         n_glitches[i] = len(idxs)
     return clean, n_glitches, frac
 
-def load_photon_reference(ref_grp, tone_set = None):
+def load_photon_reference(ref_grp):
     """
-    Read the optimal filters of a photon result (``ts_photons{p}``), for
-    finding the pulses of other timestreams.
+    Read the optimal filters of a photon result (``photons/<name>``, made
+    by 06a_find_photons.py), for finding the pulses of other timestreams.
 
     Parameters:
     ref_grp (zarr.Group): the result.
-    tone_set (int or None): the settings come from its timestream of this
-        tone set (or its first one). Default None: the first.
 
     Returns:
-    filters (dict): res_idx: filter, from every timestream of the result
-        (``photon_finder.load_reference``).
-    settings (DetectionSettings): the settings of the chosen timestream.
-
-    Raises:
-    KeyError: if the result has no timestreams.
+    filters (dict): res_idx: filter (``photon_finder.load_reference``).
+    settings (DetectionSettings): the result's settings.
     """
-    names = sorted((t for t in ref_grp.group_keys()
-                    if t.startswith('timestream')),
-                   key = lambda t: int(t[len('timestream'):]))
-    if not names:
-        raise KeyError(f'{ref_grp.path} has no timestreams')
-    same = [t for t in names
-            if ref_grp[t].attrs.get('tone_set') == tone_set]
-    settings = ph.DetectionSettings(
-        **ref_grp[(same or names)[0]].attrs['settings'])
-    filters = {}
-    for t in names:
-        filters.update(pf.load_reference(ref_grp[t], settings)[1])
-    return filters, settings
+    saved = dict(ref_grp.attrs['settings'])
+    saved.pop('tau_lifetimes', None)
+    settings = ph.DetectionSettings(**saved)
+    return pf.load_reference(ref_grp, settings)[1], settings
 
 def deglitch_photons(
     x, dt, res_idxs, filters, settings, pulses = 'cosmic', coinc_win = 2,
@@ -483,7 +460,7 @@ def deglitch_photons(
 ################################################################################
 def analyze_timestream(
     root, ts, DS, f_reduced, settings, filters = None,
-    photon_settings = None, progress = None
+    photon_settings = None, progress = None, exclude = None
 ):
     """
     Compute one timestream's spectra, one tone write at a time: optional
@@ -498,7 +475,7 @@ def analyze_timestream(
         (``union_freqs``); this timestream's own (``reduced_freqs``) are
         evaluated, the others are NaN.
     settings (dict): ``nbins``, ``fmin_mult``, ``fmax_div``,
-        ``filter_pt_n``, ``pt_frequency``, ``cn_remove`` (bool),
+        ``cn_remove`` (bool),
         ``cn_n_comp``, ``cn_n_iter``, ``cn_lowpass_hz`` (None: a tenth of
         the Nyquist frequency), ``cn_highpass_hz`` (None: ``fmin_mult`` /
         duration; 0: none), ``cn_filter_order``, ``deglitch`` (None,
@@ -512,6 +489,10 @@ def analyze_timestream(
         Default None.
     progress (callable or None): called with a message per write. Default
         None.
+    exclude (dict or None): res_idx: reason, tones left out (marked bad):
+        their timestreams are set to NaN before anything is computed, so
+        they neither get spectra nor enter the common-mode fit, and their
+        ``status`` says why. Default None.
 
     Returns:
     result (dict): ``f_binned``, ``valid_reduced`` (mask of
@@ -519,7 +500,11 @@ def analyze_timestream(
         ``write_idx`` (per tone: its write's index in the source's
         writes, -1 if none), ``status`` (per tone: '' or a message),
         ``n_glitches``, ``glitch_frac``, ``sxx_reduced``, ``sxx_binned``,
-        and with ``cn_remove``: ``sxx_reduced_cn``, ``sxx_binned_cn``,
+        the spectra of the loop components ``spar_binned`` (along the
+        loop, r theta) and ``sper_binned`` (across it, A), in normalized
+        units squared per Hz, and ``sfactor_reduced`` (10 log10 of their
+        ratio at ``f_reduced``, dB), and with ``cn_remove``:
+        ``sxx_reduced_cn``, ``sxx_binned_cn``,
         ``cn_weights`` ((ntones, n_comp), NaN-padded), ``writes`` (list
         per write: ``index``, ``name``, ``rows``, ``n_comp``,
         ``sxx_binned`` of the common modes, ``sigma_iter``).
@@ -554,18 +539,21 @@ def analyze_timestream(
         status = np.array(['no stream'] * n, dtype = object),
         n_glitches = np.zeros(n, dtype = np.int64), glitch_frac = np.zeros(n),
         sxx_reduced = np.full((n, nf), np.nan), sxx_binned = None,
-        writes = [])
+        spar_binned = None, sper_binned = None,
+        sfactor_reduced = np.full((n, nf), np.nan), writes = [])
     if s['cn_remove']:
         k_max = max(0, min(int(s['cn_n_comp']), n - 1))
         out.update(sxx_reduced_cn = np.full((n, nf), np.nan),
                    sxx_binned_cn = None,
                    cn_weights = np.full((n, k_max), np.nan))
-    bins = dict(nbins = int(s['nbins']), fmin = fmin,
-                filter_pt_n = s.get('filter_pt_n'),
-                pt_frequency = s.get('pt_frequency', 1.39296))
+    bins = dict(nbins = int(s['nbins']), fmin = fmin)
+    # The per-tone arrays follow ts['rows'] (the calibrated tones), not
+    # the DataSet's row numbers
+    pos = {int(r): i for i, r in enumerate(ts['rows'])}
     for w, name, rows in pf.tone_writes(root, ts):
         rows = np.asarray(rows, dtype = np.int64)
-        need = 4 * len(rows) * T * 8
+        idx = np.array([pos[int(r)] for r in rows], dtype = np.int64)
+        need = 7 * len(rows) * T * 8
         if need > float(s['memory_gb']) * 1e9:
             raise MemoryError(
                 f"{ts['run']} write {name}: {len(rows)} tones of {T} "
@@ -574,12 +562,32 @@ def analyze_timestream(
         if progress is not None:
             progress(f"{ts['run']} ({ts['name']}), tone set "
                      f"{ts['tone_set']}, {name}: {len(rows)} tones")
-        x = apply_stream_calibration(DS, root, ts['source'],
-                                     rows = rows)['xt']
+        cal = apply_stream_calibration(DS, root, ts['source'], rows = rows,
+                                       outputs = ('xt', 'thetat', 'At'))
+        x = cal['xt']
         ok = np.isfinite(x).all(axis = 1)
-        out['write_idx'][rows] = w
-        out['status'][rows] = np.where(
+        # The loop components: r theta along the loop, A across it (no
+        # deglitching, no common-mode removal)
+        radius = np.asarray(DS.circ_radius[rows.tolist()], dtype = float)
+        along = cal['thetat'] * radius[:, None]
+        across = cal['At']
+        del cal
+        out['write_idx'][idx] = w
+        out['status'][idx] = np.where(
             ok, '', 'the calibrated timestream is not finite')
+        if exclude:
+            for k, i in enumerate(idx):
+                reason = exclude.get(int(ts['res_idxs'][i]))
+                if reason is not None:
+                    x[k] = along[k] = across[k] = np.nan
+                    out['status'][i] = f'marked bad: {reason}'
+        fb, sb, sr_par = psd_summary(along, dt, f_reduced, valid, **bins)
+        _fill(out, 'spar_binned', idx, fb, sb, n)
+        fb, sb, sr_per = psd_summary(across, dt, f_reduced, valid, **bins)
+        _fill(out, 'sper_binned', idx, fb, sb, n)
+        with np.errstate(divide = 'ignore', invalid = 'ignore'):
+            out['sfactor_reduced'][idx] = 10 * np.log10(sr_par / sr_per)
+        del along, across
         if s['deglitch'] == 'peaks':
             x, ng, fr = deglitch_peaks(
                 x, dt, sign = int(s['glitch_sign']),
@@ -587,16 +595,16 @@ def analyze_timestream(
                 baseline_s = float(s['glitch_baseline_s']),
                 distance = max(1, int(round(s['glitch_distance_s'] / dt))),
                 nrounds = int(s['glitch_rounds']), pre = pre, post = post)
-            out['n_glitches'][rows], out['glitch_frac'][rows] = ng, fr
+            out['n_glitches'][idx], out['glitch_frac'][idx] = ng, fr
         elif s['deglitch'] == 'photons':
             x, ng, fr = deglitch_photons(
-                x, dt, ts['res_idxs'][rows], filters, photon_settings,
+                x, dt, ts['res_idxs'][idx], filters, photon_settings,
                 pulses = s['glitch_pulses'], coinc_win = int(s['coinc_win']),
                 min_mult = int(s['cosmic_min_mult']), pre = pre, post = post)
-            out['n_glitches'][rows], out['glitch_frac'][rows] = ng, fr
+            out['n_glitches'][idx], out['glitch_frac'][idx] = ng, fr
         fb, sb, sr = psd_summary(x, dt, f_reduced, valid, **bins)
-        _fill(out, 'sxx_binned', rows, fb, sb, n)
-        out['sxx_reduced'][rows] = sr
+        _fill(out, 'sxx_binned', idx, fb, sb, n)
+        out['sxx_reduced'][idx] = sr
         if not s['cn_remove']:
             del x
             continue
@@ -604,9 +612,9 @@ def analyze_timestream(
                                  (lowpass_hz, order), highpass)
         del x
         fb, sb, sr = psd_summary(cm['y'], dt, f_reduced, valid, **bins)
-        _fill(out, 'sxx_binned_cn', rows, fb, sb, n)
-        out['sxx_reduced_cn'][rows] = sr
-        out['cn_weights'][rows, :cm['n_comp']] = cm['a']
+        _fill(out, 'sxx_binned_cn', idx, fb, sb, n)
+        out['sxx_reduced_cn'][idx] = sr
+        out['cn_weights'][idx, :cm['n_comp']] = cm['a']
         if cm['n_comp']:
             fbA, sA, _ = psd_summary(cm['A'], dt, np.zeros(0), **bins)
         else:
@@ -614,7 +622,7 @@ def analyze_timestream(
         out['writes'].append(dict(
             index = w, name = name, rows = rows, n_comp = cm['n_comp'],
             f_binned = fbA, sxx_binned = sA, sigma_iter = cm['sigma_iter']))
-    for key in ('sxx_binned', 'sxx_binned_cn'):
+    for key in ('sxx_binned', 'sxx_binned_cn', 'spar_binned', 'sper_binned'):
         if key in out and out[key] is None:
             out[key] = np.zeros((n, 0))
     return out
@@ -642,7 +650,7 @@ def _fill(out, key, rows, f_binned, binned, n):
 ################################################################################
 ################################### Saving #####################################
 ################################################################################
-def save_timestream(grp, ts, result, settings):
+def save_timestream(grp, ts, result, settings, bad = None, limits = None):
     """
     Save one timestream's spectra.
 
@@ -655,8 +663,12 @@ def save_timestream(grp, ts, result, settings):
     ``valid_reduced`` (which of the group's ``f_reduced`` this
     timestream covers), and per tone (in the order of ``rows``):
     ``rows``, ``res_idxs``, ``write_idx``, ``status`` ('' if analyzed),
+    ``bad``, ``bad_reason`` (marked in the overview window),
     ``n_glitches``, ``glitch_frac``, ``sxx_reduced`` (1/Hz, at
-    ``f_reduced``), ``sxx_binned`` (1/Hz, at ``f_binned``); with
+    ``f_reduced``), ``sxx_binned`` (1/Hz, at ``f_binned``),
+    ``spar_binned``, ``sper_binned`` (the loop components along and
+    across the loop, normalized units squared per Hz), ``sfactor_reduced``
+    (10 log10 of their ratio at ``f_reduced``, dB); with
     common-mode removal also ``sxx_reduced_cn``, ``sxx_binned_cn``,
     ``cn_weights`` ((ntones, n_comp)), and ``common_modes/write{k}/``
     per tone write (attrs ``name``, ``n_comp``; arrays ``rows``,
@@ -668,8 +680,13 @@ def save_timestream(grp, ts, result, settings):
     ts (dict): the timestream.
     result (dict): ``analyze_timestream`` output.
     settings (dict): the settings used (``analyze_timestream``).
+    bad (dict or None): res_idx: reason, the tones marked bad in the
+        overview window (arrays ``bad``, ``bad_reason``). Default None.
+    limits (dict or None): the overview's review limits (attribute
+        ``limits``). Default None.
     """
     T = int(ts['stop'] - ts['start'])
+    bad = {} if bad is None else {int(k): str(v) for k, v in bad.items()}
     grp.attrs.update(to_jsonable(dict(
         dataset = ts['dataset'], run = ts['run'], name = ts['name'],
         tone_set = ts['tone_set'], calibration = ts['cal'],
@@ -681,15 +698,21 @@ def save_timestream(grp, ts, result, settings):
         cn_n_comp = settings['cn_n_comp'], cn_n_iter = settings['cn_n_iter'],
         cn_lowpass_hz = result['lowpass_hz'],
         cn_highpass_hz = result['highpass_hz'],
-        cn_filter_order = settings.get('cn_filter_order', 2))))
+        cn_filter_order = settings.get('cn_filter_order', 2),
+        limits = {} if limits is None else dict(limits))))
     dl.write_array(grp, 'f_binned', result['f_binned'])
+    dl.write_array(grp, 'bad', np.array(
+        [int(r) in bad for r in ts['res_idxs']], dtype = bool))
+    dl.write_array(grp, 'bad_reason', np.array(
+        [bad.get(int(r), '') for r in ts['res_idxs']]))
     dl.write_array(grp, 'valid_reduced', result['valid_reduced'])
     dl.write_array(grp, 'rows', np.asarray(ts['rows'], dtype = np.int64))
     dl.write_array(grp, 'res_idxs', np.asarray(ts['res_idxs'],
                                                dtype = np.int64))
     dl.write_array(grp, 'write_idx', result['write_idx'])
     dl.write_array(grp, 'status', np.asarray(result['status'], dtype = str))
-    for key in ('n_glitches', 'glitch_frac', 'sxx_reduced', 'sxx_binned'):
+    for key in ('n_glitches', 'glitch_frac', 'sxx_reduced', 'sxx_binned',
+                'spar_binned', 'sper_binned', 'sfactor_reduced'):
         dl.write_array(grp, key, result[key])
     if not settings['cn_remove']:
         return
@@ -726,6 +749,29 @@ def load_timestream(grp):
             for w in sorted(cm.group_keys(), key = lambda t: int(t[5:]))]
     return out
 
+def find_group(root, p):
+    """
+    Find a result of 07_psds.py by index or name.
+
+    Parameters:
+    root (zarr.Group): the store root.
+    p (int or str): the result's index (``ts_psd{p}``), or its name
+        (attribute ``name``: the latest result with that name).
+
+    Returns:
+    grp (zarr.Group): the result.
+
+    Raises:
+    KeyError: if there is no such result.
+    """
+    if isinstance(p, str):
+        named = [q for q in dl.list_indices(root, PREFIX)
+                 if root[dl.set_name(q, PREFIX)].attrs.get('name') == p]
+        if not named:
+            raise KeyError(f'the store has no {PREFIX} result named {p!r}')
+        p = named[-1]
+    return root[dl.set_name(int(p), PREFIX)]
+
 def load_group(root, p):
     """
     Read a result of 07_psds.py: its reduced frequencies and every
@@ -733,13 +779,14 @@ def load_group(root, p):
 
     Parameters:
     root (zarr.Group): the store root.
-    p (int): the result's index (``ts_psd{p}``).
+    p (int or str): the result's index (``ts_psd{p}``) or name
+        (``find_group``).
 
     Returns:
     out (dict): the group's attributes, ``f_reduced`` (Hz), and
         ``timestreams`` (list of ``load_timestream`` outputs, in order).
     """
-    grp = root[dl.set_name(int(p), PREFIX)]
+    grp = find_group(root, p)
     names = sorted((t for t in grp.group_keys() if t.startswith('timestream')),
                    key = lambda t: int(t[len('timestream'):]))
     return dict(grp.attrs, f_reduced = grp['f_reduced'][:],
@@ -755,8 +802,8 @@ def describe_results(root):
     Returns:
     text (str): the description.
     """
-    lines = ['Previous results (ts_psd{p}: timestreams, deglitching, '
-             'common modes):']
+    lines = ['Previous results (ts_psd{p}: name, timestreams, '
+             'deglitching, common modes):']
     for p in dl.list_indices(root, PREFIX):
         g = root[dl.set_name(p, PREFIX)]
         parts = [f"{g[t].attrs['run']} set {g[t].attrs['tone_set']} "
@@ -765,8 +812,9 @@ def describe_results(root):
                  if t.startswith('timestream')]
         s = g.attrs.get('settings', {})
         cn = f"{s.get('cn_n_comp')} modes" if s.get('cn_remove') else 'kept'
-        lines.append(f"  {PREFIX}{p}: {', '.join(parts)}; deglitch "
-                     f"{s.get('deglitch')}; common modes {cn}")
+        lines.append(f"  {PREFIX}{p}: {g.attrs.get('name')!r}, "
+                     f"{', '.join(parts)}; deglitch {s.get('deglitch')}; "
+                     f'common modes {cn}')
     if len(lines) == 1:
         lines.append('  none')
     return '\n'.join(lines)

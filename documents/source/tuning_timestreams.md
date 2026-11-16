@@ -1,634 +1,469 @@
 ---
 title: "Tuning and timestreams"
-subtitle: "03_tune, 04_stream, store_browser, 05_calibrate_streams, 06_find_photons, 07_psds"
+subtitle: "03_tune, 04_stream, store_browser, 05_calibrate_streams, 06a_find_photons, 06b_cosmic_rays, 07_psds, 08_report"
 ---
 
 # Overview
 
-After VNA screening (see the VNA screening document), the tuning procedure
-finds the optimal tone power and frequency for each resonator.
-Timestreams are then taken with the tuned tones and calibrated, the
-photon pulses in them are found, and their noise spectra are computed.
+After VNA screening: tune the tones, take timestreams, calibrate them,
+find photons or cosmic rays, and compute noise spectra. Configure the
+board with `crs_init.py` first (see "Getting started").
 
 | Script | What it does | Saves |
 |---|---|---|
-| `03_tune.py` | Plans the tones, sweeps the tone power, and finds each tone's optimal power and frequency (with two interactive windows) | `tune{k}` |
-| `04_stream.py` | Opens a window for previewing timestreams and taking named timestream runs | `ts{n}` |
-| `store_browser.py` | Any time: browses a store in a window (groups, attributes, notes, the list of timestream runs) | Nothing |
-| `05_calibrate_streams.py` | Calibrates selected timestreams, first in an interactive window, then in batch | `ts_cal{c}` |
-| `06_find_photons.py` | Finds the photon pulses and cosmic rays in calibrated timestreams, with a window for choosing the thresholds | `ts_photons{p}` |
-| `07_psds.py` | Computes the noise spectra of calibrated timestreams, before and after removing the common modes, with optional glitch removal | `ts_psd{p}` |
-
-Before running the measurement scripts, make sure the board is
-configured with `crs_init.py`. The "Getting started" document describes
-it, along with the environment, how the scripts are run (settings,
-command-line options, notes, `--simulate`), the device store, and the CRS
-terms used here (modules, NCOs, decimation stages, ...).
-
-A tuning group holds the tuning measurements, the tuned tones, and
-everything streamed with them. Before streaming a tone set, `04_stream.py`
-takes a calibration target sweep of it (`cal{j}`). The tones written to
-the board for streaming are saved under that sweep (`write{w}`), and each
-stream of those tones is saved under the write (`ts{n}`). A timestream
-run, `ts{n}`, is one named timestream, usually of one tone set; the
-tuning's run list (`streams`) records each run, with its streams. A run
-that fails before saving any stream is dropped from the list again; one
-that fails later stays, marked incomplete.
+| `03_tune.py` | Plans the tones, sweeps the power, chooses each tone's power and frequency (two windows) | `tune{k}` |
+| `04_stream.py` | Window for calibrating, previewing and taking named timestream runs | `ts{n}` |
+| `store_browser.py` | Any time: browse a store (groups, attributes, runs, tone marks) | Nothing |
+| `05_calibrate_streams.py` | Calibrates timestreams, in a window and then in batch | `ts_cal{c}` |
+| `06a_find_photons.py` | Finds photons and cosmic rays, with a threshold window | `photons/<name>` |
+| `06b_cosmic_rays.py` | Fits cosmic-ray tails pulse by pulse, with a threshold window | `cosmic/<name>` |
+| `07_psds.py` | Noise spectra before and after common-mode removal | `ts_psd{p}` |
+| `08_report.py` | Lifetimes and noise spectra as figures, tables and text | Files in a folder |
 
 ```text
 <device>.zarr/
   tune{k}/              tuning (03)
     cal{j}/             calibration target sweep of one tone set (04)
-      write{w}/         tones written for streaming (the whole tone set,
-                        or part of it at fast decimation stages)
+      write{w}/         tones written for streaming
         ts{n}/          stream of run n with these tones
-    streams/            run list (attribute runs): per run, its name,
-                        notes, decimation stage, duration, tone set,
-                        calibration, and streams
+    streams/            run list
   ts_cal{c}/            stream calibrations (05)
-  ts_photons{p}/        photon results (06)
+  photons/<name>/       photon results (06a), one per timestream
+  cosmic/<name>/        cosmic-ray tails (06b), one per timestream
   ts_psd{p}/            noise spectra (07)
+  tone_marks/           bad marks and notes on tones, from every stage
 ```
 
-Calibrated timestreams are never saved. `05_calibrate_streams.py` saves
-calibrations, and the analysis scripts (such as `06_find_photons.py`)
-apply them to the raw streams they analyze, in memory, and save only
-their results. Stores made by earlier versions, with the runs at the
-store root (`ts{n}/set{s}/write{w}/stream`), can be converted with
-`citkid.daq_layout.migrate_root_runs`.
+Calibrated timestreams are never saved: the analysis scripts apply a
+calibration in memory and save only their results.
 
 ## Tone sets
 
-Each module reads out a 500 MHz band centered on its NCO frequency (600
-MHz with extended bandwidth), with at most 1024 tones. We call this band
-an NCO window. If the tones don't all fit in the available modules at
-once, they are divided into **tone sets**. A tone set is the group of
-tones written to the modules together, with one NCO frequency per module.
-A sweep of all the tones sweeps one tone set after another and combines
-(stitches) them into a single sweep. Each stream contains the tones of
-one tone set.
+A module reads out one NCO window (500 MHz, or 600 MHz with extended
+bandwidth) with at most 1024 tones. Tones that don't fit the modules'
+windows simultaneously are divided into **tone sets**, written and
+measured one after another. The sets are planned once, with the tuning:
 
-The tone sets are assigned once, when the tuning is planned:
+- window edges go in the widest gaps between resonances, `EDGE_MARGIN`
+  from every tone;
+- each window gets at most the tones that stream simultaneously at
+  `STREAM_DEC` (128 at stages 0-1, 1024 at stages 2-6), so the NCO
+  frequencies never change while streaming;
+- `WINDOWS` (`--windows`) measures only some windows (`--list-windows`
+  prints them); `FMIN`, `FMAX` keep only a frequency range.
 
-- The tones are covered with as few NCO windows as possible. Window edges
-  are placed in the widest gaps between resonances, and every tone is at
-  least `EDGE_MARGIN` from an edge.
-- Windows are assigned to the modules in order, and each pass through the
-  modules makes one tone set.
-- If extended bandwidth is enabled on the board, a window can be 600 MHz
-  wide, with its tones in the central 575 MHz.
-- `STREAM_DEC` limits each window to the number of tones that can be
-  streamed at once at that decimation stage (currently 128 at stages 0-1
-  and 1024 at stages 2-6). This way the NCO frequencies never need to
-  change during streaming.
-- `WINDOWS` (`--windows`) selects a subset of the windows, to measure only
-  part of the array. `--list-windows` prints the windows with their NCO
-  frequencies, tone ranges, and numbers of tones.
-- `FMIN` and `FMAX` (`--fmin`, `--fmax`, in Hz) keep only the resonators
-  in a frequency range as tones, e.g. to leave out a few stragglers found
-  far above the main band that you want fitted by 02 but not measured.
-  Resonances outside the range still count as neighbours for `MIN_SEP_LW`.
-  The tone sets are planned on the tones that remain.
+## Tone marks
+
+At any stage a tone can be marked bad with a reason, or given a note
+(the tone is kept). Both go to the store's tone marks, one history per
+resonator index, with the stage and the time. A bad tone is dropped by
+the stages after (the tuned set, averages and fits) until the mark is
+cleared. `store_browser.py` lists the marks (Tone marks tab).
+
+| Where | Mark bad | Note |
+|---|---|---|
+| `03_tune.py`, IQ series window | Mark Tone Bad (Ctrl+M); Mark All Series Bad asks keep (note) or remove (bad) | Add Note (Ctrl+T) |
+| `03_tune.py`, fq_finder window | Rejecting a tone; un-rejecting clears it | N |
+| `05_calibrate_streams.py` window | Mark tone bad (M), or a panel's Bad Data | T |
+| `06a`, `06b` windows | B (again to clear) | T |
+| `07_psds.py` | No window: marked tones are left out, plus `BAD_TONES` | |
+
+Resonances the plan drops as too close get a note automatically.
 
 # 03_tune.py: make a tuning
 
-The script creates a new tuning, `tune{k}`, and runs these steps:
+Creates `tune{k}` in these steps. Done steps are skipped; `--redo
+power_fits`, `fq_finder` or `tones` repeats one and those after it;
+sweeps are never retaken (`--new` starts a new tuning).
 
-1. **plan**: Start from a resonator list (`resonators{j}`, the latest by
-   default). Remove tones that are too close to another resonance, closer
-   than `MIN_SEP_LW` times the larger of the two linewidths. `PAIRS` sets
-   whether both tones of a close pair are removed, or only the tone of the
-   shallower resonance (by the dip depths that `02_find_resonances.py`
-   measures on the VNA sweep). Divide the remaining tones into tone
-   sets. Optionally, add `N_CAL_TONES` off-resonance
-   calibration tones per window (`res_idxs` -1, -2, ...). The initial
-   tones are saved in `tones_init`, and the CRS settings, including each
-   tone set's NCO frequencies, in `crs_config`.
-2. **power_sweep**: Take a target sweep at each power in `POWERS`,
-   stitched over the tone sets (`power_sweep/set{i}`). If the sweep is
-   interrupted, the next run continues from the next power.
-3. **power_fits**: The IQ series window fits the IQ loops at every power,
-   then fits each resonator's nonlinearity parameter $a_\mathrm{nl}$ as a
-   function of power (using $a_\mathrm{nl}$ values in `A_FIT_RANGE`). The
-   power where $a_\mathrm{nl}$ reaches `ANL` is marked; Shift+click or
-   drag the line to choose a different power. Resonators whose fit never
-   reaches `ANL` get the median of the other chosen powers. The powers are
-   then clipped to `ARES_LIMITS` and saved in `power_choice`.
-4. **fq_sweep**: Take a stitched target sweep at the chosen powers.
-5. **fq_finder**: In the fq_finder window, set each tone's frequency and
-   sweep span, or reject the tone. If the window is closed before every
-   tone is done, the next run continues where it left off.
-6. **tones**: Save the tuned tones in `tones` (`fres`, `qres`, `ares`,
-   `res_idxs`, `tone_set`, `tone_module`), without the rejected tones.
+| Step | What it does | Saves |
+|---|---|---|
+| plan | From a resonator list, drops tones within `MIN_SEP_LW` linewidths of another (`PAIRS`: both, or the shallower), plans the tone sets, adds `N_CAL_TONES` off-resonance tones per window | `tones_init`, `crs_config` |
+| power_sweep | Target sweep at each power in `POWERS` | `power_sweep/set{i}` |
+| power_fits | IQ series window: IQ loop fits at every power, $a_\mathrm{nl}$ vs power per resonator; the power where $a_\mathrm{nl}$ reaches `ANL` is marked (Shift+click or drag to choose another); no fit: the median of the others; clipped to `ARES_LIMITS` | `power_fits`, `power_choice` |
+| fq_sweep | Target sweep at the chosen powers | `fq_sweep` |
+| fq_finder | Window: set each tone's frequency and span, or reject it; resumes where it stopped | `fres_opt`, `qres_opt`, `reject_reason` |
+| tones | The tuned tones, without rejected and bad-marked ones | `tones` |
 
-Steps that are already done are skipped, so the script picks up where it
-stopped. `--redo power_fits`, `--redo fq_finder`, or `--redo tones`
-repeats that step and the steps after it (`power_fits` only until the fq
-sweep has been taken). Sweeps are never retaken in an existing tuning; use
-`--new` to start a new tuning instead.
-
-## Contents of a tuning
-
-```text
-tune{k}/               attributes: resonators (the resonator list that
-                       res_idxs refer to)
-  crs_config/          modules, analog bank, bandwidth, module settings,
-                       and the NCO frequencies of each tone set
-  tones_init/          initial tones and the settings used to plan them
-  power_sweep/set{i}   stitched target sweep at each power (raw)
-  power_fits/          IQ loop fits (analysis)
-  power_choice/        chosen powers
-  fq_sweep/            stitched target sweep at the chosen powers, with
-                       the fq_finder results fres_opt, qres_opt,
-                       reject_reason
-  tones/               tuned tones
-```
-
-`tones/`, `crs_config/`, and the resonator list contain everything needed
-to measure with the tuning. `citkid.daq_layout.port_tuning` copies only
-these to another store (for example, for a new cooldown), without the
-sweeps.
+`citkid.daq_layout.port_tuning` copies `tones/`, `crs_config/` and the
+resonator list to another store (a new cooldown) without the sweeps.
 
 ## Settings
 
 {{settings:03_tune.py}}
 
+| Setting | Meaning |
+|---|---|
+| `MODULES` | Modules connected to the device |
+| `RESONATORS` | Resonator list index (`None`: the latest) |
+| `MIN_SEP_LW` | Drop tones closer than this to another resonance, linewidths |
+| `PAIRS` | Close pairs: `'drop_both'`, or `'keep_stronger'` (the deeper dip) |
+| `EDGE_MARGIN` | Least distance of a tone from an NCO window edge, Hz |
+| `STREAM_DEC` | Fastest decimation stage that will be streamed |
+| `N_CAL_TONES`, `CAL_MIN_SEP_LW` | Off-resonance calibration tones per window, and their least distance from a resonance, linewidths |
+| `WINDOWS` | NCO windows to use (`None`: all) |
+| `FMIN`, `FMAX` | Tone frequency range, Hz (`None`: no limit) |
+| `POWERS` | Power sweep, dBm |
+| `SHUFFLE`, `SEED` | Randomize the order of each tone's powers |
+| `NPOINTS_FINE`, `NPOINTS_GAIN`, `NPOINTS_ROUGH` | Sweep points per tone (rough: `None` for none) |
+| `GAIN_SPAN_FACTOR` | Gain sweep span, in fine sweep spans |
+| `NSAMPS` | Samples averaged per point |
+| `F_AVG` | Fine sweep points averaged in the fits |
+| `A_FIT_RANGE` | $a_\mathrm{nl}$ range of the $a_\mathrm{nl}$ vs power fits |
+| `ANL` | Target $a_\mathrm{nl}$ |
+| `ARES_LIMITS` | Chosen powers are clipped to this, dBm |
+| `FRES_UPDATE_METHOD` | fq_finder: `'none'`, `'spacing'`, `'minS21'`, `'distance'` |
+| `RMV_GAIN_SIMPLE` | fq_finder: simple gain correction of the display |
+| `STEPS`, `REDOABLE` | The steps; leave them |
+
 ## Command line
 
-{{help:03_tune.py}}
+`--modules`, `--new`, `--redo <step>`, `--windows`, `--list-windows`,
+`--simulate`.
 
 # 04_stream.py: take timestreams
 
-The script opens a window for one tuning (by default, the latest tuning
-that has tuned tones). The window has three parts:
+A window on one tuning (the latest with tones, or `--tune k`):
 
-- **Calibration** (saved): Choose a tone set and the sweep settings (fine
-  and gain sweep points, samples per point, gain sweep span; the defaults
-  are the settings below), type any notes for this calibration in the
-  Notes box (empty by default; saved with the sweep as its `notes`
-  attribute, and emptied once the sweep is taken), and press Calibrate.
-  This takes a target sweep of the tone set and saves it as the tuning's
-  next `cal{j}`. A calibration takes minutes, so each tone set is
-  calibrated once, and every preview and run of the set after that uses
-  the calibration. The list shows the set's saved calibrations, with
-  their notes; the latest usable one is chosen, and you can choose
-  another.
+| Part | What it does |
+|---|---|
+| Calibration | Calibrate the selected tone set (a target sweep, saved as `cal{j}`), once per set; pick which saved calibration to use |
+| Preview | Capture `PREVIEW_S` seconds and plot one tone as x, along/across the loop, or I and Q (not saved) |
+| Run | Name, notes, decimation stage and duration (or a `PRESETS` entry); the stream is saved as `cal{j}/write{w}/ts{n}` and listed in the run list |
+| View run | Shows a run's first chunks like a capture |
 
-  A calibration is only valid while the NCO frequencies stay as they were
-  when it was taken. Calibrating or streaming another tone set sets other
-  NCO frequencies, after which the earlier calibrations are marked as
-  stale and can't be used. So work one tone set at a time: calibrate it,
-  then preview and run as often as needed, then go on to the next set.
-  Restarting the script does not lose the calibrations: each session
-  records the NCO settings it makes (in `~/.citkid`, per board), and the
-  next session takes them over when the board still has those
-  frequencies, so it doesn't set the NCOs again. It can't tell when
-  something else set an NCO to the same frequency in between (other
-  software, or crs_init.py after a power cycle, which usually changes the
-  frequency anyway); calibrate again in that case. (Whether a setting to
-  the same frequency really changes the frame can be measured with
-  `nco_phase_check.py`, which compares the tones' phases before and after
-  such a setting against readings with no setting.)
-- **Preview** (not saved): Capture writes the calibration's tones and
-  streams for a few seconds (`PREVIEW_S`) at the chosen decimation stage.
-  Select a tone to plot its timestream, either as the fractional
-  frequency shift x (the projection onto the tangent of the IQ loop at
-  the tone frequency), as the components along and across the loop, or as
-  I and Q. The calibration loop and the timestream are also plotted in
-  the IQ plane.
-- **Run** (saved): Enter a name, notes, a decimation stage, and a
-  duration, or pick a preset from `PRESETS`, and run. The selected tone
-  set is streamed with its chosen calibration. The stream is saved under
-  the calibration and the tone write that put its tones on the board
-  (`cal{j}/write{w}/ts{n}`), and the run is added to the tuning's run
-  list. At fast decimation stages, a tone set with too many tones to
-  stream at once is streamed in several writes, with the same NCO
-  frequencies. The window lists the runs taken with this tuning.
-- **View run**: select a run in the list and press View run (or
-  double-click it) to read its first zarr chunks from the store (the box
-  next to the button says how many; the label gives the chunk length)
-  and show them in the plots like a capture, with the calibration loop
-  the run was taken on. A set streamed in several writes shows the
-  stream holding the selected tone. The next capture or view replaces
-  it. The progress bar below the list follows calibrations, captures,
-  and runs, and stays in place while idle, so the panel doesn't move.
-
-Tones stay written on the board between captures and runs. A capture or
-run of the same tones with the same calibration streams them without
-writing them again (the window shows "Tones on the board"). Write tones
-writes the selected set again on purpose. A different tone set, a
-different part of a set, or a new calibration sweep (which clears the
-board) means a new write.
-
-Streaming uses the board's full network bandwidth, so this script needs
-exclusive use of the board for as long as its window is open. It takes
-global control of the board (to change the decimation stage) and creates
-a lock file on the DAQ computer (`~/.citkid/locks/crs<serial>.lock`). It
-won't start while another script is sweeping or streaming on the board.
-While its window is open, any other script that tries to use the board
-(`vna_quick_check.py`, `01_vna_sweep.py`, `03_tune.py`, another
-`04_stream.py`, ...) stops immediately with an error that names the
-running `04_stream.py` session. Close the window to release the board. If
-a session crashes, its lock is ignored.
-
-With `--simulate`, the script streams the simulated device of a store made
-by `simulate_store.py`. With `SIM_PULSES = True` (or `--sim-pulses`), the
-simulated streams also contain photon pulses on each tone and cosmic rays
-on all tones at once, set by `SIM_PULSE_SETTINGS`, so that
-`06_find_photons.py` can be tried on them. While pulses are on, the
-simulated board uses the signal-to-noise ratio `SIM_SNR_DB` (80 dB by
-default), because the stores' default noise level hides photon-sized
-pulses at decimation stages 0 and 1.
+A calibration is valid only while the NCO frequencies are unchanged, so
+work one tone set at a time: calibrate, preview and run, then the next
+set. Restarting the script keeps the calibrations usable unless something
+else set the NCOs in between (a power cycle, `crs_init.py`). Tones stay
+written between captures and runs. The script holds the board while its
+window is open. `--simulate` streams a simulated device; `--sim-pulses`
+adds photons and cosmic rays to it.
 
 ## Settings
 
 {{settings:04_stream.py}}
 
+| Setting | Meaning |
+|---|---|
+| `MODULES` | Modules connected to the device |
+| `PREVIEW_DEC`, `PREVIEW_S` | Preview decimation stage and duration, s |
+| `PRESETS` | Runs offered in the window: name, stage, duration, notes |
+| `NPOINTS_FINE`, `NPOINTS_GAIN`, `GAIN_SPAN_FACTOR`, `NSAMPS` | Calibration sweeps, as in `03_tune.py` |
+| `SIM_PULSES`, `SIM_PULSE_SETTINGS` | `--simulate`: photon pulses and cosmic rays in the streams |
+| `SIM_SNR_DB` | Simulated S/N while pulses are on, dB (`None`: the store's) |
+
 ## Command line
 
-{{help:04_stream.py}}
+`--modules`, `--tune k`, `--simulate`, `--sim-pulses`.
 
 # store_browser.py: look around a store
 
-This script opens a store in a window, to see what is in it: which
-sweeps, resonator lists, tunings, calibrations, timestreams, stream
-calibrations, and photon results it holds, and what their names, notes,
-and settings are. It is handy before `05_calibrate_streams.py` and
-`06_find_photons.py`, to remind yourself which timestreams were taken.
-It does not need the CRS, saves nothing, and opens the store read-only,
-so it can be used while another script is writing to the store (press
-**F5** to reread it).
-
-- The tree on the left lists the store's groups and arrays, with each
-  group's kind and a one-line summary: a timestream's name, stage,
-  length, and notes; a calibration's tone set and notes; a tuning's
-  number of tones; an array's shape. A group's contents are read when it
-  is expanded.
-- **Attributes** shows the selected item as it is saved: its attributes
-  (name and notes first, then the settings) or, for an array, its shape,
-  dtype, chunks, and first values.
-- **Timestream runs** lists every run of every tuning (name, notes,
-  stage, length, tone set, calibration, tuning, chunks, creation time).
-  Typing in the box above it keeps the runs whose columns contain the
-  text. Double-click a run to select its stream in the tree.
-- **Open** (Ctrl+O) chooses another store in a file dialog (pick the
-  `.zarr` directory).
-
-The store to open is named by the settings or options like in the other
-scripts; with `PICK` / `--pick`, or when that store does not exist, the
-file dialog chooses it instead. Zipped archives (`archive_store.py`)
-open with `--store archive.zip`. With `--runs`, the script prints the
-timestream runs instead of opening the window (the same list
-`05_calibrate_streams.py` prints when `CALIBRATE` is empty).
+Opens a store read-only (another script can keep writing; **F5**
+rereads): a tree of its groups with one-line summaries, the selected
+item's attributes, the timestream runs (filter by typing, double-click
+to find the stream) and the tone marks. **Open** (Ctrl+O) chooses
+another store; `--pick` starts with the dialog; `--runs` prints the runs
+instead of opening the window.
 
 ## Settings
 
 {{settings:store_browser.py}}
 
-## Command line
-
-{{help:store_browser.py}}
+| Setting | Meaning |
+|---|---|
+| `PICK` | Choose the store in a file dialog |
 
 # 05_calibrate_streams.py: calibrate timestreams
 
-List the timestreams to calibrate in `CALIBRATE`. Each entry selects:
+`CALIBRATE` lists the runs to calibrate: by name or `run = n`, with the
+zarr chunks to load (a few are enough) and optionally the tone sets.
+Empty, the script lists the runs. The chosen parts of every run of a
+tone set are joined into one DataSet (`set{s}`, one row per tone) and
+calibrated (gain fit, IQ circle fit, x calibration), first in the window
+and then in batch. The result is `ts_cal{c}`; the same `CALIBRATE`
+continues in it, another or `--new` starts a new one.
 
-- a run of `04_stream.py`, by name (the latest run with that name) or by
-  index (`run = n` for `ts{n}`);
-- the part of the run to load, in zarr chunks along time (`chunks`: all
-  chunks, the first n, or `(first, stop)`). A few chunks are usually
-  enough, and loading only a few keeps the calibration fast;
-- optionally, a subset of the tone sets.
-
-If `CALIBRATE` is empty, the script lists the available runs with their
-names, tunings, decimation stages, durations, tone sets, numbers and
-lengths of chunks, and notes.
-
-The selected timestreams are loaded into one DataSet per tone set (and
-resonator list), named `set{s}`. Each row is one tone. Its timestream is
-the selected parts of every chosen run of that tone set, joined end to
-end, so the calibration is fit once on all of them, even if the runs
-have different decimation stages. `write_idx` records which tones were
-streamed together (for common-mode removal). The rows are calibrated
-(gain fit, IQ circle fit, and x calibration), first in the interactive
-window and then in batch for the remaining rows. Calibration tones get
-their own DataSet, calibrated with the 'ts_offres' path.
-
-The calibration is not applied to the runs here, and no calibrated
-timestream is saved. Later scripts apply the calibration to whichever raw
-timestreams they analyze, in memory (see `06_find_photons.py`).
-
-The results are saved in a `ts_cal{c}` group at the store root. Running
-the script again with the same `CALIBRATE` continues in the same group; a
-different `CALIBRATE`, or `--new`, starts a new group.
+In the window, Mark tone bad (M) or a panel's Bad Data asks a reason,
+sets the tone's outputs to NaN and records the mark; Add note (T) keeps
+the tone.
 
 ## Settings
 
 {{settings:05_calibrate_streams.py}}
 
+| Setting | Meaning |
+|---|---|
+| `CALIBRATE` | Runs to calibrate: `name` (the latest run with it) or `run = n`; `chunks` (`None`: all, `n`: the first n, `(first, stop)`); `tone_sets` (`None`: all) |
+| `F_AVG` | Fine sweep points averaged together |
+| `INTERACTIVE` | Review in the window before the batch |
+
 ## Command line
 
-{{help:05_calibrate_streams.py}}
+`--new`, `--no-gui`.
 
-# 06_find_photons.py: find photons
+# 06a_find_photons.py: find photons
 
-Choose a stream calibration made by `05_calibrate_streams.py`
-(`CALIBRATION`, or `--cal c`; by default the latest `ts_cal{c}`) and the
-timestreams to search (`TIMESTREAMS`). In this script, a timestream is
-one tone set of one run, over the whole run. Any run can be searched if
-the calibration covers its tone set; it doesn't have to be one of the
-runs the calibration was fit on. The calibration is applied to the raw
-streams in memory; the calibrated timestreams are not saved.
+Choose a stream calibration (`CALIBRATION`, the latest by default) and
+the timestreams (`TIMESTREAMS`, by index as listed or run name; empty
+lists them). A timestream is one tone set of one run. Tones whose
+calibration failed are left out. Each result is `photons/<name>` (the
+run's name, `_set<s>` with several tone sets, or `NAME`), one per
+timestream: when it exists, a popup offers to continue from it
+(default), overwrite it (asks again) or skip; with `--no-gui`,
+`--continue` or `--overwrite` decide.
 
-If `TIMESTREAMS` is empty, the script lists the timestreams it can search
-(run, name, tone set, duration, number of tones) and the previous results
-of the script, and stops. Otherwise, list the timestreams to search in
-`TIMESTREAMS`, by index (as listed) or by run name. A run name selects
-every tone set of the latest run with that name.
+## Detection
 
-The script can be run as often as needed, with different settings or
-timestreams. Each run either searches from scratch, with the threshold
-window, or reuses a previous result (see "Reusing a previous result").
+| Step | What it does |
+|---|---|
+| First pass | Peaks above `INIT_NSIGMA` noise sigma, below `INIT_HMAX` times the median peak, seed the template |
+| Optimal filter | Template from the selected pulses, noise spectrum away from them; heights in kHz/GHz (x × 1e6); pulses in [`HMIN`, `HMAX`] make the next template, `OF_ITERATIONS` times; `HMIN_FALSE_FRAC` chooses `HMIN` automatically |
+| Isolation | Only isolated pulses enter a template: none within the template length, none within the filter length of a pulse above `HMAX` |
+| Coincidences | Per tone write, a pulse within `COINC_WIN` samples of another tone's pulse is coincident; pulses down to `COINC_NSIGMA` filter sigma count |
+| Photons | The mean photon pulse averages the uncoincident pulses in the height window; its decay time is fit from `TAU_SKIP` samples after the maximum over `TAU_FIT_S` |
+| Cosmic rays | Events seen by at least `COSMIC_MIN_MULT` tones, with each tone's pulse height |
 
-The detection timestreams are kept in memory up to `MEMORY_GB`, so the
-threshold window can rerun tones quickly. Beyond that, they are computed
-again from the raw streams when needed.
+`HMAX` keeps large pulses out of the template and mean pulse only; every
+pulse above `HMIN` is saved.
 
-## Photon detection
+## The window
 
-Each tone is searched with an optimal filter that is built iteratively:
+Opens after each timestream's detection (`--no-gui` skips it). Left: the
+tone list (`*` reviewed, `x` bad), the thresholds, the decay fit, and
+the buttons. Right, for the selected tone (or all tones together):
 
-1. **First pass**: the peaks of the timestream (smoothed over 3 samples)
-   above `INIT_NSIGMA` times the noise are found. Peaks higher than
-   `INIT_HMAX` times the median peak height are left out. This cut is
-   loose on purpose: it only keeps large pulses, such as cosmic rays, out
-   of the first template, so that as many photons as possible are kept.
-2. **Optimal filter**: the selected pulses are averaged into a template,
-   the noise spectrum is measured away from the pulses, and the optimal
-   filter is built from the two. The filtered timestream gives each pulse
-   a height in kHz/GHz (the fractional frequency shift x times 1e6), so
-   the thresholds are in the units you think about the data in, and mean
-   the same shift on every tone. The pulses with heights between `HMIN`
-   and `HMAX` are used for the next template. This is repeated
-   `OF_ITERATIONS` times. Optionally, `HMIN` is chosen automatically
-   (`HMIN_FALSE_FRAC`) as the lowest height at which few of the accepted
-   pulses are expected to be noise.
+| Plot | Shows |
+|---|---|
+| First-pass heights | In units of their median, with the `INIT_HMAX` line |
+| Filter heights | In kHz/GHz with the expected noise peaks (red) and the `HMIN`, `HMAX` lines |
+| Mean pulse | With the decay fit and the end of the filter's template |
+| Snippet | The detection timestream (grey) and the filter output (blue), the height window as lines, filter peaks marked: green in the window, red below `HMIN`, orange above `HMAX`; slider and Prev/Next move along the record |
 
-   Only isolated pulses go into a template: a pulse with another filter
-   peak within the template length (pile-up, which would put the rise of
-   the next pulse into the template's tail) is left out, and so is any
-   pulse within the filter length of a large one (above `HMAX`), since
-   the filter's side lobes around a cosmic ray can look like pulses of
-   their own and would put the cosmic ray's edges into the template.
-   Without this, a template could change a lot from one iteration to the
-   next, and the height histogram with it. The filter itself is built
-   from the first `FILTER_POST_S` of the template after its maximum (a
-   few decay times), so that it does not reach into the next pulse; the
-   whole template (`TEMPLATE_POST_S`) is kept for the mean pulse shown and
-   saved, and for the decay-time fit. The mean pulse plot marks where the
-   filter's template ends.
+| Action | How |
+|---|---|
+| Set a threshold | Drag a line, type in a box, click a histogram (moves the nearer line), or drag on the snippet (sets `HMIN` and `HMAX` from the drag's bottom and top) |
+| Apply | Rerun (Ctrl+R): to this tone (its own values) or to all tones (the global values; the scope goes back to this tone). A tone shows `*` once reviewed: given its own values, or looked at and left; apply to all does not count |
+| Decay fit | Skip and length boxes, Apply fit (Ctrl+F), this tone or all; no detection, so immediate |
+| Move | A / D, Prev / Next (pending thresholds are applied first) |
+| Units | Heights in kHz/GHz or photons (each tone's mean photon) |
+| Revert | Ctrl+D puts the script's thresholds back on the tone |
+| Mark bad / note | B (reason; again to clear), T (note) |
+| Overview | O: histograms over all tones of photon height, decay time and rate, with draggable review limits; click a bar or a listed tone to open it; "show only tones outside" filters the list |
+| Rescale | R |
 
-`HMAX` does not stop pulses from being found: every filter peak above
-`HMIN` (and, for the coincidences, above `COINC_NSIGMA` times the filter
-noise) is kept, saved in `pulses/` with its height, and used for the
-cosmic rays. `HMAX` only keeps the large pulses out of the template and
-out of the mean photon pulse (`in_window` and `used` in `pulses/`); the
-rate reported per tone counts the pulses in the window. The template the
-final filter was built from is saved as `template`, with its amplitude
-`amp_ph` as the unit of every height; the mean pulse of the pulses
-finally accepted (height window, isolated, no coincidence) is
-`avg_pulse`.
+## Saved results, continuing and reusing
 
-## Choosing the thresholds
-
-When searching from scratch, a window opens after the detection of each
-timestream (skip it with `INTERACTIVE = False` or `--no-gui`). The left
-side lists the tones with their number of pulses and their rate. The
-plots show, for the selected tone or for all tones together:
-
-- the first-pass peak heights, in units of their median, with the
-  `INIT_HMAX` cut;
-- the heights of the filtered pulses in kHz/GHz, with the
-  expected number of noise peaks overlaid (measured from the filter output
-  with the sign flipped, which contains noise but no pulses), and the
-  `HMIN` and `HMAX` lines;
-- the mean pulse of the selected tone, with the end of the filter's
-  template marked;
-- a snippet of the selected tone's data: the detection timestream (gray)
-  and the optimal filter's output (blue), both in kHz/GHz, with `HMIN` and
-  `HMAX` as horizontal lines and the filter peaks
-  marked (green circles in the height window, red crosses below `HMIN`,
-  orange triangles above `HMAX`, drawn at the top edge when they are off
-  the scale: the heights shown reach a little above `HMAX`, so a cosmic
-  ray doesn't flatten the photons). This shows what the histogram's heights
-  look like in the data, so a threshold that is off is easy to spot. The
-  snippet opens on the tone's first pulse; set its length, drag the
-  slider along the record, or press Prev/Next peak to move between the
-  filter peaks. The horizontal lines can be dragged like the vertical
-  ones.
-
-Heights and the thresholds are in kHz/GHz. The status line gives the tone's
-mean photon (the template amplitude) in kHz/GHz, which tells how the window
-sits relative to a single photon on that tone. To compare tones of
-different responsivity, set **Heights in** to photons: the height
-histogram, the mean pulse, the snippet, and the threshold lines are
-drawn in units of each tone's mean photon; the threshold boxes stay in
-kHz/GHz, and the lines show where they fall for the selected tone. **R** (or
-Rescale plots) fits every plot to its data again after zooming.
-
-The thresholds can also be set with the mouse (the plots don't pan or
-zoom with the mouse; R rescales them): a **click** on a histogram moves
-its nearer line to the click (the `INIT_HMAX` line on the first-pass
-histogram), and a drag there carries that line along; a click on the
-snippet moves the nearer of hmin and hmax to the click's height, and a
-**drag** on the snippet sets hmin and hmax from the bottom and top of
-the drag, so a window can be drawn around the pulses themselves.
-
-Drag the lines or type the values, then press Rerun (Ctrl+R). With "Apply
-to this tone" (the default), the selected tone gets its own thresholds
-(marked with `*` in the list). With "Apply to all tones", the values
-become the global thresholds, and every tone without its own thresholds
-is run again. **A** and **D** (or the Prev and Next buttons) move to the
-previous and next tone; thresholds changed but not rerun are applied
-before moving on, so nothing is lost. **Revert tone to defaults**
-(Ctrl+D) puts the thresholds the window opened with, the script's, back
-on the selected tone and reruns it. The snippet opens long enough for
-about ten pulses at the tones' median rate. Close the window (or press
-Done) to continue.
-
-## Reusing a previous result
-
-Set `REFERENCE` (or `--reference p`) to a previous result of the script,
-`ts_photons{p}`, to reuse its work instead of searching from scratch.
-For example, search one timestream from scratch and check its thresholds
-in the window, then search other timestreams with that result as the
-reference. Each timestream uses the reference's result for the same tone
-set (or, if it has none, its first one). The window doesn't open.
-`REUSE` (or `--reuse`) sets what is reused:
-
-- `'settings'` (default): the reference's thresholds, including the ones
-  set for single tones. The full detection is run on each timestream.
-- `'filter'`: the reference's optimal filter for each tone (matched by
-  resonator index), built from its mean pulse and noise spectrum, and its
-  thresholds. The filter is applied without iterating, and the pulse
-  heights are in kHz/GHz as always. Tones that the
-  reference has no filter for are detected from scratch. The timestreams
-  must have the reference's decimation stage.
-
-## Coincidences and cosmic rays
-
-After the detection, the tones of each tone write (the tones streamed
-together) are compared. A pulse is coincident if another tone in the same
-write has a pulse within `COINC_WIN` samples before or after it (2 samples
-by default: 52 µs at decimation stage 0). For this comparison, pulses down
-to `COINC_NSIGMA` times the filter noise count, so that small pulses of a
-cosmic ray on other tones are also found.
-
-- **Photons**: each tone's mean photon pulse averages the pulses with
-  heights between `HMIN` and `HMAX` that are not coincident with any
-  other tone. Its decay time is fit with an exponential from `TAU_SKIP` samples
-  after the maximum (where the rise and the filter ringing are over)
-  out to `TAU_LIFETIMES` decay times, and shown with the mean pulse in
-  the threshold window.
-- **Cosmic rays**: the pulses of all tones in a write are grouped into
-  events. An event starts at the earliest pulse not yet in an event and
-  includes every pulse up to 2 × `COINC_WIN` samples later. Events seen by
-  at least `COSMIC_MIN_MULT` tones (3 by default) are saved as cosmic
-  rays, with the time, the number of tones, and for each tone its pulse
-  height (from the filter, and the raw peak of the timestream, since the
-  filter height is biased for pulses longer than a photon pulse).
-
-## What is saved
-
-Each run of the script makes a new `ts_photons{p}` group at the store
-root, with the calibration it used (attribute `source`) and one
-`timestream{j}` group per listed timestream:
+- Continue (the popup, or `--continue`) opens the saved result in the
+  window with no detection; only changed tones rerun.
+- `--refit-tau` refits every saved decay time with `TAU_SKIP` and
+  `TAU_FIT_S`, no detection.
+- `REFERENCE = '<name>'` searches other timestreams with a saved result,
+  without the window: `REUSE = 'settings'` (its thresholds) or
+  `'filter'` (its optimal filters, same decimation stage).
 
 ```text
-ts_photons{p}/          attributes: source (ts_cal{c}), timestreams,
-                        reference, reuse
-  timestream{j}/        attributes: run, tone set, calibration sweep and
-                        writes, samples, sample period, how it was
-                        detected, thresholds, settings
-                        per tone: res_idxs, status (empty if detected),
-                        hmin, hmax, sigma_y (kHz/GHz), amp_ph (the filter
-                        template's amplitude, in x), amp_ph_own (this
-                        timestream's mean photon height, x), rate,
-                        n_used, tau, template,
-                        avg_pulse (mean photon pulse), psd, filter
-    pulses/             every pulse found: tone, sample, height, raw peak,
-                        candidate (at least hmin), in_window, mult
-                        (number of tones), used (in the mean photon pulse)
-    cosmic/events/      t0 (sample), time_s, mult, tone write
-    cosmic/hits/        one row per tone of each event: tone, sample,
-                        height (kHz/GHz and x), raw peak
+photons/<name>/         attrs: run, tone set, calibration, mode,
+                        thresholds, settings
+                        per tone: res_idxs, status, hmin, hmax, sigma_y,
+                        amp_ph, amp_ph_own, rate, n_used, tau, tau_skip,
+                        tau_fit_s, template, avg_pulse, psd, filter,
+                        bad, bad_reason
+    pulses/             every pulse: tone, sample, height, raw peak,
+                        candidate, in_window, mult, used
+    cosmic/events/      t0, time_s, mult, write_idx
+    cosmic/hits/        per tone and event: sample, height, raw peak
+    detail/             the detection detail, for continuing
+```
+
+Results of earlier versions (`ts_photons{p}`) are moved into this layout
+by `citkid.pipeline.photon_finder.migrate_results(root)`.
+
+## Settings
+
+{{settings:06a_find_photons.py}}
+
+| Setting | Meaning |
+|---|---|
+| `CALIBRATION` | `ts_cal` index (`None`: the latest) |
+| `TIMESTREAMS` | Timestreams, by index as listed or run name; empty: list them |
+| `NAME` | Result name for a single timestream (`''`: the run's name) |
+| `REFERENCE`, `REUSE` | A saved result to reuse (its name), and `'settings'` or `'filter'` |
+| `INTERACTIVE` | Check the thresholds in the window |
+| `INIT_NSIGMA`, `INIT_HMAX` | First pass: peak threshold (noise sigma) and upper cut (times the median peak) |
+| `OF_ITERATIONS` | Optimal-filter iterations |
+| `HMIN`, `HMAX` | Height window of single photons, kHz/GHz |
+| `HMIN_FALSE_FRAC`, `HMIN_AUTO_MAX` | Choose `HMIN` automatically (`None`: fixed), up to this height |
+| `TEMPLATE_PRE_S`, `TEMPLATE_POST_S` | Template before and after the maximum, s |
+| `FILTER_POST_S` | The filter uses this much of the template after the maximum, s |
+| `TAU_SKIP`, `TAU_FIT_S` | Decay fit: samples skipped after the maximum, fit length, s |
+| `HIGHPASS_HZ` | Drift removal, Hz |
+| `COINC_NSIGMA`, `COINC_WIN` | Coincidences: pulses counted (filter sigma), window (± samples) |
+| `COSMIC_MIN_MULT` | Fewest tones of a cosmic ray |
+| `MEMORY_GB` | Timestreams kept in memory, GB |
+
+## Command line
+
+`--cal c`, `--name`, `--continue`, `--overwrite`, `--reference name
+--reuse filter`, `--refit-tau`, `--no-gui`.
+
+# 06b_cosmic_rays.py: cosmic-ray lifetimes
+
+Cosmic rays hit many tones simultaneously, so a device without photons
+still gives each tone's quasiparticle lifetime. Same timestream choice,
+naming and existing-result popup as `06a_find_photons.py`; results are
+`cosmic/<name>`.
+
+| Step | What it does |
+|---|---|
+| Events | `EVENTS = 'photons'`: the cosmic rays `06a` saved (or those of `PHOTONS`); `'triggers'`: peaks above `TRIG_NSIGMA` on each tone, clustered within `COINC_WIN` samples, kept when `COSMIC_MIN_MULT` tones see them; `'auto'`: photons if saved, else triggers |
+| Pulses | A snippet `PRE_S` before to `POST_S` after each event, baseline subtracted; the peak within `SEARCH_S` |
+| Threshold | Only pulses with peaks in [`HMIN`, `HMAX`] are averaged |
+| Alignment | The pulses differ in height and near the peak but decay alike, so each is shifted to where it falls through `LEVEL` (10 kHz/GHz) and they are averaged from there |
+| Tail fit | An exponential over `FIT_S` from the alignment point of the mean |
+| Result | Per tone, the mean's decay time and the pulses averaged |
+
+## The window
+
+Tone list, boxes for the threshold (`HMIN`), the level and the fit
+length, Apply (Ctrl+R) to this tone or all. Plots: the whole timestream
+with the pulses found (green averaged, red left out) and the threshold
+line; the aligned pulses (blue) with their mean (white), the fit
+(yellow) and the level line. Drag a line or edit a box, then Apply.
+The plots zoom with the mouse (scroll, drag, right-drag for one axis);
+R puts them back: the timestream's heights up to a little above the
+99th percentile of the pulses, and the mean pulse over the fit range up
+to its own peak. B marks bad, T adds a note, O opens the overview
+(median height, decay time, pulse rate).
+
+```text
+cosmic/<name>/          attrs: run, tone set, calibration, events,
+                        n_events, thresholds, settings
+                        per tone: res_idxs, status, hmin, hmax, level,
+                        fit_s, n_pulses, n_used, rate, tau, n_fit,
+                        avg_pulse (the aligned mean; attr anchor), bad,
+                        bad_reason
+    events/             t0, time_s, mult, write_idx
+    pulses/             per tone and event: t0, h, p, in_window, start,
+                        used
 ```
 
 ## Settings
 
-{{settings:06_find_photons.py}}
+{{settings:06b_cosmic_rays.py}}
+
+| Setting | Meaning |
+|---|---|
+| `CALIBRATION`, `TIMESTREAMS`, `NAME`, `INTERACTIVE` | As in `06a_find_photons.py` |
+| `EVENTS` | `'auto'`, `'photons'`, or `'triggers'` |
+| `PHOTONS` | Photon result to take the events from (`None`: this timestream's) |
+| `TRIG_NSIGMA`, `COINC_WIN`, `COSMIC_MIN_MULT` | Triggers: threshold (noise sigma), largest gap within an event (samples), fewest tones |
+| `HMIN`, `HMAX` | Peak height window of the pulses fitted, kHz/GHz |
+| `LEVEL` | A tail begins where the pulse falls below this, kHz/GHz |
+| `FIT_S` | Fit length, s |
+| `PRE_S`, `POST_S` | Snippet before and after an event, s |
+| `SEARCH_S` | Peak search after the event, s |
+| `HIGHPASS_HZ` | Drift removal, Hz |
+| `MEMORY_GB` | Timestreams kept in memory, GB |
 
 ## Command line
 
-{{help:06_find_photons.py}}
+`--cal c`, `--name`, `--events triggers`, `--photons name`,
+`--continue`, `--overwrite`, `--no-gui`.
 
 # 07_psds.py: noise spectra
 
-Choose timestreams in `TIMESTREAMS`. Each timestream is one tone set of
-one run, over the whole run, with a stream calibration that covers its
-tone set. The script lists every combination of run, tone set and
-calibration (run it with `TIMESTREAMS` empty to see the list), so each
-chosen timestream can use a different calibration. A timestream is
-chosen by its index in the list, by run name (every tone set of the
-latest run with that name, each with the latest calibration that covers
-it), or with a dict naming the run, the tone sets and the calibration.
+`TIMESTREAMS` chooses timestreams (index, run name, or a dict with the
+tone sets and calibration; empty lists them). The timestreams of one run
+of the script are saved together in `ts_psd{p}` with one grid of reduced
+frequencies, named by `NAME`. Tones marked bad, and `BAD_TONES`, are
+left out.
 
-The timestreams chosen in one run of the script go together: they are
-saved in one group, `ts_psd{p}`, with one grid of reduced frequencies
-for all of them, so they are plotted and compared as a set. For another
-set, run the script again (or keep a copy of it with other settings).
+| Step | What it does |
+|---|---|
+| Deglitch (optional) | `'peaks'`: each tone's peaks above `GLITCH_NSTD` sigma; `'photons'`: a photon result's filters (`PHOTONS`) and its cosmic rays (`GLITCH_PULSES = 'all'`: every pulse); `GLITCH_PRE_S` to `GLITCH_POST_S` around each glitch is replaced with noise |
+| Spectra | $S_{xx}$ per tone: reduced values (the mean within 20% of 0.1, 0.3, 1, 3, 10, ... Hz, from `FMIN_MULT` / duration to Nyquist / 2 / `FMAX_DIV`) and `NBINS` logarithmic bins; also the spectra of the loop components, along the loop ($r\theta$) and across it ($A$), and their ratio in dB at the reduced frequencies, the s-factor |
+| Common modes | Per tone write, `CN_N_COMP` modes by `citkid.xcal.corr.calc_cm` (`CN_N_ITER` iterations; highpass `CN_HIGHPASS_HZ` while finding the weights, lowpass `CN_LOWPASS_HZ` on the modes while iterating; the removed modes are unfiltered), then the spectra again on the cleaned tones, and the modes' spectra |
+| Review | The overview window on the raw spectra, before the common modes (skip it with `INTERACTIVE = False` or `--no-gui`); tones marked bad there stay out of the common-mode fit |
 
-## What is computed
+## The window
 
-For each timestream, tone write by tone write (the tones streamed
-together), the calibrated timestream x of every tone is computed in
-memory and:
-
-1. **Glitches are optionally taken out** (`DEGLITCH`). With `'peaks'`,
-   each tone's peaks above `GLITCH_NSTD` standard deviations are found
-   after subtracting a slow baseline (`GLITCH_BASELINE_S`). With
-   `'photons'`, the optimal filters of a result of `06_find_photons.py`
-   (`PHOTONS`) are applied to the tones they were made for, and the
-   cosmic rays (events seen by at least `COSMIC_MIN_MULT` tones within
-   `COINC_WIN` samples) are taken out; `GLITCH_PULSES = 'all'` takes
-   out every pulse instead. Either way, the samples from `GLITCH_PRE_S`
-   before to `GLITCH_POST_S` after each glitch are replaced with
-   Gaussian noise of the tone's own level. This happens before the
-   common modes are found, since cosmic rays are seen by many tones at
-   once.
-2. **Each tone's spectrum** $S_{xx}$ is computed over the whole run and
-   kept in two reduced forms. The reduced values are the mean of
-   $S_{xx}$ within 20% of each frequency of the grid 0.1, 0.3, 1, 3,
-   10, 30, ... Hz, over the part of the grid that the run allows: from
-   `FMIN_MULT` (10) times the lowest frequency of the spectrum (one over
-   the duration) up to half the Nyquist frequency divided by `FMAX_DIV`
-   (10). The edges of the spectrum are left out on purpose. The binned
-   spectrum has `NBINS` logarithmic bins from `FMIN_MULT` over the
-   duration up to the Nyquist frequency; the frequencies below the first
-   bin are kept unbinned. The pulse tube harmonics can be filtered out
-   before binning (`FILTER_PT_N`, `PT_FREQUENCY`).
-3. **The common modes are removed** (`CN_REMOVE`). The common modes of
-   the tones of each write are found with the iterative algorithm of
-   `citkid.xcal.corr.calc_cm` (`CN_N_COMP` components, `CN_N_ITER`
-   iterations). While the weights are found, the timestreams are
-   highpass filtered at `CN_HIGHPASS_HZ` (by default the lowest binned
-   frequency), so that the lowest 1/f noise does not dominate the
-   weights, and the modes are lowpass filtered at `CN_LOWPASS_HZ` (by
-   default a tenth of the Nyquist frequency) to make the iteration
-   converge. The modes that are removed are not filtered. Step 2 is
-   then repeated on the cleaned tones, and the modes themselves get
-   binned spectra.
-
-A write with fewer tones than `CN_N_COMP` + 1 uses fewer components (a
-single tone keeps its spectrum as it is). The tones of a write are held
-in memory together, so `MEMORY_GB` limits the size of a run that can be
-analyzed.
-
-## What is saved
-
-Each run of the script makes a new `ts_psd{p}` group at the store root,
-with the chosen timestreams, the settings, and the reduced frequencies
-of the set (`f_reduced`), and one `timestream{j}` group per timestream:
+Three histograms over all tones of the raw $S_{xx}$ (1/Hz, log axis)
+at frequencies picked from the reduced grid, each with
+draggable review limits; the histograms do not zoom. The list shows the
+tones outside the limits (or all), with their values; click a tone, or
+near its bar, to see its binned spectrum. B marks the tone bad with a
+reason (saved with the result and in the store's tone marks; again to
+clear), T adds a note. The limits are saved with the result. The common
+modes are then found without the bad tones.
 
 ```text
-ts_psd{p}/              attributes: timestreams, settings, reference
-                        (the photon result used for deglitching)
-                        f_reduced: the set's reduced frequencies, Hz
-  timestream{j}/        attributes: run, tone set, calibration, source
-                        sweep and writes, samples, sample period,
-                        duration, the lowest binned frequency, bins,
-                        deglitching, common-mode settings used
-                        f_binned: binned frequencies, Hz
-                        valid_reduced: which of f_reduced this
-                        timestream covers
-                        per tone: res_idxs, write_idx, status (empty if
-                        analyzed), n_glitches, glitch_frac,
-                        sxx_reduced, sxx_binned (1/Hz), and with the
-                        common modes removed: sxx_reduced_cn,
+ts_psd{p}/              attrs: name, timestreams, settings, reference
+                        f_reduced
+  timestream{j}/        attrs: run, tone set, calibration, duration, bins
+                        f_binned, valid_reduced
+                        per tone: res_idxs, write_idx, status, bad,
+                        bad_reason, n_glitches, glitch_frac,
+                        sxx_reduced, sxx_binned, spar_binned,
+                        sper_binned, sfactor_reduced, sxx_reduced_cn,
                         sxx_binned_cn, cn_weights
-    common_modes/       per tone write: the tones (rows), the modes'
-      write{k}/         binned spectra (sxx_binned), and the residual
-                        sigma of each tone after each iteration
-                        (sigma_iter)
+    common_modes/write{k}/   rows, f_binned, sxx_binned, sigma_iter
 ```
 
-`citkid.pipeline.psds.load_group(root, p)` reads a result back as
-dicts of arrays.
+`citkid.pipeline.psds.load_group(root, p)` reads a result back, by index
+or name.
 
 ## Settings
 
 {{settings:07_psds.py}}
 
+| Setting | Meaning |
+|---|---|
+| `TIMESTREAMS` | Index as listed, run name, or `dict(name = ..., or run = n, tone_sets = [...], cal = c)`; empty: list them |
+| `NAME` | Name of this set of spectra |
+| `INTERACTIVE` | Review each timestream in the overview window |
+| `NBINS` | Logarithmic bins |
+| `FMIN_MULT` | Lowest frequency, times 1 / duration |
+| `FMAX_DIV` | Highest reduced frequency: Nyquist / 2 / this |
+| `CN_REMOVE`, `CN_N_COMP`, `CN_N_ITER` | Common-mode removal, components, iterations |
+| `CN_LOWPASS_HZ` | On the modes while iterating (`None`: Nyquist / 10) |
+| `CN_HIGHPASS_HZ` | While finding the weights (`None`: `FMIN_MULT` / duration; `0`: off) |
+| `CN_FILTER_ORDER` | Order of both filters |
+| `BAD_TONES` | Resonators left out, besides the tone marks |
+| `DEGLITCH` | `None`, `'peaks'`, or `'photons'` |
+| `GLITCH_PRE_S`, `GLITCH_POST_S` | Replaced around each glitch, s |
+| `GLITCH_SIGN`, `GLITCH_NSTD`, `GLITCH_BASELINE_S`, `GLITCH_DISTANCE_S`, `GLITCH_ROUNDS` | `'peaks'`: sign of a glitch in x, threshold (sigma), baseline bin (s), least spacing (s), rounds |
+| `PHOTONS`, `GLITCH_PULSES` | `'photons'`: the photon result, and `'cosmic'` or `'all'` pulses |
+| `COINC_WIN`, `COSMIC_MIN_MULT` | Cosmic rays: window (± samples), fewest tones |
+| `MEMORY_GB` | Timestreams kept in memory per write, GB |
+
 ## Command line
 
-{{help:07_psds.py}}
+`--name`, `--no-gui`, `--no-cn`, `--deglitch photons --photons name`.
+
+# 08_report.py: results in plain files
+
+Writes every timestream result of a store to a folder, after
+`06a_find_photons.py`, `06b_cosmic_rays.py` and `07_psds.py`:
+
+| File | Contents |
+|---|---|
+| `<device>_lifetime_<kind>_<name>.png` | One per photon and cosmic-ray result: pulse height (photons: the mean pulse's optimal-filter height) and decay time against resonant frequency, with histograms at the side; bad tones hollow |
+| `<device>_lifetime_<kind>_<name>.csv` | One row per tone: res_idx, fres, height, tau, n_used, status, bad, bad_reason |
+| `<device>_psd<p>.png` | One per PSD group, over the tones of all its timestreams: the Sxx mean with the 1st to 99th percentile shaded, before and after common-mode removal (off-resonance tones dashed, if any); Sxx against resonant frequency at 0.1, 1, 10 and 100 Hz (those the group has) with histograms at the side; the same for the loop components and the s-factor |
+| `<device>_psd<p>.csv` | One row per tone: timestream, run, res_idx, fres, status, bad, and Sxx (raw and common modes removed) and s-factor at every reduced frequency |
+| `<device>_psd<p>_spectra.csv` | The mean and range of every spectrum kind at every binned frequency |
+| `<device>_timestreams.txt` | What each result holds: tones, bad tones with reasons, medians and ranges |
+
+## Settings
+
+{{settings:08_report.py}}
+
+| Setting | Meaning |
+|---|---|
+| `OUT_DIR` | Folder the files go in |
+| `PHOTONS`, `COSMIC`, `PSDS` | Results to report, by name (or PSD group index); `None`: all |
+
+## Command line
+
+`--out folder`, `--pick` (choose the store in a dialog).

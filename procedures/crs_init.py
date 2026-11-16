@@ -1,25 +1,10 @@
 """
-Configure the CRS board (not a numbered step: run it whenever the
-board needs configuring, e.g. after a power cycle).
-
-Run it before the module scripts (vna_quick_check.py, 01_vna_sweep.py,
-...), and again whenever the board loses its configuration.
-This session has global control: it sets the clock source, analog bank,
-DAC full scale (always 7 dBm), extended bandwidth, and decimation (stage
-6, streaming every module in the bank, so other sessions can sweep), then
-exits. The
-board keeps these settings, and the module scripts attach to it without
-changing them.
-
-Running this again while other scripts are measuring resets the board
-under them.
+Configure the CRS board (clock, analog bank, DAC full scale, bandwidth,
+decimation). Run it before the other scripts and after a power cycle.
 
 Usage:
     python crs_init.py
     python crs_init.py --clock SMA --extended-bw
-
-Edit the settings below for your setup; the command-line options override
-them for one run.
 """
 import argparse
 import asyncio
@@ -28,12 +13,11 @@ from citkid.crs.instrument import CRS
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-SERIAL_NUMBER = 46          # CRS serial number
-INTERFACE = 'enp5s0'        # Ethernet interface connected to the CRS
-CLOCK_SOURCE = 'VCXO'       # 'VCXO' (internal) or 'SMA' (external 10 MHz)
-ANALOG_BANK_HIGH = False    # False: modules 1-4; True: modules 5-8
-EXTENDED_BW = False         # True: 600 MHz module bandwidth (more loss
-                            # near the band edges)
+SERIAL_NUMBER = 46
+INTERFACE = 'enp5s0'
+CLOCK_SOURCE = 'VCXO'
+ANALOG_BANK_HIGH = False
+EXTENDED_BW = False
 
 ################################################################################
 ################################### Script #####################################

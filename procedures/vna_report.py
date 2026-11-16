@@ -1,27 +1,10 @@
 """
-Export the results of a VNA screening (after 01_vna_sweep.py and
-02_find_resonances.py) as plain files, for people who don't use zarr or
-Python (not a numbered step: run it whenever a report is useful).
-
-Writes to ``OUT_DIR`` (``citkid.vna.report.export_vna_report``):
-
-- ``<device>_vna<k>.png``: the gain-removed sweep with the resonances
-  marked, and Qi, Qc, and phi vs frequency where the fits are reliable;
-  the title has the device name;
-- ``<device>_vna<k>_info.txt``: the sweep's settings (power, averaging,
-  resolution, range, modules, Nyquist zones, bands), the finding and
-  fitting steps, the number of resonances, the frequency schedule (range,
-  gaps, banks), typical quality factors, data-quality notes, and notes;
-- ``<device>_vna<k>_resonators.csv``: one row per resonator (``res_idx``
-  as in the store's ``resonators{k}``): fr, Qi, Qc, Qr, amp, phi with
-  errors (NaN where unreliable), flags, and fit status.
+Write a VNA sweep's results as plain files (plot, text summary, CSV of
+the resonators) to OUT_DIR. Run after 02_find_resonances.py.
 
 Usage:
     python vna_report.py --device deviceA --out ~/reports
-    python vna_report.py --store ~/data/cd1/deviceA.zarr --sweep 0
-
-Edit the settings below; the command-line options override them for one
-run.
+    python vna_report.py --pick --out ~/reports
 """
 import argparse
 import os
@@ -30,13 +13,11 @@ from citkid.vna.report import export_vna_report
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-DATA_DIR = '~/data'         # stores are in
-                            # DATA_DIR/COOLDOWN/DEVICE[_SUFFIX].zarr
-COOLDOWN = 'cooldown'       # cooldown name
-DEVICE = 'device'           # device name
-SUFFIX = ''                 # store name suffix: the store is
-                            # DEVICE_SUFFIX.zarr ('': DEVICE.zarr)
-OUT_DIR = '~/data/reports'  # where the files go
+DATA_DIR = '~/data'
+COOLDOWN = 'cooldown'
+DEVICE = 'device'
+SUFFIX = ''
+OUT_DIR = '~/data/reports'
 
 ################################################################################
 ################################### Script #####################################
@@ -59,6 +40,8 @@ def parse_args(argv = None):
     p.add_argument('--suffix', default = SUFFIX,
                    help = 'store name suffix: <device>_<suffix>.zarr '
                    '(blank: <device>.zarr)')
+    p.add_argument('--pick', action = 'store_true',
+                   help = 'choose the store in a file dialog')
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device;'
                    ' may be a zip)')
@@ -92,11 +75,19 @@ def main(args):
     args (argparse.Namespace): options from ``parse_args``.
 
     Returns:
-    paths (dict): ``plot``, ``info``, ``csv``: the files written.
+    paths (dict or None): ``plot``, ``info``, ``csv``: the files written
+        (None if the dialog was cancelled).
     """
     import matplotlib
     matplotlib.use('Agg')
-    paths = export_vna_report(store_path(args), os.path.expanduser(args.out),
+    store = store_path(args)
+    if args.pick:
+        from citkid.daq_browser import choose_store
+        store = choose_store()
+        if store is None:
+            print('No store chosen.')
+            return None
+    paths = export_vna_report(store, os.path.expanduser(args.out),
                               k = args.sweep)
     for name, path in paths.items():
         print(f'{name}: {path}')

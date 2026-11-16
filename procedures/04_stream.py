@@ -1,53 +1,11 @@
 """
-04: take timestreams of the tuned tones in a window.
-
-Opens ``crs.stream_gui`` on a tuning (``tune{k}`` with ``tones``, from
-03_tune.py; the latest by default):
-
-- Calibration: calibrate a tone set once (a target sweep with the
-  settings below, which the window lets you change, and optional notes
-  typed in the window), saved as the tuning's ``cal{j}``; pick which
-  saved calibration to use when there are several. A calibration takes
-  long (minutes per set at ``NSAMPS`` samples per point), so it is never
-  repeated by a run.
-- Preview: capture a few seconds (``PREVIEW_S``) of the chosen
-  calibration's tones at a decimation stage, and look at one tone's
-  timestream as x (projected onto the IQ loop's tangent at the tone),
-  along/across the loop, or I and Q. Nothing is saved.
-- Run: name a timestream (with notes), choose its stage and length (or a
-  preset from ``PRESETS``), and run it on the selected tone set: the
-  stream is saved under the calibration it belongs to and the tone write
-  that put its tones on the board (``tune{k}/cal{j}/write{w}/ts{n}``),
-  in chunks at fast stages where the tones don't all stream at once, and
-  the run (``ts{n}``) is listed in the tuning's run list
-  (``tune{k}/streams``); View run shows a listed run's first chunks in
-  the plots, as a capture. Repeat for the next timestream. Tones stay
-  written on the board between captures and runs, so streams of the same
-  tones don't write them again; Write tones writes the set again on
-  purpose. For another tone set, select and calibrate it: setting its
-  NCO starts a new phase frame, so the sets calibrated before need a new
-  calibration when you come back to them. Restarting this script keeps
-  the calibrations usable: the session takes over the NCO settings the
-  board still has from the last one (kept in ``~/.citkid``), unless
-  something else set the NCOs in between (a power cycle, crs_init.py,
-  other software).
-
-Streaming needs the board's whole network bandwidth, so this script
-takes the board for itself (``citkid.crs.board_lock``) for as long as its
-window is open: it won't start while another script is sweeping or
-streaming, and while it is open every other script fails to connect,
-sweep, or stream (with a message saying who has the board). It also has
-global control, to set the decimation. Run crs_init.py first. ``--simulate``
-streams the simulated device of a store made by simulate_store.py; with
-``SIM_PULSES`` (or ``--sim-pulses``), its streams also hold photon pulses
-and cosmic rays (``SIM_PULSE_SETTINGS``), for trying 06_find_photons.py.
+04: take timestreams of a tuning's tones in a window: calibrate a tone
+set, preview, and run named timestreams (tune{k}/cal{j}/write{w}/ts{n}).
+Takes the board for itself while open. Needs crs_init.py first.
 
 Usage:
     python 04_stream.py --device deviceA --modules 1
     python 04_stream.py --device deviceA --modules 1 --tune 0
-
-Edit the settings below for your setup; the command-line options override
-them for one run.
 """
 import argparse
 import os
@@ -60,42 +18,29 @@ from citkid.crs.stream_gui import run_stream_gui
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-SERIAL_NUMBER = 46          # CRS serial number
-INTERFACE = 'enp5s0'        # Ethernet interface connected to the CRS
-DATA_DIR = '~/data'         # stores are in
-                            # DATA_DIR/COOLDOWN/DEVICE[_SUFFIX].zarr
-COOLDOWN = 'cooldown'       # cooldown name
-DEVICE = 'device'           # device name
-SUFFIX = ''                 # store name suffix: the store is
-                            # DEVICE_SUFFIX.zarr ('': DEVICE.zarr)
-MODULES = [1]               # modules connected to this device
-# Preview
-PREVIEW_DEC = 6             # preview decimation stage
-PREVIEW_S = 5.              # preview duration, s
-# Runs offered as presets (name, decimation stage, duration in s, notes)
+SERIAL_NUMBER = 46
+INTERFACE = 'enp5s0'
+DATA_DIR = '~/data'
+COOLDOWN = 'cooldown'
+DEVICE = 'device'
+SUFFIX = ''
+MODULES = [1]
+PREVIEW_DEC = 6
+PREVIEW_S = 5.
 PRESETS = [
     dict(name = 'dark_dec6', dec_stage = 6, duration_s = 600.,
          notes = 'dark, long'),
     dict(name = 'dark_dec0', dec_stage = 0, duration_s = 60.,
          notes = 'dark, fast'),
 ]
-# Calibration sweeps (as in 03_tune.py)
-NPOINTS_FINE = 1000         # fine sweep points per tone
-NPOINTS_GAIN = 50           # gain sweep points per tone
-GAIN_SPAN_FACTOR = 10       # gain sweep span = 10 x fine sweep span
-NSAMPS = 200                # samples averaged per point
-# Simulation (--simulate only): add photon pulses and cosmic rays to the
-# streams. Photons arrive on each tone independently (rate in Hz, size x
-# as a fractional frequency shift, decay time tau in s); cosmic rays hit
-# every streamed tone at once (cosmic_rate in Hz, size cosmic_x, varying
-# between tones by a log-normal factor of width cosmic_spread)
+NPOINTS_FINE = 1000
+NPOINTS_GAIN = 50
+GAIN_SPAN_FACTOR = 10
+NSAMPS = 200
 SIM_PULSES = False
 SIM_PULSE_SETTINGS = dict(rate = 20., x = 2e-6, tau = 150e-6,
                           cosmic_rate = 1., cosmic_x = 1e-5,
                           cosmic_spread = 0.5)
-# Signal-to-noise ratio of the simulated board while SIM_PULSES is on, dB
-# (as simulate_store.py's SNR_DB). The stores' default, 40, buries
-# photon-sized pulses at decimation stages 0-1. None: the store's value
 SIM_SNR_DB = 80.
 
 ################################################################################

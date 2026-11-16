@@ -317,6 +317,12 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         self.runs_label = QtWidgets.QLabel()
         vbox.addWidget(self.runs_label)
         self.tabs.addTab(page, 'Timestream runs')
+        self.marks = QtWidgets.QPlainTextEdit()
+        self.marks.setReadOnly(True)
+        self.marks.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+        self.marks.setFont(QtGui.QFontDatabase.systemFont(
+            QtGui.QFontDatabase.FixedFont))
+        self.tabs.addTab(self.marks, 'Tone marks')
         return self.tabs
 
     ############################################################################
@@ -380,6 +386,7 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
             self.info.setText('No store open: press Open (Ctrl+O) and '
                               'choose a .zarr directory.')
             self.attrs.setPlainText('')
+            self.marks.setPlainText('')
             self.runs = []
             self._fill_runs()
             return
@@ -390,6 +397,7 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         self.tree.blockSignals(False)
         self.runs = dl.stream_runs(self.root)
         self._fill_runs()
+        self.marks.setPlainText(dl.describe_tone_marks(self.root))
         if not (current and self.select_path(current)):
             self.attrs.setPlainText(describe_item(self.root))
 
@@ -545,6 +553,23 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
 ################################################################################
 ################################### Launcher ###################################
 ################################################################################
+def choose_store(start = None):
+    """
+    Choose a device store in a directory dialog.
+
+    Parameters:
+    start (str or None): the folder the dialog opens in. Default None:
+        the home folder.
+
+    Returns:
+    path (str or None): the store chosen, or None if cancelled.
+    """
+    get_qapp()
+    path = QtWidgets.QFileDialog.getExistingDirectory(
+        None, 'Choose a device store (.zarr directory)',
+        os.path.expanduser(start or '~'), QtWidgets.QFileDialog.ShowDirsOnly)
+    return path or None
+
 def run_store_browser(path = None, title = 'Store browser',
                       ui_scale = 1.0):
     """

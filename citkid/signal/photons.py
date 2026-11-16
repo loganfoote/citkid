@@ -100,9 +100,8 @@ class DetectionSettings:
         before its pre-maximum part ends. Default 3.
     tau_skip (int): the decay-time fit of a mean pulse (``fit_tau``)
         starts this many samples after its maximum. Default 2.
-    tau_lifetimes (float or None): the fit reaches this many decay times
-        after its start (from a first fit of the whole decay). Default 5.
-        None: the whole template after the maximum.
+    tau_fit_s (float or None): the fit covers this long after its start,
+        s. Default 1 ms. None: the whole template after the maximum.
     block (int): samples per processing block. Default 2**22.
     """
     pulse_sign: int = -1
@@ -122,7 +121,7 @@ class DetectionSettings:
     psd_max_segments: int = 4000
     baseline_gap: int = 3
     tau_skip: int = 2
-    tau_lifetimes: Optional[float] = 5.
+    tau_fit_s: Optional[float] = 1e-3
     block: int = 2 ** 22
 
 # Filter heights and thresholds are x times this: parts per million of the
@@ -1088,21 +1087,20 @@ def average_pulse(d, res, mult = None, max_mult = 1, gap = 3,
 ################################################################################
 ###################################### Tau #####################################
 ################################################################################
-def fit_tau(avg, p, dt, n_skip = 2, lifetimes = 5.):
+def fit_tau(avg, p, dt, n_skip = 2, fit_s = None):
     """
     Fit A exp(-t / tau) + B to the decay of a mean pulse after its maximum:
     from ``n_skip`` samples after the maximum (where the pulse's rise and
-    the filter's ringing are over) out to ``lifetimes`` decay times
-    (first fit over the whole decay to find the decay time, then again
-    over that range), so a long, flat tail doesn't weigh on the fit.
+    the filter's ringing are over) over the next ``fit_s`` seconds (at
+    least 4 samples), so a long, flat tail doesn't weigh on the fit.
 
     Parameters:
     avg (np.array): mean pulse (positive-going).
     p (int): index of its maximum.
     dt (float): sample period, s.
     n_skip (int): samples after the maximum to skip. Default 2.
-    lifetimes (float or None): length of the fit in decay times. Default
-        5. None: the whole template after the maximum.
+    fit_s (float or None): length of the fit, s. Default None: the whole
+        template after the maximum.
 
     Returns:
     tau (float): decay time in s (NaN if the fit fails).
@@ -1139,10 +1137,9 @@ def fit_tau(avg, p, dt, n_skip = 2, lifetimes = 5.):
             return None
 
     n = y_all.size
+    if fit_s is not None:
+        n = int(min(max(round(float(fit_s) / dt), 4), y_all.size))
     popt = fit(n)
-    if popt is not None and lifetimes is not None:
-        n = int(min(max(round(lifetimes * popt[1] / dt), 4), y_all.size))
-        popt = fit(n)
     if popt is None:
         return np.nan, np.full(3, np.nan), 0
     return float(popt[1]), popt * np.array([scale, 1., scale]), n

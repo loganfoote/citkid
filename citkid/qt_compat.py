@@ -1002,3 +1002,83 @@ def _decade(value):
     decade (int): e.g. 5 for 2e5, -5 for 2e-5.
     """
     return int(_math.floor(_math.log10(value) + 1e-9))
+
+def freeze_heights(layout, skip = ()):
+    """
+    Fix every widget of a layout at its preferred height, so the panel
+    does not move when text changes or a widget shows or hides. Call it
+    once the panel is built. Nested layouts are frozen too.
+
+    Parameters:
+    layout (QLayout): the layout.
+    skip (sequence of QWidget): widgets left free, e.g. a list that
+        should take the stretch.
+    """
+    for i in range(layout.count()):
+        item = layout.itemAt(i)
+        w = item.widget()
+        if w is not None:
+            if w in skip:
+                continue
+            w.setFixedHeight(w.sizeHint().height())
+            policy = w.sizePolicy()
+            policy.setRetainSizeWhenHidden(True)
+            w.setSizePolicy(policy)
+        elif item.layout() is not None:
+            freeze_heights(item.layout(), skip)
+
+
+class _KeyForwarder(_QtCore.QObject):
+    """
+    Event filter that gives a widget's key presses to a window's
+    ``keyPressEvent`` first (a list widget would otherwise swallow the
+    window's letter shortcuts while it has the focus).
+    """
+
+    def __init__(self, window):
+        """
+        Make the filter.
+
+        Parameters:
+        window (QWidget): whose ``keyPressEvent`` gets the keys.
+        """
+        super().__init__(window)
+        self._window = window
+
+    def eventFilter(self, obj, event):
+        """
+        Hand a key press to the window; it is consumed if the window
+        accepts it.
+
+        Parameters:
+        obj (QObject): the watched widget.
+        event (QEvent): the event.
+
+        Returns:
+        handled (bool): True if the window took the key.
+        """
+        if event.type() == _QtCore.QEvent.KeyPress:
+            event.ignore()
+            self._window.keyPressEvent(event)
+            if event.isAccepted():
+                return True
+        return super().eventFilter(obj, event)
+
+
+def forward_keys(widget, window):
+    """
+    Let a window's letter shortcuts work while a child widget (a tone
+    list, say) has the keyboard focus: the widget's key presses go to
+    ``window.keyPressEvent`` first, and the widget only gets the keys the
+    window does not accept.
+
+    Parameters:
+    widget (QWidget): the widget that takes the focus.
+    window (QWidget): the window with the shortcuts.
+
+    Returns:
+    filter (QObject): the installed filter (kept alive by ``window``).
+    """
+    f = _KeyForwarder(window)
+    widget.installEventFilter(f)
+    return f

@@ -203,7 +203,8 @@ def test_vna_view_script(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize('script', [
     '01_vna_sweep.py', '02_find_resonances.py', '03_tune.py', '04_stream.py',
-    '05_calibrate_streams.py', '06_find_photons.py', '07_psds.py',
+    '05_calibrate_streams.py', '06a_find_photons.py', '06b_cosmic_rays.py',
+    '07_psds.py', '08_report.py',
     'archive_store.py',
     'vna_view.py', 'vna_report.py', 'store_browser.py'])
 def test_store_path_suffix(script, tmp_path):
@@ -527,6 +528,19 @@ def test_03_tune(tmp_path, monkeypatch, capsys, n_cal):
     with pytest.raises(ValueError, match = 'new tuning'):
         m.main(m.parse_args(argv + ['--redo', 'power_fits']))
     m.main(m.parse_args(argv + ['--redo', 'tones']))
+    # A tone marked bad in the store's tone marks (any stage) leaves the
+    # tuned set on the next tones step
+    root = dl.open_store(path, mode = 'a')
+    first = int(tune['fq_sweep/res_idxs'][0])
+    dl.add_tone_mark(root, first, 'bad', 'double resonance', 'test')
+    m.main(m.parse_args(argv + ['--redo', 'tones']))
+    assert 'marked bad' in capsys.readouterr().out
+    t2 = dl.load_tones(dl.open_store(path)['tune0/tones'])
+    assert len(t2['fres']) == n - 2 and first not in t2['res_idxs']
+    dl.clear_tone_mark(root, first, 'test')
+    m.main(m.parse_args(argv + ['--redo', 'tones']))
+    t = dl.load_tones(dl.open_store(path)['tune0/tones'])
+    assert len(t['fres']) == n - 1
     # The tuning ports without its sweeps
     dl.port_tuning(path, 0, tmp_path / 'b.zarr')
     b = dl.open_store(tmp_path / 'b.zarr')
@@ -812,7 +826,7 @@ def test_03_tune_frequency_range(tmp_path, monkeypatch, capsys):
         m.plan(root, m.parse_args(argv + ['--fmin', '2e9']), str(path))
 
 
-def test_vna_report(tmp_path):
+def test_vna_report(tmp_path, monkeypatch):
     """
     Export a screened simulated sweep: plot, info text, and resonator CSV,
     with res_idx matching the store's resonator list.
@@ -834,6 +848,13 @@ def test_vna_report(tmp_path):
                            'LPF on the ADC']))
     paths = m.main(m.parse_args(['--store', str(path), '--out', str(out)]))
     assert paths['plot'].endswith('simdevice_vna0.png')
+    # --pick chooses the store in a dialog; cancelling writes nothing
+    import citkid.daq_browser as db
+    monkeypatch.setattr(db, 'choose_store', lambda start = None: str(path))
+    assert m.main(m.parse_args(['--pick', '--out', str(out)]))['plot'] == \
+        paths['plot']
+    monkeypatch.setattr(db, 'choose_store', lambda start = None: None)
+    assert m.main(m.parse_args(['--pick', '--out', str(out)])) is None
     assert os.path.getsize(paths['plot']) > 10000
     info = open(paths['info'], encoding = 'utf-8').read()
     assert 'Device: simdevice' in info and 'Tone power: -55.0 dBm' in info
@@ -945,11 +966,17 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
     List the timestreams (one per run and tone set); search run 0's tone
     set 0 from scratch (the window changes its thresholds); then search
     other timestreams with that result as the reference: its thresholds,
-    or its filters; and another from scratch. No timestream is saved.
+    or its filters; another from scratch under a name; continue from a
+    saved result (bad marks with reasons, per-tone decay fits); refit
+    the decay times; migrate results of the earlier layout; leave
+    uncalibrated tones out. One result per timestream, replaced on a
+    rerun. No timestream is saved.
     """
     import citkid.pipeline.interactive.photon_thresholds as pt
+    from citkid.pipeline import photon_finder as pf
+    from citkid.zarr_util import copy_group
     path, log = photon_store
-    m = load_script('06_find_photons.py')
+    m = load_script('06a_find_photons.py')
     argv = ['--store', str(path)]
     monkeypatch.setattr(m, 'TIMESTREAMS', [])
     assert m.main(m.parse_args(argv)) is None
@@ -959,7 +986,7 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
     windows = []
 
     def fake_window(ts, results, thresholds, rerun, data = None,
-                    settings = None, title = ''):
+                    settings = None, title = '', **kwargs):
         """
         Stand in for the threshold window: widen hmax for all tones, give
         one tone its own hmin, and rerun them all (as the window does).
@@ -977,10 +1004,11 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
         thresholds, results: as the window.
         """
         windows.append(ts['run'])
-        # The window gets the data for its snippet and the tau settings
+        # The window gets the data for its snippet and the fit settings
         d = data(int(ts['rows'][0]))
         assert isinstance(d, np.ndarray) and len(d) == ts['stop'] - ts['start']
-        assert settings.tau_skip == 2 and settings.tau_lifetimes == 5.
+        assert settings.tau_skip == 2 and settings.tau_fit_s == 1e-3
+        assert thresholds.tau_skip == 2 and thresholds.tau_fit_s == 1e-3
         # Thresholds are in kHz/GHz; the simulated photons are 2 kHz/GHz
         thresholds.hmax = 3.5
         r0 = int(ts['rows'][0])
@@ -993,50 +1021,284 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
     # Simulated streams of each timestream (see photon_store): ts0 set 0,
     # ts0 set 1, ts1 set 0, ts1 set 1
     logs = (log[:1], log[1:3], log[3:4], log[4:6])
-    # From scratch, with the window
+    # From scratch, with the window: the result is named after the run
+    # and tone set (the run has two tone sets)
     monkeypatch.setattr(m, 'TIMESTREAMS', [0])
     m.main(m.parse_args(argv))
     assert windows == ['ts0']
     root = dl.open_store(path)
-    g0 = root['ts_photons0']
-    assert g0.attrs['source'] == 'ts_cal0' and g0.attrs['kind'] == \
+    assert pf.list_results(root) == ['dark0_set0']
+    g0 = root['photons/dark0_set0']
+    assert g0.attrs['calibration'] == 'ts_cal0' and g0.attrs['kind'] == \
         'analysis' and g0.attrs['reference'] is None
-    dt = g0['timestream0'].attrs['dt']
-    check_photons(g0['timestream0'], logs[0], dt)
-    check_override(g0['timestream0'])
-    assert g0['timestream0'].attrs['mode'] == 'full'
+    assert g0.attrs['continued_from'] is None
+    dt = g0.attrs['dt']
+    check_photons(g0, logs[0], dt)
+    check_override(g0)
+    assert g0.attrs['mode'] == 'full'
+    np.testing.assert_array_equal(g0['tau_skip'][:], 2)
+    np.testing.assert_allclose(g0['tau_fit_s'][:], 1e-3)
+    assert not g0['bad'][:].any() and all(r == '' for r in g0['bad_reason'])
+    assert 'dark0_set0: ts0 set 0, ts_cal0, full' in pf.describe_results(root)
     # Its thresholds for both tone sets of run 1, no window
     monkeypatch.setattr(m, 'TIMESTREAMS', ['dark0b'])
-    m.main(m.parse_args(argv + ['--reference', '0']))
+    m.main(m.parse_args(argv + ['--reference', 'dark0_set0']))
     assert windows == ['ts0']
-    g1 = dl.open_store(path)['ts_photons1']
-    assert g1.attrs['reference'] == 'ts_photons0' and \
-        g1.attrs['reuse'] == 'settings'
+    root = dl.open_store(path)
     for j, entries in ((0, logs[2]), (1, logs[3])):
-        g = g1[f'timestream{j}']
-        assert g.attrs['mode'] == 'settings from ts_photons0/timestream0'
-        assert g.attrs['tone_set'] == j
+        g = root[f'photons/dark0b_set{j}']
+        assert g.attrs['mode'] == 'settings from photons/dark0_set0'
+        assert g.attrs['reference'] == 'photons/dark0_set0'
+        assert g.attrs['reuse'] == 'settings' and g.attrs['tone_set'] == j
         check_photons(g, entries, dt)
         check_override(g)
-    # Its filters for run 1's tone set 0: heights in its photon units
+    # Its filters for run 1's tone set 0: heights in its photon units,
+    # replacing that timestream's result. Without the window, a saved
+    # result is only replaced with --overwrite: otherwise it is skipped
     monkeypatch.setattr(m, 'TIMESTREAMS', [2])
-    m.main(m.parse_args(argv + ['--reference', '0', '--reuse', 'filter']))
-    g2 = dl.open_store(path)['ts_photons2/timestream0']
-    assert g2.attrs['mode'] == 'filter from ts_photons0/timestream0'
+    before = dl.open_store(path)['photons/dark0b_set0'].attrs['created']
+    assert m.main(m.parse_args(argv + ['--reference', 'dark0_set0',
+                                       '--reuse', 'filter'])) == {}
+    out = capsys.readouterr().out
+    assert 'photons/dark0b_set0 exists: skipped' in out and \
+        'Skipped photons/dark0b_set0' in out
+    assert dl.open_store(path)['photons/dark0b_set0'].attrs['created'] == \
+        before
+    m.main(m.parse_args(argv + ['--reference', 'dark0_set0', '--reuse',
+                                'filter', '--overwrite']))
+    assert 'Replacing photons/dark0b_set0' in capsys.readouterr().out
+    root = dl.open_store(path)
+    assert pf.list_results(root) == ['dark0_set0', 'dark0b_set0',
+                                     'dark0b_set1']
+    g2 = root['photons/dark0b_set0']
+    assert g2.attrs['mode'] == 'filter from photons/dark0_set0'
     check_photons(g2, logs[2], dt)
-    np.testing.assert_allclose(g2['amp_ph'][:],
-                               g0['timestream0/amp_ph_own'][:])
-    # Another timestream from scratch: the window opens again
+    np.testing.assert_allclose(g2['amp_ph'][:], g0['amp_ph_own'][:])
+    # Another timestream from scratch, under a name: the window opens
+    # again; a name needs a single timestream
     monkeypatch.setattr(m, 'TIMESTREAMS', [1])
-    m.main(m.parse_args(argv))
+    m.main(m.parse_args(argv + ['--name', 'first_set1']))
     assert windows == ['ts0', 'ts0']
-    check_photons(dl.open_store(path)['ts_photons3/timestream0'], logs[1],
-                  dt)
+    check_photons(dl.open_store(path)['photons/first_set1'], logs[1], dt)
+    monkeypatch.setattr(m, 'TIMESTREAMS', ['dark0b'])
+    with pytest.raises(ValueError, match = 'single'):
+        m.main(m.parse_args(argv + ['--name', 'x']))
+    # With the window, a run on a timestream whose result is saved asks:
+    # Cancel skips it, Overwrite detects again from scratch
+    asked = []
+
+    def answer(name, grp):
+        """
+        Stand in for the popup: record the result's description and
+        answer with the next choice.
+
+        Parameters:
+        name (str): the result's name.
+        grp (zarr.Group): the result.
+
+        Returns:
+        choice (str or None): the next answer.
+        """
+        asked.append(pf.describe_result(grp))
+        return answers.pop(0)
+
+    monkeypatch.setattr(m, 'ask_existing', answer)
+    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    answers = [None]
+    before = dl.open_store(path)['photons/dark0_set0'].attrs['created']
+    assert m.main(m.parse_args(argv)) == {}
+    assert 'Skipped photons/dark0_set0' in capsys.readouterr().out
+    assert dl.open_store(path)['photons/dark0_set0'].attrs['created'] == \
+        before and windows == ['ts0', 'ts0']
+    assert asked == ['ts0 tone set 0, 6 tones\ncreated ' + before
+                     + ', full\n1 tones with their own thresholds, 0 with '
+                     'their own decay fit, 0 marked bad']
+    answers = ['overwrite']
+    m.main(m.parse_args(argv))
+    assert 'Replacing photons/dark0_set0' in capsys.readouterr().out
+    assert windows == ['ts0', 'ts0', 'ts0'] and answers == []
+    g0 = dl.open_store(path)['photons/dark0_set0']
+    assert g0.attrs['mode'] == 'full' and g0.attrs['created'] != before
+    check_photons(g0, logs[0], dt)
+    check_override(g0)
+    # A saved result loads back as detection results
+    loaded, th = pf.load_results(g0)
+    r0 = int(g0['rows'][0])
+    res = loaded[r0]
+    for key in ('cand_idx', 'events', 'template', 'history', 'neg_h',
+                'init_h', 'coinc_idx', 'coinc_raw', 'log', 'filter', 'psd'):
+        assert key in res, key
+    assert len(res['log']) > 1 and len(res['history']) > 0
+    pulses = g0['pulses']
+    mine = pulses['row'][:] == r0
+    np.testing.assert_array_equal(res['coinc_idx'], pulses['idx'][:][mine])
+    np.testing.assert_array_equal(
+        res['cand_idx'], pulses['idx'][:][mine & pulses['candidate'][:]])
+    assert res['hmin'] == 1.2 and th.overrides == {int(g0['res_idxs'][0]):
+                                                    dict(hmin = 1.2)}
+    assert np.sum(np.isin(res['events'], res['cand_idx'])) == \
+        len(res['events']) and th.bad == {}
+    # Continue from it: the window opens on the saved results (no
+    # detection first); one tone is marked bad with a reason, one gets
+    # its own thresholds and is rerun, one gets its own decay fit
+    reruns = []
+
+    def continue_window(ts, results, thresholds, rerun, data = None,
+                        settings = None, title = '', **kwargs):
+        """
+        Stand in for the window when continuing: check the results came
+        from the store, mark the second tone bad, rerun the third, give
+        the fourth its own decay fit.
+
+        Parameters:
+        ts (dict): the timestream.
+        results (dict): the loaded results.
+        thresholds (Thresholds): the loaded thresholds.
+        rerun (callable): reruns tones.
+        data (callable): a tone's detection timestream.
+        settings (DetectionSettings): the settings.
+        title (str): window title.
+
+        Returns:
+        thresholds, results: as the window.
+        """
+        windows.append('continue')
+        assert thresholds.hmax == 3.5
+        assert set(results) == set(int(r) for r in ts['rows'])
+        assert all(isinstance(r, dict) for r in results.values())
+        thresholds.set_bad(int(ts['res_idxs'][1]), 'double resonance')
+        row = int(ts['rows'][2])
+        thresholds.overrides[int(ts['res_idxs'][2])] = dict(hmax = 3.)
+        new = rerun([row], thresholds)
+        reruns.append(row)
+        assert new[row]['hmax'] == 3.
+        thresholds.set_fit(int(ts['res_idxs'][3]), 3, 0.5e-3)
+        thresholds.limits['tau'] = [100e-6, 200e-6]
+        return thresholds, {**results, **new}
+
+    monkeypatch.setattr(pt, 'run_photon_thresholds', continue_window)
+    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    answers = ['continue']
+    m.main(m.parse_args(argv))
+    assert windows[-1] == 'continue' and len(reruns) == 1 and answers == []
+    assert 'Replacing photons/dark0_set0' in capsys.readouterr().out
+    root = dl.open_store(path)
+    t4 = root['photons/dark0_set0']
+    assert t4.attrs['continued_from'] == 'photons/dark0_set0'
+    assert t4.attrs['mode'] == 'continued from photons/dark0_set0'
+    th = t4.attrs['thresholds']
+    bad_res = int(t4['res_idxs'][1])
+    assert th['bad'] == {str(bad_res): 'double resonance'}
+    assert th['hmax'] == 3.5 and th['limits']['tau'] == [100e-6, 200e-6]
+    assert th['overrides'][str(int(t4['res_idxs'][0]))] == dict(hmin = 1.2)
+    assert th['overrides'][str(int(t4['res_idxs'][2]))] == dict(hmax = 3.)
+    assert th['overrides'][str(int(t4['res_idxs'][3]))] == \
+        dict(tau_skip = 3, tau_fit_s = 0.5e-3)
+    np.testing.assert_array_equal(t4['bad'][:],
+                                  t4['res_idxs'][:] == bad_res)
+    assert list(t4['bad_reason'][:]) == ['', 'double resonance', '', '', '',
+                                         '']
+    np.testing.assert_array_equal(t4['tau_skip'][:], [2, 2, 2, 3, 2, 2])
+    np.testing.assert_allclose(t4['tau_fit_s'][:],
+                               [1e-3, 1e-3, 1e-3, 0.5e-3, 1e-3, 1e-3])
+    # The bad tone is detected but left out of the cosmic rays and has no
+    # mean pulse; the others are as before; the per-tone fit is used
+    assert all(s == '' for s in t4['status'][:])
+    assert t4['n_used'][:][1] == 0 and np.isnan(t4['tau'][:][1])
+    assert bad_res not in t4['cosmic/hits/res_idx'][:]
+    assert t4['n_used'][:][0] == g0['n_used'][:][0]
+    np.testing.assert_allclose(t4['hmax'][:][2], 3.)
+    assert np.isfinite(t4['tau'][:][3])
+    assert 'dark0_set0: ts0 set 0, ts_cal0, continued from ' \
+        'photons/dark0_set0' in pf.describe_results(root)
+    assert '1 bad' in pf.describe_results(root)
+    # With --no-gui the saved results go straight to the summary; the
+    # --continue flag does not ask
+    m.main(m.parse_args(argv + ['--continue', '--no-gui']))
+    assert windows[-1] == 'continue' and len(asked) == 3
+    assert ('2 tones with their own thresholds, 1 with their own decay '
+            'fit, 1 marked bad') in pf.describe_result(
+        dl.open_store(path)['photons/dark0_set0'])
+    # The bad mark carries into a reference: no filter from that tone
+    t4 = dl.open_store(path)['photons/dark0_set0']
+    thr, filters = pf.load_reference(t4)
+    assert bad_res not in filters and len(filters) == 5
+    assert thr.bad == {bad_res: 'double resonance'}
+    # Refit the decay times with other values, in place, for every tone
+    monkeypatch.setattr(m, 'TAU_FIT_S', 0.3e-3)
+    monkeypatch.setattr(m, 'TAU_SKIP', 3)
+    tau_before = t4['tau'][:]
+    taus = m.main(m.parse_args(argv + ['--refit-tau']))
+    t4 = dl.open_store(path)['photons/dark0_set0']
+    assert list(taus) == ['dark0_set0']
+    np.testing.assert_array_equal(taus['dark0_set0'], t4['tau'][:])
+    ok = np.isfinite(t4['tau'][:])
+    assert ok.sum() == 5 and not ok[1]
+    np.testing.assert_allclose(t4['tau'][:][ok], 150e-6, rtol = 0.4)
+    assert not np.allclose(t4['tau'][:][ok], tau_before[ok])
+    assert t4.attrs['settings']['tau_fit_s'] == 0.3e-3 and \
+        t4.attrs['settings']['tau_skip'] == 3 and 'tau_refit' in t4.attrs
+    np.testing.assert_array_equal(t4['tau_skip'][:], 3)
+    assert t4.attrs['thresholds']['tau_fit_s'] == 0.3e-3
+    assert 'tau_fit_s' not in t4.attrs['thresholds']['overrides'].get(
+        str(int(t4['res_idxs'][3])), {})
+    assert t4.attrs['settings']['hmin'] == m.HMIN
+    monkeypatch.setattr(m, 'TAU_FIT_S', 1e-3)
+    monkeypatch.setattr(m, 'TAU_SKIP', 2)
+    # A result without detection detail (an earlier version) can still be
+    # continued: the detection runs again with its thresholds first
+    root = dl.open_store(path, mode = 'a')
+    copy_group(root['photons/dark0_set0'], root['photons'].create_group(
+        'old'), exclude = ('detail',))
+    m.main(m.parse_args(argv + ['--continue', '--name', 'old']))
+    out = capsys.readouterr().out
+    assert 'holds no detection detail' in out and windows[-1] == 'continue'
+    g_old = dl.open_store(path)['photons/old']
+    assert g_old.attrs['mode'] == 'continued from photons/old'
+    assert 'detail' in g_old
+    # Results of the earlier layout (ts_photons{p}/timestream{j}) are
+    # moved into photons/<run name>; a taken name is left where it is
+    root = dl.open_store(path, mode = 'a')
+    for p in (0, 1):
+        old = dl.create_group(root, f'ts_photons{p}', 'analysis', attrs = dict(
+            source = 'ts_cal0', reference = None, reuse = None,
+            timestreams = [0]))
+        copy_group(root['photons/first_set1'], old.create_group('timestream0'))
+    assert 'ts_photons0, ts_photons1' in pf.describe_results(root)
+    moved = pf.migrate_results(root, which = [0])
+    assert moved == {'dark0': 'ts_photons0/timestream0'}
+    root = dl.open_store(path, mode = 'a')
+    assert 'ts_photons0' not in root and 'ts_photons1' in root
+    g = root['photons/dark0']
+    assert g.attrs['migrated_from'] == 'ts_photons0/timestream0'
+    assert g.attrs['calibration'] == 'ts_cal0' and g.attrs['run'] == 'ts0'
+    np.testing.assert_array_equal(g['res_idxs'][:],
+                                  root['photons/first_set1/res_idxs'][:])
+    assert pf.migrate_results(root) == {}
+    assert 'ts_photons1' in root and 'not moved' in capsys.readouterr().out
+    # Tones whose x calibration failed are left out of the listing:
+    # NaN poly_x, or a row that was never saved
+    arr = root['ts_cal0/set0/poly_x/data']
+    saved = arr[0]
+    arr[0] = np.nan
+    mask = root['ts_cal0/set0/poly_x/row_exists']
+    mask_saved = mask[1]
+    mask[1] = False
+    try:
+        monkeypatch.setattr(m, 'TIMESTREAMS', [])
+        m.main(m.parse_args(argv))
+        out = capsys.readouterr().out
+        assert "0: ts0, 'dark0', set 0, 1.5 s, 4 tones (2 uncalibrated " \
+            "left out)" in out
+        assert "1: ts0, 'dark0', set 1, 1.5 s, 6 tones, set1" in out
+    finally:
+        arr[0] = saved
+        mask[1] = mask_saved
     # No timestream is saved: every saved array is far shorter than one
     root = dl.open_store(path)
-    nsamples = g0['timestream0'].attrs['stop']
+    nsamples = g0.attrs['stop']
     sizes = [max(v.shape)
-             for grp in ['ts_cal0'] + [f'ts_photons{q}' for q in range(4)]
+             for grp in ['ts_cal0', 'photons']
              for _, v in root[grp].members(max_depth = None)
              if isinstance(v, zarr.Array) and v.shape]
     assert max(sizes) < nsamples / 10
@@ -1108,6 +1370,200 @@ def test_nco_phase_check(monkeypatch, capsys):
     assert 'spread across tones 14.32 deg' in desc
 
 
+def test_06b_cosmic_rays(photon_store, monkeypatch, capsys):
+    """
+    Fit cosmic-ray tails: from triggers where no photon result exists
+    (the window changes the thresholds and marks a tone bad), from the
+    photon result's cosmic rays where one does; a saved result is
+    skipped, replaced or continued; one result per timestream.
+    """
+    import citkid.pipeline.interactive.cosmic_tails as ct
+    from citkid.pipeline import cosmic_finder as cf
+    from citkid.pipeline import photon_finder as pf
+    path, log = photon_store
+    m = load_script('06b_cosmic_rays.py')
+    argv = ['--store', str(path)]
+    if 'dark0_set0' not in pf.list_results(dl.open_store(path)):
+        # The photon result of run 0's tone set 0 (made by the 06a test
+        # when the whole file runs)
+        m6 = load_script('06a_find_photons.py')
+        monkeypatch.setattr(m6, 'TIMESTREAMS', [0])
+        m6.main(m6.parse_args(argv + ['--no-gui']))
+    monkeypatch.setattr(m, 'LEVEL', 3.)
+    monkeypatch.setattr(m, 'FIT_S', 1e-3)
+    monkeypatch.setattr(m, 'TIMESTREAMS', [])
+    assert m.main(m.parse_args(argv)) is None
+    out = capsys.readouterr().out
+    assert "1: ts0, 'dark0', set 1" in out and 'Previous results' in out
+    windows = []
+
+    def fake_window(ts, results, thresholds, refit, data = None,
+                    title = '', ui_scale = 1., **kwargs):
+        """
+        Stand in for the window: narrow the height window for all tones
+        and refit them, mark one tone bad.
+
+        Parameters:
+        ts (dict): the timestream.
+        results (dict): its results.
+        thresholds (TailThresholds): its thresholds.
+        refit (callable): refits tones.
+        title (str): window title.
+        ui_scale (float): font scale.
+
+        Returns:
+        thresholds, results: as the window.
+        """
+        windows.append(ts['run'])
+        assert all(isinstance(r, dict) for r in results.values())
+        assert thresholds.level == 3. and thresholds.fit_s == 1e-3
+        # The window gets the timestreams for its plot
+        d = data(int(ts['rows'][0]))
+        assert isinstance(d, np.ndarray) and len(d) == ts['stop'] - ts['start']
+        thresholds.set_all(hmax = 50.)
+        results = {**results, **refit(list(ts['rows']), thresholds)}
+        assert all(r['hmax'] == 50. for r in results.values())
+        thresholds.set_bad(int(ts['res_idxs'][1]), 'weird pulse shape')
+        return thresholds, results
+
+    monkeypatch.setattr(ct, 'run_cosmic_tails', fake_window)
+    # Run 0's tone set 1 has no photon result: events from triggers
+    monkeypatch.setattr(m, 'TIMESTREAMS', [1])
+    res = m.main(m.parse_args(argv))
+    assert windows == ['ts0'] and list(res) == ['dark0_set1']
+    assert 'events from triggers' in capsys.readouterr().out
+    root = dl.open_store(path)
+    assert cf.list_results(root) == ['dark0_set1']
+    g = root['cosmic/dark0_set1']
+    assert g.attrs['events'] == 'triggers' and g.attrs['kind'] == 'analysis'
+    assert g.attrs['calibration'] == 'ts_cal0' and \
+        g.attrs['continued_from'] \
+        is None
+    # The simulated rays (every tone of each of the two writes), within
+    # the dead time
+    n_true = sum(len(entry['cosmic']) for entry in log[1:3])
+    assert 0.8 * n_true <= g.attrs['n_events'] <= n_true
+    assert g['events/t0'].shape == (g.attrs['n_events'],)
+    assert set(g['events/write_idx'][:].tolist()) <= {0, 1}
+    assert np.all(g['events/mult'][:] >= 3)
+    assert all(s == '' for s in g['status'][:])
+    np.testing.assert_allclose(g['hmax'][:], 50.)
+    np.testing.assert_allclose(g['level'][:], 3.)
+    bad = g['bad'][:]
+    assert bad.tolist() == [False, True, False, False, False, False]
+    assert g['bad_reason'][:][1] == 'weird pulse shape'
+    assert g.attrs['thresholds']['bad'] == {str(int(g['res_idxs'][1])):
+                                            'weird pulse shape'}
+    # Decay times of the aligned means: the simulation's 150 us, from
+    # pulses of 10 kHz/GHz times a log-normal factor, mostly in the window
+    tau = g['tau'][:]
+    assert np.isfinite(tau).all()
+    # A handful of simulated pulses per tone: a loose tolerance
+    np.testing.assert_allclose(tau, 150e-6, rtol = 0.3)
+    assert g.attrs['anchor'] == g.attrs['pre']
+    # Each tone sees the events of its own write
+    n_write = {int((g['events/write_idx'][:] == w).sum()) for w in (0, 1)}
+    assert set(g['n_pulses'][:].tolist()) <= n_write
+    assert np.all(g['n_used'][:] >= 0.5 * g['n_pulses'][:])
+    p = g['pulses']
+    assert p['row'].shape[0] == g['n_pulses'][:].sum()
+    assert p['used'][:].sum() == g['n_used'][:].sum()
+    assert np.all(p['start'][:][~p['used'][:]] == -1)
+    assert g['avg_pulse'].shape[1] == g.attrs['pre'] + g.attrs['post']
+    assert 'dark0_set1: ts0 set 1' in cf.describe_results(root) and \
+        '1 bad' in cf.describe_results(root)
+    # Run 0's tone set 0 has a photon result: its cosmic rays are the
+    # events (no window)
+    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    m.main(m.parse_args(argv + ['--no-gui']))
+    assert windows == ['ts0']
+    root = dl.open_store(path)
+    g0 = root['cosmic/dark0_set0']
+    assert g0.attrs['events'] == 'photons/dark0_set0'
+    ph = root['photons/dark0_set0/cosmic/events']
+    np.testing.assert_array_equal(g0['events/t0'][:], ph['t0'][:])
+    assert g0.attrs['n_events'] == len(ph['t0'][:])
+    np.testing.assert_allclose(g0['tau'][:], 150e-6, rtol = 0.3)
+    # Asking for photons where there is no result fails; triggers can be
+    # forced where there is one; a photon result saved without its cosmic
+    # rays counts as none
+    monkeypatch.setattr(m, 'TIMESTREAMS', [1])
+    with pytest.raises(KeyError, match = 'no photon result'):
+        m.main(m.parse_args(argv + ['--events', 'photons', '--overwrite',
+                                    '--no-gui']))
+    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    dl.open_store(path, mode = 'a')['photons'].create_group('nocosmic')
+    with pytest.raises(KeyError, match = 'no photon result'):
+        m.main(m.parse_args(argv + ['--events', 'photons', '--photons',
+                                    'nocosmic', '--overwrite', '--no-gui']))
+    m.main(m.parse_args(argv + ['--photons', 'nocosmic', '--overwrite',
+                                '--no-gui']))
+    out = capsys.readouterr().out
+    assert 'holds no cosmic rays' in out and 'events from triggers' in out
+    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    m.main(m.parse_args(argv + ['--events', 'triggers', '--overwrite',
+                                '--no-gui']))
+    assert 'Replacing cosmic/dark0_set0' in capsys.readouterr().out
+    g0 = dl.open_store(path)['cosmic/dark0_set0']
+    assert g0.attrs['events'] == 'triggers'
+    # A saved result: skipped without the window, unless --overwrite or
+    # --continue; with the window, the popup decides
+    before = g0.attrs['created']
+    assert m.main(m.parse_args(argv + ['--no-gui'])) == {}
+    assert 'cosmic/dark0_set0 exists: skipped' in capsys.readouterr().out
+    assert dl.open_store(path)['cosmic/dark0_set0'].attrs['created'] == \
+        before
+    answers = ['overwrite']
+    monkeypatch.setattr(m, 'ask_existing', lambda name, grp: answers.pop(0))
+    m.main(m.parse_args(argv))
+    assert windows == ['ts0', 'ts0'] and answers == []
+    assert dl.open_store(path)['cosmic/dark0_set0'].attrs['created'] != \
+        before
+    answers = [None]
+    assert m.main(m.parse_args(argv)) == {}
+    assert 'Skipped cosmic/dark0_set0' in capsys.readouterr().out
+    # Continue from a saved result: its thresholds and bad marks open in
+    # the window; the result is replaced
+    seen = []
+
+    def continue_window(ts, results, thresholds, refit, data = None,
+                        title = '', ui_scale = 1., **kwargs):
+        """
+        Stand in for the window when continuing: record the thresholds.
+
+        Parameters:
+        ts (dict): the timestream.
+        results (dict): the results.
+        thresholds (TailThresholds): the loaded thresholds.
+        refit (callable): refits tones.
+        title (str): window title.
+        ui_scale (float): font scale.
+
+        Returns:
+        thresholds, results: unchanged.
+        """
+        seen.append((thresholds.hmax, dict(thresholds.bad)))
+        return thresholds, results
+
+    monkeypatch.setattr(ct, 'run_cosmic_tails', continue_window)
+    monkeypatch.setattr(m, 'TIMESTREAMS', [1])
+    m.main(m.parse_args(argv + ['--continue']))
+    bad_res = int(dl.open_store(path)['cosmic/dark0_set1']['res_idxs'][1])
+    assert seen == [(50., {bad_res: 'weird pulse shape'})]
+    g1 = dl.open_store(path)['cosmic/dark0_set1']
+    assert g1.attrs['continued_from'] == 'cosmic/dark0_set1'
+    assert g1['bad'][:][1]
+    with pytest.raises(KeyError, match = 'no saved result'):
+        monkeypatch.setattr(m, 'TIMESTREAMS', [3])
+        m.main(m.parse_args(argv + ['--continue']))
+    # A name needs a single timestream
+    monkeypatch.setattr(m, 'TIMESTREAMS', ['dark0b'])
+    with pytest.raises(ValueError, match = 'single'):
+        m.main(m.parse_args(argv + ['--name', 'x']))
+    assert cf.list_results(dl.open_store(path)) == ['dark0_set0',
+                                                    'dark0_set1']
+
+
 def test_07_psds(photon_store, monkeypatch, capsys):
     """
     List the timestreams of every calibration; analyze a set of them into
@@ -1116,9 +1572,42 @@ def test_07_psds(photon_store, monkeypatch, capsys):
     with the pulses found by a photon result's filters. No timestream is
     saved.
     """
+    import citkid.pipeline.interactive.psd_overview as po
     from citkid.pipeline import psds
     path, _ = photon_store
     m = load_script('07_psds.py')
+    windows = []
+    marking = []
+
+    def fake_overview(ts, result, f_reduced, bad = None, limits = None,
+                      root = None, stage = '', title = '', ui_scale = 1.):
+        """
+        Stand in for the overview window: mark the first tone bad, with
+        a reason, in the result and the store's tone marks.
+
+        Parameters:
+        ts (dict): the timestream.
+        result (dict): its spectra.
+        f_reduced (np.array): the group's reduced frequencies.
+        bad, limits (dict or None): saved marks and limits.
+        root (zarr.Group): the store root.
+        stage (str): the result's path.
+        title (str): window title.
+        ui_scale (float): font scale.
+
+        Returns:
+        bad, limits (dict): as the window.
+        """
+        windows.append(stage)
+        assert len(result['sxx_reduced']) == len(ts['rows'])
+        # The window sees the raw spectra, before the common modes
+        assert 'sxx_reduced_cn' not in result
+        if not marking:
+            return {}, {}
+        r = int(ts['res_idxs'][0])
+        return {r: 'high noise'}, {'10 Hz': [1e-17, 1e-15]}
+
+    monkeypatch.setattr(po, 'run_psd_overview', fake_overview)
     argv = ['--store', str(path)]
     monkeypatch.setattr(m, 'TIMESTREAMS', [])
     assert m.main(m.parse_args(argv)) is None
@@ -1127,13 +1616,35 @@ def test_07_psds(photon_store, monkeypatch, capsys):
     assert 'Previous results' in out
     # Run 0's tone set 0 and both tone sets of run 1
     monkeypatch.setattr(m, 'TIMESTREAMS', [0, 'dark0b'])
-    res = m.main(m.parse_args(argv))
+    res = m.main(m.parse_args(argv + ['--name', 'dark']))
     assert sorted(res) == ['timestream0', 'timestream1', 'timestream2']
     root = dl.open_store(path)
     g = root['ts_psd0']
     assert g.attrs['kind'] == 'analysis' and g.attrs['reference'] is None
+    assert g.attrs['name'] == 'dark'
     assert g.attrs['timestreams'] == [0, 'dark0b']
     assert g.attrs['settings']['cn_remove'] is True
+    # The window ran per timestream; its marks and limits are saved
+    assert windows == ['ts_psd0/timestream0', 'ts_psd0/timestream1',
+                       'ts_psd0/timestream2']
+    # A run whose window marks the first tone bad: the mark, reason and
+    # limits are saved, and the tone stayed out of the common modes
+    marking.append(True)
+    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    m.main(m.parse_args(argv + ['--name', 'marks']))
+    marking.clear()
+    monkeypatch.setattr(m, 'TIMESTREAMS', [0, 'dark0b'])
+    root = dl.open_store(path)
+    t0 = root[f"ts_psd{dl.list_indices(root, 'ts_psd')[-1]}/timestream0"]
+    assert t0['bad'][:].tolist() == [True] + [False] * 5
+    assert list(t0['bad_reason'][:]) == ['high noise'] + [''] * 5
+    assert t0.attrs['limits'] == {'10 Hz': [1e-17, 1e-15]}
+    assert t0['status'][:][0] == 'marked bad: high noise'
+    assert np.isnan(t0['sxx_reduced_cn'][:][0]).all()
+    assert np.isnan(t0['cn_weights'][:][0]).all()
+    assert np.isfinite(t0['sxx_reduced_cn'][:][1:]).all()
+    monkeypatch.setattr(po, 'run_psd_overview',
+                        lambda *a, **k: ({}, {}))
     # 1.5 s at stage 0: 6.7 Hz to 954 Hz
     np.testing.assert_array_equal(g['f_reduced'][:], [10., 30., 100., 300.])
     dt = g['timestream0'].attrs['dt']
@@ -1190,21 +1701,26 @@ def test_07_psds(photon_store, monkeypatch, capsys):
     loaded = psds.load_group(root, 0)
     assert len(loaded['timestreams']) == 3
     assert loaded['timestreams'][2]['common_modes'][1]['n_comp'] > 0
+    assert psds.load_group(root, 'dark')['name'] == 'dark'
+    with pytest.raises(KeyError, match = 'named'):
+        psds.load_group(root, 'light')
+    assert "ts_psd0: 'dark', ts0 set 0" in psds.describe_results(root)
     assert 'common modes 3 modes' in psds.describe_results(root)
     # Without common-mode removal: no cn arrays
     monkeypatch.setattr(m, 'TIMESTREAMS', [dict(name = 'dark0b',
                                                 tone_sets = [0], cal = 0)])
     m.main(m.parse_args(argv + ['--no-cn']))
-    t = dl.open_store(path)['ts_psd1/timestream0']
+    t = dl.open_store(path)['ts_psd2/timestream0']
+    assert dl.open_store(path)['ts_psd2'].attrs['name'] is None
     assert t.attrs['cn_removed'] is False and 'sxx_binned_cn' not in t
     assert 'common_modes' not in t and t.attrs['run'] == 'ts1'
-    assert dl.open_store(path)['ts_psd1'].attrs['timestreams'] == \
+    assert dl.open_store(path)['ts_psd2'].attrs['timestreams'] == \
         [dict(name = 'dark0b', tone_sets = [0], cal = 0)]
     # Peak deglitching finds the simulated pulses (about 30 photons/s per
     # tone plus cosmic rays)
     monkeypatch.setattr(m, 'TIMESTREAMS', [0])
     m.main(m.parse_args(argv + ['--deglitch', 'peaks']))
-    t = dl.open_store(path)['ts_psd2/timestream0']
+    t = dl.open_store(path)['ts_psd3/timestream0']
     assert t.attrs['deglitch'] == 'peaks'
     ng = t['n_glitches'][:]
     # About 45 pulses per tone, found in proportion to each tone's
@@ -1220,26 +1736,27 @@ def test_07_psds(photon_store, monkeypatch, capsys):
     with pytest.raises(ValueError, match = 'PHOTONS'):
         m.main(m.parse_args(argv + ['--deglitch', 'photons']))
     root = dl.open_store(path, mode = 'a')
-    if not dl.list_indices(root, 'ts_photons'):
-        m6 = load_script('06_find_photons.py')
+    if 'photons' not in root or 'dark0_set0' not in root['photons']:
+        m6 = load_script('06a_find_photons.py')
         monkeypatch.setattr(m6, 'TIMESTREAMS', [0])
         m6.main(m6.parse_args(argv + ['--no-gui']))
-    p = dl.list_indices(dl.open_store(path), 'ts_photons')[0]
     m.main(m.parse_args(argv + ['--deglitch', 'photons', '--photons',
-                                str(p)]))
+                                'dark0_set0']))
     root = dl.open_store(path)
-    g = root['ts_psd3']
-    assert g.attrs['reference'] == f'ts_photons{p}'
+    g = root['ts_psd4']
+    assert g.attrs['reference'] == 'photons/dark0_set0'
     t = g['timestream0']
     n_cosmic = t['n_glitches'][:]
-    assert np.all(n_cosmic >= 0) and np.all(n_cosmic < 30)
-    assert n_cosmic.sum() > 0
+    # The tone marked bad in the photon result has no filter: -1
+    has = n_cosmic >= 0
+    assert has.sum() >= 5 and np.all(n_cosmic[has] < 30)
+    assert n_cosmic[has].sum() > 0
     monkeypatch.setattr(m, 'GLITCH_PULSES', 'all')
     m.main(m.parse_args(argv + ['--deglitch', 'photons', '--photons',
-                                str(p)]))
-    t = dl.open_store(path)['ts_psd4/timestream0']
-    assert np.all(t['n_glitches'][:] > n_cosmic)
-    assert np.all(t['n_glitches'][:] > 20)
+                                'dark0_set0']))
+    t = dl.open_store(path)['ts_psd5/timestream0']
+    assert np.all(t['n_glitches'][:][has] > n_cosmic[has])
+    assert np.all(t['n_glitches'][:][has] > 20)
     # No timestream is saved
     nsamples = g['timestream0'].attrs['stop']
     sizes = [max(v.shape)
@@ -1247,3 +1764,167 @@ def test_07_psds(photon_store, monkeypatch, capsys):
              for _, v in root[f'ts_psd{q}'].members(max_depth = None)
              if isinstance(v, zarr.Array) and v.shape]
     assert max(sizes) < nsamples / 10
+
+
+def test_07_psds_uncalibrated(photon_store, monkeypatch, capsys):
+    """
+    A tone whose x calibration failed is left out of the timestream, and
+    the per-tone arrays follow the tones kept, not the DataSet's rows.
+    """
+    import citkid.pipeline.interactive.psd_overview as po
+    path, _ = photon_store
+    m = load_script('07_psds.py')
+    monkeypatch.setattr(po, 'run_psd_overview', lambda *a, **k: ({}, {}))
+    root = dl.open_store(path, mode = 'a')
+    arr = root['ts_cal0/set0/poly_x/data']
+    saved = arr[0]
+    arr[0] = np.nan
+    try:
+        monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+        res = m.main(m.parse_args(['--store', str(path), '--name',
+                                   'uncal']))
+    finally:
+        arr[0] = saved
+    assert '5 tones' in capsys.readouterr().out
+    g = res['timestream0']
+    assert g['sxx_reduced'].shape[0] == 5 and g['write_idx'].tolist() == \
+        [0] * 5
+    assert all(s == '' for s in g['status'])
+    assert np.isfinite(g['sxx_binned']).all()
+    assert np.isfinite(g['sxx_reduced'][:, g['valid_reduced']]).all()
+
+
+def test_export_s21_h5(tmp_path, monkeypatch, capsys):
+    """
+    Write a screened sweep as f, i, q and fres in an h5 file, choosing
+    the sweep when several have fitted resonators; the dialogs are
+    skipped with --no-gui.
+    """
+    h5py = pytest.importorskip('h5py')
+    from citkid.crs.sim import simulate_vna_store
+    path = tmp_path / 'sim.zarr'
+    small = dict(f_lo = 1.0e9, f_hi = 1.1e9, n_banks = 1, n_per_bank = 10,
+                 pair_frac = 0.)
+    root, truth = asyncio.run(simulate_vna_store(
+        path, device_kwargs = small, verbose = False))
+    m = load_script('export_s21_h5.py')
+    with pytest.raises(KeyError, match = 'no VNA sweep with fitted'):
+        m.main(m.parse_args(['--store', str(path), '--no-gui',
+                             '--out', str(tmp_path)]))
+    dl.write_array(root['vna0'], 'fres_auto', truth.fr.values[::-1])
+    m2 = load_script('02_find_resonances.py')
+    m2.main(m2.parse_args(['--store', str(path), '--no-manual']))
+    out = m.main(m.parse_args(['--store', str(path), '--no-gui',
+                               '--out', str(tmp_path)]))
+    assert out == os.path.join(str(tmp_path), 's21_simdevice.h5')
+    f, z = dl.load_vna_sweep(dl.open_store(path), 0)
+    with h5py.File(out, 'r') as fh:
+        np.testing.assert_array_equal(fh['f'][:], f)
+        np.testing.assert_array_equal(fh['i'][:], z.real)
+        np.testing.assert_array_equal(fh['q'][:], z.imag)
+        fres = fh['fres'][:]
+        assert fh.attrs['vna'] == 0 and fh.attrs['device'] == 'simdevice'
+    assert len(fres) == len(truth) and np.all(np.diff(fres) > 0)
+    # A second screened sweep: the sweep is asked for (in the terminal
+    # without the window); a sweep without resonators is refused
+    root = dl.open_store(path, mode = 'a')
+    from citkid.zarr_util import copy_group
+    copy_group(root['vna0'], dl.create_group(root, 'vna1', 'raw'))
+    copy_group(root['resonators0'], dl.create_group(root, 'resonators1',
+                                                    'decision'))
+    copy_group(root['vna0'], dl.create_group(root, 'vna2', 'raw'))
+    assert m.sweeps_with_resonators(root) == [0, 1]
+    monkeypatch.setattr('builtins.input', lambda prompt = '': '1')
+    out2 = tmp_path / 'chosen.h5'
+    assert m.main(m.parse_args(['--store', str(path), '--no-gui', '--out',
+                                str(out2)])) == str(out2)
+    assert 'vna0:' in capsys.readouterr().out
+    with h5py.File(out2, 'r') as fh:
+        assert fh.attrs['vna'] == 1
+    with pytest.raises(KeyError, match = 'no fitted resonators'):
+        m.main(m.parse_args(['--store', str(path), '--no-gui', '--vna', '2',
+                             '--out', str(out2)]))
+
+
+def test_08_report(photon_store, monkeypatch, capsys):
+    """
+    Write the lifetime figures and tables of every photon and cosmic-ray
+    result, the PSD figures and tables of every PSD group, and the text,
+    from the store's own results.
+    """
+    import citkid.pipeline.interactive.psd_overview as po
+    import pandas as pd
+    from citkid.pipeline import cosmic_finder as cf
+    from citkid.pipeline import photon_finder as pf
+    path, _ = photon_store
+    argv = ['--store', str(path)]
+    root = dl.open_store(path)
+    if 'dark0_set0' not in pf.list_results(root):
+        m6 = load_script('06a_find_photons.py')
+        monkeypatch.setattr(m6, 'TIMESTREAMS', [0])
+        m6.main(m6.parse_args(argv + ['--no-gui']))
+    if 'dark0_set0' not in cf.list_results(root):
+        m6b = load_script('06b_cosmic_rays.py')
+        monkeypatch.setattr(m6b, 'TIMESTREAMS', [0])
+        m6b.main(m6b.parse_args(argv + ['--no-gui']))
+    m7 = load_script('07_psds.py')
+    monkeypatch.setattr(po, 'run_psd_overview', lambda *a, **k: ({}, {}))
+    monkeypatch.setattr(m7, 'TIMESTREAMS', [0, 'dark0b'])
+    m7.main(m7.parse_args(argv + ['--name', 'report']))
+    root = dl.open_store(path)
+    p = dl.list_indices(root, 'ts_psd')[-1]
+    m = load_script('08_report.py')
+    out = path.parent / 'report'
+    monkeypatch.setattr(m, 'PSDS', [p])
+    paths = m.main(m.parse_args(argv + ['--out', str(out)]))
+    device = root.attrs['device']
+    # A result saved incompletely (no arrays) is skipped and named
+    dl.open_store(path, mode = 'a')['photons'].require_group('partial')
+    paths = m.main(m.parse_args(argv + ['--out', str(out)]))
+    complete = [n for n in pf.list_results(root)
+                if 'tau' in root[f'photons/{n}']]
+    names = [f'lifetime_photons_{n}' for n in complete] + \
+        [f'lifetime_cosmic_{n}' for n in cf.list_results(root)]
+    for key in names:
+        assert paths[key].endswith(f'{device}_{key}.png')
+        assert os.path.getsize(paths[key]) > 10000
+        t = pd.read_csv(paths[key + '_csv'])
+        assert set(t.columns) >= {'res_idx', 'fres', 'height', 'tau',
+                                  'n_used', 'bad', 'bad_reason'}
+        assert len(t) == 6 and np.isfinite(t['fres']).all()
+        assert 0.9e9 < t['fres'].min() and t['fres'].max() < 10e9
+    ph = pd.read_csv(paths['lifetime_photons_dark0_set0_csv'])
+    # Every tone has a height; the tones not marked bad have a decay time
+    good = ph[~ph['bad']]
+    assert np.isfinite(ph['height']).all() and len(good) >= 5
+    assert np.isfinite(good['tau']).all()
+    np.testing.assert_allclose(good['tau'], 150e-6, rtol = 0.4)
+    # The PSD group: the per-tone table at every reduced frequency, the
+    # spectra table over the binned frequencies, the figure
+    key = f'psd{p}'
+    assert os.path.getsize(paths[key]) > 10000
+    pts = pd.read_csv(paths[key + '_csv'])
+    f_reduced = root[f'ts_psd{p}/f_reduced'][:]
+    assert len(pts) == 18 and pts['timestream'].nunique() == 3
+    for fr in f_reduced:
+        assert f'sxx_{fr:g}' in pts and f'sxx_cn_{fr:g}' in pts and \
+            f'sfactor_{fr:g}' in pts
+    assert np.isfinite(pts['sxx_cn_10']).all()
+    assert np.isfinite(pts['sfactor_10']).all()
+    spec = pd.read_csv(paths[key + '_spectra_csv'])
+    assert {'f', 'sxx_mean_on', 'sxx_lo_on', 'sxx_hi_on', 'sxx_cn_mean_on',
+            'spar_mean_on', 'sper_mean_on'} <= set(spec.columns)
+    assert len(spec) == len(root[f'ts_psd{p}/timestream0/f_binned'][:])
+    ok = np.isfinite(spec['sxx_mean_on'])
+    assert ok.sum() > 50
+    assert np.all(spec.loc[ok, 'sxx_lo_on'] <= spec.loc[ok, 'sxx_mean_on'])
+    assert np.all(spec.loc[ok, 'sxx_mean_on'] <= spec.loc[ok, 'sxx_hi_on'])
+    text = open(paths['info'], encoding = 'utf-8').read()
+    assert 'photons/dark0_set0' in text and 'cosmic/dark0_set0' in text
+    assert 'Skipped (saved incompletely): ' in text and \
+        'photons/partial' in text
+    assert f'ts_psd{p} (report)' in text and 'Sxx at 10 Hz' in text
+    # --pick with a cancelled dialog writes nothing
+    import citkid.daq_browser as db
+    monkeypatch.setattr(db, 'choose_store', lambda start = None: None)
+    assert m.main(m.parse_args(['--pick', '--out', str(out)])) is None

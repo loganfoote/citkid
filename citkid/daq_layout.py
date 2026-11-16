@@ -1010,6 +1010,165 @@ def describe_stream_runs(root, tuning = None):
         lines.append('  none')
     return '\n'.join(lines)
 
+################################################################################
+################################## Tone marks ##################################
+################################################################################
+# The tone-marks registry at the store root: per resonator, what the user
+# said about it at any stage (bad with a reason, a note, or clearing a
+# bad mark), in order
+TONE_MARKS_GROUP = 'tone_marks'
+MARK_KINDS = ('bad', 'note', 'clear')
+# Reasons offered when a tone is marked bad (any text can be typed)
+BAD_REASONS = ('double resonance', 'no resonance', 'weird pulse shape',
+               'low or no pulses', 'high noise', 'bad fit', 'other')
+
+def tone_marks_group(root, create = False):
+    """
+    Return the tone-marks group at the store root.
+
+    Parameters:
+    root (zarr.Group): the store root.
+    create (bool): If True, make the group if it is missing (the root
+        must be writable). Default False.
+
+    Returns:
+    grp (zarr.Group or None): the group, or None if it is missing and not
+        created.
+    """
+    if TONE_MARKS_GROUP in root:
+        return root[TONE_MARKS_GROUP]
+    if not create:
+        return None
+    return create_group(root, TONE_MARKS_GROUP, 'decision',
+                        attrs = dict(marks = {}))
+
+def add_tone_mark(root, res_idx, kind, text = '', stage = ''):
+    """
+    Record what the user said about a resonator: mark it bad with a
+    reason, add a note (the tone is kept), or clear its bad mark. Entries
+    are only ever appended, so the history stays.
+
+    Parameters:
+    root (zarr.Group): the store root (writable).
+    res_idx (int): resonator index.
+    kind (str): 'bad', 'note' or 'clear'.
+    text (str): the reason or note. Default ''.
+    stage (str): the group the user was working in, e.g.
+        'tune0/power_fits', 'ts_cal0/set0', 'photons/dark'. Default ''.
+
+    Returns:
+    entry (dict): the entry written: 'kind', 'text', 'stage', 'created'.
+
+    Raises:
+    ValueError: if ``kind`` is unknown.
+    """
+    if kind not in MARK_KINDS:
+        raise ValueError(f'kind must be one of {MARK_KINDS}, not {kind!r}')
+    grp = tone_marks_group(root, create = True)
+    marks = dict(grp.attrs.get('marks', {}))
+    entry = dict(kind = kind, text = str(text).strip(), stage = str(stage),
+                 created = _now())
+    key = str(int(res_idx))
+    marks[key] = list(marks.get(key, [])) + [entry]
+    grp.attrs['marks'] = marks
+    return entry
+
+def clear_tone_mark(root, res_idx, text = '', stage = ''):
+    """
+    Clear a resonator's bad mark (an entry of kind 'clear').
+
+    Parameters:
+    root (zarr.Group): the store root (writable).
+    res_idx (int): resonator index.
+    text (str): why. Default ''.
+    stage (str): the group the user was working in. Default ''.
+
+    Returns:
+    entry (dict): the entry written.
+    """
+    return add_tone_mark(root, res_idx, 'clear', text, stage)
+
+def tone_marks(root, res_idx = None):
+    """
+    Read the tone marks.
+
+    Parameters:
+    root (zarr.Group): the store root.
+    res_idx (int or None): one resonator. Default None: all.
+
+    Returns:
+    marks (dict or list): res_idx (int): list of entries, in order; with
+        ``res_idx``, that resonator's list (empty if none).
+    """
+    grp = tone_marks_group(root)
+    marks = {} if grp is None else grp.attrs.get('marks', {})
+    if res_idx is not None:
+        return list(marks.get(str(int(res_idx)), []))
+    return {int(k): list(v) for k, v in marks.items()}
+
+def bad_tones(root):
+    """
+    Return the resonators marked bad and not cleared since.
+
+    Parameters:
+    root (zarr.Group): the store root.
+
+    Returns:
+    bad (dict): res_idx (int): the latest 'bad' entry.
+    """
+    out = {}
+    for r, entries in tone_marks(root).items():
+        latest = None
+        for e in entries:
+            if e['kind'] == 'bad':
+                latest = e
+            elif e['kind'] == 'clear':
+                latest = None
+        if latest is not None:
+            out[r] = latest
+    return out
+
+def bad_reason(entry):
+    """
+    Describe a bad entry in a few words, for lists and status lines.
+
+    Parameters:
+    entry (dict): a 'bad' entry (``bad_tones``).
+
+    Returns:
+    text (str): e.g. 'double resonance (tune0/power_fits)'.
+    """
+    stage = f" ({entry['stage']})" if entry.get('stage') else ''
+    return (entry.get('text') or 'no reason given') + stage
+
+def describe_tone_marks(root, res_idxs = None):
+    """
+    Describe the tone marks, one line per entry, grouped by resonator.
+
+    Parameters:
+    root (zarr.Group): the store root.
+    res_idxs (sequence of int or None): only these resonators. Default
+        None: every resonator with marks.
+
+    Returns:
+    text (str): the description.
+    """
+    marks = tone_marks(root)
+    keys = sorted(marks) if res_idxs is None else \
+        [int(r) for r in res_idxs if int(r) in marks]
+    bad = bad_tones(root)
+    lines = [f'Tone marks ({len(bad)} resonators bad, {len(marks)} with '
+             'marks or notes):']
+    for r in keys:
+        lines.append(f'  res {r}' + (' (bad)' if r in bad else ''))
+        for e in marks[r]:
+            where = f" at {e['stage']}" if e.get('stage') else ''
+            lines.append(f"    {e['created']} {e['kind']}{where}: "
+                         f"{e.get('text') or '-'}")
+    if len(lines) == 1:
+        lines.append('  none')
+    return '\n'.join(lines)
+
 def select_streams(
     root, name = None, run = None, chunks = None, tone_sets = None,
     tuning = None

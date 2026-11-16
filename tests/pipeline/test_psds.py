@@ -76,23 +76,6 @@ def test_psd_summary_white_noise():
     assert len(fb) == 0 and binned.shape == (2, 0)
 
 
-def test_psd_summary_pulse_tube_filter():
-    rng = np.random.default_rng(1)
-    dt, T = 1e-3, 200000
-    t = np.arange(T) * dt
-    x = rng.normal(0, 1e-6, size = T) + 5e-6 * np.sin(2 * np.pi * 1.39296 * t)
-    freqs = np.array([1.])
-    _, _, r = psds.psd_summary(x, dt, freqs, fmin = 0.5)
-    _, _, rf = psds.psd_summary(x, dt, freqs, fmin = 0.5, filter_pt_n = 3)
-    # The reduced value is of the unfiltered spectrum either way
-    assert r[0, 0] == rf[0, 0]
-    fb, b, _ = psds.psd_summary(x, dt, freqs, fmin = 0.5)
-    fbf, bf, _ = psds.psd_summary(x, dt, freqs, fmin = 0.5, filter_pt_n = 3)
-    np.testing.assert_array_equal(fb, fbf)
-    k = np.argmin(np.abs(fb - 1.39296))
-    assert bf[0, k] < 0.01 * b[0, k]
-
-
 def test_remove_common_modes():
     """
     Tones sharing a slow common mode on top of white noise: the mode is

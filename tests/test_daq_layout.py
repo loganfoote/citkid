@@ -588,3 +588,44 @@ def test_migrate_root_runs(tmp_path):
     assert src[0]['group'] == 'ts1/set1' and src[0]['stream'] == 'stream'
     # Nothing left to move
     assert dl.migrate_root_runs(path, verbose = False) == []
+
+
+def test_tone_marks(tmp_path):
+    """
+    The tone-marks registry appends entries per resonator (bad with a
+    reason, notes, clears), reports the resonators bad and not cleared
+    since, and describes itself.
+    """
+    root = zarr.open_group(tmp_path / 's.zarr', mode = 'a')
+    assert dl.tone_marks_group(root) is None
+    assert dl.tone_marks(root) == {} and dl.bad_tones(root) == {}
+    assert dl.describe_tone_marks(root).endswith('none')
+    e = dl.add_tone_mark(root, 5, 'bad', 'double resonance',
+                         'tune0/power_fits')
+    assert e['kind'] == 'bad' and e['stage'] == 'tune0/power_fits'
+    assert root['tone_marks'].attrs['kind'] == 'decision'
+    dl.add_tone_mark(root, 7, 'note', ' looks fine ', 'ts_cal0/set0')
+    dl.add_tone_mark(root, 5, 'note', 'checked again', 'photons/dark')
+    note = dl.tone_marks(root, 7)
+    assert len(note) == 1 and note[0]['text'] == 'looks fine'
+    assert note[0]['stage'] == 'ts_cal0/set0' and note[0]['kind'] == 'note'
+    assert [x['kind'] for x in dl.tone_marks(root, 5)] == ['bad', 'note']
+    assert dl.tone_marks(root, 9) == []
+    assert set(dl.bad_tones(root)) == {5}
+    assert dl.bad_reason(dl.bad_tones(root)[5]) ==         'double resonance (tune0/power_fits)'
+    assert dl.bad_reason(dict(kind = 'bad', text = '')) == 'no reason given'
+    text = dl.describe_tone_marks(root)
+    assert '1 resonators bad, 2 with' in text and 'res 5 (bad)' in text
+    assert 'bad at tune0/power_fits: double resonance' in text
+    only = dl.describe_tone_marks(root, [7])
+    assert 'res 7' in only and 'res 5' not in only
+    dl.clear_tone_mark(root, 5, 'it is fine', 'photons/dark')
+    assert dl.bad_tones(root) == {}
+    dl.add_tone_mark(root, 5, 'bad', 'high noise')
+    assert set(dl.bad_tones(root)) == {5}
+    assert dl.bad_reason(dl.bad_tones(root)[5]) == 'high noise'
+    with pytest.raises(ValueError, match = 'kind'):
+        dl.add_tone_mark(root, 5, 'good')
+    # Reopened, the marks are still there
+    again = zarr.open_group(tmp_path / 's.zarr', mode = 'r')
+    assert len(dl.tone_marks(again, 5)) == 4

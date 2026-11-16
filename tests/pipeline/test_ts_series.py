@@ -594,3 +594,35 @@ def test_fixed_theta_analysis_uses_its_panel(qt_app, monkeypatch):
     assert [p.step_names for p in win.panels] == [tuple(g) for g in panels]
     _close(win)
 
+
+def test_mark_all_series_bad_asks_keep_or_remove(qt_app, monkeypatch):
+    """
+    Marking every series point bad first asks whether to keep or remove
+    the tone: cancelling marks nothing, keeping marks the points (with a
+    note where there is a store), removing records the tone bad.
+    """
+    win, _ = _make_window(qt_app, monkeypatch)
+    win._mark_series_bad = MagicMock()
+    recorded = []
+    win._record = lambda kind, text: recorded.append((kind, text)) or True
+    win._ask_all_bad = lambda: (None, '')
+    win._mark_all_series_bad()
+    win._mark_series_bad.assert_not_called()
+    win._ask_all_bad = lambda: ('keep', 'double resonance')
+    win._mark_all_series_bad()
+    win._mark_series_bad.assert_called_once()
+    assert recorded == [('note', 'double resonance')]
+    win._ask_all_bad = lambda: ('remove', '')
+    win._mark_all_series_bad()
+    assert recorded[-1] == ('bad', 'every fit point marked bad')
+    # Mark Tone Bad and Add Note record straight away; without a store
+    # (mock datasets) nothing is written
+    win._ask_reason = lambda: 'high noise'
+    win._mark_tone_bad()
+    assert recorded[-1] == ('bad', 'high noise')
+    win._ask_note = lambda: 'a note'
+    win._add_note()
+    assert recorded[-1] == ('note', 'a note')
+    del win._record
+    assert win._record('note', 'x') is False and win._res_idx() is None
+    _close(win)

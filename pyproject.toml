@@ -49,6 +49,8 @@ dependencies = [
   "tqdm>=4.67.1",
   "pandas>=2.3.3",
   "zarr>=3.1.5",
+  # s21 h5 export (export_s21_h5.py)
+  "h5py>=3.16.0",
   "pyyaml>=6.0.3",
   "psutil>=7.2.2",
   # zarr's Group.tree()
@@ -92,6 +94,7 @@ constraint-dependencies = [
   "tqdm==4.67.1",
   "pandas==2.3.3",
   "zarr==3.1.5",
+  "h5py==3.16.0",
   "pyyaml==6.0.3",
   "psutil==7.2.2",
   "rich==15.0.0",

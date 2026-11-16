@@ -18,6 +18,7 @@ from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 import threading
 
 from ..analysis import AnalysisRunner
+from . import marks as _marks
 from ...qt_compat import (
     responsive_busy,
     run_responsive,
@@ -1078,8 +1079,13 @@ class StepPanel(QtWidgets.QWidget):
     def _on_bad_data_clicked(self):
         """
         Mark the current row's outputs bad (NaN), and ask the window to mark
-        the later panels bad too (``marked_bad``).
+        the later panels bad too (``marked_bad``). A window that records
+        tones in the store's tone marks sets ``before_bad``, a callable
+        asked first; False from it cancels.
         """
+        before = getattr(self, 'before_bad', None)
+        if before is not None and before() is False:
+            return
         self._status_label.setText("Marking bad…")
         QtWidgets.QApplication.processEvents()
         ok = self._write_nan_outputs()
@@ -1370,7 +1376,10 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             panel.panel_index = i
             panel.downstream_rerun.connect(self._on_panel_rerun)
             panel.marked_bad.connect(self._on_panel_marked_bad)
+            panel.before_bad = self._ask_bad_reason
             self._add_panel(panel)
+        self._bad_reason = None
+        self._update_marks_label()
 
         # Keyboard shortcuts: navigate resonator index
         # Forward:  D key  or  Right arrow
@@ -1389,6 +1398,11 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         # H: show or hide the help dialog
         QtGui.QShortcut(QtGui.QKeySequence("H"), self,
                         activated=self._toggle_help)
+        # M: mark the tone bad; T: add a note (the store's tone marks)
+        QtGui.QShortcut(QtGui.QKeySequence("M"), self,
+                        activated=self._mark_tone_bad)
+        QtGui.QShortcut(QtGui.QKeySequence("T"), self,
+                        activated=self._add_note)
 
         # Number keys 1-9: run panel N and all following ("Run +", 1-indexed).
         # Shift+N: run panel N only.
@@ -1540,10 +1554,29 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         self._save_label.setToolTip("Background save status")
         layout.addWidget(self._save_label)
 
+        # The store's tone marks: mark the tone bad (every panel's outputs
+        # NaN, with a reason) or add a note
+        self._tone_bad_btn = QtWidgets.QPushButton("Mark tone bad")
+        self._tone_bad_btn.setToolTip(
+            "Mark this tone bad with a reason: every panel's outputs for "
+            "it are NaN, and the store's tone marks record it (M)")
+        self._tone_bad_btn.clicked.connect(self._mark_tone_bad)
+        layout.addWidget(self._tone_bad_btn)
+        self._note_btn = QtWidgets.QPushButton("Add note")
+        self._note_btn.setToolTip(
+            "Record a note on this tone in the store's tone marks; the "
+            "tone is kept (T)")
+        self._note_btn.clicked.connect(self._add_note)
+        layout.addWidget(self._note_btn)
+        self._marks_label = StatusLabel(min_width=120)
+        self._marks_label.setToolTip("This tone's marks and notes in the "
+                                     "store's tone marks")
+        layout.addWidget(self._marks_label)
+
         self._hints_label = hint_label(
             "[\u2190/A  \u2192/D] navigate    [R] rescale    "
             "[N] run+following    [\u21e7N] run panel only    "
-            "[H] help"
+            "[M] mark tone bad    [T] add note    [H] help"
         )
         rows.addWidget(self._hints_label)
         return w
@@ -1681,6 +1714,10 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
                 ('R', 'Rescale every plot'),
                 ('1-9', 'Run panel N and every panel after it (Run+)'),
                 ('Shift+1-9', 'Run panel N only'),
+                ('M', "Mark the tone bad with a reason (every panel's "
+                      "outputs NaN; recorded in the store's tone marks)"),
+                ('T', "Add a note on the tone to the store's tone marks "
+                      '(the tone is kept)'),
                 ('H', 'Show / hide this help'),
             ]),
             PANEL_HELP,
@@ -1754,6 +1791,119 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             return
         for panel in self.panels[src_idx + 1:]:
             panel.mark_bad_after(source_panel)
+        # The store's tone marks: the reason asked by _ask_bad_reason
+        reason = getattr(self, '_bad_reason', None)
+        self._bad_reason = None
+        record = getattr(self, '_record', None)
+        if reason is not None and record is not None:
+            record('bad', reason)
+        update = getattr(self, '_update_marks_label', None)
+        if update is not None:
+            update()
+
+    ############################################################################
+    # The store's tone marks
+    ############################################################################
+    def _ask_bad_reason(self):
+        """
+        Ask why the tone is bad before a panel marks it (``before_bad``);
+        the reason is recorded when the panel reports the mark.
+
+        Returns:
+        go (bool): False if cancelled.
+        """
+        reason = self._ask_reason()
+        if reason is None:
+            return False
+        self._bad_reason = reason
+        return True
+
+    def _ask_reason(self):
+        """
+        Ask why the current tone is bad (``marks.ask_reason``).
+
+        Returns:
+        reason (str or None): the reason, or None if cancelled.
+        """
+        return _marks.ask_reason(self, f'Mark res {self._res_idx()} bad')
+
+    def _mark_tone_bad(self):
+        """
+        Mark the current tone bad with a reason: the first panel's Bad
+        Data (every panel's outputs for this row become NaN), recorded
+        in the store's tone marks (the button, or M).
+        """
+        if self.panels:
+            self.panels[0]._on_bad_data_clicked()
+
+    def _add_note(self):
+        """
+        Record a note on the current tone in the store's tone marks (the
+        button, or T). The tone is kept.
+        """
+        note = self._ask_note()
+        if note:
+            self._record('note', note)
+            self._update_marks_label()
+
+    def _ask_note(self):
+        """
+        Ask for a note on the current tone (``marks.ask_note``).
+
+        Returns:
+        note (str or None): the note, or None if cancelled.
+        """
+        return _marks.ask_note(self, f'Note on res {self._res_idx()}')
+
+    def _res_idx(self):
+        """
+        Return the current row's resonator index.
+
+        Returns:
+        res_idx (int or None): the index, or None if the DataSet has
+            none.
+        """
+        try:
+            return int(np.asarray(self.AR.DS.res_idxs[:])[self._current_di])
+        except Exception:
+            return None
+
+    def _record(self, kind, text):
+        """
+        Write a mark on the current tone to the store's tone marks
+        (``marks.record``), if the DataSet is in a store.
+
+        Parameters:
+        kind (str): 'bad', 'note' or 'clear'.
+        text (str): the reason or note.
+
+        Returns:
+        written (bool): True if an entry was written.
+        """
+        root, stage = _marks.registry(self._ds_root())
+        return _marks.record(root, self._res_idx(), kind, text, stage)
+
+    def _ds_root(self):
+        """
+        Return the DataSet's zarr group, if any.
+
+        Returns:
+        grp (zarr.Group or None): ``AR.DS.root``, or None.
+        """
+        AR = getattr(self, 'AR', None)
+        return getattr(getattr(AR, 'DS', None), 'root', None)
+
+    def _update_marks_label(self):
+        """
+        Show the current tone's marks and notes from the store.
+        """
+        label = getattr(self, '_marks_label', None)
+        if label is None:
+            return
+        root, _ = _marks.registry(self._ds_root())
+        r = self._res_idx()
+        label.setText('' if root is None or r is None
+                      else _marks.mark_label(root, r))
 
     def _auto_initialize_all(self):
         """Initialise every panel in order so upstream data is always ready."""
@@ -1792,6 +1942,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         # Sync nav position when spinbox is changed manually. A row outside
         # data_idxs keeps the nearest entry as the nav position.
         self._current_di = value
+        self._update_marks_label()
         if value in self._data_idxs:
             self._nav_pos = self._data_idxs.index(value)
         elif self._data_idxs:

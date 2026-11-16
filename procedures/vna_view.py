@@ -1,23 +1,10 @@
 """
-View a saved VNA sweep (not a numbered step: use it after 01_vna_sweep.py
-and before 02_find_resonances.py, or any time).
-
-Opens a window (``citkid.vna.view``) with |S21| in dB and the phase of
-S21 versus frequency for ``vna{k}`` of the device store
-``<DATA_DIR>/<COOLDOWN>/<DEVICE>[_<SUFFIX>].zarr`` (the latest sweep by
-default), with the band edges marked and the sweep's settings in the header. The
-plots share the frequency axis: drag to pan, scroll to zoom, and press R
-to fit the data again. Nothing is saved, and no CRS is needed.
-01_vna_sweep.py can open this window itself when its sweep finishes
-(``VIEW`` / ``--view``).
+Show a saved VNA sweep (vna{k}, the latest by default) in a window.
+No CRS needed.
 
 Usage:
     python vna_view.py --device deviceA
     python vna_view.py --device deviceA --vna 1
-    python vna_view.py --store ~/data/sim/simdevice.zarr
-
-Edit the settings below for your setup; the command-line options override
-them for one run.
 """
 import argparse
 import os
@@ -26,13 +13,11 @@ from citkid.vna.view import run_vna_view
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-DATA_DIR = '~/data'         # stores are in
-                            # DATA_DIR/COOLDOWN/DEVICE[_SUFFIX].zarr
-COOLDOWN = 'cooldown'       # cooldown name
-DEVICE = 'device'           # device name
-SUFFIX = ''                 # store name suffix: the store is
-                            # DEVICE_SUFFIX.zarr ('': DEVICE.zarr)
-VNA = None                  # sweep index (vna{k}); None: the latest
+DATA_DIR = '~/data'
+COOLDOWN = 'cooldown'
+DEVICE = 'device'
+SUFFIX = ''
+VNA = None
 
 ################################################################################
 ################################### Script #####################################

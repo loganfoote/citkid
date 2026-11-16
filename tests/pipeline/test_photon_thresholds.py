@@ -11,6 +11,21 @@ from citkid.signal import photons as ph
 from ..signal.test_photons import DT, synth
 
 
+from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
+
+
+def _press(widget, key):
+    """
+    Send a key press to a widget, as the keyboard would.
+
+    Parameters:
+    widget (QWidget): the widget with the focus.
+    key (Qt.Key): the key.
+    """
+    QtWidgets.QApplication.sendEvent(widget, QtGui.QKeyEvent(
+        QtCore.QEvent.KeyPress, key, QtCore.Qt.NoModifier))
+
+
 @pytest.fixture
 def qapp():
     """
@@ -102,10 +117,17 @@ def test_window_thresholds(qapp, tones):
     assert win.hmax_box.value() == pytest.approx(1.8)
     win.hmin_box.setValue(0.45)
     assert win.hmin_line.value() == pytest.approx(0.45)
-    # Global thresholds: every tone without its own reruns
+    # Global thresholds: every tone without its own reruns, one at a
+    # time (the progress bar shows while they run, then hides)
+    shown = []
+    win.progress.setVisible = lambda v: shown.append(v)
     win.scope_all.setChecked(True)
     win.rerun()
-    assert calls == [[5, 7]]
+    assert calls == [[5], [7]]
+    # The scope goes back to the selected tone afterwards
+    assert win.scope_tone.isChecked() and not win.scope_all.isChecked()
+    assert shown == [True] and win.progress.value() == 2
+    assert win.progress.isHidden()
     assert (win.thresholds.hmin, win.thresholds.hmax) == \
         pytest.approx((0.45, 1.8))
     assert win.results[5]['hmax'] == pytest.approx(1.8)
@@ -118,6 +140,99 @@ def test_window_thresholds(qapp, tones):
     assert win.thresholds.overrides[11]['hmin'] == pytest.approx(0.7)
     assert win.results[7]['hmin'] == pytest.approx(0.7)
     assert win.tone_list.item(1).text().startswith('*')
+    # * means reviewed: tone 0 was looked at and left, tone 1 got its own
+    # values; the earlier apply to all did not mark anything by itself
+    assert win.thresholds.reviewed == {10, 11}
+    assert win.thresholds.to_dict()['reviewed'] == [10, 11]
+    assert win.tone_list.item(0).text().startswith('*')
+    # Mark bad (B), and clear it again: no rerun either way
+    n_calls = len(calls)
+    win._ask_reason = lambda: 'weird pulse shape'
+    win.toggle_bad()
+    assert win.thresholds.bad == {11: 'weird pulse shape'}
+    assert win.thresholds.is_bad(11)
+    assert win.tone_list.item(1).text().startswith('x')
+    assert win.status.text().startswith('MARKED BAD')
+    assert win.bad_btn.text().startswith('Clear')
+    assert win.thresholds.to_dict()['bad'] == {'11': 'weird pulse shape'}
+    assert 'weird pulse shape' in win.tone_list.item(1).text()
+    assert 'MARKED BAD: weird pulse shape' in win.status.text()
+    win.toggle_bad()
+    assert win.thresholds.bad == {} and not win.thresholds.is_bad(11)
+    assert win.tone_list.item(1).text().startswith('*')
+    assert not win.status.text().startswith('MARKED BAD')
+    assert len(calls) == n_calls
+    # The decay fit: the boxes show the tone's values; Apply fit gives
+    # the tone its own, or every tone the same (dropping their own), with
+    # no rerun; the plot title says what was fit
+    assert win.tau_skip_box.value() == 2 and win.tau_fit_box.value() == 1.
+    win.tau_skip_box.setValue(3)
+    win.tau_fit_box.setValue(0.5)
+    win.fit_scope_tone.setChecked(True)
+    win.apply_fit()
+    assert win.thresholds.for_tone(11)['tau_skip'] == 3
+    assert win.thresholds.for_tone(11)['tau_fit_s'] == pytest.approx(5e-4)
+    assert win.thresholds.for_tone(10)['tau_skip'] == 2
+    assert 'from 3 samples' in win.pulse_plot.titleLabel.text
+    tau1 = win.tau_of(1)[0]
+    assert np.isfinite(tau1) and win.tau_of(1)[2] == round(0.5e-3 / DT)
+    win.tau_fit_box.setValue(1.)
+    win.fit_scope_all.setChecked(True)
+    win.apply_fit()
+    assert win.fit_scope_tone.isChecked()
+    assert win.thresholds.tau_skip == 3 and win.thresholds.tau_fit_s == 1e-3
+    assert 'tau_skip' not in win.thresholds.overrides.get(11, {})
+    assert win.tau_of(0)[2] == round(1e-3 / DT) and len(calls) == n_calls
+    # The overview: histograms over the tones, limits at the data's edges
+    # at first, then where the lines go; the tones outside are listed and
+    # can be the only ones in the tone list; a click selects a tone
+    win.open_overview()
+    ov = win.overview
+    assert ov.isVisible() and set(win.thresholds.limits) == \
+        {'height', 'tau', 'rate'}
+    values = win.overview_values()
+    assert np.isfinite(values['height']).all() and \
+        np.isfinite(values['tau']).all()
+    lo, hi = win.thresholds.limits['rate']
+    assert lo == pytest.approx(values['rate'].min())
+    assert hi == pytest.approx(values['rate'].max())
+    assert win.outside_limits() == set() and ov.outside_list.count() == 0
+    # Move a low limit between the two tones' values (the quantity that
+    # differs most between them: the tones share one pulse train)
+    key = max(('height', 'tau', 'rate'),
+              key = lambda k: np.ptp(values[k]) / abs(values[k]).max())
+    low_tone = int(np.argmin(values[key]))
+    assert values[key].min() < values[key].max()
+    k = 1e6 if key == 'tau' else 1.
+    ov.lines[key][0].setValue(values[key].mean() * k)
+    ov._on_line()
+    assert win.outside_limits() == {low_tone}
+    assert ov.outside_list.count() == 1 and key in \
+        ov.outside_list.item(0).text()
+    ov.only_outside.setChecked(True)
+    assert win._only_outside and win.tone_list.count() == 1
+    assert win.current() == low_tone
+    assert 'outside the limits: 1 of 2' in win.list_label.text()
+    # A change that brings the selected tone inside the limits keeps it
+    # listed and selected (applying does not jump to another tone)
+    ov.lines[key][0].setValue(values[key].min() * k)
+    ov._on_line()
+    assert win.outside_limits() == set()
+    assert win.tone_list.count() == 1 and win.current() == low_tone
+    ov.lines[key][0].setValue(values[key].mean() * k)
+    ov._on_line()
+    other = 1 - low_tone
+    win.select_tone(other)
+    assert not win._only_outside and win.tone_list.count() == 2
+    assert win.current() == other
+    ov._on_item(ov.outside_list.item(0))
+    assert win.current() == low_tone
+    # Bad tones show in the overview list too
+    win._ask_reason = lambda: 'high noise'
+    win.toggle_bad()
+    assert ov.outside_list.item(0).text().startswith('x res')
+    win.toggle_bad()
+    ov.close()
     # Selecting a tone shows its thresholds
     win.tone_list.setCurrentRow(0)
     assert win.hmin_box.value() == pytest.approx(0.45)
@@ -153,8 +268,10 @@ def test_window_failed_tone(qapp, tones):
 
 def test_thresholds_for_tone():
     th = Thresholds(hmin = 0.4, overrides = {3: dict(hmax = 2.)})
-    assert th.for_tone(3) == dict(hmin = 0.4, hmax = 2., init_hmax = 3.)
-    assert th.for_tone(4) == dict(hmin = 0.4, hmax = 1.6, init_hmax = 3.)
+    assert th.for_tone(3) == dict(hmin = 0.4, hmax = 2., init_hmax = 3.,
+                                  tau_skip = 2, tau_fit_s = 1e-3)
+    assert th.for_tone(4) == dict(hmin = 0.4, hmax = 1.6, init_hmax = 3.,
+                                  tau_skip = 2, tau_fit_s = 1e-3)
     assert th.to_dict()['overrides'] == {'3': dict(hmax = 2.)}
     copy = dataclasses.replace(th, overrides = dict(th.overrides))
     copy.overrides[5] = dict(hmin = 1.)
@@ -224,8 +341,11 @@ def test_window_snippet_and_fit(qapp, tones):
     win.close()
     win, _ = make_window(tones, fail_row = 7, data = tones.get)
     win.tone_list.setCurrentRow(1)
-    assert win.snippet is None and 'No data' in win.snip_label.text()
+    # A failed tone shows its raw timestream alone, to see why it failed
+    assert win.snippet is None and 'detection failed' in \
+        win.snip_label.text()
     assert len(win.y_curve.getData()[0] or []) == 0
+    assert len(win.raw_curve.getData()[0]) == length
     win.close()
     # Without data: no snippet, the rest as before
     win, _ = make_window(tones)
@@ -340,8 +460,9 @@ def test_window_navigation_and_defaults(qapp, tones):
     win.scope_all.setChecked(True)
     win.hmin_box.setValue(0.4)
     win.step_tone(1)
-    assert calls[-1] == [5, 7] and win.thresholds.hmin == pytest.approx(0.4)
-    assert win.current() == 1
+    assert calls[-2:] == [[5], [7]]
+    assert win.thresholds.hmin == pytest.approx(0.4)
+    assert win.current() == 1 and win.scope_tone.isChecked()
     win.close()
 
 
@@ -497,4 +618,81 @@ def test_window_panel_width_and_filter_end(qapp, tones):
     assert res['filter_post'] < res['post']
     win.all_tones.setChecked(True)
     assert not win.filter_end_line.isVisible()
+    win.close()
+
+@pytest.mark.parametrize('answers, choice', [
+    (['Continue'], 'continue'),
+    (['Overwrite', 'Overwrite'], 'overwrite'),
+    (['Overwrite', 'Cancel'], None),
+    (['Cancel'], None),
+    ([None], None),
+])
+def test_ask_existing_result(qapp, monkeypatch, answers, choice):
+    """
+    The existing-result popup offers Continue (default), Overwrite and
+    Cancel; Overwrite asks once more, with Cancel as the default.
+    """
+    import citkid.pipeline.interactive.photon_thresholds as pt
+    seen = []
+
+    def fake_box(title, text, buttons, default, icon = None):
+        seen.append((title, buttons, default))
+        assert 'photons/x' in title and 'photons/x' in text
+        return answers[len(seen) - 1]
+
+    monkeypatch.setattr(pt, '_message_box', fake_box)
+    assert pt.ask_existing_result('x', 'run tone set 0') == choice
+    assert seen[0][1:] == (['Continue', 'Overwrite', 'Cancel'], 'Continue')
+    if answers[0] == 'Overwrite':
+        assert seen[1][1:] == (['Overwrite', 'Cancel'], 'Cancel')
+    assert len(seen) == len(answers)
+
+
+def test_window_tone_marks(qapp, tones):
+    """
+    With a store root, marking bad, clearing and adding a note write the
+    store's tone marks, and the status shows them.
+    """
+    import zarr
+    from citkid import daq_layout as dl
+    win, _ = make_window(tones)
+    root = zarr.group()
+    win.root, win.stage = root, 'photons/x'
+    win._ask_reason = lambda: 'double resonance'
+    win._ask_note = lambda: 'keep an eye on it'
+    win.tone_list.setCurrentRow(0)
+    win.toggle_bad()
+    assert dl.bad_tones(root) == {10: dl.tone_marks(root, 10)[0]}
+    assert dl.tone_marks(root, 10)[0]['stage'] == 'photons/x'
+    win.add_note()
+    assert [e['kind'] for e in dl.tone_marks(root, 10)] == ['bad', 'note']
+    assert 'MARKED BAD: double resonance' in win.status.text()
+    assert '1 note' in win.status.text()
+    win.toggle_bad()
+    assert dl.bad_tones(root) == {}
+    assert [e['kind'] for e in dl.tone_marks(root, 10)] == \
+        ['bad', 'note', 'clear']
+    assert '1 note' in win.status.text()
+    # Cancelled dialogs write nothing
+    win._ask_note = lambda: None
+    win.add_note()
+    assert len(dl.tone_marks(root, 10)) == 3
+    win.close()
+
+
+def test_keys_work_from_the_list(qapp, tones):
+    """
+    A and D (and the other letter shortcuts) move through the tones even
+    while the tone list has the keyboard focus.
+    """
+    win, _ = make_window(tones)
+    win.tone_list.setFocus()
+    assert win.current() == 0
+    _press(win.tone_list, QtCore.Qt.Key_D)
+    assert win.current() == 1
+    _press(win.tone_list, QtCore.Qt.Key_A)
+    assert win.current() == 0
+    win._ask_reason = lambda: 'high noise'
+    _press(win.tone_list, QtCore.Qt.Key_B)
+    assert win.thresholds.is_bad(10)
     win.close()

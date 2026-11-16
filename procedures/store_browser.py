@@ -1,33 +1,11 @@
 """
-Browse a device store (not a numbered step: use it any time, e.g. to
-remind yourself which timestreams were taken and what their notes say
-before setting up 05_calibrate_streams.py or 06_find_photons.py).
-
-Opens a window (``citkid.daq_browser``) on the device store
-``<DATA_DIR>/<COOLDOWN>/<DEVICE>[_<SUFFIX>].zarr``, or on a store chosen
-in a file dialog (``PICK`` / ``--pick``, or when that store does not
-exist; Open (Ctrl+O) in the window chooses another at any time): a tree
-of its groups
-and arrays (VNA sweeps, resonator lists, tunings with their calibrations,
-tone writes and streams, stream calibrations, photon results), each with
-a one-line summary, and the attributes of whatever is selected (names,
-notes, settings). The Timestream runs tab lists every run with its name,
-notes, stage, length, tone set, and calibration; type to filter them, and
-double-click one to find its stream in the tree. The store is opened
-read-only, so it can be browsed while another script writes to it
-(F5 rereads it). Nothing is saved, and no CRS is needed.
-
-With --runs, it prints the timestream runs instead of opening the window
-(e.g. over ssh without a display).
+Browse a device store in a window (groups, attributes, timestream runs,
+tone marks), read-only. --runs prints the runs instead.
 
 Usage:
     python store_browser.py --device deviceA
     python store_browser.py --pick
-    python store_browser.py --store ~/data/sim/simdevice.zarr
     python store_browser.py --device deviceA --runs
-
-Edit the settings below for your setup; the command-line options override
-them for one run.
 """
 import argparse
 import os
@@ -37,13 +15,11 @@ from citkid.daq_browser import run_store_browser
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-DATA_DIR = '~/data'         # stores are in
-                            # DATA_DIR/COOLDOWN/DEVICE[_SUFFIX].zarr
-COOLDOWN = 'cooldown'       # cooldown name
-DEVICE = 'device'           # device name
-SUFFIX = ''                 # store name suffix: the store is
-                            # DEVICE_SUFFIX.zarr ('': DEVICE.zarr)
-PICK = False                # choose the store in a file dialog instead
+DATA_DIR = '~/data'
+COOLDOWN = 'cooldown'
+DEVICE = 'device'
+SUFFIX = ''
+PICK = False
 
 ################################################################################
 ################################### Script #####################################

@@ -3648,3 +3648,38 @@ def test_series_plot_axes_are_plain(qt_app, monkeypatch):
     assert win._plot_series.getAxis('left').tickStrings(
         [100., 200.], 0.001, 100.) == ['0.1', '0.2']
     _close(win)
+
+
+def test_mark_tone_bad_asks_reason(qt_app, monkeypatch):
+    """
+    Mark tone bad asks a reason, then the first panel marks the row bad
+    and the window records the reason; a cancelled reason marks
+    nothing. Add note records a note.
+    """
+    win = _make_window(qt_app, monkeypatch)
+    recorded = []
+    win._record = lambda kind, text: recorded.append((kind, text)) or True
+    for panel in win.panels:
+        panel._write_nan_outputs = MagicMock(return_value=True)
+        panel.blank_plots = MagicMock()
+    win._ask_reason = lambda: None
+    win._mark_tone_bad()
+    win.panels[0]._write_nan_outputs.assert_not_called()
+    assert recorded == []
+    win._ask_reason = lambda: 'bad fit'
+    win._mark_tone_bad()
+    win.panels[0]._write_nan_outputs.assert_called_once()
+    win.panels[1]._write_nan_outputs.assert_called_once_with(redraw=False)
+    assert recorded == [('bad', 'bad fit')]
+    # A panel's own Bad Data button asks too
+    win._ask_reason = lambda: 'high noise'
+    win.panels[1]._on_bad_data_clicked()
+    assert recorded[-1] == ('bad', 'high noise')
+    win._ask_note = lambda: 'note'
+    win._add_note()
+    assert recorded[-1] == ('note', 'note')
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
