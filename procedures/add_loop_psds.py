@@ -96,21 +96,21 @@ def add_loop_psds(root, grp, timestreams, datasets, memory_gb = MEMORY_GB):
                                            rows = rows,
                                            outputs = ('thetat', 'At'))
             radius = np.asarray(DS.circ_radius[rows.tolist()], dtype = float)
-            along = cal['thetat']
-            along *= radius[:, None]
-            across = cal['At']
+            par = cal['thetat']
+            par *= radius[:, None]
+            perp = cal['At']
             del cal
             bad = np.array([s.startswith('marked bad') for s in status[idx]])
-            along[bad] = across[bad] = np.nan
-            fb, sb, sr_par = psds.psd_summary(along, dt, f_reduced, valid,
+            par[bad] = perp[bad] = np.nan
+            fb, sb, sr_par = psds.psd_summary(par, dt, f_reduced, valid,
                                               **bins)
             psds._fill(out, 'spar_binned', idx, fb, sb, n)
-            fb, sb, sr_per = psds.psd_summary(across, dt, f_reduced, valid,
+            fb, sb, sr_per = psds.psd_summary(perp, dt, f_reduced, valid,
                                               **bins)
             psds._fill(out, 'sper_binned', idx, fb, sb, n)
             with np.errstate(divide = 'ignore', invalid = 'ignore'):
                 out['sfactor_reduced'][idx] = 10 * np.log10(sr_par / sr_per)
-            del along, across
+            del par, perp
         for key in ('spar_binned', 'sper_binned'):
             if out[key] is None:
                 out[key] = np.zeros((n, 0))

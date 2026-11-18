@@ -7,8 +7,8 @@ report; close it to build). A store that has not changed since its last
 build is left alone.
 
 Usage:
-    python 09_report_site.py
-    python 09_report_site.py --store Z:/cd/deviceA_screen.zarr --no-gui
+    python 08_report_site.py
+    python 08_report_site.py --store Z:/cd/deviceA_screen.zarr --no-gui
 """
 import argparse
 import os
@@ -22,6 +22,7 @@ STORE = None
 OUT_DIR = '~/reports'
 RES_PAGES = True
 INTERACTIVE = True
+INDEX = False
 
 ################################################################################
 ################################### Script #####################################
@@ -41,7 +42,8 @@ def parse_args(argv = None):
     p.add_argument('--store', default = STORE,
                    help = 'the store (default: STORE, or a dialog)')
     p.add_argument('--force', action = 'store_true',
-                   help = 'rebuild devices that have not changed')
+                   help = 'rebuild a store that has not changed (an '
+                   'existing report is rebuilt anyway)')
     p.add_argument('--no-res-pages', action = 'store_true',
                    help = 'skip the resonator pages')
     p.add_argument('--no-gui', action = 'store_true',
@@ -89,7 +91,7 @@ def existing_report(store, args):
 
 def main(args):
     """
-    Build the store's pages and the top page.
+    Build the store's pages, and the top page if ``INDEX``.
 
     Parameters:
     args (argparse.Namespace): options from ``parse_args``.
@@ -117,6 +119,9 @@ def main(args):
         import shutil
         shutil.rmtree(site.device_dir(args.out, dl.open_store(
             os.path.expanduser(store))))
+    if choice in ('overwrite', 'update'):
+        # The user asked for the report again: rebuild it even if the
+        # store has not changed
         args.force = True
     if INTERACTIVE and not args.no_gui:
         # Notes and attachments first; the store shown last is built
@@ -130,8 +135,8 @@ def main(args):
                             force = args.force,
                             res_pages = RES_PAGES and not args.no_res_pages,
                             progress = print)
-    index = site.build_index(args.out)
-    print(f'Site: {index}')
+    if INDEX:
+        print(f'Site: {site.build_index(args.out)}')
     return [out] if out is not None else []
 
 if __name__ == '__main__':

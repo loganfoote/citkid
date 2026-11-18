@@ -22,7 +22,8 @@ For one timestream:
    ``detect_timestream`` again for the tones it changes.
 3. ``finish_timestream`` works per tone write (the tones streamed
    together): the multiplicity of each pulse (``candidate_multiplicity``),
-   the cosmic rays (``cosmic_events``), and per tone the mean photon pulse
+   the high-energy events (HEEs, ``hee_events``), and per tone the
+   mean photon pulse
    of the pulses in the height window with multiplicity 1
    (``average_pulse``) and its decay time (``fit_tau``).
 4. ``save_timestream`` saves the results in one group,
@@ -369,7 +370,7 @@ class TimestreamData:
     max_bytes (float): memory limit.
     """
 
-    def __init__(self, root, ts, DS, settings, max_bytes = 4e9):
+    def __init__(self, root, ts, DS, settings, max_bytes = 12e9):
         """
         Set up the timestream's data.
 
@@ -378,7 +379,7 @@ class TimestreamData:
         ts (dict): the timestream (``list_timestreams``).
         DS (DataSet): its calibration DataSet.
         settings (DetectionSettings): detection settings.
-        max_bytes (float): memory limit, bytes. Default 4e9.
+        max_bytes (float): memory limit, bytes. Default 12e9.
         """
         self._root, self._ts, self._DS = root, ts, DS
         self.dt = float(ts['dt'])
@@ -476,7 +477,7 @@ class Thresholds:
     overrides (dict): res_idx: dict with any of 'hmin', 'hmax',
         'init_hmax', 'tau_skip', 'tau_fit_s'.
     bad (dict): res_idx: reason, for the tones marked bad (in the
-        threshold window): left out of the coincidences, cosmic rays and
+        threshold window): left out of the coincidences, HEEs and
         mean pulses, and not used as a reference.
     limits (dict): review limits of the tone overview window: 'height',
         'tau', 'rate': [low, high] (kHz/GHz, s, 1/s), or None when unset.
@@ -722,11 +723,11 @@ def tone_writes(root, ts):
     return out
 
 def finish_timestream(
-    root, ts, data, results, settings, coinc_win = 2, cosmic_min_mult = 3,
+    root, ts, data, results, settings, coinc_win = 2, hee_min_mult = 3,
     progress = True, thresholds = None
 ):
     """
-    Find coincidences and cosmic rays per tone write, and average each
+    Find coincidences and HEEs per tone write, and average each
     tone's photon pulses (height window, multiplicity 1). Tones marked
     bad are left out, like tones whose detection failed.
 
@@ -740,7 +741,7 @@ def finish_timestream(
     coinc_win (int): coincidence window, samples: a pulse at t is
         coincident with other tones' pulses in [t - win, t + win].
         Default 2.
-    cosmic_min_mult (int): fewest tones of a cosmic ray. Default 3.
+    hee_min_mult (int): fewest tones of an HEE. Default 3.
     progress (bool): If True (default), show a progress bar.
     thresholds (Thresholds or None): for the bad marks and each tone's
         decay-fit values. Default None: no bad tones, the settings' fit
@@ -750,7 +751,7 @@ def finish_timestream(
     summary (dict): ``mult`` (row: multiplicity of each pulse candidate),
         ``avg`` (row: mean photon pulse), ``p`` (row: index of its
         maximum), ``used`` (row: the pulses averaged), ``tau`` (row: decay
-        time, s), ``cosmic`` (dict of arrays: ``events`` with ``t0``,
+        time, s), ``hee`` (dict of arrays: ``events`` with ``t0``,
         ``time_s``, ``mult``, ``write_idx``; ``hits`` with ``event``,
         ``row``, ``res_idx``, ``idx``, ``h``, ``x``, ``raw``).
     """
@@ -770,7 +771,7 @@ def finish_timestream(
             continue
         for r, m in zip(good, ph.candidate_multiplicity(res, coinc_win)):
             mult[r] = m
-        events, hits = ph.cosmic_events(res, coinc_win, cosmic_min_mult)
+        events, hits = ph.hee_events(res, coinc_win, hee_min_mult)
         k = len(events['t0'])
         ev_cols['t0'].append(events['t0'])
         ev_cols['mult'].append(events['mult'])
@@ -818,14 +819,14 @@ def finish_timestream(
     hits = {k: cat(v, np.int64 if k in ('event', 'row', 'res_idx', 'idx')
                    else np.float64) for k, v in hit_cols.items()}
     return dict(mult = mult, avg = avg, p = peak, used = used, tau = tau,
-                cosmic = dict(events = events, hits = hits))
+                hee = dict(events = events, hits = hits))
 
 ################################################################################
 ##################################### Saving ###################################
 ################################################################################
 def save_timestream(
     grp, ts, results, summary, thresholds, settings, mode, coinc_win,
-    cosmic_min_mult
+    hee_min_mult
 ):
     """
     Save one timestream's photons.
@@ -847,7 +848,7 @@ def save_timestream(
     (every coincidence candidate: ``row``, ``idx`` (sample in the window),
     ``h`` (height, kHz/GHz), ``raw`` (raw peak, x), ``candidate`` (at or
     above hmin), ``in_window`` (in [hmin, hmax]), ``mult``, ``used``
-    (averaged)); ``cosmic/events`` and ``cosmic/hits``
+    (averaged)); ``hee/events`` and ``hee/hits``
     (``finish_timestream``); and ``detail/``, the rest of each tone's
     detection result, so that ``load_results`` can rebuild it for the
     threshold window: tables ``events`` (``row``, ``idx``), ``init``
@@ -866,7 +867,7 @@ def save_timestream(
     settings (DetectionSettings): the settings used.
     mode (str): how the timestream was detected, e.g. 'full'.
     coinc_win (int): coincidence window, samples.
-    cosmic_min_mult (int): fewest tones of a cosmic ray.
+    hee_min_mult (int): fewest tones of an HEE.
     """
     rows = [int(r) for r in ts['rows']]
     ok = [isinstance(results.get(r), dict) for r in rows]
@@ -880,7 +881,7 @@ def save_timestream(
         stop = ts['stop'], dt = ts['dt'], mode = mode,
         thresholds = thresholds.to_dict(),
         settings = dataclasses.asdict(settings), coinc_win = coinc_win,
-        cosmic_min_mult = cosmic_min_mult,
+        hee_min_mult = hee_min_mult,
         pre = None if ref is None else ref['pre'],
         post = None if ref is None else ref['post'],
         filter_post = None if ref is None else ref['filter_post'])))
@@ -986,10 +987,10 @@ def save_timestream(
             (float if k in ('h', 'raw') else np.int64)
         dl.write_array(pulses, k, np.concatenate(v).astype(dtype) if v
                        else np.zeros(0, dtype))
-    cosmic = dl.create_group(grp, 'cosmic', 'analysis')
+    hee = dl.create_group(grp, 'hee', 'analysis')
     for part in ('events', 'hits'):
-        g = dl.create_group(cosmic, part, 'analysis')
-        for k, v in summary['cosmic'][part].items():
+        g = dl.create_group(hee, part, 'analysis')
+        for k, v in summary['hee'][part].items():
             dl.write_array(g, k, v)
     _save_detail(dl.create_group(grp, 'detail', 'analysis'), rows, ok,
                  results, M)

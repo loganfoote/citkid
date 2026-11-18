@@ -798,7 +798,7 @@ async def stream_tone_sets(
         another decimation stage than the board's).
     tune (zarr.Group): the tuning, with ``tones`` and ``crs_config``,
         in a writable store.
-    name (str): timestream name, e.g. 'dark_dec6'. Names may repeat.
+    name (str): timestream name, e.g. 'dark_dec6', used once per tuning.
     duration_s (float): stream length in seconds.
     dec_stage (int): decimation stage.
     notes (str): free-form notes saved with the run. Default ''.
@@ -834,10 +834,16 @@ async def stream_tone_sets(
         'tune0/cal0/write0/ts3'.
 
     Raises:
-    ValueError: if ``name`` is empty.
+    ValueError: if ``name`` is empty, or the tuning has a run with it.
     """
     if not str(name).strip():
         raise ValueError('the timestream needs a name')
+    root = dl.store_root(tune, mode = 'r+')
+    taken = [r for r in dl.stream_runs(root, tune.basename)
+             if r.get('name') == str(name)]
+    if taken:
+        raise ValueError(f"{tune.basename} has a run named {name!r} "
+                         f"(ts{taken[-1]['run']}): choose another name")
     say = status or (lambda message: None)
     t = dl.load_tones(tune['tones'])
     sets = sorted(set(t['tone_set'].tolist())) if set_idxs is None else \
@@ -845,7 +851,6 @@ async def stream_tone_sets(
     cals = {int(s): c for s, c in (calibrations or {}).items()}
     if written is None:
         written = {}
-    root = dl.store_root(tune, mode = 'r+')
     record = dict(name = str(name), notes = str(notes),
                   dec_stage = int(dec_stage), duration_s = float(duration_s),
                   tuning = tune.basename, tones = tune['tones'].path,

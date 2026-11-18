@@ -523,7 +523,7 @@ def fit_from_guesses(
        groups that converged onto the same resonance are reduced to one.
 
     Clusters larger than ``max_group`` are split by regrouping with smaller
-    windows, so strongly overlapping resonators are still fit jointly. For
+    windows, so double resonances are still fit jointly. For
     windows and grouping, linewidths are capped (robust Qr floor), so one
     bad fit can't create a huge window. Steps 1 and 3 run in
     ``n_workers`` processes (the result does not depend on it); step 2 is
@@ -1272,7 +1272,7 @@ def measured_depths(f, s21, fres, lw, half_width_lw = 0.5):
     windows never overlap and a resonator can't take its neighbor's dip.
     For two resonances whose dips have merged, each gets the deepest point
     on its own side of the midpoint. Unlike the fitted Qr / Qc, this needs
-    no reliable fit, so it works for overlapping resonances and failed
+    no reliable fit, so it works for double resonances and failed
     fits (with the finder's frequency).
 
     Parameters:

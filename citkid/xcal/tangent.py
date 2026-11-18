@@ -17,9 +17,9 @@ def loop_tangent_shift(f, z, f_tone, zt, n_fit = 5):
     side of the tone (a straight line would be biased by the loop's
     curvature). A timestream sample's offset from the loop at the tone,
     dz = zt - z0 (z0 from the fit at ``f_tone``), splits into
-    the part along the loop, Re[dz conj(s)] / |s|^2, which is the tone
+    the part parallel to the loop, Re[dz conj(s)] / |s|^2, which is the tone
     frequency that sample would correspond to on the sweep (in Hz from
-    ``f_tone``), and the part across it, Im[dz conj(s)] / |s|^2, in the
+    ``f_tone``), and the part perpendicular to it, Im[dz conj(s)] / |s|^2, in the
     same units (the dissipation direction near resonance). A resonance
     shift dfr moves the loop under a fixed tone like a tone shift of -dfr,
     so the shift is returned as dfr = -Re[dz conj(s)] / |s|^2. The gain and
@@ -42,7 +42,8 @@ def loop_tangent_shift(f, z, f_tone, zt, n_fit = 5):
     Returns:
     dfr (np.array): resonance frequency shift in Hz, per sample (positive
         when the resonance moves up). Divide by ``f_tone`` for x.
-    dperp (np.array): offset across the loop, in Hz-equivalent units.
+    dperp (np.array): offset perpendicular to the loop, in Hz-equivalent
+        units.
     z0 (complex): the sweep's S21 at the tone (on the fitted curve).
     slope (complex): dz/df at the tone, per Hz.
 

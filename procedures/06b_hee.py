@@ -1,19 +1,20 @@
 """
-06b: decay times from cosmic-ray tails for devices without photons:
+06b: lifetimes from high-energy event (HEE) tails for devices without
+photons:
 the pulses are lined up where each falls through the tail level,
 averaged, and the average is fitted; check the level in a window; save
-one result per timestream (cosmic/<name>). No CRS needed.
+one result per timestream (hee/<name>). No CRS needed.
 
 Usage:
-    python 06b_cosmic_rays.py --device deviceA
-    python 06b_cosmic_rays.py --device deviceA --events triggers
-    python 06b_cosmic_rays.py --device deviceA --continue
+    python 06b_hee.py --device deviceA
+    python 06b_hee.py --device deviceA --events triggers
+    python 06b_hee.py --device deviceA --continue
 """
 import argparse
 import os
 import numpy as np
 from citkid import daq_layout as dl
-from citkid.pipeline import cosmic_finder as cf
+from citkid.pipeline import hee_finder as cf
 from citkid.pipeline import photon_finder as pf
 from citkid.pipeline.stream_sources import open_calibration
 from citkid.signal.photons import DetectionSettings
@@ -34,7 +35,7 @@ PHOTONS = None
 INTERACTIVE = True
 TRIG_NSIGMA = 6.
 COINC_WIN = 2
-COSMIC_MIN_MULT = 3
+HEE_MIN_MULT = 3
 HMIN = 0.
 HMAX = 1000.
 LEVEL = 10.
@@ -43,7 +44,7 @@ PRE_S = 0.5e-3
 POST_S = 5.e-3
 SEARCH_S = 0.3e-3
 HIGHPASS_HZ = 10.
-MEMORY_GB = 4.
+MEMORY_GB = 12.
 
 NOTES = """
 """
@@ -62,7 +63,7 @@ def parse_args(argv = None):
     args (argparse.Namespace): the options.
     """
     p = argparse.ArgumentParser(
-        description = 'Fit the decay times of cosmic-ray tails.')
+        description = 'Fit the lifetimes of HEE tails.')
     p.add_argument('--data-dir', default = DATA_DIR)
     p.add_argument('--cooldown', default = COOLDOWN)
     p.add_argument('--device', default = DEVICE)
@@ -117,9 +118,8 @@ def store_path(args):
     """
     if args.store:
         return os.path.expanduser(args.store)
-    name = args.device + (f'_{args.suffix}' if args.suffix else '')
-    return os.path.join(os.path.expanduser(args.data_dir), args.cooldown,
-                        f'{name}.zarr')
+    return dl.store_path(args.data_dir, args.cooldown, args.device,
+                         args.suffix)
 
 def tail_settings():
     """
@@ -132,7 +132,7 @@ def tail_settings():
     return cf.TailSettings(
         highpass_hz = HIGHPASS_HZ, pre_s = PRE_S, post_s = POST_S,
         search_s = SEARCH_S, trig_nsigma = TRIG_NSIGMA,
-        coinc_win = COINC_WIN, min_mult = COSMIC_MIN_MULT)
+        coinc_win = COINC_WIN, min_mult = HEE_MIN_MULT)
 
 def ask_existing(name, grp):
     """
@@ -171,7 +171,7 @@ def existing_choice(name, grp, args, interactive):
         return 'overwrite'
     if interactive:
         return ask_existing(name, grp)
-    print(f'cosmic/{name} exists: skipped (run with --continue to go on '
+    print(f'hee/{name} exists: skipped (run with --continue to go on '
           'from it, or --overwrite to replace it)')
     return None
 
@@ -194,14 +194,14 @@ def pick_events(root, ts, data, name, settings, args):
     """
     ph_name = args.photons if args.photons else name
     have = pf.PHOTONS_GROUP in root and ph_name in root[pf.PHOTONS_GROUP]
-    # A result saved without its cosmic rays (interrupted) has no events
-    if have and 'cosmic/events' not in root[pf.PHOTONS_GROUP][ph_name]:
-        print(f'photons/{ph_name} holds no cosmic rays (saved '
+    # A result saved without its HEEs (interrupted) has no events
+    if have and 'hee/events' not in root[pf.PHOTONS_GROUP][ph_name]:
+        print(f'photons/{ph_name} holds no HEEs (saved '
               'incompletely): run 06a_find_photons.py on it again')
         have = False
     if args.events == 'photons' and not have:
-        raise KeyError(f'no photon result photons/{ph_name} with cosmic '
-                       'rays to take the events from: run '
+        raise KeyError(f'no photon result photons/{ph_name} with HEEs '
+                       'to take the events from: run '
                        "06a_find_photons.py, or use EVENTS = 'triggers'")
     if args.events != 'triggers' and have:
         grp = root[pf.PHOTONS_GROUP][ph_name]
@@ -213,7 +213,7 @@ def review(
     data = None
 ):
     """
-    Open the cosmic tail window on a timestream's results, if asked.
+    Open the HEE tail window on a timestream's results, if asked.
 
     Parameters:
     ts (dict): the timestream.
@@ -233,7 +233,7 @@ def review(
     """
     if not interactive:
         return results, thresholds
-    from citkid.pipeline.interactive.cosmic_tails import run_cosmic_tails
+    from citkid.pipeline.interactive.hee_tails import run_hee_tails
 
     def refit(rows, th):
         """
@@ -260,10 +260,10 @@ def review(
         """
         return next(iter(data.get([row])))[1]
 
-    thresholds, results = run_cosmic_tails(
+    thresholds, results = run_hee_tails(
         ts, results, thresholds, refit,
         data = None if data is None else tone_data,
-        title = f"Cosmic-ray tails: {ts['run']} ({ts['name']}), tone set "
+        title = f"HEE tails: {ts['run']} ({ts['name']}), tone set "
         f"{ts['tone_set']}", root = root, stage = stage)
     return results, thresholds
 
@@ -283,7 +283,7 @@ def report(ts, results, events):
     print(f"{ts['run']} ({ts['name']}), tone set {ts['tone_set']}: "
           f"{len(events['t0'])} events, {len(ok)} of {len(ts['rows'])} "
           f'tones analyzed, {n_used} pulses averaged, {len(good)} tails '
-          f'fitted; median decay time {np.median(good) * 1e6:.3g} us'
+          f'fitted; median lifetime {np.median(good) * 1e6:.3g} us'
           if len(good) else
           f"{ts['run']} ({ts['name']}), tone set {ts['tone_set']}: "
           f"{len(events['t0'])} events, no tails fitted")
@@ -294,7 +294,7 @@ def report(ts, results, events):
 
 def main(args):
     """
-    Fit the cosmic-ray tails of the chosen timestreams, or list them.
+    Fit the HEE tails of the chosen timestreams, or list them.
 
     Parameters:
     args (argparse.Namespace): options from ``parse_args``.
@@ -342,15 +342,15 @@ def main(args):
             choice = existing_choice(name, results_grp[name], args,
                                      interactive)
             if choice is None:
-                print(f'Skipped cosmic/{name}')
+                print(f'Skipped hee/{name}')
                 del data
                 continue
             if choice == 'continue':
-                continued = f'cosmic/{name}'
+                continued = f'hee/{name}'
                 thresholds = cf.load_thresholds(results_grp[name])
         elif args.cont:
             raise KeyError(f"{ts['run']} tone set {ts['tone_set']} has no "
-                           f'saved result cosmic/{name} to continue')
+                           f'saved result hee/{name} to continue')
         events, mode = pick_events(root, ts, data, name, settings, args)
         print(f"{len(events['t0'])} events from {mode}")
         marked = pf.apply_tone_marks(root, ts, thresholds)
@@ -360,10 +360,10 @@ def main(args):
         results = cf.analyze_timestream(root, ts, data, events, settings,
                                         thresholds)
         results, thresholds = review(ts, results, thresholds, interactive,
-                                     root = root, stage = f'cosmic/{name}',
+                                     root = root, stage = f'hee/{name}',
                                      data = data)
         if name in results_grp:
-            print(f'Replacing cosmic/{name}')
+            print(f'Replacing hee/{name}')
         grp = dl.create_group(results_grp, name, 'analysis',
                               overwrite = True)
         cf.save_timestream(grp, ts, results, events, thresholds, settings,
@@ -375,7 +375,7 @@ def main(args):
         out[name] = dict(results = results, events = events,
                          thresholds = thresholds)
         del data
-    print(f"Done: {', '.join(f'cosmic/{n}' for n in out)}")
+    print(f"Done: {', '.join(f'hee/{n}' for n in out)}")
     return out
 
 if __name__ == '__main__':

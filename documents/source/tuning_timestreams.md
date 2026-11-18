@@ -1,12 +1,12 @@
 ---
 title: "Tuning and timestreams"
-subtitle: "03_tune, 04_stream, store_browser, 05_calibrate_streams, 06a_find_photons, 06b_cosmic_rays, 07_psds, 08_report, 09_report_site, set_notes"
+subtitle: "03_tune, 04_stream, store_browser, 05_calibrate_streams, 06a_find_photons, 06b_hee, 07_psds, 08_report_site, set_notes"
 ---
 
 # Overview
 
 After VNA screening: tune the tones, take timestreams, calibrate them,
-find photons or cosmic rays, and compute noise spectra. Configure the
+find photons or high-energy events (HEEs), and compute noise spectra. Configure the
 board with `crs_init.py` first (see "Getting started").
 
 | Script | What it does | Saves |
@@ -15,11 +15,10 @@ board with `crs_init.py` first (see "Getting started").
 | `04_stream.py` | Window for calibrating, previewing and taking named timestream runs | `ts{n}` |
 | `store_browser.py` | Any time: browse a store (groups, attributes, runs, tone marks, notes) | Notes, if edited |
 | `05_calibrate_streams.py` | Calibrates timestreams, in a window and then in batch | `ts_cal{c}` |
-| `06a_find_photons.py` | Finds photons and cosmic rays, with a threshold window | `photons/<name>` |
-| `06b_cosmic_rays.py` | Fits cosmic-ray tails pulse by pulse, with a threshold window | `cosmic/<name>` |
+| `06a_find_photons.py` | Finds photons and HEEs, with a threshold window | `photons/<name>` |
+| `06b_hee.py` | Fits HEE tails pulse by pulse, with a threshold window | `hee/<name>` |
 | `07_psds.py` | Noise spectra before and after common-mode removal | `ts_psd{p}` |
-| `08_report.py` | Lifetimes and noise spectra as figures, tables and text | Files in a folder |
-| `09_report_site.py` | Browsable pages of every device: what was taken, the figures, one page per resonator | Files in a folder |
+| `08_report_site.py` | Browsable pages of every device: what was taken, the figures, one page per resonator | Files in a folder |
 | `set_notes.py` | Any time: add notes to the store or a group, shown on the pages | `notes` attributes |
 
 ```text
@@ -31,7 +30,7 @@ board with `crs_init.py` first (see "Getting started").
     streams/            run list
   ts_cal{c}/            stream calibrations (05)
   photons/<name>/       photon results (06a), one per timestream
-  cosmic/<name>/        cosmic-ray tails (06b), one per timestream
+  hee/<name>/        HEE tails (06b), one per timestream
   ts_psd{p}/            noise spectra (07)
   tone_marks/           bad marks and notes on tones, from every stage
 ```
@@ -130,8 +129,8 @@ A window on one tuning (the latest with tones, or `--tune k`):
 | Part | What it does |
 |---|---|
 | Calibration | Calibrate the selected tone set (a target sweep, saved as `cal{j}`), once per set; pick which saved calibration to use |
-| Preview | Capture `PREVIEW_S` seconds and plot one tone as x, along/across the loop, or I and Q (not saved) |
-| Run | Name, notes, decimation stage and duration (or a `PRESETS` entry); the stream is saved as `cal{j}/write{w}/ts{n}` and listed in the run list |
+| Preview | Capture `PREVIEW_S` seconds and plot one tone as x, parallel/perpendicular to the loop, or I and Q, with its PSD if asked (not saved) |
+| Run | Name, notes, decimation stage and duration (or a `PRESETS` entry); the stream is saved as `cal{j}/write{w}/ts{n}` and listed in the run list; a name is used once per tuning |
 | View run | Shows a run's first chunks like a capture |
 
 A calibration is valid only while the NCO frequencies are unchanged, so
@@ -140,7 +139,7 @@ set. Restarting the script keeps the calibrations usable unless something
 else set the NCOs in between (a power cycle, `crs_init.py`). Tones stay
 written between captures and runs. The script holds the board while its
 window is open. `--simulate` streams a simulated device; `--sim-pulses`
-adds photons and cosmic rays to it.
+adds photons and HEEs to it.
 
 ## Settings
 
@@ -152,7 +151,7 @@ adds photons and cosmic rays to it.
 | `PREVIEW_DEC`, `PREVIEW_S` | Preview decimation stage and duration, s |
 | `PRESETS` | Runs offered in the window: name, stage, duration, notes |
 | `NPOINTS_FINE`, `NPOINTS_GAIN`, `GAIN_SPAN_FACTOR`, `NSAMPS` | Calibration sweeps, as in `03_tune.py` |
-| `SIM_PULSES`, `SIM_PULSE_SETTINGS` | `--simulate`: photon pulses and cosmic rays in the streams |
+| `SIM_PULSES`, `SIM_PULSE_SETTINGS` | `--simulate`: photon pulses and HEEs in the streams |
 | `SIM_SNR_DB` | Simulated S/N while pulses are on, dB (`None`: the store's) |
 
 ## Command line
@@ -201,7 +200,7 @@ the tone.
 
 | Setting | Meaning |
 |---|---|
-| `CALIBRATE` | Runs to calibrate: `name` (the latest run with it) or `run = n`; `chunks` (`None`: all, `n`: the first n, `(first, stop)`); `tone_sets` (`None`: all) |
+| `CALIBRATE` | Runs to calibrate, one `dict(...)` per run with the keys `name` (the latest run with it) or `run` (its index n in `ts{n}`); `chunks` (left out: all, `n`: the first n, `(first, stop)`); `tone_sets` (left out: all). Empty: list the runs |
 | `F_AVG` | Fine sweep points averaged together |
 | `INTERACTIVE` | Review in the window before the batch |
 | `FIT_IQ` | Also fit each resonance (nonlinear IQ fit): an IQ fit panel in the window, the rest in batch; the fits go to the report |
@@ -229,8 +228,8 @@ timestream: when it exists, a popup offers to continue from it
 | Optimal filter | Template from the selected pulses, noise spectrum away from them; heights in kHz/GHz (x × 1e6); pulses in [`HMIN`, `HMAX`] make the next template, `OF_ITERATIONS` times; `HMIN_FALSE_FRAC` chooses `HMIN` automatically |
 | Isolation | Only isolated pulses enter a template: none within the template length, none within the filter length of a pulse above `HMAX` |
 | Coincidences | Per tone write, a pulse within `COINC_WIN` samples of another tone's pulse is coincident; pulses down to `COINC_NSIGMA` filter sigma count |
-| Photons | The mean photon pulse averages the uncoincident pulses in the height window; its decay time is fit from `TAU_SKIP` samples after the maximum over `TAU_FIT_S` |
-| Cosmic rays | Events seen by at least `COSMIC_MIN_MULT` tones, with each tone's pulse height |
+| Photons | The mean photon pulse averages the uncoincident pulses in the height window; its lifetime is fit from `TAU_SKIP` samples after the maximum over `TAU_FIT_S` |
+| High-energy events | Events seen by at least `HEE_MIN_MULT` tones, with each tone's pulse height |
 
 `HMAX` keeps large pulses out of the template and mean pulse only; every
 pulse above `HMIN` is saved.
@@ -257,14 +256,15 @@ the buttons. Right, for the selected tone (or all tones together):
 | Units | Heights in kHz/GHz or photons (each tone's mean photon) |
 | Revert | Ctrl+D puts the script's thresholds back on the tone |
 | Mark bad / note | B (reason; again to clear), T (note) |
-| Overview | O: histograms over all tones of photon height, decay time and rate, with draggable review limits; click a bar or a listed tone to open it; "show only tones outside" filters the list |
+| Overview | O: histograms over all tones of photon height, lifetime and rate, with draggable review limits; click a bar or a listed tone to open it |
+| Tone list | Two boxes above it: show only the flagged tones (outside the overview limits), and include the tones marked bad |
 | Rescale | R |
 
 ## Saved results, continuing and reusing
 
 - Continue (the popup, or `--continue`) opens the saved result in the
   window with no detection; only changed tones rerun.
-- `--refit-tau` refits every saved decay time with `TAU_SKIP` and
+- `--refit-tau` refits every saved lifetime with `TAU_SKIP` and
   `TAU_FIT_S`, no detection.
 - `REFERENCE = '<name>'` searches other timestreams with a saved result,
   without the window: `REUSE = 'settings'` (its thresholds) or
@@ -279,8 +279,8 @@ photons/<name>/         attrs: run, tone set, calibration, mode,
                         bad, bad_reason
     pulses/             every pulse: tone, sample, height, raw peak,
                         candidate, in_window, mult, used
-    cosmic/events/      t0, time_s, mult, write_idx
-    cosmic/hits/        per tone and event: sample, height, raw peak
+    hee/events/      t0, time_s, mult, write_idx
+    hee/hits/        per tone and event: sample, height, raw peak
     detail/             the detection detail, for continuing
 ```
 
@@ -307,7 +307,7 @@ by `citkid.pipeline.photon_finder.migrate_results(root)`.
 | `TAU_SKIP`, `TAU_FIT_S` | Decay fit: samples skipped after the maximum, fit length, s |
 | `HIGHPASS_HZ` | Drift removal, Hz |
 | `COINC_NSIGMA`, `COINC_WIN` | Coincidences: pulses counted (filter sigma), window (± samples) |
-| `COSMIC_MIN_MULT` | Fewest tones of a cosmic ray |
+| `HEE_MIN_MULT` | Fewest tones of an HEE |
 | `MEMORY_GB` | Timestreams kept in memory, GB |
 
 ## Command line
@@ -315,21 +315,21 @@ by `citkid.pipeline.photon_finder.migrate_results(root)`.
 `--cal c`, `--name`, `--continue`, `--overwrite`, `--reference name
 --reuse filter`, `--refit-tau`, `--no-gui`.
 
-# 06b_cosmic_rays.py: cosmic-ray lifetimes
+# 06b_hee.py: HEE lifetimes
 
-Cosmic rays hit many tones simultaneously, so a device without photons
+High-energy events hit many tones simultaneously, so a device without photons
 still gives each tone's quasiparticle lifetime. Same timestream choice,
 naming and existing-result popup as `06a_find_photons.py`; results are
-`cosmic/<name>`.
+`hee/<name>`.
 
 | Step | What it does |
 |---|---|
-| Events | `EVENTS = 'photons'`: the cosmic rays `06a` saved (or those of `PHOTONS`); `'triggers'`: peaks above `TRIG_NSIGMA` on each tone, clustered within `COINC_WIN` samples, kept when `COSMIC_MIN_MULT` tones see them; `'auto'`: photons if saved, else triggers |
+| Events | `EVENTS = 'photons'`: the HEEs `06a` saved (or those of `PHOTONS`); `'triggers'`: peaks above `TRIG_NSIGMA` on each tone, clustered within `COINC_WIN` samples, kept when `HEE_MIN_MULT` tones see them; `'auto'`: photons if saved, else triggers |
 | Pulses | A snippet `PRE_S` before to `POST_S` after each event, baseline subtracted; the peak within `SEARCH_S` |
 | Threshold | Only pulses with peaks in [`HMIN`, `HMAX`] are averaged |
 | Alignment | The pulses differ in height and near the peak but decay alike, so each is shifted to where it falls through `LEVEL` (10 kHz/GHz) and they are averaged from there |
 | Tail fit | An exponential over `FIT_S` from the alignment point of the mean |
-| Result | Per tone, the mean's decay time and the pulses averaged |
+| Result | Per tone, the mean's lifetime and the pulses averaged |
 
 ## The window
 
@@ -342,10 +342,12 @@ The plots zoom with the mouse (scroll, drag, right-drag for one axis);
 R puts them back: the timestream's heights up to a little above the
 99th percentile of the pulses, and the mean pulse over the fit range up
 to its own peak. B marks bad, T adds a note, O opens the overview
-(median height, decay time, pulse rate).
+(median height, lifetime, pulse rate). Two boxes above the tone list
+show only the flagged tones (outside the overview limits) and
+include the tones marked bad.
 
 ```text
-cosmic/<name>/          attrs: run, tone set, calibration, events,
+hee/<name>/          attrs: run, tone set, calibration, events,
                         n_events, thresholds, settings
                         per tone: res_idxs, status, hmin, hmax, level,
                         fit_s, n_pulses, n_used, rate, tau, n_fit,
@@ -358,14 +360,14 @@ cosmic/<name>/          attrs: run, tone set, calibration, events,
 
 ## Settings
 
-{{settings:06b_cosmic_rays.py}}
+{{settings:06b_hee.py}}
 
 | Setting | Meaning |
 |---|---|
 | `CALIBRATION`, `TIMESTREAMS`, `NAME`, `INTERACTIVE` | As in `06a_find_photons.py` |
 | `EVENTS` | `'auto'`, `'photons'`, or `'triggers'` |
 | `PHOTONS` | Photon result to take the events from (`None`: this timestream's) |
-| `TRIG_NSIGMA`, `COINC_WIN`, `COSMIC_MIN_MULT` | Triggers: threshold (noise sigma), largest gap within an event (samples), fewest tones |
+| `TRIG_NSIGMA`, `COINC_WIN`, `HEE_MIN_MULT` | Triggers: threshold (noise sigma), largest gap within an event (samples), fewest tones |
 | `HMIN`, `HMAX` | Peak height window of the pulses fitted, kHz/GHz |
 | `LEVEL` | A tail begins where the pulse falls below this, kHz/GHz |
 | `FIT_S` | Fit length, s |
@@ -393,7 +395,7 @@ with `--no-gui`, `--new`, `--load` or `--overwrite` decide.
 
 | Step | What it does |
 |---|---|
-| Deglitch (optional) | `'peaks'`: each tone's peaks above `GLITCH_NSTD` sigma; `'photons'`: a photon result's filters (`PHOTONS`) and its cosmic rays (`GLITCH_PULSES = 'all'`: every pulse); `GLITCH_PRE_S` to `GLITCH_POST_S` around each glitch is replaced with noise |
+| Deglitch (optional) | `'peaks'`: each tone's peaks above `GLITCH_NSTD` sigma; `'photons'`: a photon result's filters (`PHOTONS`) and its HEEs (`GLITCH_PULSES = 'all'`: every pulse); `GLITCH_PRE_S` to `GLITCH_POST_S` around each glitch is replaced with noise |
 | Spectra | $S_{xx}$ per tone: reduced values (the mean within 20% of 0.1, 0.3, 1, 3, 10, ... Hz, from `FMIN_MULT` / duration to Nyquist / 2 / `FMAX_DIV`) and `NBINS` logarithmic bins; also the spectra of the loop components, parallel to the loop ($r\theta$, dissipation) and perpendicular to it ($A$, amplitude), and their ratio in dB at the reduced frequencies, the s-factor. The droop of the CRS decimation filters is undone (the rfmux transfer function), and the spectra end at 0.8 of the Nyquist frequency |
 | Common modes | Per tone write, `CN_N_COMP` modes by `citkid.xcal.corr.calc_cm` (`CN_N_ITER` iterations; highpass `CN_HIGHPASS_HZ` while finding the weights, lowpass `CN_LOWPASS_HZ` on the modes while iterating; the removed modes are unfiltered), then the spectra again on the cleaned tones, and the modes' spectra |
 | Review | The overview window on the raw spectra, before the common modes (skip it with `INTERACTIVE = False` or `--no-gui`); tones marked bad there stay out of the common-mode fit |
@@ -403,7 +405,8 @@ with `--no-gui`, `--new`, `--load` or `--overwrite` decide.
 Three histograms over all tones of the raw $S_{xx}$ (1/Hz, log axis)
 at frequencies picked from the reduced grid, each with
 draggable review limits; the histograms do not zoom. The list shows the
-tones outside the limits (or all), with their values; click a tone, or
+flagged tones (outside the limits) or all, with or without the tones
+marked bad (the boxes above it), with their values; click a tone, or
 near its bar, to see its binned spectrum. B marks the tone bad with a
 reason (saved with the result and in the store's tone marks; again to
 clear), T adds a note. The limits are saved with the result. The common
@@ -445,8 +448,8 @@ or name.
 | `DEGLITCH` | `None`, `'peaks'`, or `'photons'` |
 | `GLITCH_PRE_S`, `GLITCH_POST_S` | Replaced around each glitch, s |
 | `GLITCH_SIGN`, `GLITCH_NSTD`, `GLITCH_BASELINE_S`, `GLITCH_DISTANCE_S`, `GLITCH_ROUNDS` | `'peaks'`: sign of a glitch in x, threshold (sigma), baseline bin (s), least spacing (s), rounds |
-| `PHOTONS`, `GLITCH_PULSES` | `'photons'`: the photon result, and `'cosmic'` or `'all'` pulses |
-| `COINC_WIN`, `COSMIC_MIN_MULT` | Cosmic rays: window (± samples), fewest tones |
+| `PHOTONS`, `GLITCH_PULSES` | `'photons'`: the photon result, and `'hee'` or `'all'` pulses |
+| `COINC_WIN`, `HEE_MIN_MULT` | High-energy events: window (± samples), fewest tones |
 | `MEMORY_GB` | Timestreams kept in memory per write, GB |
 
 ## Command line
@@ -454,36 +457,7 @@ or name.
 `--name`, `--new`, `--load`, `--overwrite`, `--no-gui`, `--no-cn`,
 `--deglitch photons --photons name`.
 
-# 08_report.py: results in plain files
-
-Writes every timestream result of a store to a folder, after
-`06a_find_photons.py`, `06b_cosmic_rays.py` and `07_psds.py`:
-
-| File | Contents |
-|---|---|
-| `<device>_lifetime_<kind>_<name>.png` | One per photon and cosmic-ray result: pulse height (photons: the mean pulse's optimal-filter height), decay time (us) and pulses per second against resonant frequency (MHz), with histograms at the side; tones marked bad are left out; outliers sit at the edge as arrows with their values |
-| `<device>_lifetime_<kind>_<name>.csv` | One row per tone: res_idx, fres, height, tau, rate, n_used, status, bad, bad_reason |
-| `<device>_multiplicity_<kind>_<name>.png` | One per result with coincident events: how many tones each event hit (log counts), and events per second over the run in 5 s bins |
-| `<device>_multiplicity_<kind>_<name>.csv` | One row per coincident event: time_s, mult |
-| `<device>_psd<p>.png` | One per PSD group, over the tones of all its timestreams: the Sxx mean with the 1st to 99th percentile shaded, before and after correlated noise removal (off-resonance tones dashed, if any); Sxx against resonant frequency (MHz) at 0.1, 1, 10 and 100 Hz (those the group has) with histograms at the side; the same for the amplitude and dissipation noise (perpendicular and parallel to the loop) and the s-factor. Tones marked bad are left out; outliers sit at the edge as arrows with their values |
-| `<device>_psd<p>.csv` | One row per tone: timestream, run, res_idx, fres, status, bad, and Sxx (raw and common modes removed) and s-factor at every reduced frequency |
-| `<device>_psd<p>_spectra.csv` | The mean and range of every spectrum kind at every binned frequency |
-| `<device>_timestreams.txt` | What each result holds: tones, bad tones with reasons, medians and ranges |
-
-## Settings
-
-{{settings:08_report.py}}
-
-| Setting | Meaning |
-|---|---|
-| `OUT_DIR` | Folder the files go in |
-| `PHOTONS`, `COSMIC`, `PSDS` | Results to report, by name (or PSD group index); `None`: all |
-
-## Command line
-
-`--out folder`, `--pick` (choose the store in a dialog).
-
-# 09_report_site.py: browsable pages
+# 08_report_site.py: browsable pages
 
 Builds a static site (plain HTML, opens from the drive): one page per
 device store, from the results in the store, and a top page of every
@@ -491,8 +465,8 @@ device built so far. Each run builds one store (`STORE`, `--store`, or
 a dialog). The store browser opens first on its Notes tab: edit the
 notes of any item, or **Attach file...** to copy a file (a photo, a
 plot, a PDF) into the site next to that item, linked from the page and
-never put in the store; close the browser to build. A store that has
-not changed is left alone. A report that exists is not replaced
+never put in the store (**Remove file...** takes one away again);
+close the browser to build. A report that exists is not replaced
 without asking: a popup offers to keep the attached files and
 `notes.md` (rebuilding the pages), to overwrite everything, or to stop;
 without the window, `--update` or `--overwrite` decide. Only reduced
@@ -502,8 +476,8 @@ every item names by path.
 | Page | Contents |
 |---|---|
 | `index.html` | Every cooldown and device (wafer, die, store suffix, counts); type under a heading to filter, click one to sort. No file paths, so the site can move |
-| `<cooldown>/<device>/index.html` | What was taken (sweeps, tunings, calibration sweeps, runs with their settings, calibrations, results), with notes and store paths; the VNA, tuning (chosen powers), stream calibration (the IQ fits, with `FIT_IQ`), photon, cosmic-ray and noise figures (every version in a dropdown, latest first, with its notes); a sortable table of the resonators; the tone marks |
-| `<cooldown>/<device>/res/res<r>.html` | One per resonator: its IQ loop at the chosen power, calibration sweep, mean photon and cosmic-ray pulses, and spectra; its numbers from every step and result |
+| `<cooldown>/<device>/index.html` | What was taken (sweeps, tunings, calibration sweeps, runs with their settings, calibrations, results), with notes and store paths; the VNA, tuning (chosen powers), stream calibration (the IQ fits, with `FIT_IQ`), photon, HEE and noise figures (every version in a dropdown, latest first, with its notes); a sortable table of the resonators; the tone marks |
+| `<cooldown>/<device>/res/res<r>.html` | One per resonator: its IQ loop at the chosen power, calibration sweep, mean photon and HEE pulses, and spectra; its numbers from every step and result |
 | `<cooldown>/<device>/figures/`, `data/` | The figures (PNG) and tables (CSV) |
 | `<cooldown>/<device>/notes.md` | Written by hand; shown at the top of the device page and never overwritten |
 | `<cooldown>/<device>/attachments/` | Files attached in the store browser, by item, linked from the page |
@@ -511,7 +485,7 @@ every item names by path.
 Each section of the device page folds (click its heading); the
 resonator and tone-mark tables start folded, with a filter box. A
 device folder is self-contained: copy it into another site's
-`<cooldown>` folder and run `09_report_site.py --index-only` there to
+`<cooldown>` folder and run `08_report_site.py --index-only` there to
 list it.
 
 Notes come from the store: the `notes` of the store itself, the VNA
@@ -522,7 +496,7 @@ without text it lists the notes).
 
 ## Settings
 
-{{settings:09_report_site.py}}
+{{settings:08_report_site.py}}
 
 | Setting | Meaning |
 |---|---|
@@ -530,8 +504,9 @@ without text it lists the notes).
 | `OUT_DIR` | The site folder |
 | `RES_PAGES` | One page per resonator (about 100 kB each) |
 | `INTERACTIVE` | Open the store browser on its Notes tab first |
+| `INDEX` | Also rebuild the top page (`index.html`) after the device; `--index-only` rebuilds it alone |
 
 ## Command line
 
-`--store path`, `--update`, `--overwrite`, `--force` (rebuild an
-unchanged store), `--no-res-pages`, `--no-gui`, `--index-only`.
+`--store path`, `--update`, `--overwrite`, `--no-res-pages`,
+`--no-gui`, `--index-only`.

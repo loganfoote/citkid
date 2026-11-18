@@ -25,6 +25,9 @@ COOLDOWN = 'cooldown'
 DEVICE = 'device'
 SUFFIX = ''
 CALIBRATE = [
+    dict(name = 'dark_dec6', chunks = 2),
+    dict(name = 'dark_dec0', chunks = (0, 2), tone_sets = [0]),
+    dict(run = 3)
 ]
 F_AVG = 1
 INTERACTIVE = True
@@ -90,9 +93,8 @@ def store_path(args):
     """
     if args.store:
         return os.path.expanduser(args.store)
-    name = args.device + (f'_{args.suffix}' if args.suffix else '')
-    return os.path.join(os.path.expanduser(args.data_dir), args.cooldown,
-                        f'{name}.zarr')
+    return dl.store_path(args.data_dir, args.cooldown, args.device,
+                         args.suffix)
 
 def cal_group(root, selection, new, notes = None):
     """

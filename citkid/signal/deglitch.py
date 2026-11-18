@@ -1,5 +1,6 @@
 """
-Find and remove glitches from timestreams, e.g. from cosmic ray impacts.
+Find and remove glitches from timestreams, e.g. from high-energy event
+(HEE) impacts.
 """
 
 import numpy as np

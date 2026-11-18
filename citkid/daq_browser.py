@@ -366,6 +366,12 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         self.attach_btn.clicked.connect(self._on_attach)
         self.attach_btn.setEnabled(False)
         row.addWidget(self.attach_btn)
+        self.detach_btn = QtWidgets.QPushButton('Remove file...')
+        self.detach_btn.setToolTip("Remove one of this item's attached "
+                                   'files from the report site')
+        self.detach_btn.clicked.connect(self._on_detach)
+        self.detach_btn.setEnabled(False)
+        row.addWidget(self.detach_btn)
         vbox.addLayout(row)
         self.notes_edit = QtWidgets.QPlainTextEdit()
         self.notes_edit.setFixedHeight(110)
@@ -437,7 +443,17 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         self.attach_btn.setEnabled(self.site_dir is not None and
                                    self._notes_row is not None and
                                    self.root is not None)
+        self._update_detach()
         self._notes_loading = False
+
+    def _update_detach(self):
+        """
+        Enable the Remove file button when the selected item has
+        attached files.
+        """
+        self.detach_btn.setEnabled(
+            self.attach_btn.isEnabled() and
+            bool(self.attachments(self._notes[self._notes_row]['path'])))
 
     def attachments(self, item):
         """
@@ -476,11 +492,66 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         e = self._notes[self._notes_row]
         out_dir = site.device_dir(self.site_dir, self.root)
         rel = site.add_attachment(out_dir, e['path'], source)
+        self._show_attachments(e)
+        return rel
+
+    def remove_attachment(self, name):
+        """
+        Remove an attached file from the selected item: the record goes
+        and the copy is deleted from the report site (the store is not
+        touched).
+
+        Parameters:
+        name (str): the file name, as ``attachments`` lists it.
+
+        Returns:
+        removed (bool): True if the item had the file.
+        """
+        if self.site_dir is None or self._notes_row is None or \
+                self.root is None:
+            return False
+        from .pipeline import site
+        e = self._notes[self._notes_row]
+        out_dir = site.device_dir(self.site_dir, self.root)
+        links = dict(site.attachment_links(site.load_attachments(out_dir),
+                                           e['path']))
+        if name not in links:
+            return False
+        removed = site.remove_attachment(out_dir, e['path'], links[name])
+        self._show_attachments(e)
+        return removed
+
+    def _show_attachments(self, e):
+        """
+        Refresh the label and the Remove file button after an item's
+        attachments changed.
+
+        Parameters:
+        e (dict): the item's notes entry.
+        """
         files = self.attachments(e['path'])
         what = 'the store' if e['kind'] == 'store' else e['label']
-        self.notes_label.setText(f'Notes of {what}; attached: '
-                                 + ', '.join(files))
-        return rel
+        text = f'Notes of {what}'
+        if files:
+            text += '; attached: ' + ', '.join(files)
+        self.notes_label.setText(text)
+        self._update_detach()
+
+    def _on_detach(self):
+        """
+        Choose one of the selected item's attached files to remove (the
+        button).
+        """
+        if self._notes_row is None:
+            return
+        files = self.attachments(self._notes[self._notes_row]['path'])
+        if not files:
+            return
+        name, ok = QtWidgets.QInputDialog.getItem(
+            self, 'Remove an attached file', 'File to remove from the '
+            'report:', files, 0, False)
+        if ok and name:
+            self.remove_attachment(name)
 
     def _on_attach(self):
         """

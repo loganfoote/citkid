@@ -1,5 +1,5 @@
 """
-Tests of citkid.pipeline.cosmic_finder: thresholds, per-tone analysis and
+Tests of citkid.pipeline.hee_finder: thresholds, per-tone analysis and
 refits, saving (the whole path through a store is in
 tests/procedures/test_scripts.py).
 """
@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 import zarr
 from citkid import daq_layout as dl
-from citkid.pipeline import cosmic_finder as cf
-from ..signal.test_cosmic import rays
+from citkid.pipeline import hee_finder as cf
+from ..signal.test_hee import rays
 from ..signal.test_photons import DT, TAU
 
 SETTINGS = cf.TailSettings(pre_s = 20 * DT, post_s = 150 * DT,
@@ -107,7 +107,7 @@ def test_save(rays, tmp_path):
     root = zarr.open_group(tmp_path / 's.zarr', mode = 'a')
     grp = dl.create_group(cf.results_group(root), 'dark', 'analysis')
     cf.save_timestream(grp, ts, results, events, th, SETTINGS, 'triggers')
-    g = zarr.open_group(tmp_path / 's.zarr', mode = 'r')['cosmic/dark']
+    g = zarr.open_group(tmp_path / 's.zarr', mode = 'r')['hee/dark']
     assert g.attrs['events'] == 'triggers' and g.attrs['n_events'] == \
         len(times)
     assert g.attrs['thresholds']['bad'] == {'12': 'other'}

@@ -1,7 +1,7 @@
 """
 Report of a store's timestream results as plain files: the lifetimes
-(photon and cosmic-ray results: pulse height and decay time against
-resonant frequency) and the noise spectra (PSD groups: the spectra's
+(photon and high-energy event (HEE) results: pulse height and lifetime
+againstresonant frequency) and the noise spectra (PSD groups: the spectra's
 mean and range over the tones, Sxx and the s-factor against resonant
 frequency at a few frequencies), each as a figure and a CSV table, with
 a text summary. ``export_timestream_report`` writes everything.
@@ -10,7 +10,7 @@ import os
 import numpy as np
 import pandas as pd
 from .. import daq_layout as dl
-from . import cosmic_finder as cf
+from . import hee_finder as cf
 from . import photon_finder as pf
 from . import psds
 from .stream_sources import open_calibration
@@ -33,7 +33,7 @@ def tone_frequencies(root, grp):
 
     Parameters:
     root (zarr.Group): the store root.
-    grp (zarr.Group): a photon, cosmic or PSD timestream result (attr
+    grp (zarr.Group): a photon, HEE or PSD timestream result (attr
         ``source``, the sweep, or ``run`` whose run list names it; array
         ``res_idxs``).
 
@@ -92,16 +92,16 @@ def _bad(grp):
 ################################################################################
 def lifetime_table(root, grp, kind):
     """
-    Tabulate a photon or cosmic-ray result per tone.
+    Tabulate a photon or HEE result per tone.
 
     Parameters:
     root (zarr.Group): the store root.
-    grp (zarr.Group): ``photons/<name>`` or ``cosmic/<name>``.
-    kind (str): 'photons' or 'cosmic'.
+    grp (zarr.Group): ``photons/<name>`` or ``hee/<name>``.
+    kind (str): 'photons' or 'hee'.
 
     Returns:
     table (pd.DataFrame): ``res_idx``, ``fres`` (Hz), ``height`` (the mean
-        pulse's optimal-filter height, kHz/GHz; NaN for cosmic rays),
+        pulse's optimal-filter height, kHz/GHz; NaN for HEEs),
         ``tau`` (s), ``rate`` (pulses per second), ``n_used``,
         ``status``, ``bad``, ``bad_reason``.
     """
@@ -120,17 +120,17 @@ def lifetime_table(root, grp, kind):
 
 def multiplicity_table(grp, kind):
     """
-    Tabulate the coincident events of a photon or cosmic-ray result.
+    Tabulate the coincident events of a photon or HEE result.
 
     Parameters:
-    grp (zarr.Group): ``photons/<name>`` or ``cosmic/<name>``.
-    kind (str): 'photons' or 'cosmic'.
+    grp (zarr.Group): ``photons/<name>`` or ``hee/<name>``.
+    kind (str): 'photons' or 'hee'.
 
     Returns:
     table (pd.DataFrame): per event: ``time_s`` (since the start of the
         run) and ``mult`` (tones hit). Empty if the result has none.
     """
-    ev = grp.get('cosmic/events' if kind == 'photons' else 'events')
+    ev = grp.get('hee/events' if kind == 'photons' else 'events')
     if ev is None or 'mult' not in ev or 'time_s' not in ev:
         return pd.DataFrame(dict(time_s = np.zeros(0), mult = np.zeros(0,
                                                                      int)))
@@ -160,7 +160,7 @@ def plot_multiplicity(table, duration, title = '', bin_s = 5.):
         values, counts = np.unique(mult, return_counts = True)
         ax1.bar(values, counts, width = 0.8, color = 'C0')
         ax1.set_yscale('log')
-    ax1.set_xlabel('Tones hit per event')
+    ax1.set_xlabel('Multiplicity (tones hit per event)')
     ax1.set_ylabel('Events')
     ax1.set_title(f'{len(mult)} events', fontsize = 10)
     ax1.grid(alpha = 0.3)
@@ -332,7 +332,7 @@ def _scatter_with_hist(fig, gs, row, table, column, label):
 
 def plot_lifetimes(table, title = ''):
     """
-    Plot pulse height and decay time (us) against resonant frequency
+    Plot pulse height and lifetime (us) against resonant frequency
     (MHz), each with a histogram at the side.
 
     Parameters:
@@ -344,7 +344,7 @@ def plot_lifetimes(table, title = ''):
     """
     import matplotlib.pyplot as plt
     from matplotlib.gridspec import GridSpec
-    rows = [('tau_us', 'Decay time (us)')]
+    rows = [('tau_us', 'Lifetime (us)')]
     table = table.assign(tau_us = table['tau'] * 1e6)
     if np.isfinite(table['height']).any():
         rows.insert(0, ('height', 'Pulse height (kHz/GHz)'))
@@ -703,7 +703,7 @@ def report_text(root, lifetimes, groups):
                   f"{int((t['status'] != '').sum())} failed"]
         if len(good):
             med = np.median(good['tau']) * 1e6
-            lines.append(f"  decay time: median {med:.3g} "
+            lines.append(f"  lifetime: median {med:.3g} "
                          f"us, {RANGE[0]:g}-{RANGE[1]:g} percentile "
                          f"{np.percentile(good['tau'], RANGE[0]) * 1e6:.3g}-"
                          f"{np.percentile(good['tau'], RANGE[1]) * 1e6:.3g} us")
@@ -716,7 +716,7 @@ def report_text(root, lifetimes, groups):
         events = multiplicity_table(grp, kind)
         if len(events):
             m = events['mult'].to_numpy()
-            lines.append(f"  coincident events: {len(m)}, tones hit "
+            lines.append(f"  multiplicity: {len(m)} events, tones hit "
                          f"median {int(np.median(m))}, most {int(m.max())}")
         for _, r in t[t['bad']].iterrows():
             lines.append(f"  res {r['res_idx']} bad: {r['bad_reason']}")
@@ -743,7 +743,7 @@ def report_text(root, lifetimes, groups):
     return '\n'.join(lines) + '\n'
 
 def export_timestream_report(
-    root, out_dir, photons = None, cosmic = None, groups = None, dpi = 150
+    root, out_dir, photons = None, hee = None, groups = None, dpi = 150
 ):
     """
     Write the figures, tables and text of a store's timestream results.
@@ -753,7 +753,7 @@ def export_timestream_report(
     out_dir (str or os.PathLike): output directory (created if needed).
     photons (list of str or None): photon results to report (names).
         Default None: all.
-    cosmic (list of str or None): cosmic-ray results. Default None: all.
+    hee (list of str or None): HEE results. Default None: all.
     groups (list of int or None): PSD groups (p). Default None: all.
     dpi (int): plot resolution. Default 150.
 
@@ -774,8 +774,8 @@ def export_timestream_report(
     paths, lifetimes, group_out = {}, [], []
     kinds = (('photons', pf.list_results(root) if photons is None
               else list(photons)),
-             ('cosmic', cf.list_results(root) if cosmic is None
-              else list(cosmic)))
+             ('hee', cf.list_results(root) if hee is None
+              else list(hee)))
     skipped = []
     for kind, names in kinds:
         for name in names:
@@ -799,7 +799,7 @@ def export_timestream_report(
                 duration = (int(a['stop']) - int(a['start'])) * float(a['dt'])
                 fig = plot_multiplicity(
                     events, duration,
-                    f'{device} {kind}/{name}: coincident events')
+                    f'{device} {kind}/{name}: multiplicity')
                 key = f'multiplicity_{kind}_{name}'
                 paths[key] = f'{stem}_{key}.png'
                 fig.savefig(paths[key], dpi = dpi, bbox_inches = 'tight')

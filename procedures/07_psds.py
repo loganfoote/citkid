@@ -47,10 +47,10 @@ GLITCH_BASELINE_S = 1.
 GLITCH_DISTANCE_S = 1.e-3
 GLITCH_ROUNDS = 2
 PHOTONS = None
-GLITCH_PULSES = 'cosmic'
+GLITCH_PULSES = 'hee'
 COINC_WIN = 2
-COSMIC_MIN_MULT = 3
-MEMORY_GB = 4.
+HEE_MIN_MULT = 3
+MEMORY_GB = 12.
 
 NOTES = """
 """
@@ -126,9 +126,8 @@ def store_path(args):
     """
     if args.store:
         return os.path.expanduser(args.store)
-    name = args.device + (f'_{args.suffix}' if args.suffix else '')
-    return os.path.join(os.path.expanduser(args.data_dir), args.cooldown,
-                        f'{name}.zarr')
+    return dl.store_path(args.data_dir, args.cooldown, args.device,
+                         args.suffix)
 
 def analysis_settings(args):
     """
@@ -150,7 +149,7 @@ def analysis_settings(args):
         glitch_nstd = GLITCH_NSTD, glitch_baseline_s = GLITCH_BASELINE_S,
         glitch_distance_s = GLITCH_DISTANCE_S, glitch_rounds = GLITCH_ROUNDS,
         glitch_pulses = GLITCH_PULSES, coinc_win = COINC_WIN,
-        cosmic_min_mult = COSMIC_MIN_MULT, memory_gb = MEMORY_GB,
+        hee_min_mult = HEE_MIN_MULT, memory_gb = MEMORY_GB,
         photons = args.photons)
 
 def review(ts, result, f_reduced, root, stage, limits = None):

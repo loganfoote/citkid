@@ -629,3 +629,60 @@ def test_tone_marks(tmp_path):
     # Reopened, the marks are still there
     again = zarr.open_group(tmp_path / 's.zarr', mode = 'r')
     assert len(dl.tone_marks(again, 5)) == 4
+
+def test_rename_hee(tmp_path):
+    """
+    A store of the 'cosmic' spelling: the root group is renamed on disk,
+    the photon result's cosmic subgroup, nested settings keys, the PSD
+    result's settings and the tone marks' stages get the 'hee' spelling,
+    notes with spaces are left alone, a second run changes nothing, and
+    a store with both groups is refused.
+    """
+    path = tmp_path / 'old.zarr'
+    root = dl.create_store(path, 'devA', 'cd1')
+    g = dl.create_group(root, 'cosmic', 'analysis')
+    r = dl.create_group(g, 'dark', 'analysis', attrs = dict(
+        continued_from = 'cosmic/dark', notes = 'cosmic rays were here',
+        settings = dict(cosmic_min_mult = 3, pulses = 'cosmic')))
+    r.create_array('tau_us', data = np.array([1., 2.]))
+    ph = dl.create_group(dl.create_group(root, 'photons', 'analysis'),
+                         'dark', 'analysis', attrs = dict(cosmic_min_mult = 3))
+    ev = dl.create_group(dl.create_group(ph, 'cosmic', 'analysis'), 'events',
+                         'analysis')
+    ev.create_array('t0', data = np.array([5, 9]))
+    ph.create_array('cosmic_count', data = np.array([2]))
+    psd = dl.create_group(root, 'ts_psd0', 'analysis', attrs = dict(
+        settings = dict(cosmic_min_mult = 2, pulses = 'cosmic')))
+    root['ts_psd0'].create_array('status', data = np.array(
+        ['', 'marked bad: odd pulses (cosmic/dark)', 'x']))
+    dl.add_tone_mark(root, 3, 'bad', 'cosmic ray', stage = 'cosmic/dark')
+    root = dl.open_store(path, mode = 'a')
+
+    changed = dl.rename_hee(root)
+    assert 'cosmic -> hee' in changed
+    assert 'photons/dark/cosmic -> photons/dark/hee' in changed
+    root = dl.open_store(path)
+    assert 'cosmic' not in root and 'hee' in root
+    assert root['hee/dark'].attrs['continued_from'] == 'hee/dark'
+    assert root['hee/dark'].attrs['notes'] == 'cosmic rays were here'
+    assert root['hee/dark'].attrs['settings'] == dict(hee_min_mult = 3,
+                                                       pulses = 'hee')
+    assert root['hee/dark/tau_us'][1] == 2.
+    assert root['photons/dark'].attrs['hee_min_mult'] == 3
+    assert list(root['photons/dark/hee/events/t0'][:]) == [5, 9]
+    assert root['photons/dark/hee_count'][0] == 2
+    assert root['ts_psd0'].attrs['settings'] == dict(hee_min_mult = 2,
+                                                      pulses = 'hee')
+    mark = dl.tone_marks(root, 3)[0]
+    assert mark['stage'] == 'hee/dark' and mark['text'] == 'cosmic ray'
+    # A string array: the stage path in a status, the free text kept
+    assert list(root['ts_psd0/status'][:]) == \
+        ['', 'marked bad: odd pulses (hee/dark)', 'x']
+    assert 'ts_psd0/status: values' in changed
+
+    assert dl.rename_hee(dl.open_store(path, mode = 'a')) == []
+    with pytest.raises(ValueError, match = 'mode'):
+        dl.rename_hee(dl.open_store(path))
+    dl.create_group(dl.open_store(path, mode = 'a'), 'cosmic', 'analysis')
+    with pytest.raises(ValueError, match = 'both'):
+        dl.rename_hee(dl.open_store(path, mode = 'a'))

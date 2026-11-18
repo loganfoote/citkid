@@ -59,9 +59,8 @@ def store_path(args):
     """
     if args.store:
         return os.path.expanduser(args.store)
-    name = args.device + (f'_{args.suffix}' if args.suffix else '')
-    return os.path.join(os.path.expanduser(args.data_dir), args.cooldown,
-                        f'{name}.zarr')
+    return dl.store_path(args.data_dir, args.cooldown, args.device,
+                         args.suffix)
 
 def main(args):
     """

@@ -1,9 +1,9 @@
 """
-Cosmic-ray tails: decay times from the pulses that cosmic rays leave in
-many tones at once, for devices without photon pulses (or alongside
-them).
+High-energy event (HEE) tails: decay times from the pulses that HEEs
+leave in many tones at once, for devices without photon pulses (or
+alongside them).
 
-A cosmic ray deposits a different energy in every tone, so its pulses
+An HEE deposits a different energy in every tone, so its pulses
 have different heights and shapes near the peak (where the response can
 saturate), but their tails decay alike. So the pulses are lined up at
 the point where each has fallen through a level set by the user
@@ -13,8 +13,8 @@ is fitted (``fit_tail`` from the alignment point). ``fit_tails`` and
 ``tail_summary`` fit pulses one by one instead, for a look at their
 spread.
 
-Events come either from a photon result (``photons/<name>``, its cosmic
-rays) or, without photons, from simple triggers on the tones streamed
+Events come either from a photon result (``photons/<name>``, its
+HEEs) or, without photons, from simple triggers on the tones streamed
 together (``find_events``: ``photons.triggers`` and
 ``photons.coincidence_clusters``). ``cut_pulses`` cuts a baseline-
 subtracted snippet around each event, ``peak_heights`` measures the
@@ -29,7 +29,7 @@ def find_events(
     ds, nsigma, win, min_mult = 3, distance = 3, sign = None, dead = 0
 ):
     """
-    Find cosmic rays in the detection timestreams of tones streamed
+    Find HEEs in the detection timestreams of tones streamed
     together: the peaks above ``nsigma`` noise sigma of each tone
     (``triggers``), clustered across tones (``coincidence_clusters``),
     keeping the clusters seen by at least ``min_mult`` tones, and

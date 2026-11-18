@@ -1,7 +1,8 @@
 """
-06a: find photons and cosmic rays in calibrated timestreams with an
-iterative optimal filter, check the thresholds in a window, and save
-one result per timestream (photons/<name>). No CRS needed.
+06a: find photons and high-energy events (HEEs) in calibrated
+timestreams with an iterative optimal filter, check the thresholds in
+a window, and save one result per timestream (photons/<name>). No CRS
+needed.
 
 Usage:
     python 06a_find_photons.py --device deviceA
@@ -47,8 +48,8 @@ TAU_FIT_S = 1.e-3
 HIGHPASS_HZ = 10.
 COINC_NSIGMA = 4.
 COINC_WIN = 2
-COSMIC_MIN_MULT = 3
-MEMORY_GB = 4.
+HEE_MIN_MULT = 3
+MEMORY_GB = 12.
 
 NOTES = """
 """
@@ -125,9 +126,8 @@ def store_path(args):
     """
     if args.store:
         return os.path.expanduser(args.store)
-    name = args.device + (f'_{args.suffix}' if args.suffix else '')
-    return os.path.join(os.path.expanduser(args.data_dir), args.cooldown,
-                        f'{name}.zarr')
+    return dl.store_path(args.data_dir, args.cooldown, args.device,
+                         args.suffix)
 
 def detection_settings():
     """
@@ -221,12 +221,12 @@ def report(ts, results, summary):
     ok = [r for r in ts['rows'] if isinstance(results.get(int(r)), dict)]
     n_used = sum(len(summary['used'].get(int(r), [])) for r in ok)
     duration = (ts['stop'] - ts['start']) * ts['dt']
-    n_cr = len(summary['cosmic']['events']['t0'])
+    n_cr = len(summary['hee']['events']['t0'])
     left_out = ts.get('n_uncalibrated', 0)
     print(f"{ts['run']} ({ts['name']}), tone set {ts['tone_set']}: "
           f"{len(ok)} of {len(ts['rows'])} tones detected"
           + (f' ({left_out} uncalibrated left out)' if left_out else '')
-          + f', {n_used} photons averaged, {n_cr} cosmic rays '
+          + f', {n_used} photons averaged, {n_cr} HEEs '
           f'({n_cr / duration:.3g}/s)')
     for k, r in enumerate(ts['rows']):
         res = results.get(int(r))
@@ -446,14 +446,14 @@ def main(args):
                   f'marks are left out: res {marked}')
         summary = pf.finish_timestream(root, ts, data, results, settings,
                                        coinc_win = COINC_WIN,
-                                       cosmic_min_mult = COSMIC_MIN_MULT,
+                                       hee_min_mult = HEE_MIN_MULT,
                                        thresholds = thresholds)
         if name in results_grp:
             print(f'Replacing photons/{name}')
         grp = dl.create_group(results_grp, name, 'analysis',
                               overwrite = True)
         pf.save_timestream(grp, ts, results, summary, thresholds, settings,
-                           mode, COINC_WIN, COSMIC_MIN_MULT)
+                           mode, COINC_WIN, HEE_MIN_MULT)
         grp.attrs.update(dl.to_jsonable(dict(
             calibration = cal.path,
             reference = None if ref_grp is None else ref_grp.path,

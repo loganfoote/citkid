@@ -16,16 +16,14 @@ noise spectra. Run them in this order:
 | 3 | `01_vna_sweep.py`: full VNA sweep | VNA screening |
 | 4 | `vna_view.py` (optional): look at the sweep | VNA screening |
 | 5 | `02_find_resonances.py`: find and fit the resonances | VNA screening |
-| 6 | `vna_report.py` (optional): results as plain files | VNA screening |
-| 7 | `03_tune.py`: tone powers and frequencies | Tuning and timestreams |
-| 8 | `04_stream.py`: take timestreams | Tuning and timestreams |
-| 9 | `store_browser.py` (optional, any time): look around the store | Tuning and timestreams |
-| 10 | `05_calibrate_streams.py`: calibrate the timestreams | Tuning and timestreams |
-| 11 | `06a_find_photons.py`: photons and cosmic rays | Tuning and timestreams |
-| 12 | `06b_cosmic_rays.py`: lifetimes from cosmic rays | Tuning and timestreams |
-| 13 | `07_psds.py`: noise spectra | Tuning and timestreams |
-| 14 | `08_report.py`: lifetimes and spectra as plain files | Tuning and timestreams |
-| 15 | `09_report_site.py`: browsable pages of every device | Tuning and timestreams |
+| 6 | `03_tune.py`: tone powers and frequencies | Tuning and timestreams |
+| 7 | `04_stream.py`: take timestreams | Tuning and timestreams |
+| 8 | `store_browser.py` (optional, any time): look around the store | Tuning and timestreams |
+| 9 | `05_calibrate_streams.py`: calibrate the timestreams | Tuning and timestreams |
+| 10 | `06a_find_photons.py`: photons and high-energy events (HEEs) | Tuning and timestreams |
+| 11 | `06b_hee.py`: lifetimes from HEEs | Tuning and timestreams |
+| 12 | `07_psds.py`: noise spectra | Tuning and timestreams |
+| 13 | `08_report_site.py`: browsable pages of every device | Tuning and timestreams |
 
 # The environment
 

@@ -39,8 +39,8 @@ GAIN_SPAN_FACTOR = 10
 NSAMPS = 200
 SIM_PULSES = False
 SIM_PULSE_SETTINGS = dict(rate = 20., x = 2e-6, tau = 150e-6,
-                          cosmic_rate = 1., cosmic_x = 1e-5,
-                          cosmic_spread = 0.5)
+                          hee_rate = 1., hee_x = 1e-5,
+                          hee_spread = 0.5)
 SIM_SNR_DB = 80.
 
 ################################################################################
@@ -74,8 +74,8 @@ def parse_args(argv = None):
                    help = "stream the store's simulated device")
     p.add_argument('--sim-pulses', action = 'store_true',
                    default = SIM_PULSES,
-                   help = 'with --simulate: add photon pulses and cosmic '
-                   'rays to the streams')
+                   help = 'with --simulate: add photon pulses and HEEs '
+                   'to the streams')
     return p.parse_args(argv)
 
 def store_path(args):
@@ -91,9 +91,8 @@ def store_path(args):
     """
     if args.store:
         return os.path.expanduser(args.store)
-    name = args.device + (f'_{args.suffix}' if args.suffix else '')
-    return os.path.join(os.path.expanduser(args.data_dir), args.cooldown,
-                        f'{name}.zarr')
+    return dl.store_path(args.data_dir, args.cooldown, args.device,
+                         args.suffix)
 
 def find_tuning(root, k = None):
     """

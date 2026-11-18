@@ -1,14 +1,15 @@
 """
-Tests of the cosmic tail window (citkid.pipeline.interactive.cosmic_tails).
+Tests of the high-energy event (HEE) tail window
+(citkid.pipeline.interactive.hee_tails).
 """
 import numpy as np
 import pytest
 import zarr
 from citkid import daq_layout as dl
-from citkid.pipeline import cosmic_finder as cf
+from citkid.pipeline import hee_finder as cf
 from citkid.qt_compat import get_qapp
-from .test_cosmic_finder import SETTINGS
-from ..signal.test_cosmic import rays
+from .test_hee_finder import SETTINGS
+from ..signal.test_hee import rays
 from ..signal.test_photons import DT, TAU
 
 
@@ -34,10 +35,10 @@ def make_window(rays, fail_row = None, data = False):
         False.
 
     Returns:
-    win (CosmicTailWindow): the window.
+    win (HeeTailWindow): the window.
     calls (list): the rows of each refit.
     """
-    from citkid.pipeline.interactive.cosmic_tails import CosmicTailWindow
+    from citkid.pipeline.interactive.hee_tails import HeeTailWindow
     ds, times, _ = rays
     ts = dict(rows = np.array([0, 1, 2]), res_idxs = np.array([10, 11, 12]),
               dt = DT, start = 0, stop = len(ds[0]))
@@ -67,13 +68,13 @@ def make_window(rays, fail_row = None, data = False):
         calls.append(list(rows))
         return cf.refit_timestream(ts, win.results, th, rows)
 
-    win = CosmicTailWindow(ts, results, th, refit,
+    win = HeeTailWindow(ts, results, th, refit,
                            data = (lambda row: ds[row]) if data else None)
     return win, calls
 
 
 def test_envelope():
-    from citkid.pipeline.interactive.cosmic_tails import envelope
+    from citkid.pipeline.interactive.hee_tails import envelope
     d = np.arange(100.)
     idx, y = envelope(d, nbins = 10)
     assert len(idx) == 20 and len(y) == 20
@@ -105,7 +106,7 @@ def test_window_values_and_apply(qapp, rays):
     assert len(win.avg_curve.getData()[0]) == 170
     assert len(win.fit_curve.getData()[0]) == res['n_fit']
     assert 'tau =' in win.pulse_plot.titleLabel.text
-    assert 'decay time of the mean tail' in win.status.text()
+    assert 'lifetime of the mean tail' in win.status.text()
     # The default y range stops near the 99th percentile of the pulses;
     # the mouse can zoom (no fixed view box); R puts the range back
     top = max(float(np.percentile(res['h'], 99)), 1.)
@@ -201,6 +202,24 @@ def test_window_bad_overview_and_failed(qapp, rays):
     assert win.outside_limits() == {low, 2}
     win.select_tone(1 - low)
     assert win.tone_list.count() == 3
+    # The boxes above the list: only the flagged tones, without the
+    # tones marked bad
+    win.only_outside.setChecked(True)
+    assert win.tone_list.count() == 3 and win.current() == 1 - low
+    win.select_tone(low)
+    win._fill_list()
+    assert win.tone_list.count() == 2
+    win._ask_reason = lambda: 'noisy'
+    win.toggle_bad()
+    win.include_bad.setChecked(False)
+    assert win.tone_list.count() == 2 and win.current() == low
+    win.select_tone(2)
+    win._fill_list()
+    assert win.tone_list.count() == 1
+    win.include_bad.setChecked(True)
+    assert win.tone_list.count() == 2
+    win.only_outside.setChecked(False)
+    assert win.tone_list.count() == 3
     ov.close()
     win.close()
 
@@ -212,7 +231,7 @@ def test_window_tone_marks(qapp, rays):
     """
     win, _ = make_window(rays)
     root = zarr.group()
-    win.root, win.stage = root, 'cosmic/x'
+    win.root, win.stage = root, 'hee/x'
     win._ask_reason = lambda: 'weird pulse shape'
     win._ask_note = lambda: 'note'
     win.tone_list.setCurrentRow(1)
@@ -220,7 +239,7 @@ def test_window_tone_marks(qapp, rays):
     win.add_note()
     assert set(dl.bad_tones(root)) == {11}
     assert [e['kind'] for e in dl.tone_marks(root, 11)] == ['bad', 'note']
-    assert dl.tone_marks(root, 11)[0]['stage'] == 'cosmic/x'
+    assert dl.tone_marks(root, 11)[0]['stage'] == 'hee/x'
     win.toggle_bad()
     assert dl.bad_tones(root) == {}
     win.close()

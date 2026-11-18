@@ -147,6 +147,7 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         self._updating = False
         self._listed = []
         self._only_outside = True
+        self._include_bad = True
         self._ask_reason = lambda: ask_reason(
             self, f'Mark res {self.res_idxs[self.current()]} bad')
         self._ask_note = lambda: ask_note(
@@ -224,10 +225,14 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
 
         right = QtWidgets.QVBoxLayout()
         self.only_outside = QtWidgets.QCheckBox(
-            'List only the tones outside the limits')
+            'Show only flagged tones (outside the limits)')
         self.only_outside.setChecked(True)
         self.only_outside.toggled.connect(self._on_only_outside)
         right.addWidget(self.only_outside)
+        self.include_bad = QtWidgets.QCheckBox('Include tones marked bad')
+        self.include_bad.setChecked(True)
+        self.include_bad.toggled.connect(self._on_include_bad)
+        right.addWidget(self.include_bad)
         self.count_label = QtWidgets.QLabel()
         right.addWidget(self.count_label)
         self.tone_list = QtWidgets.QListWidget()
@@ -372,6 +377,8 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         outside = self.outside_limits()
         listed = sorted(outside) if self._only_outside else \
             list(range(len(self.rows)))
+        if not self._include_bad:
+            listed = [i for i in listed if self.res_idxs[i] not in self.bad]
         if selected >= 0 and selected not in listed:
             listed = sorted(set(listed) | {selected})
         vals = [self.values(k) for k in range(N_HIST)]
@@ -421,6 +428,16 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         only (bool): the box.
         """
         self._only_outside = bool(only)
+        self._fill_list()
+
+    def _on_include_bad(self, include):
+        """
+        List the tones marked bad, or leave them out.
+
+        Parameters:
+        include (bool): the box.
+        """
+        self._include_bad = bool(include)
         self._fill_list()
 
     def _on_row_changed(self, li):
@@ -492,6 +509,8 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
             i = int(np.nanargmin(np.abs(np.log10(v) - x)))
         if i not in self._listed:
             self.only_outside.setChecked(False)
+        if i not in self._listed:
+            self.include_bad.setChecked(True)
         if i in self._listed:
             self.tone_list.setCurrentRow(self._listed.index(i))
 

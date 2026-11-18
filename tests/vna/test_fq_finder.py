@@ -428,7 +428,7 @@ def test_title_set(qapp):
 
 
 def test_reject_reasons_class_constant():
-    expected = ["tone off resonance", "overlapping resonance",
+    expected = ["tone off resonance", "double resonance",
                 "bifurcated", "other"]
     assert FqFinderWindow._REJECT_REASONS == expected
 
@@ -603,11 +603,11 @@ def test_save_writes_empty_reason_for_accepted(basic_win):
 def test_save_writes_reason_for_rejected(basic_win):
     w = basic_win
     ri = w._ri
-    w._reason_combo.setCurrentText("overlapping resonance")
+    w._reason_combo.setCurrentText("double resonance")
     w._reject_current()
     w._save_current()
     w._flush_saves()
-    assert str(w._zg["reject_reason"][ri]) == "overlapping resonance"
+    assert str(w._zg["reject_reason"][ri]) == "double resonance"
 
 
 def test_save_nan_fres_stored(basic_win):

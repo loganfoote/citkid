@@ -26,7 +26,8 @@ from ``procedures/03_tune.py``):
 - Preview: Capture writes the chosen calibration's tones (the chunk
   holding the selected tone) and streams a few seconds into memory. Pick
   a tone to see its timestream as the resonance frequency shift x
-  (``xcal.tangent.loop_tangent_shift``), as I and Q, or along and across
+  (``xcal.tangent.loop_tangent_shift``), as I and Q, or parallel and
+perpendicular to
   the IQ loop, with its calibration loop and the stream in the IQ plane.
   R fits the plots to their data again. Nothing is saved.
 - Run: enter a name (and notes), a decimation stage, and a length, and
@@ -72,9 +73,13 @@ from .procedures import (
 )
 from .quick_check import AsyncWorker, ProgressClock
 from .util import get_sample_freq
+from ..signal.psd import get_psd
 
 # Preview display modes
-MODES = ('Frequency shift x', 'Along / across loop (Hz)', 'I and Q')
+MODES = ('Frequency shift x', 'Parallel / perpendicular to loop (Hz)',
+         'I and Q')
+# PSD axis label of each mode
+PSD_LABELS = ('Sxx (1/Hz)', 'Spar, Sper (Hz^2/Hz)', 'SII, SQQ (1/Hz)')
 # Most stream samples drawn in the IQ plane
 MAX_IQ_POINTS = 5000
 # Calibration sweep settings editable in the window: target_sweep name,
@@ -213,7 +218,10 @@ class StreamWindow(QtWidgets.QMainWindow):
         central = QtWidgets.QWidget()
         lay = QtWidgets.QHBoxLayout(central)
         lay.addWidget(self._panel)
-        lay.addWidget(self.plots, stretch = 1)
+        right = QtWidgets.QVBoxLayout()
+        right.addWidget(self.plots, stretch = 2)
+        right.addWidget(self.psd_plot, stretch = 1)
+        lay.addLayout(right, stretch = 1)
         self.setCentralWidget(central)
         self._on_set()
         self._set_status('Connecting to the CRS...')
@@ -316,11 +324,14 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.mode_box = QtWidgets.QComboBox()
         self.mode_box.addItems(MODES)
         self.mode_box.currentIndexChanged.connect(self._plot)
+        self.psd_box = QtWidgets.QCheckBox('PSD of the timestream')
+        self.psd_box.toggled.connect(self._on_psd_box)
         form.addRow('Stage', self.preview_dec)
         form.addRow('Length', self.preview_s)
         form.addRow(self.capture_btn)
         form.addRow('Tone', self.tone_box)
         form.addRow('Show', self.mode_box)
+        form.addRow('', self.psd_box)
         outer.addWidget(box)
 
         # Run
@@ -409,6 +420,12 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.iq_plot.setAspectLocked(True)
         self.iq_plot.setLabel('bottom', 'I')
         self.iq_plot.setLabel('left', 'Q')
+        # The PSD of what the timestream plot shows (the box)
+        self.psd_plot = pg.PlotWidget()
+        self.psd_plot.setLogMode(x = True, y = True)
+        self.psd_plot.setLabel('bottom', 'Frequency (Hz)')
+        self.psd_plot.addLegend()
+        self.psd_plot.setVisible(False)
 
     ############################################################################
     @staticmethod
@@ -446,6 +463,15 @@ class StreamWindow(QtWidgets.QMainWindow):
                 + ('' if cal['complete'] else ', incomplete')
                 + ('' if cal.get('in_frame') else ', stale (NCO set since)')
                 + (f' - {notes}' if notes else ''))
+
+    def run_names(self):
+        """
+        Return the names of the tuning's runs (a name is used once).
+
+        Returns:
+        names (set of str): the names.
+        """
+        return {str(r.get('name')) for r in self.tuning_runs()}
 
     def tuning_runs(self):
         """
@@ -540,8 +566,13 @@ class StreamWindow(QtWidgets.QMainWindow):
         chunks = self._run_chunks()
         self.write_btn.setEnabled(idle and has_cal and chunks is not None
                                   and len(chunks) == 1)
-        self.run_btn.setEnabled(idle and has_cal and
-                                bool(self.name_edit.text().strip()))
+        name = self.name_edit.text().strip()
+        taken = name in self.run_names()
+        self.run_btn.setEnabled(idle and has_cal and bool(name) and
+                                not taken)
+        self.run_btn.setToolTip(
+            f'A run named {name!r} exists: choose another name' if taken
+            else '')
         self.view_btn.setEnabled(not self.worker.busy and
                                  self.runs_list.currentRow() >= 0)
         w = self.written
@@ -857,6 +888,10 @@ class StreamWindow(QtWidgets.QMainWindow):
         its chosen calibration.
         """
         name = self.name_edit.text().strip()
+        if name in self.run_names():
+            self._set_status(f'A run named {name!r} exists: choose '
+                             'another name.')
+            return
         notes = self.notes_edit.toPlainText()
         dec, secs = self.run_dec.value(), self.run_s.value()
         s, cal = self.cal['set'], self.cal['path']
@@ -969,8 +1004,10 @@ class StreamWindow(QtWidgets.QMainWindow):
         """
         self.ts_plot.clear()
         self.iq_plot.clear()
-        if self.ts_plot.legend is not None:
-            self.ts_plot.legend.clear()
+        self.psd_plot.clear()
+        for plot in (self.ts_plot, self.psd_plot.getPlotItem()):
+            if plot.legend is not None:
+                plot.legend.clear()
         r = self.tone_box.currentData()
         # A saved run brings its own calibration loop; a capture uses the
         # chosen calibration's
@@ -993,19 +1030,36 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.iq_plot.plot([z0.real], [z0.imag], pen = None, symbol = '+',
                           symbolSize = 14, symbolPen = 'w')
         t = np.arange(len(zt)) * p['dt']
-        mode = self.mode_box.currentText()
-        if mode == MODES[2]:
-            self.ts_plot.plot(t, zt.real, pen = 'c', name = 'I')
-            self.ts_plot.plot(t, zt.imag, pen = 'm', name = 'Q')
+        mode = self.mode_box.currentIndex()
+        if mode == 2:
+            series = [('I', zt.real), ('Q', zt.imag)]
             self.ts_plot.setLabel('left', 'S21')
-        elif mode == MODES[0]:
-            self.ts_plot.plot(t, dfr / f_tone, pen = 'c', name = 'x')
+        elif mode == 0:
+            series = [('x', dfr / f_tone)]
             self.ts_plot.setLabel('left', 'x = dfr / fr')
         else:
-            self.ts_plot.plot(t, dfr, pen = 'c', name = 'along (dfr)')
-            self.ts_plot.plot(t, dperp, pen = 'm', name = 'across')
+            series = [('parallel (dfr)', dfr), ('perpendicular', dperp)]
             self.ts_plot.setLabel('left', 'Hz')
+        for (name, y), pen in zip(series, ('c', 'm')):
+            self.ts_plot.plot(t, y, pen = pen, name = name)
+        if self.psd_box.isChecked():
+            self.psd_plot.setLabel('left', PSD_LABELS[mode])
+            for (name, y), pen in zip(series, ('c', 'm')):
+                f, psd = get_psd(y - np.mean(y), p['dt'],
+                                 return_freqs = True)
+                ok = (f > 0) & (psd > 0)
+                self.psd_plot.plot(f[ok], psd[ok], pen = pen, name = name)
         self.rescale()
+
+    def _on_psd_box(self, show):
+        """
+        Show or hide the PSD plot and draw it (the box).
+
+        Parameters:
+        show (bool): the box.
+        """
+        self.psd_plot.setVisible(bool(show))
+        self._plot()
 
     def rescale(self):
         """
@@ -1014,7 +1068,7 @@ class StreamWindow(QtWidgets.QMainWindow):
         """
         # Enabling auto-range fits the view at once (autoRange() would
         # set a fixed range and turn auto-range off again)
-        for plot in (self.ts_plot, self.iq_plot):
+        for plot in (self.ts_plot, self.iq_plot, self.psd_plot):
             plot.enableAutoRange()
 
     def keyPressEvent(self, event):

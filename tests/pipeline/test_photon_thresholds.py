@@ -209,7 +209,7 @@ def test_window_thresholds(qapp, tones):
     assert win.outside_limits() == {low_tone}
     assert ov.outside_list.count() == 1 and key in \
         ov.outside_list.item(0).text()
-    ov.only_outside.setChecked(True)
+    win.only_outside.setChecked(True)
     assert win._only_outside and win.tone_list.count() == 1
     assert win.current() == low_tone
     assert 'outside the limits: 1 of 2' in win.list_label.text()
@@ -224,6 +224,7 @@ def test_window_thresholds(qapp, tones):
     other = 1 - low_tone
     win.select_tone(other)
     assert not win._only_outside and win.tone_list.count() == 2
+    assert not win.only_outside.isChecked()
     assert win.current() == other
     ov._on_item(ov.outside_list.item(0))
     assert win.current() == low_tone
@@ -233,6 +234,16 @@ def test_window_thresholds(qapp, tones):
     win._ask_reason = lambda: 'high noise'
     win.toggle_bad()
     assert win.current() in win.outside_limits()
+    # Leaving the bad tones out of the list keeps the selected one
+    # until you move on; selecting a bad tone lists them again
+    bad_tone = win.current()
+    win.include_bad.setChecked(False)
+    assert win.tone_list.count() == 2 and win.current() == bad_tone
+    win.select_tone(1 - bad_tone)
+    win._fill_list()
+    assert win.tone_list.count() == 1 and win.current() == 1 - bad_tone
+    win.select_tone(bad_tone)
+    assert win.include_bad.isChecked() and win.tone_list.count() == 2
     assert any(ov.outside_list.item(i).text().startswith('x res')
                for i in range(ov.outside_list.count()))
     assert ov.curves[key].getData()[1].sum() == 1

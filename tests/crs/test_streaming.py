@@ -122,7 +122,7 @@ async def test_simulated_streams():
 @pytest.mark.asyncio
 async def test_simulated_pulses():
     """
-    With ``pulses``, streams hold photon pulses on each tone and cosmic rays
+    With ``pulses``, streams hold photon pulses on each tone and HEEs
     on every tone at once, at the logged samples; without, none are logged.
     """
     crs = make_crs(global_control = True)
@@ -131,19 +131,19 @@ async def test_simulated_pulses():
     await write_stream_chunk(crs, fres, -55., [1] * 4, {'1': 1.05e9})
     await crs.stream_to_memory(0.05, 0)
     assert crs.pulse_log == []
-    crs.pulses = dict(DEFAULT_PULSES, rate = 100., cosmic_rate = 50.)
+    crs.pulses = dict(DEFAULT_PULSES, rate = 100., hee_rate = 50.)
     zt = await crs.stream_to_memory(0.2, 0)
     log = crs.pulse_log[-1]
     assert log['n'] == zt.shape[1] and list(log['rows']) == [0, 1, 2, 3]
-    assert len(log['cosmic']) > 0
-    assert log['cosmic_x'].shape == (4, len(log['cosmic']))
+    assert len(log['hee']) > 0
+    assert log['hee_x'].shape == (4, len(log['hee']))
     for k in range(4):
         dev = np.abs(zt[k] - np.median(zt[k]))
         jump = np.diff(dev)
         noise = np.median(np.abs(jump))
         # Pulses rise in one sample: |z - z0| jumps up at every logged
-        # pulse start (photons of this tone, cosmic rays of all tones)
-        true = np.union1d(log['photons'][k], log['cosmic'])
+        # pulse start (photons of this tone, HEEs of all tones)
+        true = np.union1d(log['photons'][k], log['hee'])
         true = true[true > 0]
         assert np.all(jump[true - 1] > 20 * noise)
         # and almost nowhere else
@@ -213,6 +213,8 @@ async def test_stream_tone_sets(tmp_path):
     assert not calibration_in_frame(crs, tune['cal0'])
     assert calibration_in_frame(crs, tune['cal1'])
     said.clear()
+    with pytest.raises(ValueError, match = "named 'dark'"):
+        await stream_tone_sets(crs, tune, 'dark', 0.5, 6, **kw)
     paths = await stream_tone_sets(crs, tune, 'fast', 0.02, 0,
                                    calibrations = cals, **kw)
     assert paths == ['tune0/cal2/write0/ts1', 'tune0/cal3/write0/ts1',
@@ -459,6 +461,19 @@ def test_stream_window(qapp, tmp_path):
         assert len(win.ts_plot.listDataItems()) == n_ts
         # Loop, stream points, and the tone's point
         assert len(win.iq_plot.listDataItems()) == 3
+    # The PSD plot, when asked: one spectrum per series, in the mode's
+    # units
+    assert win.psd_plot.isHidden() and not win.psd_plot.listDataItems()
+    win.psd_box.setChecked(True)
+    assert not win.psd_plot.isHidden()
+    for i, n_ts in zip(range(len(MODES)), (1, 2, 2)):
+        win.mode_box.setCurrentIndex(i)
+        curves = win.psd_plot.listDataItems()
+        assert len(curves) == n_ts
+        assert np.all(curves[0].xData > 0) and np.all(curves[0].yData > 0)
+    assert 'SII' in win.psd_plot.getPlotItem().getAxis('left').labelText
+    win.psd_box.setChecked(False)
+    assert win.psd_plot.isHidden()
     # The x preview is near zero (no photons in the simulation)
     win.mode_box.setCurrentIndex(0)
     x = win.ts_plot.listDataItems()[0].yData
@@ -493,7 +508,12 @@ def test_stream_window(qapp, tmp_path):
     assert root['tune0/cal0/write0'].attrs['tones_reused'] is False
     n1 = int(np.sum(tune['tones/tone_set'][:] == 1))
     assert len(win.written['rows']) == n1
-    # The same run again streams without writing: under the same write
+    # A name is used once: the Run button waits for another one. The
+    # next run streams without writing: under the same write
+    assert not win.run_btn.isEnabled() and 'exists' in \
+        win.run_btn.toolTip()
+    win.name_edit.setText('dark_dec6_again')
+    assert win.run_btn.isEnabled()
     win.run()
     wait_for(lambda: len(win.runs) == 2 and not win.worker.busy)
     assert win.runs[1] == ['tune0/cal0/write0/ts1']
@@ -510,6 +530,7 @@ def test_stream_window(qapp, tmp_path):
     assert ' - ' not in win.cal_box.currentText()
     win.cal_box.setCurrentIndex(0)
     assert win.cal['name'] == 'cal0' and win.chosen[1] == 'cal0'
+    win.name_edit.setText('dark_dec6_cal0')
     assert win.run_btn.isEnabled()
     win.run()
     wait_for(lambda: len(win.runs) == 3 and not win.worker.busy)
@@ -521,6 +542,7 @@ def test_stream_window(qapp, tmp_path):
     assert not win.run_btn.isEnabled() and not win.capture_btn.isEnabled()
     win.calibrate()
     wait_for(lambda: win.cal is not None and not win.worker.busy)
+    win.name_edit.setText('dark_dec6_set0')
     assert win.cal['name'] == 'cal2' and win.run_btn.isEnabled()
     win.run()
     wait_for(lambda: len(win.runs) == 4 and not win.worker.busy)

@@ -110,6 +110,27 @@ def create_store(path, device, cooldown, setup = None):
         citkid_version = citkid_version, setup = dict(setup or {}))))
     return root
 
+def store_path(data_dir, cooldown, device, suffix = ''):
+    """
+    Return a device store's path, ``<data dir>/<cooldown>/<device>.zarr``
+    or ``<device>_<suffix>.zarr`` with a suffix.
+
+    Parameters:
+    data_dir (str): the data folder (``~`` expands; a bare Windows drive
+        like ``'Z:'`` means its root, not the current folder on it).
+    cooldown (str): the cooldown name.
+    device (str): the device name.
+    suffix (str): appended after an underscore; '' (default) for none.
+
+    Returns:
+    path (str): the store's path.
+    """
+    data_dir = os.path.expanduser(data_dir)
+    if re.fullmatch(r'[A-Za-z]:', data_dir):
+        data_dir += os.sep
+    name = device + (f'_{suffix}' if suffix else '')
+    return os.path.join(data_dir, cooldown, f'{name}.zarr')
+
 def open_store(path, mode = 'r'):
     """
     Open a device store, as a directory or as a zip archive.
@@ -137,7 +158,12 @@ def open_store(path, mode = 'r'):
                                mode = 'r')
     else:
         root = zarr.open_group(path, mode = mode)
-    check_store(root)
+    try:
+        check_store(root)
+    except ValueError as exc:
+        # The full path shows a mistake in a script's settings (a wrong
+        # DATA_DIR makes zarr create an empty group there in mode 'a')
+        raise ValueError(f'{os.path.abspath(path)}: {exc}') from None
     return root
 
 def check_store(root):
@@ -1075,8 +1101,8 @@ def notes_entries(root):
     """
     List everything notes can be kept on, which is what the report site
     shows notes for: the store, the VNA sweeps, the tunings and their
-    calibration sweeps, the stream calibrations, the photon, cosmic-ray
-    and PSD results, and every timestream run (the notes in its run
+    calibration sweeps, the stream calibrations, the photon, high-energy
+    event (HEE) and PSD results, and every timestream run (the notes in its run
     record).
 
     Parameters:
@@ -1100,7 +1126,7 @@ def notes_entries(root):
             groups.append(g)
             groups += [g[sub] for sub in g.group_keys()
                        if sub.startswith('cal')]
-        elif name in ('photons', 'cosmic'):
+        elif name in ('photons', 'hee'):
             groups += [g[sub] for sub in g.group_keys()]
     for g in groups:
         entries.append(dict(path = g.path, label = g.path,
@@ -1441,6 +1467,131 @@ def migrate_root_runs(path, verbose = True):
             print(f'{name}: now {tuning}/streams run {new_n} ({len(paths)} '
                   'streams); the copied sweep deleted')
     return moved
+
+def _hee_spelling(value):
+    """
+    Give an attribute key or identifier-like value the 'hee' spelling.
+
+    Parameters:
+    value: any JSON value. Dicts and lists are converted recursively
+        (keys and values); a string without whitespace has 'cosmic'
+        replaced by 'hee' (and 'COSMIC' by 'HEE'); other text only has
+        the group path 'cosmic/' replaced by 'hee/' (e.g. the stage in
+        a status 'marked bad: reason (cosmic/dark)'); anything else is
+        returned as is.
+
+    Returns:
+    value: the converted value.
+    """
+    if isinstance(value, dict):
+        return {_hee_spelling(k): _hee_spelling(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_hee_spelling(v) for v in value]
+    if isinstance(value, str) and 'cosmic' in value.lower():
+        if not any(c.isspace() for c in value):
+            return value.replace('cosmic', 'hee').replace('COSMIC', 'HEE')
+        return value.replace('cosmic/', 'hee/')
+    return value
+
+def rename_hee(root):
+    """
+    Migrate a store from 'cosmic' (cosmic ray) to 'hee' (high-energy
+    event), the spelling since 2026-11-17: the root group ``cosmic``
+    becomes ``hee`` (its directory is renamed on disk), and in
+    ``photons/*``, ``hee/*``, every ``ts_psd*`` result and the tone
+    marks, group and array names, string arrays (e.g. a result's
+    ``status``), attribute keys (nested settings included) and
+    whitespace-free string attribute values containing
+    'cosmic' get the 'hee' spelling (``cosmic_min_mult`` ->
+    ``hee_min_mult``, ``photons/<name>/cosmic`` -> ``photons/<name>/hee``,
+    a stage ``'cosmic/<name>'`` -> ``'hee/<name>'``). Notes and other
+    text with spaces are left alone. Running it again changes nothing.
+
+    The store must be a local directory store opened writable; nothing
+    else should have it open.
+
+    Parameters:
+    root (zarr.Group): the store root, opened with mode 'a'.
+
+    Returns:
+    changed (list of str): what was renamed, in order, e.g.
+        ['cosmic -> hee', 'photons/dark/cosmic -> photons/dark/hee',
+        'ts_psd0: attrs'].
+
+    Raises:
+    ValueError: if ``cosmic`` and ``hee`` both exist at the root, or the
+        store is not a writable local directory store.
+    """
+    store = root.store
+    if not isinstance(store, zarr.storage.LocalStore) or store.read_only:
+        raise ValueError('rename_hee needs a local directory store opened '
+                         'with mode \'a\'')
+    base = os.path.abspath(str(store.root))
+    changed = []
+
+    def rename_member(grp, name):
+        """
+        Rename a group's member on disk if its name holds 'cosmic'.
+
+        Parameters:
+        grp (zarr.Group): the parent group.
+        name (str): the member's name.
+
+        Returns:
+        name (str): the member's name afterwards.
+        """
+        new = _hee_spelling(name)
+        if new == name:
+            return name
+        parent = os.path.join(base, *grp.path.split('/')) if grp.path \
+            else base
+        os.rename(os.path.join(parent, name), os.path.join(parent, new))
+        old_path = f'{grp.path}/{name}' if grp.path else name
+        new_path = f'{grp.path}/{new}' if grp.path else new
+        changed.append(f'{old_path} -> {new_path}')
+        return new
+
+    def convert(grp):
+        """
+        Convert one group and everything under it.
+
+        Parameters:
+        grp (zarr.Group): the group.
+        """
+        attrs = dict(grp.attrs)
+        new_attrs = _hee_spelling(attrs)
+        if new_attrs != attrs:
+            grp.attrs.put(new_attrs)
+            changed.append(f'{grp.path or "/"}: attrs')
+        for name in sorted(grp.group_keys()):
+            convert(grp[rename_member(grp, name)])
+        for name in sorted(grp.array_keys()):
+            sub = grp[rename_member(grp, name)]
+            attrs = dict(sub.attrs)
+            new_attrs = _hee_spelling(attrs)
+            if new_attrs != attrs:
+                sub.attrs.put(new_attrs)
+                changed.append(f'{sub.path}: attrs')
+            if sub.dtype.kind in 'UOT' and sub.size:
+                old = sub[...]
+                new = np.array([_hee_spelling(str(v)) for v in
+                                old.ravel()]).reshape(old.shape)
+                if (new != old.astype(str)).any():
+                    sub[...] = new.astype(old.dtype) \
+                        if old.dtype.kind == 'U' else new
+                    changed.append(f'{sub.path}: values')
+
+    if 'cosmic' in root:
+        if 'hee' in root:
+            raise ValueError(f'{base}: both cosmic and hee exist at the root; '
+                             'merge or remove one first')
+        rename_member(root, 'cosmic')
+    names = ['photons', 'hee', TONE_MARKS_GROUP]
+    names += [set_name(p, 'ts_psd') for p in list_indices(root, 'ts_psd')]
+    for name in names:
+        if name in root:
+            convert(root[name])
+    return changed
 
 ################################################################################
 ################################## Porting #####################################

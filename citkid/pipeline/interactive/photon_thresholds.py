@@ -49,9 +49,10 @@ but not rerun are applied before moving on. "Revert tone to defaults"
 puts the thresholds the window opened with (the script's) back on the
 selected tone. "Mark tone bad" (B) marks the selected tone bad, with a
 reason (``x`` in the list; ``Thresholds.bad``): it is left out of the
-coincidences, cosmic rays and mean pulses, and is not used as a
-reference. "Tone overview" (O) opens ``ToneOverviewWindow``: histograms
-over all tones of the mean photon height, the fitted decay time and the
+coincidences, high-energy events (HEEs) and mean pulses, and is not
+used as a reference. "Tone overview" (O) opens ``ToneOverviewWindow``:
+histograms over all tones of the mean photon height, the fitted
+lifetime and the
 pulse rate, each with draggable review limits (``Thresholds.limits``),
 and a list of the tones outside them; clicking a tone there selects it
 here, and "show only tones outside the limits" filters the list here.
@@ -81,7 +82,7 @@ SLIDER_STEPS = 1000
 BAD_REASONS = dl.BAD_REASONS
 # The overview's quantities: key, label, per-tone value from the window
 OVERVIEW = (('height', 'Mean photon height (kHz/GHz)'),
-            ('tau', 'Decay time (us)'), ('rate', 'Pulse rate (1/s)'))
+            ('tau', 'Lifetime (us)'), ('rate', 'Pulse rate (1/s)'))
 # Height units offered: label, and whether heights are in kHz/GHz (x
 # times 1e6, the thresholds' units) rather than in each tone's mean photon
 UNITS = (('kHz/GHz', True), ('photons', False))
@@ -251,6 +252,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         self._drag_box = None       # the box a histogram drag moves
         self._list_rows = []        # tone index of each list row
         self._only_outside = False  # list only the tones outside limits
+        self._include_bad = True    # list the tones marked bad too
         self.overview = None
         self._ask_reason = self.ask_bad_reason
         self._ask_note = lambda: ask_note(
@@ -281,6 +283,14 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         forward_keys(self.tone_list, self)
         self.list_label = QtWidgets.QLabel('Tones (* : reviewed, x : bad)')
         lay.addWidget(self.list_label)
+        self.only_outside = QtWidgets.QCheckBox(
+            'Show only flagged tones (outside the overview limits)')
+        self.only_outside.toggled.connect(self.set_only_outside)
+        lay.addWidget(self.only_outside)
+        self.include_bad = QtWidgets.QCheckBox('Include tones marked bad')
+        self.include_bad.setChecked(True)
+        self.include_bad.toggled.connect(self.set_include_bad)
+        lay.addWidget(self.include_bad)
         lay.addWidget(self.tone_list, stretch = 1)
         row = QtWidgets.QHBoxLayout()
         self.prev_tone_btn = QtWidgets.QPushButton('< Prev (A)')
@@ -375,7 +385,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
                             self.reset_tone)
         self.bad_btn = QtWidgets.QPushButton('Mark tone bad (B)')
         self.bad_btn.setToolTip('Leave this tone out of the coincidences, '
-                                'cosmic rays and mean pulses, with a '
+                                'HEEs and mean pulses, with a '
                                 'reason (press again to clear the mark)')
         self.bad_btn.clicked.connect(self.toggle_bad)
         self.note_btn = QtWidgets.QPushButton('Add note (T)')
@@ -384,7 +394,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         self.note_btn.clicked.connect(self.add_note)
         self.overview_btn = QtWidgets.QPushButton('Tone overview (O)')
         self.overview_btn.setToolTip('Histograms of every tone\'s photon '
-                                     'height, decay time and pulse rate, '
+                                     'height, lifetime and pulse rate, '
                                      'with review limits')
         self.overview_btn.clicked.connect(self.open_overview)
         self.rescale_btn = QtWidgets.QPushButton('Rescale plots (R)')
@@ -552,7 +562,8 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
     def _fill_list(self):
         """
         Fill the tone list from the results: every tone, or only the tones
-        outside the overview's limits (``set_only_outside``), keeping the
+        outside the overview's limits (``set_only_outside``), with or
+        without the tones marked bad (``set_include_bad``), keeping the
         selection.
         """
         selected = self._list_rows[self.tone_list.currentRow()] \
@@ -568,6 +579,9 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         self._list_rows = []
         for i, (row, r_idx) in enumerate(zip(self.rows, self.res_idxs)):
             if outside is not None and i not in outside:
+                continue
+            if not self._include_bad and i != selected and \
+                    self.thresholds.is_bad(r_idx):
                 continue
             res = self.results.get(row)
             mark = 'x' if self.thresholds.is_bad(r_idx) else \
@@ -586,7 +600,8 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         self.tone_list.blockSignals(False)
         n = len(self._list_rows)
         self.list_label.setText(
-            f'Tones (* : reviewed, x : bad)' if outside is None else
+            f'Tones (* : reviewed, x : bad): {n} of {len(self.rows)}'
+            if outside is None else
             f'Tones outside the limits: {n} of {len(self.rows)}')
         if selected in self._list_rows:
             self.tone_list.setCurrentRow(self._list_rows.index(selected))
@@ -673,18 +688,33 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         """
         if i not in self._list_rows:
             self.set_only_outside(False)
+        if i not in self._list_rows:
+            self.set_include_bad(True)
         if i in self._list_rows:
             self.tone_list.setCurrentRow(self._list_rows.index(i))
 
     def set_only_outside(self, only):
         """
         List every tone, or only the tones outside the overview's review
-        limits.
+        limits (the box above the tone list).
 
         Parameters:
         only (bool): True for only the tones outside.
         """
         self._only_outside = bool(only)
+        _sync_box(self.only_outside, self._only_outside)
+        self._fill_list()
+
+    def set_include_bad(self, include):
+        """
+        List the tones marked bad, or leave them out (the box above the
+        tone list).
+
+        Parameters:
+        include (bool): True to list them.
+        """
+        self._include_bad = bool(include)
+        _sync_box(self.include_bad, self._include_bad)
         self._fill_list()
 
     def pending(self, i):
@@ -1275,7 +1305,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
     def _range_snippet(self):
         """
         Fit the snippet to its time range, with the heights shown up to a
-        little above hmax (a cosmic ray would flatten the photons
+        little above hmax (an HEE would flatten the photons
         otherwise; peaks above the top are drawn at its edge).
         """
         self.snippet_plot.enableAutoRange(x = True)
@@ -1463,7 +1493,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
     def overview_values(self):
         """
         Return every tone's values for the overview: mean photon height,
-        fitted decay time, and pulse rate.
+        fitted lifetime, and pulse rate.
 
         Returns:
         values (dict): 'height' (kHz/GHz), 'tau' (s), 'rate' (1/s):
@@ -1554,7 +1584,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
 class ToneOverviewWindow(QtWidgets.QDialog):
     """
     Histograms over all tones of a threshold window: the mean photon
-    height, the fitted decay time, and the pulse rate, each with a low
+    height, the fitted lifetime, and the pulse rate, each with a low
     and a high review limit (draggable lines, kept in
     ``Thresholds.limits``), and the list of the tones outside the limits
     (or without a value). Clicking a tone in the list, or near its value
@@ -1577,7 +1607,7 @@ class ToneOverviewWindow(QtWidgets.QDialog):
         main (PhotonThresholdWindow): the threshold window (or another
             window with ``rows``, ``res_idxs``, ``thresholds.limits``,
             ``overview_values``, ``outside_limits``, ``select_tone``,
-            ``set_only_outside``, ``_only_outside``, ``_fill_list`` and
+            ``select_tone``, ``_only_outside``, ``_fill_list`` and
             ``_ui_scale``).
         items (tuple): the quantities, (key, axis label) each; the key
             'tau' is in s and shown in us. Default ``OVERVIEW``.
@@ -1620,11 +1650,6 @@ class ToneOverviewWindow(QtWidgets.QDialog):
             self.lines[key] = tuple(pair)
         lay.addWidget(self.plots_widget, stretch = 1)
         side = QtWidgets.QVBoxLayout()
-        self.only_outside = QtWidgets.QCheckBox(
-            'Show only tones outside the limits in the tone list')
-        self.only_outside.setChecked(main._only_outside)
-        self.only_outside.toggled.connect(main.set_only_outside)
-        side.addWidget(self.only_outside)
         self.count_label = QtWidgets.QLabel()
         side.addWidget(self.count_label)
         self.outside_list = QtWidgets.QListWidget()
@@ -1743,6 +1768,18 @@ class ToneOverviewWindow(QtWidgets.QDialog):
         li = self.outside_list.row(item)
         if 0 <= li < len(self._listed):
             self.main.select_tone(self._listed[li])
+
+def _sync_box(box, checked):
+    """
+    Set a check box without firing its signal.
+
+    Parameters:
+    box (QCheckBox): the box.
+    checked (bool): the state.
+    """
+    box.blockSignals(True)
+    box.setChecked(bool(checked))
+    box.blockSignals(False)
 
 def _message_box(title, text, buttons, default, icon = None):
     """

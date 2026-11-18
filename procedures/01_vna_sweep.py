@@ -99,9 +99,8 @@ def store_path(args):
     Returns:
     path (str): ``<data dir>/<cooldown>/<device>[_<suffix>].zarr``.
     """
-    name = args.device + (f'_{args.suffix}' if args.suffix else '')
-    return os.path.join(os.path.expanduser(args.data_dir), args.cooldown,
-                        f'{name}.zarr')
+    return dl.store_path(args.data_dir, args.cooldown, args.device,
+                         args.suffix)
 
 async def main(args):
     """

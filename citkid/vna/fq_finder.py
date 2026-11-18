@@ -441,7 +441,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
     # Fractional qres step size: each scroll notch changes qres by this
     # fraction of its current value (×step magnitude).
     _QRES_FRAC = 0.04
-    _REJECT_REASONS = ["tone off resonance", "overlapping resonance",
+    _REJECT_REASONS = ["tone off resonance", "double resonance",
                        "bifurcated", "other"]
 
     def __init__(

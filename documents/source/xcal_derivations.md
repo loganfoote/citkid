@@ -422,7 +422,7 @@ Meaning:
   timestream that is about 4 bins (50% scatter).
 - $\mathrm{sfactor}_\nu \approx 0$ dB when the noise is the same in both
   directions, as for noise added after the resonator (e.g. amplifier
-  noise). Positive values mean excess noise along the loop, i.e. noise that
+  noise). Positive values mean excess noise parallel to the loop, i.e. noise that
   looks like resonance frequency fluctuations (or real signal). It is used
   to flag rows whose $S_{xx}$ is limited by the readout rather than the
   resonator (e.g. `sfactor_10 < 3` in

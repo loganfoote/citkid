@@ -1,9 +1,10 @@
 """
-Tests of citkid.signal.cosmic: cosmic-ray events and tail fits.
+Tests of citkid.signal.hee: high-energy event (HEE) events and tail
+fits.
 """
 import numpy as np
 import pytest
-from citkid.signal import cosmic as cr
+from citkid.signal import hee as cr
 from citkid.signal import photons as ph
 from .test_photons import DT, TAU, synth
 
@@ -13,13 +14,13 @@ PRE, POST = 20, 150
 @pytest.fixture(scope = 'module')
 def rays():
     """
-    Make three tones hit by the same cosmic rays with different heights
+    Make three tones hit by the same HEEs with different heights
     (sharing one decay time), one tone with a pulse of its own, and the
     events' samples.
 
     Returns:
     ds (list of np.array): detection timestreams.
-    times (np.array, int): the cosmic rays' samples.
+    times (np.array, int): the HEEs' samples.
     heights (np.array): (tones, rays) relative heights.
     """
     rng = np.random.default_rng(1)

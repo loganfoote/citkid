@@ -1,20 +1,20 @@
 """
-Cosmic tail window: review the tail fits of a timestream's cosmic rays
-(``pipeline.cosmic_finder``) tone by tone, and change the threshold,
-the tail level and the fit length.
+High-energy event (HEE) tail window: review the tail fits of a
+timestream's HEEs (``pipeline.hee_finder``) tone by tone, and change
+the threshold, the tail level and the fit length.
 
 Left: the tone list (``*``: reviewed, ``x``: bad), the threshold (the
 lowest peak height of a pulse that is averaged), the tail level (where
 the pulses are lined up and the fit starts) and the fit length, their
 scope (this tone, or all tones), Apply, mark bad (with a reason), add a
 note, the tone overview (``photon_thresholds.ToneOverviewWindow``:
-histograms over all tones of the median height, decay time and pulse
+histograms over all tones of the median height, lifetime and pulse
 rate, with review limits), rescale and Done. Right: the tone's whole
 timestream with the pulses found (green: averaged; red: left out) and
 the threshold line; the aligned pulses (blue) with their mean (white),
 the fit (yellow) and the level line. Dragging a line changes its box;
 Apply refits the tone(s) from the pulses already cut
-(``cosmic_finder.refit_timestream``), so it is immediate. The plots pan
+(``hee_finder.refit_timestream``), so it is immediate. The plots pan
 and zoom with the mouse; R puts them back (the timestream's heights up
 to a little above the 99th percentile of the pulses; the mean pulse
 over the fit range, up to a little above its own peak).
@@ -33,11 +33,11 @@ from ...qt_compat import (
 from ...signal.photons import PPM
 from ... import daq_layout as dl
 from .marks import ask_note, ask_reason, mark_label
-from .photon_thresholds import ToneOverviewWindow
+from .photon_thresholds import ToneOverviewWindow, _sync_box
 
 # The overview's quantities: key, axis label
 OVERVIEW = (('height', 'Median pulse height (kHz/GHz)'),
-            ('tau', 'Decay time of the mean tail (us)'),
+            ('tau', 'Lifetime of the mean tail (us)'),
             ('rate', 'Pulse rate (1/s)'))
 # Most pulses drawn in the pulse plot (the mean uses all of them)
 MAX_DRAWN = 200
@@ -85,12 +85,12 @@ def envelope(d, nbins = ENVELOPE_BINS):
     return idx, y
 
 
-class CosmicTailWindow(QtWidgets.QMainWindow):
+class HeeTailWindow(QtWidgets.QMainWindow):
     """
-    Window for reviewing the cosmic-ray tail fits of a timestream.
+    Window for reviewing the HEE tail fits of a timestream.
 
     Attributes:
-    results (dict): row: ``cosmic_finder.analyze_tone`` result or error.
+    results (dict): row: ``hee_finder.analyze_tone`` result or error.
     thresholds (TailThresholds): the thresholds (changed in place).
     rows, res_idxs (list of int): the tones.
     dt (float): sample period, s.
@@ -99,23 +99,23 @@ class CosmicTailWindow(QtWidgets.QMainWindow):
 
     def __init__(
         self, ts, results, thresholds, refit, data = None,
-        title = 'Cosmic-ray tails', ui_scale = 1.0, root = None, stage = ''
+        title = 'HEE tails', ui_scale = 1.0, root = None, stage = ''
     ):
         """
         Build the window.
 
         Parameters:
         ts (dict): the timestream (``photon_finder.list_timestreams``).
-        results (dict): its ``cosmic_finder.analyze_timestream`` results.
+        results (dict): its ``hee_finder.analyze_timestream`` results.
         thresholds (TailThresholds): starting thresholds (changed in
             place).
         refit (callable): function of (rows, thresholds) returning the
             new results of those rows (dict row: result), e.g. a wrapper
-            of ``cosmic_finder.refit_timestream``.
+            of ``hee_finder.refit_timestream``.
         data (callable or None): function of a row returning its
             detection timestream (np.array), or an error message (str),
             for the timestream plot. Default None: no timestream plot.
-        title (str): window title. Default 'Cosmic-ray tails'.
+        title (str): window title. Default 'HEE tails'.
         ui_scale (float): font size multiplier. Default 1.0.
         root (zarr.Group or None): the store root, writable, for the
             tone-marks registry. Default None: no registry.
@@ -142,6 +142,7 @@ class CosmicTailWindow(QtWidgets.QMainWindow):
         self._updating = False
         self._list_rows = []
         self._only_outside = False
+        self._include_bad = True
         self.overview = None
         self._ask_reason = self.ask_bad_reason
         self._ask_note = lambda: ask_note(
@@ -166,6 +167,14 @@ class CosmicTailWindow(QtWidgets.QMainWindow):
         lay = QtWidgets.QVBoxLayout(self._panel)
         self.list_label = QtWidgets.QLabel('Tones (* : reviewed, x : bad)')
         lay.addWidget(self.list_label)
+        self.only_outside = QtWidgets.QCheckBox(
+            'Show only flagged tones (outside the overview limits)')
+        self.only_outside.toggled.connect(self.set_only_outside)
+        lay.addWidget(self.only_outside)
+        self.include_bad = QtWidgets.QCheckBox('Include tones marked bad')
+        self.include_bad.setChecked(True)
+        self.include_bad.toggled.connect(self.set_include_bad)
+        lay.addWidget(self.include_bad)
         self.tone_list = QtWidgets.QListWidget()
         self.tone_list.currentRowChanged.connect(self._on_row_changed)
         # The shortcuts keep working while the list has the focus
@@ -340,12 +349,16 @@ class CosmicTailWindow(QtWidgets.QMainWindow):
         for i in range(len(self.rows)):
             if outside is not None and i not in outside:
                 continue
+            if not self._include_bad and i != selected and \
+                    self.thresholds.is_bad(self.res_idxs[i]):
+                continue
             self.tone_list.addItem(self._list_text(i))
             self._list_rows.append(i)
         self.tone_list.blockSignals(False)
         n = len(self._list_rows)
         self.list_label.setText(
-            'Tones (* : reviewed, x : bad)' if outside is None else
+            f'Tones (* : reviewed, x : bad): {n} of {len(self.rows)}'
+            if outside is None else
             f'Tones outside the limits: {n} of {len(self.rows)}')
         if selected in self._list_rows:
             self.tone_list.setCurrentRow(self._list_rows.index(selected))
@@ -426,17 +439,33 @@ class CosmicTailWindow(QtWidgets.QMainWindow):
         """
         if i not in self._list_rows:
             self.set_only_outside(False)
+        if i not in self._list_rows:
+            self.set_include_bad(True)
         if i in self._list_rows:
             self.tone_list.setCurrentRow(self._list_rows.index(i))
 
     def set_only_outside(self, only):
         """
-        List every tone, or only the tones outside the review limits.
+        List every tone, or only the tones outside the review limits
+        (the box above the tone list).
 
         Parameters:
         only (bool): True for only the tones outside.
         """
         self._only_outside = bool(only)
+        _sync_box(self.only_outside, self._only_outside)
+        self._fill_list()
+
+    def set_include_bad(self, include):
+        """
+        List the tones marked bad, or leave them out (the box above the
+        tone list).
+
+        Parameters:
+        include (bool): True to list them.
+        """
+        self._include_bad = bool(include)
+        _sync_box(self.include_bad, self._include_bad)
         self._fill_list()
 
     def select(self, i):
@@ -468,7 +497,7 @@ class CosmicTailWindow(QtWidgets.QMainWindow):
             self.status.setText(
                 head + f"{len(res['h'])} pulses, {res['n_used']} averaged "
                 f"(peak above the threshold and reaching the level)\n"
-                f'decay time of the mean tail: {tau}')
+                f'lifetime of the mean tail: {tau}')
         else:
             self.status.setText(head + f'Failed: {res}')
         self.update_plots()
@@ -752,7 +781,7 @@ class CosmicTailWindow(QtWidgets.QMainWindow):
     def overview_values(self):
         """
         Return every tone's values for the overview: the median peak
-        height of the averaged pulses, the mean tail's decay time, and
+        height of the averaged pulses, the mean tail's lifetime, and
         the rate of averaged pulses (per second of the record, so tones
         and devices compare).
 
@@ -818,23 +847,23 @@ class CosmicTailWindow(QtWidgets.QMainWindow):
             self.overview.refresh()
 
 
-def run_cosmic_tails(
-    ts, results, thresholds, refit, data = None, title = 'Cosmic-ray tails',
+def run_hee_tails(
+    ts, results, thresholds, refit, data = None, title = 'HEE tails',
     ui_scale = 1.0, root = None, stage = ''
 ):
     """
-    Open the cosmic tail window and wait until it is closed.
+    Open the HEE tail window and wait until it is closed.
 
     Parameters:
     ts, results, thresholds, refit, data, title, ui_scale, root, stage:
-        see ``CosmicTailWindow``.
+        see ``HeeTailWindow``.
 
     Returns:
     thresholds (TailThresholds): the chosen thresholds.
     results (dict): the results with them.
     """
     app = get_qapp(title)
-    win = CosmicTailWindow(ts, results, thresholds, refit, data = data,
+    win = HeeTailWindow(ts, results, thresholds, refit, data = data,
                            title = title, ui_scale = ui_scale, root = root,
                            stage = stage)
     delete_on_close(win)

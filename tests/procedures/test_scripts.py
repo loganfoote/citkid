@@ -203,10 +203,10 @@ def test_vna_view_script(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize('script', [
     '01_vna_sweep.py', '02_find_resonances.py', '03_tune.py', '04_stream.py',
-    '05_calibrate_streams.py', '06a_find_photons.py', '06b_cosmic_rays.py',
-    '07_psds.py', '08_report.py',
+    '05_calibrate_streams.py', '06a_find_photons.py', '06b_hee.py',
+    '07_psds.py',
     'archive_store.py',
-    'vna_view.py', 'vna_report.py', 'store_browser.py'])
+    'vna_view.py', 'store_browser.py'])
 def test_store_path_suffix(script, tmp_path):
     """
     Every procedure names the store <device>_<suffix>.zarr, or
@@ -222,6 +222,12 @@ def test_store_path_suffix(script, tmp_path):
         str(tmp_path / 'cd1' / 'devA_warm.zarr')
     assert m.store_path(m.parse_args(base + ['--suffix', ''])) == \
         str(tmp_path / 'cd1' / 'devA.zarr')
+    # A bare Windows drive is its root, not the current folder on it
+    assert dl.store_path('Z:', 'cd1', 'devA') == \
+        os.path.join('Z:' + os.sep, 'cd1', 'devA.zarr')
+    # A wrong path: the error names it in full
+    with pytest.raises(ValueError, match = 'nowhere.zarr.*not a DAQ'):
+        dl.open_store(str(tmp_path / 'nowhere.zarr'), mode = 'a')
 
 
 def test_store_browser_script(monkeypatch, tmp_path, capsys):
@@ -606,7 +612,7 @@ def test_04_stream(tmp_path, monkeypatch):
     with pytest.raises(KeyError, match = 'no tones'):
         m.main(m.parse_args(['--store', str(path), '--simulate', '--tune',
                              '1']))
-    # Simulated photons and cosmic rays, on a quieter board
+    # Simulated photons and HEEs, on a quieter board
     assert seen['crs'].pulses is None
     snr = seen['crs'].snr_db
     m.main(m.parse_args(['--store', str(path), '--simulate',
@@ -848,57 +854,11 @@ def test_03_tune_frequency_range(tmp_path, monkeypatch, capsys):
         m.plan(root, m.parse_args(argv + ['--fmin', '2e9']), str(path))
 
 
-def test_vna_report(tmp_path, monkeypatch):
-    """
-    Export a screened simulated sweep: plot, info text, and resonator CSV,
-    with res_idx matching the store's resonator list.
-    """
-    import pandas as pd
-    from citkid.crs.sim import simulate_vna_store
-    path = tmp_path / 'sim.zarr'
-    small = dict(f_lo = 1.0e9, f_hi = 1.1e9, n_banks = 1, n_per_bank = 10,
-                 pair_frac = 0.)
-    root, truth = asyncio.run(simulate_vna_store(
-        path, device_kwargs = small, verbose = False))
-    m = load_script('vna_report.py')
-    out = tmp_path / 'reports'
-    with pytest.raises(KeyError, match = 'full sweep fit'):
-        m.main(m.parse_args(['--store', str(path), '--out', str(out)]))
-    dl.write_array(root['vna0'], 'fres_auto', truth.fr.values[::-1])
-    m2 = load_script('02_find_resonances.py')
-    m2.main(m2.parse_args(['--store', str(path), '--no-manual', '--notes',
-                           'LPF on the ADC']))
-    paths = m.main(m.parse_args(['--store', str(path), '--out', str(out)]))
-    assert paths['plot'].endswith('simdevice_vna0.png')
-    # --pick chooses the store in a dialog; cancelling writes nothing
-    import citkid.daq_browser as db
-    monkeypatch.setattr(db, 'choose_store', lambda start = None: str(path))
-    assert m.main(m.parse_args(['--pick', '--out', str(out)]))['plot'] == \
-        paths['plot']
-    monkeypatch.setattr(db, 'choose_store', lambda start = None: None)
-    assert m.main(m.parse_args(['--pick', '--out', str(out)])) is None
-    assert os.path.getsize(paths['plot']) > 10000
-    info = open(paths['info'], encoding = 'utf-8').read()
-    assert 'Device: simdevice' in info and 'Tone power: -55.0 dBm' in info
-    assert f'Resonances: {len(truth)}' in info and 'Modules: 1' in info
-    assert 'checked by hand: False' in info
-    assert 'Notes (fit)' in info and 'LPF on the ADC' in info
-    assert isinstance(dl.open_store(path)['vna0/full_sweep_fit'].attrs[
-        'notes'], list)
-    table = pd.read_csv(paths['csv'])
-    res = dl.load_resonators(path, 0)
-    assert list(table.res_idx) == list(range(len(truth)))
-    np.testing.assert_allclose(table.fr, res['fres_all'])
-    np.testing.assert_allclose(table.fr, np.sort(truth.fr_d.values),
-                               atol = 0.2 * (truth.fr / truth.Qr).max())
-    assert {'Qi', 'Qc', 'phi', 'flags', 'valid_Qc'} <= set(table.columns)
-
-
 @pytest.fixture(scope = 'module')
 def photon_store(tmp_path_factory):
     """
     Make a store with two calibrated stage-0 runs of a simulated device with
-    photon pulses and cosmic rays.
+    photon pulses and HEEs.
 
     Returns:
     path (pathlib.Path): the store.
@@ -912,7 +872,7 @@ def photon_store(tmp_path_factory):
     tmp = tmp_path_factory.mktemp('photons')
     crs = make_crs()
     crs.snr_db = 80.
-    crs.pulses = dict(DEFAULT_PULSES, rate = 30., cosmic_rate = 5.)
+    crs.pulses = dict(DEFAULT_PULSES, rate = 30., hee_rate = 5.)
 
     async def take():
         """
@@ -956,9 +916,9 @@ def check_photons(grp, log, dt):
     used, win = p['used'][:], p['in_window'][:]
     assert np.all(win[used]) and np.all(p['mult'][:][used] == 1)
     assert np.all(p['candidate'][:][win])
-    # Cosmic rays: the simulated ones, each on every tone of its write
-    ev, hits = grp['cosmic/events'], grp['cosmic/hits']
-    n_true = sum(len(entry['cosmic']) for entry in log)
+    # High-energy events: the simulated ones, each on every tone of its write
+    ev, hits = grp['hee/events'], grp['hee/hits']
+    n_true = sum(len(entry['hee']) for entry in log)
     assert 0.85 * n_true <= len(ev['t0'][:]) <= n_true
     np.testing.assert_allclose(ev['time_s'][:], ev['t0'][:] * dt)
     assert len(hits['event'][:]) == ev['mult'][:].sum()
@@ -1223,11 +1183,11 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
     np.testing.assert_array_equal(t4['tau_skip'][:], [2, 2, 2, 3, 2, 2])
     np.testing.assert_allclose(t4['tau_fit_s'][:],
                                [1e-3, 1e-3, 1e-3, 0.5e-3, 1e-3, 1e-3])
-    # The bad tone is detected but left out of the cosmic rays and has no
+    # The bad tone is detected but left out of the HEEs and has no
     # mean pulse; the others are as before; the per-tone fit is used
     assert all(s == '' for s in t4['status'][:])
     assert t4['n_used'][:][1] == 0 and np.isnan(t4['tau'][:][1])
-    assert bad_res not in t4['cosmic/hits/res_idx'][:]
+    assert bad_res not in t4['hee/hits/res_idx'][:]
     assert t4['n_used'][:][0] == g0['n_used'][:][0]
     np.testing.assert_allclose(t4['hmax'][:][2], 3.)
     assert np.isfinite(t4['tau'][:][3])
@@ -1392,18 +1352,18 @@ def test_nco_phase_check(monkeypatch, capsys):
     assert 'spread across tones 14.32 deg' in desc
 
 
-def test_06b_cosmic_rays(photon_store, monkeypatch, capsys):
+def test_06b_hee(photon_store, monkeypatch, capsys):
     """
-    Fit cosmic-ray tails: from triggers where no photon result exists
+    Fit HEE tails: from triggers where no photon result exists
     (the window changes the thresholds and marks a tone bad), from the
-    photon result's cosmic rays where one does; a saved result is
+    photon result's HEEs where one does; a saved result is
     skipped, replaced or continued; one result per timestream.
     """
-    import citkid.pipeline.interactive.cosmic_tails as ct
-    from citkid.pipeline import cosmic_finder as cf
+    import citkid.pipeline.interactive.hee_tails as ct
+    from citkid.pipeline import hee_finder as cf
     from citkid.pipeline import photon_finder as pf
     path, log = photon_store
-    m = load_script('06b_cosmic_rays.py')
+    m = load_script('06b_hee.py')
     argv = ['--store', str(path)]
     if 'dark0_set0' not in pf.list_results(dl.open_store(path)):
         # The photon result of run 0's tone set 0 (made by the 06a test
@@ -1448,7 +1408,7 @@ def test_06b_cosmic_rays(photon_store, monkeypatch, capsys):
         thresholds.set_bad(int(ts['res_idxs'][1]), 'weird pulse shape')
         return thresholds, results
 
-    monkeypatch.setattr(ct, 'run_cosmic_tails', fake_window)
+    monkeypatch.setattr(ct, 'run_hee_tails', fake_window)
     # Run 0's tone set 1 has no photon result: events from triggers
     monkeypatch.setattr(m, 'TIMESTREAMS', [1])
     res = m.main(m.parse_args(argv))
@@ -1456,14 +1416,14 @@ def test_06b_cosmic_rays(photon_store, monkeypatch, capsys):
     assert 'events from triggers' in capsys.readouterr().out
     root = dl.open_store(path)
     assert cf.list_results(root) == ['dark0_set1']
-    g = root['cosmic/dark0_set1']
+    g = root['hee/dark0_set1']
     assert g.attrs['events'] == 'triggers' and g.attrs['kind'] == 'analysis'
     assert g.attrs['calibration'] == 'ts_cal0' and \
         g.attrs['continued_from'] \
         is None
     # The simulated rays (every tone of each of the two writes), within
     # the dead time
-    n_true = sum(len(entry['cosmic']) for entry in log[1:3])
+    n_true = sum(len(entry['hee']) for entry in log[1:3])
     assert 0.8 * n_true <= g.attrs['n_events'] <= n_true
     assert g['events/t0'].shape == (g.attrs['n_events'],)
     assert set(g['events/write_idx'][:].tolist()) <= {0, 1}
@@ -1494,56 +1454,56 @@ def test_06b_cosmic_rays(photon_store, monkeypatch, capsys):
     assert g['avg_pulse'].shape[1] == g.attrs['pre'] + g.attrs['post']
     assert 'dark0_set1: ts0 set 1' in cf.describe_results(root) and \
         '1 bad' in cf.describe_results(root)
-    # Run 0's tone set 0 has a photon result: its cosmic rays are the
+    # Run 0's tone set 0 has a photon result: its HEEs are the
     # events (no window)
     monkeypatch.setattr(m, 'TIMESTREAMS', [0])
     m.main(m.parse_args(argv + ['--no-gui']))
     assert windows == ['ts0']
     root = dl.open_store(path)
-    g0 = root['cosmic/dark0_set0']
+    g0 = root['hee/dark0_set0']
     assert g0.attrs['events'] == 'photons/dark0_set0'
-    ph = root['photons/dark0_set0/cosmic/events']
+    ph = root['photons/dark0_set0/hee/events']
     np.testing.assert_array_equal(g0['events/t0'][:], ph['t0'][:])
     assert g0.attrs['n_events'] == len(ph['t0'][:])
     np.testing.assert_allclose(g0['tau'][:], 150e-6, rtol = 0.3)
     # Asking for photons where there is no result fails; triggers can be
-    # forced where there is one; a photon result saved without its cosmic
-    # rays counts as none
+    # forced where there is one; a photon result saved without its HEEs
+    # counts as none
     monkeypatch.setattr(m, 'TIMESTREAMS', [1])
     with pytest.raises(KeyError, match = 'no photon result'):
         m.main(m.parse_args(argv + ['--events', 'photons', '--overwrite',
                                     '--no-gui']))
     monkeypatch.setattr(m, 'TIMESTREAMS', [0])
-    dl.open_store(path, mode = 'a')['photons'].create_group('nocosmic')
+    dl.open_store(path, mode = 'a')['photons'].create_group('nohee')
     with pytest.raises(KeyError, match = 'no photon result'):
         m.main(m.parse_args(argv + ['--events', 'photons', '--photons',
-                                    'nocosmic', '--overwrite', '--no-gui']))
-    m.main(m.parse_args(argv + ['--photons', 'nocosmic', '--overwrite',
+                                    'nohee', '--overwrite', '--no-gui']))
+    m.main(m.parse_args(argv + ['--photons', 'nohee', '--overwrite',
                                 '--no-gui']))
     out = capsys.readouterr().out
-    assert 'holds no cosmic rays' in out and 'events from triggers' in out
+    assert 'holds no HEEs' in out and 'events from triggers' in out
     monkeypatch.setattr(m, 'TIMESTREAMS', [0])
     m.main(m.parse_args(argv + ['--events', 'triggers', '--overwrite',
                                 '--no-gui']))
-    assert 'Replacing cosmic/dark0_set0' in capsys.readouterr().out
-    g0 = dl.open_store(path)['cosmic/dark0_set0']
+    assert 'Replacing hee/dark0_set0' in capsys.readouterr().out
+    g0 = dl.open_store(path)['hee/dark0_set0']
     assert g0.attrs['events'] == 'triggers'
     # A saved result: skipped without the window, unless --overwrite or
     # --continue; with the window, the popup decides
     before = g0.attrs['created']
     assert m.main(m.parse_args(argv + ['--no-gui'])) == {}
-    assert 'cosmic/dark0_set0 exists: skipped' in capsys.readouterr().out
-    assert dl.open_store(path)['cosmic/dark0_set0'].attrs['created'] == \
+    assert 'hee/dark0_set0 exists: skipped' in capsys.readouterr().out
+    assert dl.open_store(path)['hee/dark0_set0'].attrs['created'] == \
         before
     answers = ['overwrite']
     monkeypatch.setattr(m, 'ask_existing', lambda name, grp: answers.pop(0))
     m.main(m.parse_args(argv))
     assert windows == ['ts0', 'ts0'] and answers == []
-    assert dl.open_store(path)['cosmic/dark0_set0'].attrs['created'] != \
+    assert dl.open_store(path)['hee/dark0_set0'].attrs['created'] != \
         before
     answers = [None]
     assert m.main(m.parse_args(argv)) == {}
-    assert 'Skipped cosmic/dark0_set0' in capsys.readouterr().out
+    assert 'Skipped hee/dark0_set0' in capsys.readouterr().out
     # Continue from a saved result: its thresholds and bad marks open in
     # the window; the result is replaced
     seen = []
@@ -1567,13 +1527,13 @@ def test_06b_cosmic_rays(photon_store, monkeypatch, capsys):
         seen.append((thresholds.hmax, dict(thresholds.bad)))
         return thresholds, results
 
-    monkeypatch.setattr(ct, 'run_cosmic_tails', continue_window)
+    monkeypatch.setattr(ct, 'run_hee_tails', continue_window)
     monkeypatch.setattr(m, 'TIMESTREAMS', [1])
     m.main(m.parse_args(argv + ['--continue']))
-    bad_res = int(dl.open_store(path)['cosmic/dark0_set1']['res_idxs'][1])
+    bad_res = int(dl.open_store(path)['hee/dark0_set1']['res_idxs'][1])
     assert seen == [(50., {bad_res: 'weird pulse shape'})]
-    g1 = dl.open_store(path)['cosmic/dark0_set1']
-    assert g1.attrs['continued_from'] == 'cosmic/dark0_set1'
+    g1 = dl.open_store(path)['hee/dark0_set1']
+    assert g1.attrs['continued_from'] == 'hee/dark0_set1'
     assert g1['bad'][:][1]
     with pytest.raises(KeyError, match = 'no saved result'):
         monkeypatch.setattr(m, 'TIMESTREAMS', [3])
@@ -1744,7 +1704,7 @@ def test_07_psds(photon_store, monkeypatch, capsys):
     assert dl.open_store(path)['ts_psd2'].attrs['timestreams'] == \
         [dict(name = 'dark0b', tone_sets = [0], cal = 0)]
     # Peak deglitching finds the simulated pulses (about 30 photons/s per
-    # tone plus cosmic rays)
+    # tone plus HEEs)
     monkeypatch.setattr(m, 'TIMESTREAMS', [0])
     m.main(m.parse_args(argv + ['--deglitch', 'peaks']))
     t = dl.open_store(path)['ts_psd3/timestream0']
@@ -1758,7 +1718,7 @@ def test_07_psds(photon_store, monkeypatch, capsys):
     # With the pulses deglitched, the low-frequency spectrum is lower
     raw = dl.open_store(path)['ts_psd0/timestream0/sxx_reduced'][:, 0]
     assert np.median(t['sxx_reduced'][:, 0] / raw) < 0.7
-    # A photon result's filters: cosmic rays only (a few per second), or
+    # A photon result's filters: HEEs only (a few per second), or
     # every pulse
     with pytest.raises(ValueError, match = 'PHOTONS'):
         m.main(m.parse_args(argv + ['--deglitch', 'photons', '--new']))
@@ -1773,16 +1733,16 @@ def test_07_psds(photon_store, monkeypatch, capsys):
     g = root['ts_psd4']
     assert g.attrs['reference'] == 'photons/dark0_set0'
     t = g['timestream0']
-    n_cosmic = t['n_glitches'][:]
+    n_hee = t['n_glitches'][:]
     # The tone marked bad in the photon result has no filter: -1
-    has = n_cosmic >= 0
-    assert has.sum() >= 5 and np.all(n_cosmic[has] < 30)
-    assert n_cosmic[has].sum() > 0
+    has = n_hee >= 0
+    assert has.sum() >= 5 and np.all(n_hee[has] < 30)
+    assert n_hee[has].sum() > 0
     monkeypatch.setattr(m, 'GLITCH_PULSES', 'all')
     m.main(m.parse_args(argv + ['--deglitch', 'photons', '--photons',
                                 'dark0_set0', '--new']))
     t = dl.open_store(path)['ts_psd5/timestream0']
-    assert np.all(t['n_glitches'][:][has] > n_cosmic[has])
+    assert np.all(t['n_glitches'][:][has] > n_hee[has])
     assert np.all(t['n_glitches'][:][has] > 20)
     # No timestream is saved
     nsamples = g['timestream0'].attrs['stop']
@@ -1947,105 +1907,6 @@ def test_export_s21_h5(tmp_path, monkeypatch, capsys):
                              '--out', str(out2)]))
 
 
-def test_08_report(photon_store, monkeypatch, capsys):
-    """
-    Write the lifetime figures and tables of every photon and cosmic-ray
-    result, the PSD figures and tables of every PSD group, and the text,
-    from the store's own results.
-    """
-    import citkid.pipeline.interactive.psd_overview as po
-    import pandas as pd
-    from citkid.pipeline import cosmic_finder as cf
-    from citkid.pipeline import photon_finder as pf
-    path, _ = photon_store
-    argv = ['--store', str(path)]
-    root = dl.open_store(path)
-    if 'dark0_set0' not in pf.list_results(root):
-        m6 = load_script('06a_find_photons.py')
-        monkeypatch.setattr(m6, 'TIMESTREAMS', [0])
-        m6.main(m6.parse_args(argv + ['--no-gui']))
-    if 'dark0_set0' not in cf.list_results(root):
-        m6b = load_script('06b_cosmic_rays.py')
-        monkeypatch.setattr(m6b, 'TIMESTREAMS', [0])
-        m6b.main(m6b.parse_args(argv + ['--no-gui']))
-    m7 = load_script('07_psds.py')
-    monkeypatch.setattr(po, 'run_psd_overview', lambda *a, **k: ({}, {}))
-    monkeypatch.setattr(m7, 'TIMESTREAMS', [0, 'dark0b'])
-    m7.main(m7.parse_args(argv + ['--name', 'report']))
-    root = dl.open_store(path)
-    p = dl.list_indices(root, 'ts_psd')[-1]
-    m = load_script('08_report.py')
-    out = path.parent / 'report'
-    monkeypatch.setattr(m, 'PSDS', [p])
-    paths = m.main(m.parse_args(argv + ['--out', str(out)]))
-    device = root.attrs['device']
-    # A result saved incompletely (no arrays) is skipped and named
-    dl.open_store(path, mode = 'a')['photons'].require_group('partial')
-    paths = m.main(m.parse_args(argv + ['--out', str(out)]))
-    complete = [n for n in pf.list_results(root)
-                if 'tau' in root[f'photons/{n}']]
-    names = [f'lifetime_photons_{n}' for n in complete] + \
-        [f'lifetime_cosmic_{n}' for n in cf.list_results(root)]
-    for key in names:
-        assert paths[key].endswith(f'{device}_{key}.png')
-        assert os.path.getsize(paths[key]) > 10000
-        t = pd.read_csv(paths[key + '_csv'])
-        assert set(t.columns) >= {'res_idx', 'fres', 'height', 'tau',
-                                  'rate', 'n_used', 'bad', 'bad_reason'}
-        assert len(t) == 6 and np.isfinite(t['fres']).all()
-        assert 0.9e9 < t['fres'].min() and t['fres'].max() < 10e9
-        assert np.isfinite(t['rate']).any()
-    # The coincident events of each result: a figure and a table
-    for key in [n.replace('lifetime', 'multiplicity') for n in names]:
-        assert os.path.getsize(paths[key]) > 10000
-        ev = pd.read_csv(paths[key + '_csv'])
-        assert list(ev.columns) == ['time_s', 'mult'] and len(ev) > 0
-        assert (ev['mult'] >= 1).all() and (ev['time_s'] >= 0).all()
-    ph = pd.read_csv(paths['lifetime_photons_dark0_set0_csv'])
-    # Every tone has a height; the tones not marked bad have a decay time
-    good = ph[~ph['bad']]
-    assert np.isfinite(ph['height']).all() and len(good) >= 5
-    assert np.isfinite(good['tau']).all()
-    np.testing.assert_allclose(good['tau'], 150e-6, rtol = 0.4)
-    # The PSD group: the per-tone table at every reduced frequency, the
-    # spectra table over the binned frequencies, the figure
-    key = f'psd{p}'
-    assert os.path.getsize(paths[key]) > 10000
-    pts = pd.read_csv(paths[key + '_csv'])
-    f_reduced = root[f'ts_psd{p}/f_reduced'][:]
-    assert len(pts) == 18 and pts['timestream'].nunique() == 3
-    for fr in f_reduced:
-        assert f'sxx_{fr:g}' in pts and f'sxx_cn_{fr:g}' in pts and \
-            f'sfactor_{fr:g}' in pts
-    assert np.isfinite(pts['sxx_cn_10']).all()
-    assert np.isfinite(pts['sfactor_10']).all()
-    spec = pd.read_csv(paths[key + '_spectra_csv'])
-    assert {'f', 'sxx_mean_on', 'sxx_lo_on', 'sxx_hi_on', 'sxx_cn_mean_on',
-            'spar_mean_on', 'sper_mean_on'} <= set(spec.columns)
-    assert len(spec) == len(root[f'ts_psd{p}/timestream0/f_binned'][:])
-    ok = np.isfinite(spec['sxx_mean_on'])
-    assert ok.sum() > 50
-    assert np.all(spec.loc[ok, 'sxx_lo_on'] <= spec.loc[ok, 'sxx_mean_on'])
-    assert np.all(spec.loc[ok, 'sxx_mean_on'] <= spec.loc[ok, 'sxx_hi_on'])
-    text = open(paths['info'], encoding = 'utf-8').read()
-    assert 'photons/dark0_set0' in text and 'cosmic/dark0_set0' in text
-    assert 'Skipped (saved incompletely): ' in text and \
-        'photons/partial' in text
-    assert f'ts_psd{p} (report)' in text and 'Sxx at 10 Hz' in text
-    # A PSD set saved incompletely (no timestream) is skipped and named
-    dl.create_group(dl.open_store(path, mode = 'a'), 'ts_psd99', 'analysis')
-    monkeypatch.setattr(m, 'PSDS', [p, 99])
-    paths = m.main(m.parse_args(argv + ['--out', str(out)]))
-    assert 'psd99' not in paths and key in paths
-    text = open(paths['info'], encoding = 'utf-8').read()
-    assert 'ts_psd99' in text.split('Skipped (saved incompletely): ')[1]
-    monkeypatch.setattr(m, 'PSDS', [p])
-    # --pick with a cancelled dialog writes nothing
-    import citkid.daq_browser as db
-    monkeypatch.setattr(db, 'choose_store', lambda start = None: None)
-    assert m.main(m.parse_args(['--pick', '--out', str(out)])) is None
-
-
 def test_add_loop_psds(photon_store, monkeypatch, capsys):
     """
     The temporary script adds the loop-component spectra to a PSD group
@@ -2090,7 +1951,7 @@ def test_device_parts():
     assert device_parts('p1p2-die12') == ('p1.2', '12')
 
 
-def test_09_report_site(photon_store, monkeypatch, capsys, tmp_path):
+def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
     """
     The site: a device page with the figures and tables, one page per
     resonator, a manifest and the top index; a store that has not
@@ -2099,7 +1960,7 @@ def test_09_report_site(photon_store, monkeypatch, capsys, tmp_path):
     """
     import json
     import citkid.pipeline.interactive.psd_overview as po
-    from citkid.pipeline import cosmic_finder as cf
+    from citkid.pipeline import hee_finder as cf
     from citkid.pipeline import photon_finder as pf
     path, _ = photon_store
     root = dl.open_store(path)
@@ -2109,7 +1970,7 @@ def test_09_report_site(photon_store, monkeypatch, capsys, tmp_path):
         monkeypatch.setattr(m6, 'TIMESTREAMS', [0])
         m6.main(m6.parse_args(store_argv + ['--no-gui']))
     if 'dark0_set0' not in cf.list_results(root):
-        m6b = load_script('06b_cosmic_rays.py')
+        m6b = load_script('06b_hee.py')
         monkeypatch.setattr(m6b, 'TIMESTREAMS', [0])
         m6b.main(m6b.parse_args(store_argv + ['--no-gui']))
     if not dl.list_indices(root, 'ts_psd'):
@@ -2120,18 +1981,23 @@ def test_09_report_site(photon_store, monkeypatch, capsys, tmp_path):
         m7.main(m7.parse_args(store_argv + ['--name', 'site']))
     root = dl.open_store(path)
     device, cooldown = root.attrs['device'], root.attrs['cooldown']
-    m = load_script('09_report_site.py')
+    m = load_script('08_report_site.py')
     out = tmp_path / 'reports'
     argv = ['--store', str(path), '--out', str(out), '--no-gui',
             '--update']
     built = m.main(m.parse_args(argv))
     dev = out / cooldown / device
     assert built == [str(dev)]
-    assert (out / 'index.html').exists() and (dev / 'index.html').exists()
+    # The top page only with INDEX (off in the template)
+    assert not (out / 'index.html').exists()
+    assert (dev / 'index.html').exists()
+    monkeypatch.setattr(m, 'INDEX', True)
+    assert m.main(m.parse_args(argv)) == [str(dev)]
+    assert (out / 'index.html').exists()
     manifest = json.loads((dev / 'manifest.json').read_text('utf-8'))
     assert manifest['device'] == device and manifest['res_pages'] is True
     assert len(manifest['runs']) >= 2 and manifest['tunings']
-    assert manifest['photons'] and manifest['cosmic'] and manifest['psds']
+    assert manifest['photons'] and manifest['hee'] and manifest['psds']
     n_tones = len(root['tune0/tones/res_idxs'][:])
     pages = sorted((dev / 'res').glob('res*.html'))
     assert len(pages) == n_tones
@@ -2154,19 +2020,25 @@ def test_09_report_site(photon_store, monkeypatch, capsys, tmp_path):
     assert '<th>die</th>' in top and '<th>suffix</th>' in top
     assert 'input class="colfilter"' in top and str(path) not in top
     assert '<details' in page and 'input class="rowfilter"' in page
+    # The section markers are CSS escapes, not Python octal escapes
+    assert 'content: "\\25B8 "' in page and chr(0x15) not in page
     assert str(path) not in page
     # --index-only rebuilds the top page alone
     (out / 'index.html').unlink()
     assert m.main(m.parse_args(['--out', str(out), '--index-only'])) == []
     assert (out / 'index.html').exists()
-    # Up to date: nothing rebuilt
-    assert m.main(m.parse_args(argv)) == []
-    assert m.main(m.parse_args(argv[:-1])) is None     # no --update
+    # An unchanged store is up to date for build_device, but --update
+    # (the user asked for the report again) rebuilds it anyway
+    assert m.site.build_device(str(path), str(out),
+                               progress = print) is None
     assert 'up to date' in capsys.readouterr().out
-    # notes.md is shown; --force rebuilds
+    assert m.main(m.parse_args(argv[:-1])) is None     # no --update
+    assert 'exists' in capsys.readouterr().out
+    assert m.main(m.parse_args(argv + ['--no-res-pages'])) == [str(dev)]
+    assert 'up to date' not in capsys.readouterr().out
+    # notes.md is shown
     (dev / 'notes.md').write_text('Hand-written notes here', 'utf-8')
-    assert m.main(m.parse_args(argv + ['--force', '--no-res-pages'])) == \
-        [str(dev)]
+    assert m.main(m.parse_args(argv + ['--no-res-pages'])) == [str(dev)]
     page = (dev / 'index.html').read_text('utf-8')
     assert 'Hand-written notes here' in page and 'res/res' not in page
     assert (dev / 'notes.md').exists()
@@ -2198,9 +2070,12 @@ def test_09_report_site(photon_store, monkeypatch, capsys, tmp_path):
     assert m.main(m.parse_args(['--store', str(path), '--out', str(out),
                                 '--no-gui'])) is None
     assert 'exists' in capsys.readouterr().out
+    # Update rebuilds the pages even though the store has not changed
+    capsys.readouterr()
     assert m.main(m.parse_args(['--store', str(path), '--out', str(out),
-                                '--no-gui', '--update', '--force',
+                                '--no-gui', '--update',
                                 '--no-res-pages'])) == [str(dev)]
+    assert 'up to date' not in capsys.readouterr().out
     assert (dev / 'attachments' / 'keep.txt').exists()
     answers = []
     monkeypatch.setattr(db, 'ask_existing_report',
@@ -2253,4 +2128,6 @@ def test_09_report_site(photon_store, monkeypatch, capsys, tmp_path):
     assert 'attachments/tune0/wiring.txt' in page and 'Attached files' in page
     assert page.count('attachments/tune0/wiring.txt') >= 3
     assert (dev / 'attachments' / 'tune0' / 'wiring.txt').exists()
-    assert m.main(m.parse_args(argv + ['--no-res-pages'])) == []
+    # Rebuilt again on request, the attachment stays
+    assert m.main(m.parse_args(argv + ['--no-res-pages'])) == [str(dev)]
+    assert (dev / 'attachments' / 'tune0' / 'wiring.txt').exists()

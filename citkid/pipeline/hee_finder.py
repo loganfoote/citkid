@@ -1,7 +1,7 @@
 """
-Fit cosmic-ray tails in calibrated timestreams: the multi-tone
-bookkeeping around ``signal.cosmic``, for devices without photon pulses
-(or alongside them).
+Fit high-energy event (HEE) tails in calibrated timestreams: the
+multi-tone bookkeeping around ``signal.hee``, for devices without
+photon pulses (or alongside them).
 
 A timestream is one tone set of one run with a stream calibration, as
 ``photon_finder.list_timestreams`` lists them; its detection timestreams
@@ -9,16 +9,16 @@ come from ``photon_finder.TimestreamData`` (x from the raw streams in
 memory, never saved). For one timestream:
 
 1. The events come from a photon result (``events_from_photons``: the
-   cosmic rays ``06a_find_photons.py`` saved) or from triggers on the
+   HEEs ``06a_find_photons.py`` saved) or from triggers on the
    tones streamed together (``find_events_timestream``).
 2. ``analyze_timestream`` cuts every tone's pulses at the events, lines
    them up where each falls through the tail level, averages them and
    fits the average's tail (``analyze_tone``); the thresholds (height
    window, tail level, fit length; ``TailThresholds``) can then be
-   reviewed in the cosmic tail window
-   (``pipeline.interactive.cosmic_tails``), which calls ``refit_tone``
+   reviewed in the HEE tail window
+   (``pipeline.interactive.hee_tails``), which calls ``refit_tone``
    for the tones it changes (no data is read again).
-3. ``save_timestream`` saves the result as ``cosmic/<name>`` at the store
+3. ``save_timestream`` saves the result as ``hee/<name>`` at the store
    root (``photon_finder.result_name``), replaced when the timestream is
    analyzed again; ``load_thresholds`` reads a result's thresholds back
    to continue in the window.
@@ -27,12 +27,12 @@ import dataclasses
 import numpy as np
 from tqdm.auto import tqdm
 from .. import daq_layout as dl
-from ..signal import cosmic as cr
+from ..signal import hee as cr
 from ..signal.photons import PPM
 from . import photon_finder as pf
 
 # The results' group at the store root, one child per timestream
-COSMIC_GROUP = 'cosmic'
+HEE_GROUP = 'hee'
 
 ################################################################################
 ################################### Settings ###################################
@@ -40,7 +40,7 @@ COSMIC_GROUP = 'cosmic'
 @dataclasses.dataclass
 class TailSettings:
     """
-    Settings of the cosmic-ray tail analysis.
+    Settings of the HEE tail analysis.
 
     Attributes:
     pulse_sign (int): sign of a pulse in the detection timestream.
@@ -259,15 +259,15 @@ def results_group(root):
     root (zarr.Group): the store root (writable).
 
     Returns:
-    grp (zarr.Group): ``cosmic``.
+    grp (zarr.Group): ``hee``.
     """
-    if COSMIC_GROUP not in root:
-        dl.create_group(root, COSMIC_GROUP, 'analysis')
-    return root[COSMIC_GROUP]
+    if HEE_GROUP not in root:
+        dl.create_group(root, HEE_GROUP, 'analysis')
+    return root[HEE_GROUP]
 
 def list_results(root):
     """
-    List the saved cosmic-ray results.
+    List the saved HEE results.
 
     Parameters:
     root (zarr.Group): the store root.
@@ -275,13 +275,13 @@ def list_results(root):
     Returns:
     names (list of str): the result names, sorted.
     """
-    if COSMIC_GROUP not in root:
+    if HEE_GROUP not in root:
         return []
-    return sorted(root[COSMIC_GROUP].group_keys())
+    return sorted(root[HEE_GROUP].group_keys())
 
 def describe_results(root):
     """
-    Describe the saved cosmic-ray results, one line each.
+    Describe the saved HEE results, one line each.
 
     Parameters:
     root (zarr.Group): the store root.
@@ -289,10 +289,10 @@ def describe_results(root):
     Returns:
     text (str): the description.
     """
-    lines = ['Previous results (cosmic/<name>: run, tone set, events, '
+    lines = ['Previous results (hee/<name>: run, tone set, events, '
              'created):']
     for name in list_results(root):
-        a = root[COSMIC_GROUP][name].attrs
+        a = root[HEE_GROUP][name].attrs
         n_bad = len(a.get('thresholds', {}).get('bad', {}))
         lines.append(f"  {name}: {a.get('run')} set {a.get('tone_set')}, "
                      f"{a.get('n_events')} events from {a.get('events')}, "
@@ -308,7 +308,7 @@ def describe_result(grp):
     and how much of it was set by hand.
 
     Parameters:
-    grp (zarr.Group): the result (``cosmic/<name>``).
+    grp (zarr.Group): the result (``hee/<name>``).
 
     Returns:
     text (str): the description.
@@ -340,7 +340,7 @@ def load_thresholds(grp):
 ################################################################################
 def events_from_photons(grp):
     """
-    Read the cosmic rays a photon result saved, as events.
+    Read the HEEs a photon result saved, as events.
 
     Parameters:
     grp (zarr.Group): a ``photons/<name>`` result.
@@ -349,15 +349,15 @@ def events_from_photons(grp):
     events (dict): 't0' (sample, int64), 'mult' (tones), 'write_idx'
         (tone write), arrays over the events.
     """
-    ev = grp['cosmic/events']
+    ev = grp['hee/events']
     return dict(t0 = np.asarray(ev['t0'][:], dtype = np.int64),
                 mult = np.asarray(ev['mult'][:], dtype = np.int64),
                 write_idx = np.asarray(ev['write_idx'][:], dtype = np.int64))
 
 def find_events_timestream(root, ts, data, settings, progress = True):
     """
-    Find the cosmic rays of a timestream from triggers, per tone write
-    (``signal.cosmic.find_events`` on the tones streamed together).
+    Find the HEEs of a timestream from triggers, per tone write
+    (``signal.hee.find_events`` on the tones streamed together).
 
     Parameters:
     root (zarr.Group): the store root.
@@ -532,7 +532,7 @@ def refit_timestream(ts, results, thresholds, rows = None):
 ################################################################################
 def save_timestream(grp, ts, results, events, thresholds, settings, mode):
     """
-    Save one timestream's cosmic-ray tails.
+    Save one timestream's HEE tails.
 
     Layout of ``grp``: attrs describe the timestream, the settings, the
     thresholds, ``events`` (where the events came from) and

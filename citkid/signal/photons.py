@@ -1,7 +1,8 @@
 """
 Find photon pulses in calibrated timestreams with an iteratively built
-optimal filter, mark pulses that are coincident across tones (e.g. cosmic
-rays), average the photon pulses, and fit their decay time.
+optimal filter, mark pulses that are coincident across tones (e.g.
+high-energy events, HEEs), average the photon pulses, and fit their
+decay time.
 
 Detection on one tone (``run_detection``):
 
@@ -11,7 +12,7 @@ Detection on one tone (``run_detection``):
 2. Initial events: peaks of a 3-sample boxcar of sign * d above
    ``init_nsigma`` robust (MAD) sigma, and at most ``init_hmax`` times the
    median initial peak height (a loose cut that keeps large pulses such as
-   cosmic rays out of the first template).
+   HEEs out of the first template).
 3. Repeat ``of_iterations`` times: average the events into a template,
    estimate the noise PSD from segments without pulses, build the optimal
    filter, filter, and take the filter peaks with heights in [hmin, hmax]
@@ -35,13 +36,13 @@ Detection on one tone (``run_detection``):
    (the noise threshold only), and the events in [hmin, hmax]. It also
    keeps the coincidence candidates: the filter peaks above the lower
    ``coinc_nsigma`` threshold, with their heights and raw peak values, so
-   that small pulses of a cosmic ray still count as coincident.
+   that small pulses of an HEE still count as coincident.
 
 Across the tones streamed together (one tone write, which share sample
 times), a pulse is coincident when another tone has a coincidence
 candidate within +-``win`` samples of it (``candidate_multiplicity``).
 ``average_pulse`` averages the pulses inside the height window that are
-not coincident. ``cosmic_events`` groups the coincidence candidates of all
+not coincident. ``hee_events`` groups the coincidence candidates of all
 tones into events (each starting at its earliest pulse and spanning
 2 ``win`` samples) and returns the events seen by at least ``min_mult``
 tones, with each tone's pulse height. ``fit_tau`` fits the decay of an
@@ -847,7 +848,7 @@ def raw_peaks(d, idx, sign, half_width = 2):
     """
     Return the raw peak of each pulse: the largest sign * d within
     ``half_width`` samples of it. Unlike the filter height, this doesn't
-    assume the photon pulse shape (e.g. for cosmic rays).
+    assume the photon pulse shape (e.g. for HEEs).
 
     Parameters:
     d (np.array): detection timestream.
@@ -972,11 +973,10 @@ def candidate_multiplicity(results, win):
         out.append(m)
     return out
 
-def cosmic_events(results, win, min_mult = 3):
+def hee_events(results, win, min_mult = 3):
     """
     Group the coincidence candidates of the tones of one tone write into
-    events, and return those seen by at least ``min_mult`` tones (cosmic
-    rays).
+    events, and return those seen by at least ``min_mult`` tones (HEEs).
 
     The candidates of all tones are sorted by time. An event starts at the
     earliest candidate not yet in an event, t0, and takes every candidate
@@ -1069,7 +1069,7 @@ def average_pulse(d, res, mult = None, max_mult = 1, gap = 3,
     p (int): index of its maximum.
     used (np.array, int): the events averaged.
     coincident (np.array, int): the candidates above the noise threshold
-        with multiplicity above ``max_mult`` (e.g. cosmic rays), for
+        with multiplicity above ``max_mult`` (e.g. HEEs), for
         separate study.
     """
     idx, h = res['cand_idx'], res['cand_h']

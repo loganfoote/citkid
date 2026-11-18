@@ -1,7 +1,7 @@
 """
 Browsable report site: a static HTML site (no server, no extra
 dependency) with one page per device store, built from what the store
-holds (09_report_site.py).
+holds (08_report_site.py).
 
 Layout of the site::
 
@@ -16,8 +16,8 @@ Layout of the site::
 
 The device page shows what was taken (sweeps, tunings, runs,
 calibrations, results) with the store path of each, the VNA, tuning,
-lifetime, multiplicity and noise figures of 08_report.py and
-vna_report.py (every version, chosen with a dropdown; the latest first),
+lifetime, multiplicity and noise figures (``report`` and
+``vna.report``; every version, chosen with a dropdown; the latest first),
 a sortable table of the resonators linking to their pages, and the tone
 marks. A ``notes.md`` in the device's folder is shown at the top and
 never overwritten. Only reduced results are copied: timestreams and
@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 from .. import daq_layout as dl
 from ..vna import report as vreport
-from . import cosmic_finder as cf
+from . import hee_finder as cf
 from . import photon_finder as pf
 from . import psds
 from . import report as treport
@@ -120,6 +120,36 @@ def add_attachment(out_dir, item, source):
               encoding = 'utf-8') as fh:
         json.dump(attachments, fh, indent = 1)
     return rel
+
+def remove_attachment(out_dir, item, rel):
+    """
+    Remove an attached file from an item: the record goes, and the copy
+    is deleted when no other item lists it.
+
+    Parameters:
+    out_dir (str): the device's folder in the site.
+    item (str): the item ('' for the store).
+    rel (str): the file's path relative to the device folder, as
+        ``load_attachments`` lists it.
+
+    Returns:
+    removed (bool): True if the item listed the file.
+    """
+    attachments = load_attachments(out_dir)
+    files = attachments.get(item, [])
+    if rel not in files:
+        return False
+    files.remove(rel)
+    if not files:
+        del attachments[item]
+    with open(os.path.join(out_dir, ATTACHMENTS_INDEX), 'w',
+              encoding = 'utf-8') as fh:
+        json.dump(attachments, fh, indent = 1)
+    if not any(rel in v for v in attachments.values()):
+        path = os.path.join(out_dir, rel)
+        if os.path.exists(path):
+            os.remove(path)
+    return True
 
 def attachment_links(attachments, item):
     """
@@ -244,7 +274,7 @@ def inventory(root):
     Returns:
     inv (dict): ``device``, ``cooldown``, ``attrs`` (the root
         attributes), ``newest`` (``store_newest``), ``sweeps``,
-        ``tunings``, ``runs``, ``calibrations``, ``photons``, ``cosmic``,
+        ``tunings``, ``runs``, ``calibrations``, ``photons``, ``hee``,
         ``psds`` (lists of dict, in store order, each with its ``path``,
         ``created``, ``notes`` and a few numbers), and ``marks`` (list of
         dict: ``res_idx``, ``kind``, ``text``, ``stage``, ``created``).
@@ -342,7 +372,7 @@ def inventory(root):
                          selection = _attr(g, 'selection', []), sets = sets))
     inv['calibrations'] = cals
     for kind, names in (('photons', pf.list_results(root)),
-                        ('cosmic', cf.list_results(root))):
+                        ('hee', cf.list_results(root))):
         items = []
         for name in names:
             g = root[f'{kind}/{name}']
@@ -580,7 +610,7 @@ class DeviceData:
     calibrations (list of tuple): (cal group, ``calibration_tables``)
         per stream calibration with IQ fits.
     vna_tables (dict): sweep index: ``vna.report.resonator_table``.
-    results (dict): 'photons' / 'cosmic': list of (name, group, table).
+    results (dict): 'photons' / 'hee': list of (name, group, table).
     psd_groups (list): the complete ``ts_psd{p}`` groups.
     """
 
@@ -611,7 +641,7 @@ class DeviceData:
                 self.vna_tables[s['k']] = vreport.resonator_table(
                     root[s['path']]['full_sweep_fit'])
         self.results = {}
-        for kind in ('photons', 'cosmic'):
+        for kind in ('photons', 'hee'):
             items = []
             for item in inv[kind]:
                 if item['complete']:
@@ -648,7 +678,7 @@ def resonator_rows(data, r):
 
     Returns:
     sections (list of tuple): (title, pd.DataFrame) per step that has
-        the resonator: 'VNA fit', 'Tuning', 'Photons', 'Cosmic rays',
+        the resonator: 'VNA fit', 'Tuning', 'Photons', 'High-energy events',
         'Noise', 'Marks'.
     """
     out = []
@@ -673,7 +703,8 @@ def resonator_rows(data, r):
     if rows:
         out.append(('Stream calibration (IQ fit)',
                     pd.concat(rows).reset_index(drop = True)))
-    for kind, title in (('photons', 'Photons'), ('cosmic', 'Cosmic rays')):
+    for kind, title in (('photons', 'Photons'),
+        ('hee', 'High-energy events')):
         rows = []
         for name, grp, table in data.results[kind]:
             row = table[table['res_idx'] == r]
@@ -730,7 +761,7 @@ def _sweep_row(grp, r):
 def resonator_figure(data, r):
     """
     Draw one resonator's figure: its IQ loop at the chosen power, its
-    calibration sweep, its mean photon and cosmic-ray pulses (every
+    calibration sweep, its mean photon and HEE pulses (every
     result), and its noise spectra (every set).
 
     Parameters:
@@ -824,7 +855,7 @@ def resonator_figure(data, r):
     ax.grid(alpha = 0.3)
     ax = axes[1, 0]
     drawn = False
-    for name, grp, table in data.results['cosmic']:
+    for name, grp, table in data.results['hee']:
         i = _sweep_row(grp, r)
         if i is None or 'avg_pulse' not in grp:
             continue
@@ -840,8 +871,8 @@ def resonator_figure(data, r):
                 f"{row['n_used']} pulses")
         drawn = True
     ax.set_xlabel('Time from the tail level (ms)')
-    ax.set_ylabel('Mean cosmic-ray pulse, -x (kHz/GHz)')
-    ax.set_title('Cosmic rays' if drawn else 'no cosmic-ray result',
+    ax.set_ylabel('Mean HEE pulse, -x (kHz/GHz)')
+    ax.set_title('High-energy events' if drawn else 'no HEE result',
                  fontsize = 9)
     if drawn:
         ax.legend(fontsize = 7)
@@ -899,7 +930,7 @@ def resonator_summary(data):
     table (pd.DataFrame): per resonator: ``res_idx``, ``fres_mhz``,
         ``tone_set``, ``power_dbm``, ``Qr``, ``Qc``, ``Qi``, ``a_nl`` (the
         latest stream calibration's IQ fit, if any), ``photon_tau_us``,
-        ``photon_height``, ``photon_rate``, ``cosmic_tau_us``,
+        ``photon_height``, ``photon_rate``, ``hee_tau_us``,
         ``sxx_cn_10hz``, ``sfactor_10hz``, ``marks``.
     """
     rows = {}
@@ -918,7 +949,7 @@ def resonator_summary(data):
                 if r in rows and np.isfinite(t['Qr']):
                     rows[r].update(Qr = t['Qr'], Qc = t['Qc'], Qi = t['Qi'],
                                    a_nl = t['a_nl'])
-    for kind, prefix in (('photons', 'photon'), ('cosmic', 'cosmic')):
+    for kind, prefix in (('photons', 'photon'), ('hee', 'hee')):
         for name, grp, table in data.results[kind]:
             for _, t in table.iterrows():
                 r = int(t['res_idx'])
@@ -962,8 +993,8 @@ h2 { font-size: 1.25em; margin-top: 36px; border-bottom: 1px solid #ccc;
      padding-bottom: 4px; }
 details > summary { cursor: pointer; list-style: none; }
 details > summary h2 { display: inline-block; margin-right: 12px; }
-details > summary::before { content: "\25B8 "; color: #888; }
-details[open] > summary::before { content: "\25BE "; }
+details > summary::before { content: "\\25B8 "; color: #888; }
+details[open] > summary::before { content: "\\25BE "; }
 tr.filters input { width: 95%; font-size: 0.9em; }
 h3 { font-size: 1.05em; margin-top: 24px; }
 table { border-collapse: collapse; font-size: 0.85em; margin: 8px 0; }
@@ -1281,13 +1312,14 @@ def _taken_table(inv, attachments = None):
                          details = '; '.join(
                              f"{s['name']}: {s.get('n_calibrated')} of "
                              f"{s.get('n_tones')} tones" for s in c['sets'])))
-    for kind, label in (('photons', 'Photons'), ('cosmic', 'Cosmic rays')):
+    for kind, label in (('photons', 'Photons'),
+        ('hee', 'High-energy events')):
         for it in inv[kind]:
             rows.append(dict(
                 kind = label, path = it['path'], created = it['created'],
                 name = it['name'], notes = it['notes'],
                 details = (f"{it.get('n_tones')} tones, {it.get('n_bad')} "
-                           f"bad, median decay time "
+                           f"bad, median lifetime "
                            f"{_fmt(it.get('tau_median_us'))} us"
                            if it['complete'] else 'saved incompletely')))
     for g in inv['psds']:
@@ -1485,7 +1517,8 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
                         for s in c['sets'])))
     body.append(section_html('Stream calibrations',
                              versions_html('cal', items, attachments)))
-    for kind, title in (('photons', 'Photons'), ('cosmic', 'Cosmic rays')):
+    for kind, title in (('photons', 'Photons'),
+        ('hee', 'High-energy events')):
         items = []
         for it in reversed(inv[kind]):
             key = f"lifetime_{kind}_{it['name']}"
@@ -1505,7 +1538,7 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
                 text = f"run {it['run']} ({it['run_name']}), tone set "
                 f"{it['tone_set']}, calibration {it['calibration']}; "
                 f"{it.get('n_tones')} tones, {it.get('n_bad')} marked bad; "
-                f"median decay time {_fmt(it.get('tau_median_us'))} us"
+                f"median lifetime {_fmt(it.get('tau_median_us'))} us"
                 + (f", median rate {_fmt(it.get('rate_median'))} /s"
                    if it.get('rate_median') is not None else ''),
                 files = files))
@@ -1596,12 +1629,12 @@ def build_index(out_root):
                 tunings = len(inv.get('tunings', [])),
                 runs = len(inv.get('runs', [])),
                 photons = len(inv.get('photons', [])),
-                cosmic = len(inv.get('cosmic', [])),
+                hee = len(inv.get('hee', [])),
                 noise = len(inv.get('psds', [])),
                 built = inv.get('built', '')))
     table = pd.DataFrame(rows, columns = [
         'cooldown', 'device', 'die', 'suffix', 'created', 'sweeps',
-        'tunings', 'runs', 'photons', 'cosmic', 'noise', 'built'])
+        'tunings', 'runs', 'photons', 'hee', 'noise', 'built'])
     body = ('<p class="small">Type under a heading to filter; click a '
             'heading to sort. A device folder copied in from another '
             'site is listed after the next build.</p>'

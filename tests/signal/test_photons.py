@@ -108,16 +108,16 @@ def test_auto_hmin_and_noise_only():
 def test_coincidences_and_average():
     rng = np.random.default_rng(2)
     n = int(10 / DT)
-    cosmic = np.arange(1000, n - 1000, 7919)
+    hee = np.arange(1000, n - 1000, 7919)
     ds, results = [], []
     for k in range(3):
         # Independent photons on each tone, at least 250 samples apart
         own = 500 + np.cumsum(rng.integers(250, 1000, 600))
         own = own[own < n - 500]
-        own = own[~ph.near(own, cosmic, 300, 300)]
-        # Cosmic rays: big pulses on every tone at once
-        times = np.concatenate((own, cosmic + k))
-        height = np.concatenate((np.ones(len(own)), np.full(len(cosmic), 3.)))
+        own = own[~ph.near(own, hee, 300, 300)]
+        # High-energy events: big pulses on every tone at once
+        times = np.concatenate((own, hee + k))
+        height = np.concatenate((np.ones(len(own)), np.full(len(hee), 3.)))
         o = np.argsort(times)
         x = synth(rng, n, times[o], height = height[o])
         ds.append(ph.detection_timestream(x, DT))
@@ -125,21 +125,21 @@ def test_coincidences_and_average():
     mult = ph.coincidence_multiplicity([r['cand_idx'] for r in results],
                                        win = 3)
     for k, (r, m) in enumerate(zip(results, mult)):
-        at_cosmic = ph.near(r['cand_idx'], cosmic + k, 3, 4)
-        # Cosmic rays are above the noise threshold and coincident on all
+        at_hee = ph.near(r['cand_idx'], hee + k, 3, 4)
+        # High-energy events are above the noise threshold and coincident on all
         # three tones; nearly all others are on one tone
-        assert at_cosmic.sum() == len(cosmic)
-        assert np.all(m[at_cosmic] == 3)
+        assert at_hee.sum() == len(hee)
+        assert np.all(m[at_hee] == 3)
         # (accidental coincidences at 60 photons/s per tone: ~2%)
-        assert np.mean(m[~at_cosmic] == 1) > 0.95
+        assert np.mean(m[~at_hee] == 1) > 0.95
         avg, p, used, coinc = ph.average_pulse(ds[k], r, m)
-        assert set(coinc.tolist()) >= set(r['cand_idx'][at_cosmic].tolist())
-        assert not np.any(ph.near(used, cosmic + k, 3, 4))
-        # The cosmic rays (height 3, outside hmax) don't bias the average
+        assert set(coinc.tolist()) >= set(r['cand_idx'][at_hee].tolist())
+        assert not np.any(ph.near(used, hee + k, 3, 4))
+        # The HEEs (height 3, outside hmax) don't bias the average
         assert avg[p] == pytest.approx(1e-6, rel = 0.05)
     t, mlt = ph.coincidence_clusters(
         [ph.triggers(d, 6., 30) for d in ds], win = 3)
-    assert np.sum(mlt == 3) >= len(cosmic) - 1
+    assert np.sum(mlt == 3) >= len(hee) - 1
 
 
 def test_helpers():
@@ -159,7 +159,7 @@ def test_helpers():
 
 def test_init_hmax_keeps_large_pulses_out_of_first_template():
     """
-    Large pulses (e.g. cosmic rays at 20 photons) are found in the first
+    Large pulses (e.g. HEEs at 20 photons) are found in the first
     pass but cut by ``init_hmax``, and the PSD still avoids them.
     """
     rng = np.random.default_rng(3)
@@ -181,17 +181,17 @@ def test_init_hmax_keeps_large_pulses_out_of_first_template():
     assert np.isinf(loose['init_hmax_abs'])
 
 
-def test_coincidence_candidates_and_cosmic_events():
+def test_coincidence_candidates_and_hee_events():
     """
-    Cosmic rays: large pulses on tones 0 and 1, a pulse below hmin (0.4,
+    High-energy events: large pulses on tones 0 and 1, a pulse below hmin (0.4,
     about 7 sigma of the filter output) on tone 2. The lower coincidence
-    threshold still counts tone 2, so every cosmic ray has multiplicity 3
-    and is masked from the averages, and ``cosmic_events`` returns each
+    threshold still counts tone 2, so every HEE has multiplicity 3
+    and is masked from the averages, and ``hee_events`` returns each
     one with the three tones' heights.
     """
     rng = np.random.default_rng(4)
     n = int(10 / DT)
-    cosmic = np.arange(1000, n - 1000, 7919)
+    hee = np.arange(1000, n - 1000, 7919)
     heights = (4., 3., 0.4)
     # Arrival offsets in samples (within the +-2 sample window)
     offset = (0, 1, 1)
@@ -199,10 +199,10 @@ def test_coincidence_candidates_and_cosmic_events():
     for k in range(3):
         own = 500 + np.cumsum(rng.integers(250, 1000, 600))
         own = own[own < n - 500]
-        own = own[~ph.near(own, cosmic, 300, 300)]
-        times = np.concatenate((own, cosmic + offset[k]))
+        own = own[~ph.near(own, hee, 300, 300)]
+        times = np.concatenate((own, hee + offset[k]))
         height = np.concatenate((np.ones(len(own)),
-                                 np.full(len(cosmic), heights[k])))
+                                 np.full(len(hee), heights[k])))
         o = np.argsort(times)
         x = synth(rng, n, times[o], height = height[o])
         ds.append(ph.detection_timestream(x, DT))
@@ -210,24 +210,24 @@ def test_coincidence_candidates_and_cosmic_events():
     for r in results:
         # Every pulse candidate is a coincidence candidate
         assert set(r['cand_idx'].tolist()) <= set(r['coinc_idx'].tolist())
-    # Tone 2's cosmic-ray pulses are mostly below hmin (noise lifts a few
+    # Tone 2's HEE pulses are mostly below hmin (noise lifts a few
     # above it), but all are coincidence candidates
-    r2, t2 = results[2], cosmic + offset[2]
-    assert ph.near(r2['cand_idx'], t2, 2, 3).sum() < 0.2 * len(cosmic)
-    assert ph.near(r2['coinc_idx'], t2, 2, 3).sum() == len(cosmic)
+    r2, t2 = results[2], hee + offset[2]
+    assert ph.near(r2['cand_idx'], t2, 2, 3).sum() < 0.2 * len(hee)
+    assert ph.near(r2['coinc_idx'], t2, 2, 3).sum() == len(hee)
     mult = ph.candidate_multiplicity(results, win = 2)
     for k in (0, 1):
         r, m = results[k], mult[k]
-        at = ph.near(r['cand_idx'], cosmic + offset[k], 2, 3)
-        assert at.sum() == len(cosmic) and np.all(m[at] == 3)
+        at = ph.near(r['cand_idx'], hee + offset[k], 2, 3)
+        assert at.sum() == len(hee) and np.all(m[at] == 3)
         avg, p, used, coinc = ph.average_pulse(ds[k], r, m)
-        assert not ph.near(used, cosmic + offset[k], 2, 3).any()
+        assert not ph.near(used, hee + offset[k], 2, 3).any()
         assert avg[p] == pytest.approx(1e-6, rel = 0.05)
-    events, hits = ph.cosmic_events(results, win = 2, min_mult = 3)
-    assert len(events['t0']) == len(cosmic)
+    events, hits = ph.hee_events(results, win = 2, min_mult = 3)
+    assert len(events['t0']) == len(hee)
     assert np.all(events['mult'] == 3)
-    assert np.all(np.abs(events['t0'] - cosmic) <= 2)
-    assert len(hits['event']) == 3 * len(cosmic)
+    assert np.all(np.abs(events['t0'] - hee) <= 2)
+    assert len(hits['event']) == 3 * len(hee)
     for k, hk in enumerate(heights):
         sel = hits['tone'] == k
         assert np.median(hits['h'][sel]) == pytest.approx(hk, rel = 0.15)
@@ -255,7 +255,7 @@ def fake_result(idx, h, amp = 1e-6):
                 cand_idx = idx)
 
 
-def test_cosmic_event_grouping():
+def test_hee_event_grouping():
     """
     Events start at the earliest pulse and span 2 win samples; a tone's
     largest pulse is kept; events with too few tones are dropped.
@@ -264,7 +264,7 @@ def test_cosmic_event_grouping():
                fake_result([104, 503], [3., 1.]),
                fake_result([105, 505], [1., 1.]),
                fake_result([900], [1.])]
-    events, hits = ph.cosmic_events(results, win = 2, min_mult = 2)
+    events, hits = ph.hee_events(results, win = 2, min_mult = 2)
     # 100..104: tones 0 (largest: 102) and 1; 105 starts a new event alone
     # (dropped); 500..504: tones 0 and 1; 505 alone; 900 alone
     np.testing.assert_array_equal(events['t0'], [100, 500])
@@ -274,10 +274,10 @@ def test_cosmic_event_grouping():
     np.testing.assert_array_equal(hits['idx'], [102, 104, 500, 503])
     np.testing.assert_allclose(hits['h'], [2., 3., 1., 1.])
     np.testing.assert_allclose(hits['x'], [2e-6, 3e-6, 1e-6, 1e-6])
-    events, hits = ph.cosmic_events(results, win = 3, min_mult = 3)
+    events, hits = ph.hee_events(results, win = 3, min_mult = 3)
     np.testing.assert_array_equal(events['t0'], [100, 500])
     np.testing.assert_array_equal(events['mult'], [3, 3])
-    events, hits = ph.cosmic_events([], win = 2)
+    events, hits = ph.hee_events([], win = 2)
     assert len(events['t0']) == 0 and len(hits['idx']) == 0
     # Multiplicity: +-win around each candidate, inclusive
     m = ph.candidate_multiplicity(
@@ -312,7 +312,7 @@ def test_isolated_events():
 def test_template_from_isolated_events_and_filter_length():
     """
     Pile-up and the neighbourhood of large pulses stay out of the
-    template, so a cosmic ray's side lobes don't corrupt it and the
+    template, so an HEE's side lobes don't corrupt it and the
     heights don't jump between iterations; the filter uses the short
     template, the mean pulse the whole one.
     """
@@ -320,7 +320,7 @@ def test_template_from_isolated_events_and_filter_length():
     n = int(10 / DT)
     times = np.arange(500, n - 500, 400)
     # Pairs of pulses 40 samples apart (pile-up), and a few 50-photon
-    # cosmic rays
+    # HEEs
     pair = rng.random(len(times)) < 0.2
     big = ~pair & (rng.random(len(times)) < 0.05)
     t_all = np.concatenate([times, times[pair] + 40])
@@ -336,7 +336,7 @@ def test_template_from_isolated_events_and_filter_length():
     assert len(res['template']) == pre + post
     assert res['nfft'] >= 2 * (pre + post_f) and res['nfft'] < 2 * (pre + post)
     # The template events are isolated: none within the template length
-    # of another peak, none within the filter length of a cosmic ray
+    # of another peak, none within the filter length of an HEE
     ti = res['template_idx']
     keep = ph.isolated_events(ti, res['cand_idx'],
                               res['cand_idx'][res['cand_h'] > res['hmax']],
@@ -361,7 +361,7 @@ def test_template_from_isolated_events_and_filter_length():
     full = ph.run_detection(d, DT, ph.DetectionSettings(
         filter_post_s = None, of_iterations = 2))
     assert full['filter_post'] == full['post']
-    # The mean photon pulse leaves the pile-up and the cosmic rays'
+    # The mean photon pulse leaves the pile-up and the HEEs'
     # neighbourhoods out as well
     avg, p, used, _ = ph.average_pulse(d, res)
     assert ph.isolated_events(

@@ -14,7 +14,8 @@ drawn readout chain, with:
   sqrt(nsamps);
 - a small random complex gain step each time a module's NCO is set (the
   seams between bands);
-- optionally, photon pulses and cosmic rays in streams (``pulses``).
+- optionally, photon pulses and high-energy events (HEEs) in streams
+  (``pulses``).
 
 ``simulate_vna_store`` makes a device store with one VNA sweep of a
 simulated device (``crs.procedures.vna_sweep_to_store``) and saves the
@@ -37,11 +38,11 @@ DEFAULT_MODULE_CFG = dict(full_scale_dbm = 7.0, adc_attenuation_db = 0.0,
                           adc_calibration_mode = 'AUTO', adc_autocal = True)
 # Serial number of simulated boards
 SIM_SERIAL = 0
-# Default photon and cosmic-ray pulses (``SimulatedCRS.pulses``): rates in
-# Hz (photons per tone, cosmic rays on every streamed tone at once),
+# Default photon and HEE pulses (``SimulatedCRS.pulses``): rates in
+# Hz (photons per tone, HEEs on every streamed tone at once),
 # amplitudes as fractional frequency shifts, decay time in s
-DEFAULT_PULSES = dict(rate = 20., x = 2e-6, tau = 150e-6, cosmic_rate = 1.,
-                      cosmic_x = 1e-5, cosmic_spread = 0.5)
+DEFAULT_PULSES = dict(rate = 20., x = 2e-6, tau = 150e-6, hee_rate = 1.,
+                      hee_x = 1e-5, hee_spread = 0.5)
 
 class SimulatedCRS:
     """
@@ -57,8 +58,8 @@ class SimulatedCRS:
         keys), or None for none.
     pulse_log (list of dict): one entry per stream with pulses: ``n``
         (samples), ``dt``, ``photons`` (per streamed tone, the sample of
-        each photon's maximum), ``cosmic`` (samples of the cosmic rays),
-        ``cosmic_x`` (per tone and cosmic ray, the amplitude), ``rows``
+        each photon's maximum), ``hee`` (samples of the HEEs),
+        ``hee_x`` (per tone and HEE, the amplitude), ``rows``
         (the streamed tones' rows of the stream).
     """
 
@@ -86,7 +87,7 @@ class SimulatedCRS:
             ``SIM_SERIAL`` (0).
         global_control (bool): If True, the session may change the
             decimation. Default False.
-        pulses (dict, bool, or None): photon pulses and cosmic rays in
+        pulses (dict, bool, or None): photon pulses and HEEs in
             streams. True: ``DEFAULT_PULSES``; a dict overrides some of
             its keys. None or False (default): no pulses.
         board (dict or None): the simulated hardware's NCO state, module:
@@ -492,12 +493,12 @@ class SimulatedCRS:
 
     def _pulse_x(self, ntones, n, dt):
         """
-        Draw the resonance shift x(t) of photon pulses and cosmic rays.
+        Draw the resonance shift x(t) of photon pulses and HEEs.
 
         Photons arrive on each tone independently (Poisson, ``rate``);
-        cosmic rays hit every tone at once (``cosmic_rate``), with an
-        amplitude ``cosmic_x`` times a log-normal factor per tone
-        (``cosmic_spread``). Pulses rise in one sample and decay with
+        HEEs hit every tone at once (``hee_rate``), with an
+        amplitude ``hee_x`` times a log-normal factor per tone
+        (``hee_spread``). Pulses rise in one sample and decay with
         ``tau``; x is negative (the resonance moves down).
 
         Parameters:
@@ -507,7 +508,7 @@ class SimulatedCRS:
 
         Returns:
         out (dict): ``x`` (ntones, n), and the ``pulse_log`` entries
-            ``n``, ``dt``, ``photons``, ``cosmic``, ``cosmic_x``.
+            ``n``, ``dt``, ``photons``, ``hee``, ``hee_x``.
         """
         p = self.pulses
         impulses = np.zeros((ntones, n))
@@ -516,15 +517,15 @@ class SimulatedCRS:
             t = np.flatnonzero(self.rng.random(n) < p['rate'] * dt)
             impulses[k, t] += p['x']
             photons.append(t)
-        cosmic = np.flatnonzero(self.rng.random(n) < p['cosmic_rate'] * dt)
-        cx = p['cosmic_x'] * np.exp(
-            p['cosmic_spread'] * self.rng.standard_normal((ntones,
-                                                           len(cosmic))))
-        impulses[:, cosmic] += cx
+        hee = np.flatnonzero(self.rng.random(n) < p['hee_rate'] * dt)
+        cx = p['hee_x'] * np.exp(
+            p['hee_spread'] * self.rng.standard_normal((ntones,
+                                                           len(hee))))
+        impulses[:, hee] += cx
         a = np.exp(-dt / p['tau'])
         x = -lfilter([1.], [1., -a], impulses, axis = 1)
-        return dict(x = x, n = n, dt = dt, photons = photons, cosmic = cosmic,
-                    cosmic_x = cx)
+        return dict(x = x, n = n, dt = dt, photons = photons, hee = hee,
+                    hee_x = cx)
 
     @uses_board
     async def stream(
@@ -662,7 +663,7 @@ def simulated_crs(
     seed (int or None): noise seed. None (default): the store's seed + 2.
     global_control (bool): If True, the session may change the decimation.
         Default False.
-    pulses (dict, bool, or None): photon pulses and cosmic rays in streams
+    pulses (dict, bool, or None): photon pulses and HEEs in streams
         (``SimulatedCRS``). Default None (none).
 
     Returns:

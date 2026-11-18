@@ -13,9 +13,9 @@ different calibration. Its x comes from the raw streams in memory
 (the tones streamed together, over which the common modes are taken), and
 only reduced results are saved (``save_timestream``). Per write:
 
-1. Optionally, glitches (cosmic rays) are taken out of every tone and
-   replaced with noise (``deglitch_peaks``, or ``deglitch_photons`` with
-   the optimal filters of a photon result).
+1. Optionally, glitches (high-energy events, HEEs) are taken out of
+   every tone and replaced with noise (``deglitch_peaks``, or
+   ``deglitch_photons`` with the optimal filters of a photon result).
 2. Every tone's Sxx (``signal.psd.get_psd``) is reduced to its mean
    around each frequency of a 1-3-10 grid that the run's length and
    sample period allow (``reduced_freqs``, ``xcal.reduced_params``), and
@@ -40,7 +40,7 @@ from .stream_sources import apply_stream_calibration, open_calibration
 # Group prefix of the results at the store root
 PREFIX = 'ts_psd'
 DEGLITCH_OPTIONS = (None, 'peaks', 'photons')
-PULSE_OPTIONS = ('cosmic', 'all')
+PULSE_OPTIONS = ('hee', 'all')
 
 ################################################################################
 ################################## Timestreams #################################
@@ -449,13 +449,13 @@ def load_photon_reference(ref_grp):
     return pf.load_reference(ref_grp, settings)[1], settings
 
 def deglitch_photons(
-    x, dt, res_idxs, filters, settings, pulses = 'cosmic', coinc_win = 2,
+    x, dt, res_idxs, filters, settings, pulses = 'hee', coinc_win = 2,
     min_mult = 3, pre = 1, post = 1
 ):
     """
     Find the pulses of the tones streamed together with given optimal
-    filters (``signal.photons.detect_with_filter``) and replace the cosmic
-    rays (or every pulse) with noise.
+    filters (``signal.photons.detect_with_filter``) and replace the HEEs
+    (or every pulse) with noise.
 
     Parameters:
     x (np.array, (N, T)): the tones' timestreams. Non-finite rows, and
@@ -465,12 +465,12 @@ def deglitch_photons(
     filters (dict): res_idx: filter (``load_photon_reference``).
     settings (DetectionSettings): detection settings (``highpass_hz``,
         ``coinc_nsigma``, ...).
-    pulses (str): 'cosmic' (default): replace the events seen by at least
+    pulses (str): 'hee' (default): replace the events seen by at least
         ``min_mult`` tones within +-``coinc_win`` samples
-        (``signal.photons.cosmic_events``); 'all': every pulse candidate
+        (``signal.photons.hee_events``); 'all': every pulse candidate
         of every tone.
     coinc_win (int): coincidence window, samples. Default 2.
-    min_mult (int): fewest tones of a cosmic ray. Default 3.
+    min_mult (int): fewest tones of an HEE. Default 3.
     pre, post (int): samples replaced before and after each pulse.
         Default 1 each.
 
@@ -513,7 +513,7 @@ def deglitch_photons(
         for i in good:
             idxs[i] = np.asarray(results[i]['cand_idx'], dtype = np.int64)
     elif good:
-        _, hits = ph.cosmic_events([results[i] for i in good], coinc_win,
+        _, hits = ph.hee_events([results[i] for i in good], coinc_win,
                                    min_mult)
         for tone, idx in zip(hits['tone'], hits['idx']):
             idxs[good[tone]] = np.append(idxs[good[tone]], int(idx))
@@ -549,7 +549,7 @@ def analyze_timestream(
         'peaks' or 'photons'), ``glitch_pre_s``, ``glitch_post_s``,
         ``glitch_sign``, ``glitch_nstd``, ``glitch_baseline_s``,
         ``glitch_distance_s``, ``glitch_rounds``, ``glitch_pulses``,
-        ``coinc_win``, ``cosmic_min_mult``, ``memory_gb``.
+        ``coinc_win``, ``hee_min_mult``, ``memory_gb``.
     filters (dict or None): res_idx: optimal filter, for ``deglitch`` =
         'photons' (``load_photon_reference``). Default None.
     photon_settings (DetectionSettings or None): with ``filters``.
@@ -567,8 +567,8 @@ def analyze_timestream(
         ``write_idx`` (per tone: its write's index in the source's
         writes, -1 if none), ``status`` (per tone: '' or a message),
         ``n_glitches``, ``glitch_frac``, ``sxx_reduced``, ``sxx_binned``,
-        the spectra of the loop components ``spar_binned`` (along the
-        loop, r theta) and ``sper_binned`` (across it, A), in normalized
+        the spectra of the loop components ``spar_binned`` (parallel to
+        the loop, r theta) and ``sper_binned`` (perpendicular, A), in normalized
         units squared per Hz, and ``sfactor_reduced`` (10 log10 of their
         ratio at ``f_reduced``, dB), and with ``cn_remove``:
         ``sxx_reduced_cn``, ``sxx_binned_cn``,
@@ -636,12 +636,13 @@ def analyze_timestream(
                                        outputs = ('xt', 'thetat', 'At'))
         x = cal['xt']
         ok = np.isfinite(x).all(axis = 1)
-        # The loop components: r theta along the loop, A across it (no
+        # The loop components: r theta parallel to the loop, A
+        # perpendicular to it (no
         # deglitching, no common-mode removal)
         radius = np.asarray(DS.circ_radius[rows.tolist()], dtype = float)
-        along = cal['thetat']
-        along *= radius[:, None]
-        across = cal['At']
+        par = cal['thetat']
+        par *= radius[:, None]
+        perp = cal['At']
         del cal
         out['write_idx'][idx] = w
         out['status'][idx] = np.where(
@@ -650,15 +651,15 @@ def analyze_timestream(
             for k, i in enumerate(idx):
                 reason = exclude.get(int(ts['res_idxs'][i]))
                 if reason is not None:
-                    x[k] = along[k] = across[k] = np.nan
+                    x[k] = par[k] = perp[k] = np.nan
                     out['status'][i] = f'marked bad: {reason}'
-        fb, sb, sr_par = psd_summary(along, dt, f_reduced, valid, **bins)
+        fb, sb, sr_par = psd_summary(par, dt, f_reduced, valid, **bins)
         _fill(out, 'spar_binned', idx, fb, sb, n)
-        fb, sb, sr_per = psd_summary(across, dt, f_reduced, valid, **bins)
+        fb, sb, sr_per = psd_summary(perp, dt, f_reduced, valid, **bins)
         _fill(out, 'sper_binned', idx, fb, sb, n)
         with np.errstate(divide = 'ignore', invalid = 'ignore'):
             out['sfactor_reduced'][idx] = 10 * np.log10(sr_par / sr_per)
-        del along, across
+        del par, perp
         if s['deglitch'] == 'peaks':
             x, ng, fr = deglitch_peaks(
                 x, dt, sign = int(s['glitch_sign']),
@@ -671,7 +672,7 @@ def analyze_timestream(
             x, ng, fr = deglitch_photons(
                 x, dt, ts['res_idxs'][idx], filters, photon_settings,
                 pulses = s['glitch_pulses'], coinc_win = int(s['coinc_win']),
-                min_mult = int(s['cosmic_min_mult']), pre = pre, post = post)
+                min_mult = int(s['hee_min_mult']), pre = pre, post = post)
             out['n_glitches'][idx], out['glitch_frac'][idx] = ng, fr
         fb, sb, sr = psd_summary(x, dt, f_reduced, valid, **bins)
         _fill(out, 'sxx_binned', idx, fb, sb, n)
@@ -737,8 +738,8 @@ def save_timestream(grp, ts, result, settings, bad = None, limits = None):
     ``bad``, ``bad_reason`` (marked in the overview window),
     ``n_glitches``, ``glitch_frac``, ``sxx_reduced`` (1/Hz, at
     ``f_reduced``), ``sxx_binned`` (1/Hz, at ``f_binned``),
-    ``spar_binned``, ``sper_binned`` (the loop components along and
-    across the loop, normalized units squared per Hz), ``sfactor_reduced``
+    ``spar_binned``, ``sper_binned`` (the loop components parallel and
+    perpendicular to the loop, normalized units squared per Hz), ``sfactor_reduced``
     (10 log10 of their ratio at ``f_reduced``, dB); with
     common-mode removal also ``sxx_reduced_cn``, ``sxx_binned_cn``,
     ``cn_weights`` ((ntones, n_comp)), and ``common_modes/write{k}/``

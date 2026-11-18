@@ -1,6 +1,6 @@
 ---
 title: "VNA screening"
-subtitle: "vna_quick_check, 01_vna_sweep, vna_view, 02_find_resonances, vna_report"
+subtitle: "vna_quick_check, 01_vna_sweep, vna_view, 02_find_resonances"
 ---
 
 # Overview
@@ -15,7 +15,6 @@ started").
 | `01_vna_sweep.py` | Once per device or setup | Full VNA sweep | `vna{k}` |
 | `vna_view.py` | After a sweep | Shows a saved sweep | Nothing |
 | `02_find_resonances.py` | After each sweep | Finds, checks and fits the resonances | `full_sweep_fit`, `resonators{k}` |
-| `vna_report.py` | After `02_find_resonances.py` | Plot, summary and table as plain files | Files in a folder |
 | `export_s21_h5.py` | After `02_find_resonances.py` | The sweep as an s21 h5 file (`f`, `i`, `q`, `fres`), for the resonance-finder tools | One `.h5` file |
 
 ```text
@@ -115,7 +114,7 @@ Runs on the latest sweep (or `--sweep k`), without the CRS:
 |---|---|---|
 | find | The CNN finder (default; needs PyTorch) or the interactive automatic finder (`--finder auto`) | `fres_auto`, `res_finder_auto/` |
 | manual | Check and edit the list in the manual finder window (`--no-manual` skips it) | `fres_manual` |
-| fit | Fits every resonance (overlapping ones together) and the gain, and prints a summary | `full_sweep_fit` |
+| fit | Fits every resonance (double resonances together) and the gain, and prints a summary | `full_sweep_fit` |
 | resonators | The list for tuning, in ascending frequency: fitted fr, Qr where reliable, span factors Qr / `SPAN_LW`, dip depths | `resonators{k}` |
 
 Steps already done are skipped; `--redo <step>` repeats it and those
@@ -146,45 +145,10 @@ failed, fr is the finder's frequency.
 
 `--sweep k`, `--finder auto`, `--no-manual`, `--redo <step>`.
 
-# vna_report.py: results in plain files
-
-Writes to a folder, after `02_find_resonances.py`:
-
-| File | Contents |
-|---|---|
-| `<device>_vna<k>.png` | The gain-removed sweep with the resonances marked; Qi, Qc, phi vs frequency |
-| `<device>_vna<k>_info.txt` | Sweep settings, how the resonances were found and fit, counts, frequency distribution, typical Q, notes |
-| `<device>_vna<k>_resonators.csv` | One row per resonator: fr, Qi, Qc, Qr, amp, phi with errors (NaN where unreliable), flags, `valid_*` |
-
-## Settings
-
-{{settings:vna_report.py}}
-
-| Setting | Meaning |
-|---|---|
-| `OUT_DIR` | Folder the files go in |
-
-## Command line
-
-`--out folder`, `--sweep k`, `--pick` (choose the store in a dialog).
-
-# export_s21_h5.py: the sweep as an h5 file
-
-Writes one screened sweep as `s21_<device>.h5` with datasets `f` (Hz),
-`i`, `q` and `fres` (the fitted resonance frequencies), the format of
-`Z:/s21_full/formatted`. Without `--store` and `--out`, file dialogs
-choose the store and the output; with several sweeps that have fitted
-resonators, a dialog asks which (`--vna k` chooses).
-
-## Command line
-
-`--store`, `--out`, `--vna k`, `--no-gui`.
-
 # Trying it on simulated data
 
 `simulate_store.py` makes a store with a VNA sweep of a simulated device
-and its true parameters. `02_find_resonances.py --store ...` and
-`vna_report.py` then run on it as on real data;
+and its true parameters. `02_find_resonances.py --store ...` then runs on it as on real data;
 `citkid.vna.simulate.compare_to_truth` compares the fits with the truth.
 
 ## Settings

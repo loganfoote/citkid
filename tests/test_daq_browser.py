@@ -193,7 +193,9 @@ def test_attachments(qapp, store, tmp_path):
     qapp.processEvents()
     assert not win.attach_btn.isEnabled()
     win.tabs.setCurrentIndex(3)
-    win.notes_table.setCurrentCell(2, 0)         # tune0
+    rows = {win.notes_table.item(i, 0).text(): i
+            for i in range(win.notes_table.rowCount())}
+    win.notes_table.setCurrentCell(rows['tune0'], 0)
     assert win.attach_btn.isEnabled()
     f = tmp_path / 'wiring.txt'
     f.write_text('photo of the wiring')
@@ -213,6 +215,23 @@ def test_attachments(qapp, store, tmp_path):
     assert win.attach_file(str(g)) == 'attachments/store/other.txt'
     assert win.attachments('') == ['other.txt']
     assert 'attachments' not in os.listdir(store)
+    # Removing: the record goes and the copy is deleted; the button
+    # follows whether the item has files
+    assert win.detach_btn.isEnabled()
+    assert not win.remove_attachment('missing.txt')
+    assert win.remove_attachment('other.txt')
+    assert win.attachments('') == []
+    assert not win.detach_btn.isEnabled()
+    assert not (dev / 'attachments' / 'store' / 'other.txt').exists()
+    assert 'attached' not in win.notes_label.text()
+    win.notes_table.setCurrentCell(rows['tune0'], 0)
+    assert win.detach_btn.isEnabled()
+    assert win.remove_attachment('wiring.txt')
+    assert win.attachments('tune0') == ['other.txt']
+    assert not (dev / rel).exists()
+    assert (dev / 'attachments' / 'tune0' / 'other.txt').exists()
+    assert site.load_attachments(str(dev)) == {
+        'tune0': ['attachments/tune0/other.txt']}
     win.close()
 
 
