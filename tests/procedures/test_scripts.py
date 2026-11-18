@@ -543,10 +543,34 @@ def test_03_tune(tmp_path, monkeypatch, capsys, n_cal):
     assert 'marked bad' in capsys.readouterr().out
     t2 = dl.load_tones(dl.open_store(path)['tune0/tones'])
     assert len(t2['fres']) == n - 2 and first not in t2['res_idxs']
-    dl.clear_tone_mark(root, first, 'test')
+    dl.clear_tone_mark(root, first, 'test', 'test')
     m.main(m.parse_args(argv + ['--redo', 'tones']))
     t = dl.load_tones(dl.open_store(path)['tune0/tones'])
     assert len(t['fres']) == n - 1
+    # A new tuning from tune0's tones: its powers are kept, the plan,
+    # power sweep and power fits are skipped, and only the frequencies
+    # and spans are optimized again, from PREDICT's guess
+    monkeypatch.setattr(m, 'PREDICT', lambda f, q: (f + 5e3, q * 2.))
+    assert m.main(m.parse_args(argv + ['--new', '--port-tune', '0'])) == 1
+    assert calls == ['iq', 'fq', 'fq']
+    root = dl.open_store(path)
+    t1 = root['tune1']
+    assert t1.attrs['ported_powers'] and 'power_sweep' not in t1
+    assert t1.attrs['ported_from'] == dict(store = None, group = 'tune0')
+    t0 = dl.load_tones(root['tune0/tones'])
+    init = dl.load_tones(t1['tones_init'])
+    np.testing.assert_allclose(init['fres'], t0['fres'] + 5e3)
+    np.testing.assert_allclose(init['qres'], t0['qres'] * 2.)
+    np.testing.assert_array_equal(t1['power_choice/ares'][:], t0['ares'])
+    assert not t1['power_choice/fallback'][:].any()
+    np.testing.assert_allclose(t1['fq_sweep/ares'][:], t0['ares'])
+    assert len(dl.load_tones(t1['tones'])['fres']) == len(t0['fres']) - 1
+    assert 'at its powers, frequencies and spans predicted' in \
+        capsys.readouterr().out
+    monkeypatch.setattr(m, 'PREDICT', lambda f, q: (f[:1], q))
+    with pytest.raises(ValueError, match = 'same shape'):
+        m.main(m.parse_args(argv + ['--new', '--port-tune', '1']))
+    monkeypatch.setattr(m, 'PREDICT', None)
     # The tuning ports without its sweeps
     dl.port_tuning(path, 0, tmp_path / 'b.zarr')
     b = dl.open_store(tmp_path / 'b.zarr')

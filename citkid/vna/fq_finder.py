@@ -1045,24 +1045,27 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         if text == "not rejected":
             self._record('clear', 'not rejected in fq_finder')
         else:
-            self._record('bad', self._reject_reasons[ri])
+            self._record('bad', self._reject_reasons[ri], 'global')
         self._update_marks_label()
 
-    def _record(self, kind, text):
+    def _record(self, kind, text, scope = None):
         """
         Write a mark on the current resonator to the store's tone marks
-        (``marks.record``), if the group is in a store.
+        (``marks.record``), if the group is in a store. A rejected tone
+        is bad globally (it never enters the tuned set).
 
         Parameters:
         kind (str): 'bad', 'note' or 'clear'.
         text (str): the reason or note.
+        scope (str or None): 'global' or 'local'. Default None: the
+            stage's default.
 
         Returns:
         written (bool): True if an entry was written.
         """
         root, stage = _marks.registry(self._zg)
         return _marks.record(root, int(self._res_idxs[self._ri]), kind, text,
-                             stage)
+                             stage, scope)
 
     def _add_note(self):
         """
@@ -1088,9 +1091,9 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         """
         Show the current resonator's tone marks (bad reason, notes).
         """
-        root, _ = _marks.registry(self._zg)
+        root, stage = _marks.registry(self._zg)
         self._marks_label.setText(
-            _marks.mark_label(root, int(self._res_idxs[self._ri])))
+            _marks.mark_label(root, int(self._res_idxs[self._ri]), stage))
         self.setFocus()
 
     def _on_reason_edit_finished(self):

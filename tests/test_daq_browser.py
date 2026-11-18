@@ -180,6 +180,49 @@ def test_window(qapp, store):
     assert ('ts1 dark1', 'lights on') in dl.list_notes(root)
 
 
+def test_marks_tab(qapp, store):
+    """
+    The Tone marks tab lists every entry with its scope and says
+    which bad marks are active; the buttons clear the selected mark or
+    change its scope (both as new entries).
+    """
+    root = dl.open_store(store, mode = 'a')
+    dl.add_tone_mark(root, 1, 'bad', 'high noise', 'tune0/power_fits')
+    dl.add_tone_mark(root, 2, 'note', 'fine', 'tune0/power_fits')
+    win = StoreBrowserWindow(store, title = 't')
+    win.tabs.setCurrentWidget(win.marks_table.parentWidget())
+    rows = {win.marks_table.item(i, 0).text() + win.marks_table.item(
+        i, 2).text(): i for i in range(win.marks_table.rowCount())}
+    assert win.marks_table.rowCount() == 2
+    assert '1 active bad marks' in win.marks_label.text()
+    i = rows['1bad (active)']
+    assert win.marks_table.item(i, 3).text() == 'global'
+    assert win.marks_table.item(i, 5).text() == 'tune0'
+    assert win.marks_table.item(rows['2note'], 3).text() == ''
+    # A note: no buttons; an active bad mark: clear, or the other scope
+    win.marks_table.setCurrentCell(rows['2note'], 0)
+    assert not win.clear_mark_btn.isEnabled()
+    win.marks_table.setCurrentCell(i, 0)
+    assert win.clear_mark_btn.isEnabled()
+    assert win.local_mark_btn.isEnabled() and \
+        not win.global_mark_btn.isEnabled()
+    win._on_rescope('local')
+    marks = dl.tone_marks(dl.open_store(store), 1)
+    assert [e['kind'] for e in marks] == ['bad', 'clear', 'bad']
+    assert marks[-1]['scope'] == 'local'
+    assert win.marks_table.rowCount() == 4
+    rows = {win.marks_table.item(i, 2).text() + win.marks_table.item(
+        i, 3).text(): i for i in range(win.marks_table.rowCount())}
+    win.marks_table.setCurrentCell(rows['bad (active)local'], 0)
+    assert win.global_mark_btn.isEnabled()
+    win._on_clear_mark()
+    assert dl.active_bad_marks(dl.open_store(store), 1) == []
+    assert '0 active bad marks, 5 entries' in win.marks_label.text()
+    win.close()
+    # Leave the shared store as it was
+    del dl.open_store(store, mode = 'a')['tone_marks']
+
+
 def test_attachments(qapp, store, tmp_path):
     """
     With a site folder, a file can be attached to the selected item: it

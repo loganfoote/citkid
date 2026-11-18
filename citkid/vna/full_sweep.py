@@ -1200,7 +1200,7 @@ def run_full_sweep_fit(
     FileExistsError: if 'full_sweep_fit' exists and ``overwrite`` is False.
     ValueError: if the sweep has no usable phase.
     """
-    from .. import __version__
+    from .. import CODE_INFO, __version__
     t0 = time.time()
     if isinstance(zarr_grp, (str, os.PathLike)):
         zarr_grp = zarr.open_group(os.path.expanduser(str(zarr_grp)),
@@ -1249,7 +1249,8 @@ def run_full_sweep_fit(
                     n_recovered = info['n_recovered'], gain = info['gain'])
     out.attrs.update(to_jsonable(dict(
         created = time.strftime('%Y-%m-%d %H:%M:%S'),
-        citkid_version = __version__, source = 'fres_manual',
+        citkid_version = __version__, code = CODE_INFO,
+        source = 'fres_manual',
         fit_nonlinear = fit_nonlinear, downward = downward,
         settings = settings, sweep_metrics = metrics, notes = notes,
         range = rinfo['range'],

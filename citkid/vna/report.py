@@ -22,6 +22,7 @@ or wiki pages.
 """
 import os
 import numpy as np
+from .gain import cable_delay
 import pandas as pd
 from .. import daq_layout as dl
 from .full_sweep import parameter_masks, resonator_list
@@ -72,7 +73,7 @@ def resonator_table(fit_grp):
     table.insert(0, 'res_idx', np.arange(len(table)))
     return table.reset_index(drop = True)
 
-def sweep_info_text(root, k, table):
+def sweep_info_text(root, k, table, cable_delay_s = None):
     """
     Describe a VNA sweep and its screening in plain text.
 
@@ -80,6 +81,8 @@ def sweep_info_text(root, k, table):
     root (zarr.Group): the store root.
     k (int): sweep index.
     table (pd.DataFrame): ``resonator_table``.
+    cable_delay_s (float or None): the cable delay in seconds, from
+        the gain phase (``gain.cable_delay``). Default None: not listed.
 
     Returns:
     text (str): the description.
@@ -143,6 +146,9 @@ def sweep_info_text(root, k, table):
     if banks.get('n_found'):
         lines.append('  Banks: ' + ', '.join(
             f"{key.replace('_', ' ')} {val}" for key, val in banks.items()))
+    if cable_delay_s is not None and np.isfinite(cable_delay_s):
+        lines.append(f'  Cable delay: {cable_delay_s * 1e9:.2f} ns (line '
+                     'fit to the gain phase)')
     report = fa.get('report')
     if report:
         lines += ['', 'Summary (from the fit)'] + \
@@ -191,14 +197,16 @@ def _dip_points(f, ydb, fr, Qr, half_lw = 1.):
     return x, y
 
 def plot_vna_results(f, y, table, title = '', n_bins = 6000,
-                     clip = (0.5, 99.5)):
+                     clip = (0.5, 99.5), gain = None):
     """
-    Plot a screened VNA sweep: the sweep (min/max envelope per bin, so
-    narrow dips stay visible) with the resonances marked, and Qi, Qc, and
-    phi vs frequency on a shared logarithmic frequency axis, limited to
-    the resonances' range (5% margin) if there are any. Unreliable
-    values are NaN in ``table`` and left out; Qi and Qc outside the
-    ``clip`` percentiles are left out of the plot (not the data).
+    Plot a screened VNA sweep: the gain profile (its amplitude in dB and
+    its phase with the cable-delay line, ``gain.cable_delay``) if
+    given, the sweep (min/max envelope per bin, so narrow dips stay
+    visible) with the resonances marked, and Qi, Qc, and phi vs
+    frequency on a shared logarithmic frequency axis, limited to the
+    resonances' range (5% margin) if there are any. Unreliable values
+    are NaN in ``table`` and left out; Qi and Qc outside the ``clip``
+    percentiles are left out of the plot (not the data).
 
     Parameters:
     f (np.array): frequencies in Hz, ascending.
@@ -208,6 +216,8 @@ def plot_vna_results(f, y, table, title = '', n_bins = 6000,
     n_bins (int): plotting bins for the sweep. Default 6000.
     clip (tuple): percentiles kept in the Qi and Qc panels. Default
         (0.5, 99.5).
+    gain (np.array or None): complex gain at ``f``, for the gain panel.
+        Default None: no gain panel.
 
     Returns:
     fig (matplotlib.figure.Figure): the figure.
@@ -218,8 +228,28 @@ def plot_vna_results(f, y, table, title = '', n_bins = 6000,
     db = 20 * np.log10(np.maximum(np.abs(y), 1e-12))
     idx = np.unique(np.searchsorted(f, np.geomspace(f[0], f[-1], n_bins)))
     idx = idx[idx < len(f)]
-    fig, axs = plt.subplots(4, 1, figsize = (14, 11), sharex = True,
-                            gridspec_kw = dict(height_ratios = (2, 1, 1, 1)))
+    ratios = (2, 1, 1, 1) if gain is None else (1, 2, 1, 1, 1)
+    fig, axs = plt.subplots(len(ratios), 1, sharex = True,
+                            figsize = (14, 11 if gain is None else 13),
+                            gridspec_kw = dict(height_ratios = ratios))
+    if gain is not None:
+        ax = axs[0]
+        tau, phase, phase_fit = cable_delay(f, gain)
+        gdb = 20 * np.log10(np.maximum(np.abs(gain), 1e-12))
+        ax.plot(f[idx] / 1e9, gdb[idx], color = c(0), lw = 1.,
+                label = '|gain|')
+        ax.set_ylabel('|gain| (dB)', color = c(0))
+        ax.grid(True, alpha = 0.3)
+        ax2 = ax.twinx()
+        ax2.plot(f[idx] / 1e9, phase[idx], color = c(3), lw = 1.,
+                 label = 'gain phase')
+        ax2.plot(f[idx] / 1e9, phase_fit[idx], color = c(3), lw = 1.,
+                 ls = '--', label = f'line: cable delay {tau * 1e9:.2f} ns')
+        ax2.set_ylabel('phase (rad)', color = c(3))
+        lines = ax.get_lines() + ax2.get_lines()
+        ax.legend(lines, [l.get_label() for l in lines], loc = 'best',
+                  fontsize = 9)
+        axs = axs[1:]
     ax = axs[0]
     lo, hi = np.minimum.reduceat(db, idx), np.maximum.reduceat(db, idx)
     x = f[idx] / 1e9
@@ -286,7 +316,9 @@ def export_vna_report(root, out_dir, k = None, dpi = 150):
     dpi (int): plot resolution. Default 150.
 
     Returns:
-    paths (dict): ``plot``, ``info``, ``csv``: the files written.
+    paths (dict): ``plot``, ``info``, ``csv``, ``gain_csv`` (frequency,
+        gain in dB, gain phase and its cable-delay line, in rad): the
+        files written.
 
     Raises:
     KeyError: if the sweep has no full sweep fit (run the
@@ -318,13 +350,18 @@ def export_vna_report(root, out_dir, k = None, dpi = 150):
     title = (f'{device}: vna{k}, {len(table)} resonances'
              + ('' if checked is not False else ' (not checked by hand)'))
     backend = matplotlib.get_backend()
-    fig = plot_vna_results(f, z / gain, table, title)
+    fig = plot_vna_results(f, z / gain, table, title, gain = gain)
     fig.savefig(stem + '.png', dpi = dpi)
     plt.close(fig)
     if backend != matplotlib.get_backend():
         matplotlib.use(backend)
+    tau, phase, phase_fit = cable_delay(gf, gz)
     with open(stem + '_info.txt', 'w', encoding = 'utf-8') as fh:
-        fh.write(sweep_info_text(root, k, table))
+        fh.write(sweep_info_text(root, k, table, cable_delay_s = tau))
     table.to_csv(stem + '_resonators.csv', index = False)
+    pd.DataFrame(dict(f = gf, gain_db = 20 * np.log10(np.abs(gz)),
+                      phase = phase, phase_fit = phase_fit)).to_csv(
+        stem + '_gain.csv', index = False)
     return dict(plot = stem + '.png', info = stem + '_info.txt',
-                csv = stem + '_resonators.csv')
+                csv = stem + '_resonators.csv',
+                gain_csv = stem + '_gain.csv')

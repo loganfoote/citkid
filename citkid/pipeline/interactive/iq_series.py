@@ -1945,7 +1945,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             return
         self._mark_series_bad(range(self._n_series))
         if choice == 'remove':
-            self._record('bad', text or 'every fit point marked bad')
+            self._record('bad', text or 'every fit point marked bad',
+                         'global')
         elif text:
             self._record('note', text)
 
@@ -1967,22 +1968,26 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         with a reason (the Mark Tone Bad button, Ctrl+M). It is then
         removed from the tuned set.
         """
-        reason = self._ask_reason()
+        reason, scope = _marks.reason_and_scope(self._ask_reason(),
+                                                'global')
         if reason is None:
             return
-        if self._record('bad', reason):
+        if self._record('bad', reason, scope):
             self._apply_status_label.setText('Tone marked bad')
         else:
             self._apply_status_label.setText('No tone marks (no store)')
 
     def _ask_reason(self):
         """
-        Ask why the current resonator is bad (``marks.ask_reason``).
+        Ask why the current resonator is bad (``marks.ask_reason``),
+        and whether the mark is global (default: the tuned set and
+        everything after leave the tone out) or local.
 
         Returns:
-        reason (str or None): the reason, or None if cancelled.
+        choice (tuple or None): (reason, scope), or None if cancelled.
         """
-        return _marks.ask_reason(self, f'Mark res {self._res_idx()} bad')
+        return _marks.ask_reason(self, f'Mark res {self._res_idx()} bad',
+                                 scope = 'global')
 
     def _add_note(self):
         """
@@ -2016,7 +2021,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         except Exception:
             return None
 
-    def _record(self, kind, text):
+    def _record(self, kind, text, scope = None):
         """
         Write a mark on the current resonator to the store's tone marks
         (``marks.record``), if the datasets are in a store.
@@ -2024,12 +2029,15 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         Parameters:
         kind (str): 'bad', 'note' or 'clear'.
         text (str): the reason or note.
+        scope (str or None): 'global' or 'local'. Default None: the
+            stage's default (global).
 
         Returns:
         written (bool): True if an entry was written.
         """
         root, stage = _marks.registry(getattr(self._ARs[0].DS, 'root', None))
-        return _marks.record(root, self._res_idx(), kind, text, stage)
+        return _marks.record(root, self._res_idx(), kind, text, stage,
+                             scope)
 
     def _mark_bad_above(self):
         """

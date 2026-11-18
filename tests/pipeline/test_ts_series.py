@@ -604,7 +604,8 @@ def test_mark_all_series_bad_asks_keep_or_remove(qt_app, monkeypatch):
     win, _ = _make_window(qt_app, monkeypatch)
     win._mark_series_bad = MagicMock()
     recorded = []
-    win._record = lambda kind, text: recorded.append((kind, text)) or True
+    win._record = lambda kind, text, scope = None: \
+        recorded.append((kind, text)) or True
     win._ask_all_bad = lambda: (None, '')
     win._mark_all_series_bad()
     win._mark_series_bad.assert_not_called()

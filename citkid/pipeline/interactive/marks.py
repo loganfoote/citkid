@@ -13,9 +13,16 @@ can stand it in.
 from pyqtgraph.Qt import QtWidgets
 from ...daq_layout import BAD_REASONS
 
-def ask_reason(parent, title, reasons = BAD_REASONS, label = 'Reason:'):
+GLOBAL_LABEL = 'Also leave the tone out of every later step (global)'
+
+def ask_reason(
+    parent, title, reasons = BAD_REASONS, label = 'Reason:', scope = None,
+    forced = False
+):
     """
-    Ask why a tone is bad: one of some reasons, or typed.
+    Ask why a tone is bad: one of some reasons, or typed; with a scope,
+    also whether the mark is global (the tone leaves every later step
+    of the tuning) or local to this step's results.
 
     Parameters:
     parent (QWidget or None): the dialog's parent.
@@ -23,9 +30,17 @@ def ask_reason(parent, title, reasons = BAD_REASONS, label = 'Reason:'):
     reasons (sequence of str): the choices offered. Default
         ``daq_layout.BAD_REASONS``.
     label (str): the prompt. Default 'Reason:'.
+    scope (str or None): the default scope, 'global' or 'local', shown
+        as a box. Default None: no box, and only the reason is returned.
+    forced (bool): If True, the box is checked (global) and cannot be
+        changed, e.g. where the tone's outputs become NaN. Default
+        False.
 
     Returns:
-    reason (str or None): the reason, or None if cancelled.
+    if scope is None:
+        reason (str or None): the reason, or None if cancelled.
+    else:
+        choice (tuple or None): (reason, scope), or None if cancelled.
     """
     dialog = QtWidgets.QDialog(parent)
     dialog.setWindowTitle(title)
@@ -37,6 +52,15 @@ def ask_reason(parent, title, reasons = BAD_REASONS, label = 'Reason:'):
     lay.addWidget(box)
     box.setFocus()
     box.lineEdit().selectAll()
+    global_box = None
+    if scope is not None:
+        global_box = QtWidgets.QCheckBox(GLOBAL_LABEL)
+        global_box.setChecked(forced or scope == 'global')
+        global_box.setEnabled(not forced)
+        if forced:
+            global_box.setToolTip('The outputs become NaN here, so the '
+                                  'later steps cannot use the tone')
+        lay.addWidget(global_box)
     buttons = QtWidgets.QDialogButtonBox(
         QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
     buttons.accepted.connect(dialog.accept)
@@ -44,7 +68,30 @@ def ask_reason(parent, title, reasons = BAD_REASONS, label = 'Reason:'):
     lay.addWidget(buttons)
     if dialog.exec_() != QtWidgets.QDialog.Accepted:
         return None
-    return box.currentText().strip()
+    reason = box.currentText().strip()
+    if global_box is None:
+        return reason
+    return reason, 'global' if global_box.isChecked() else 'local'
+
+def reason_and_scope(answer, default):
+    """
+    Split a reason dialog's answer into the reason and the scope: the
+    answer is (reason, scope) from ``ask_reason`` with a scope, or a
+    bare reason (e.g. a stand-in in tests), which gets the default.
+
+    Parameters:
+    answer (tuple, str or None): the dialog's answer.
+    default (str): the scope of a bare reason.
+
+    Returns:
+    reason (str or None): the reason (None if cancelled).
+    scope (str): the scope.
+    """
+    if answer is None:
+        return None, default
+    if isinstance(answer, tuple):
+        return answer[0], answer[1]
+    return answer, default
 
 def ask_note(parent, title, text = ''):
     """
@@ -146,11 +193,12 @@ def registry(grp):
         return None, ''
     return root, str(grp.path)
 
-def record(root, res_idx, kind, text, stage):
+def record(root, res_idx, kind, text, stage, scope = None):
     """
     Write a mark to the registry unless it repeats the resonator's last
     entry (the same kind, text and stage), so a window that saves on
-    every move does not pile up copies.
+    every move does not pile up copies. A 'clear' is written only if
+    the stage has an active bad mark.
 
     Parameters:
     root (zarr.Group or None): the store root (None: nothing written).
@@ -158,6 +206,8 @@ def record(root, res_idx, kind, text, stage):
     kind (str): 'bad', 'note' or 'clear'.
     text (str): the reason or note.
     stage (str): the group the user was working in.
+    scope (str or None): 'global' or 'local'. Default None: the
+        stage's default; a clear takes the active mark's.
 
     Returns:
     written (bool): True if an entry was written.
@@ -168,21 +218,29 @@ def record(root, res_idx, kind, text, stage):
     marks = dl.tone_marks(root, res_idx)
     text = str(text).strip()
     if marks and marks[-1]['kind'] == kind and marks[-1]['text'] == text \
-            and marks[-1]['stage'] == stage:
+            and marks[-1]['stage'] == stage and \
+            (scope is None or marks[-1].get('scope') == scope):
         return False
-    if kind == 'clear' and int(res_idx) not in dl.bad_tones(root):
-        return False
-    dl.add_tone_mark(root, res_idx, kind, text, stage)
+    if kind == 'clear':
+        if not any(e.get('stage', '') == stage for e in
+                   dl.active_bad_marks(root, res_idx)):
+            return False
+        dl.clear_tone_mark(root, res_idx, text, stage, scope)
+        return True
+    dl.add_tone_mark(root, res_idx, kind, text, stage, scope)
     return True
 
-def mark_label(root, res_idx):
+def mark_label(root, res_idx, stage = None):
     """
     Describe a resonator's registry state in a few words, for a status
-    line: its bad reason, or how many notes it has.
+    line: its bad reason (the mark that applies at the stage), or how
+    many notes it has.
 
     Parameters:
     root (zarr.Group or None): the store root (None: no registry).
     res_idx (int): resonator index.
+    stage (str or None): the stage asking (``daq_layout.bad_tones``).
+        Default None: any global mark.
 
     Returns:
     text (str): e.g. 'BAD: double resonance (tune0/power_fits)',
@@ -191,7 +249,7 @@ def mark_label(root, res_idx):
     from ... import daq_layout as dl
     if root is None:
         return ''
-    bad = dl.bad_tones(root).get(int(res_idx))
+    bad = dl.bad_tones(root, stage).get(int(res_idx))
     notes = [e for e in dl.tone_marks(root, res_idx) if e['kind'] == 'note']
     parts = []
     if bad is not None:

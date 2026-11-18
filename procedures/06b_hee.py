@@ -353,7 +353,7 @@ def main(args):
                            f'saved result hee/{name} to continue')
         events, mode = pick_events(root, ts, data, name, settings, args)
         print(f"{len(events['t0'])} events from {mode}")
-        marked = pf.apply_tone_marks(root, ts, thresholds)
+        marked = pf.apply_tone_marks(root, ts, thresholds, f'hee/{name}')
         if marked:
             print(f"{len(marked)} tones marked bad in the store's tone "
                   f'marks are left out: res {marked}')

@@ -36,7 +36,7 @@ import zipfile
 from datetime import datetime
 import numpy as np
 import zarr
-from . import __version__ as citkid_version
+from . import CODE_INFO, __version__ as citkid_version
 from .zarr_util import list_sets, set_name, to_jsonable
 
 LAYOUT_VERSION = 1
@@ -107,7 +107,8 @@ def create_store(path, device, cooldown, setup = None):
     root.attrs.update(to_jsonable(dict(
         layout_version = LAYOUT_VERSION, device = str(device),
         cooldown = str(cooldown), created = _now(),
-        citkid_version = citkid_version, setup = dict(setup or {}))))
+        citkid_version = citkid_version, code = CODE_INFO,
+        setup = dict(setup or {}))))
     return root
 
 def store_path(data_dir, cooldown, device, suffix = ''):
@@ -233,7 +234,9 @@ def latest_index(grp, prefix):
 
 def create_group(parent, name, kind, attrs = None, overwrite = False):
     """
-    Create a layout group with its ``kind`` and creation attributes.
+    Create a layout group with its ``kind`` and creation attributes
+    (``created``, ``citkid_version`` and ``code``: the commit, from
+    ``citkid.code_info``).
 
     Parameters:
     parent (zarr.Group): parent group.
@@ -265,7 +268,7 @@ def create_group(parent, name, kind, attrs = None, overwrite = False):
     grp = parent.create_group(name)
     grp.attrs.update(to_jsonable(dict(
         kind = kind, created = _now(), citkid_version = citkid_version,
-        **(attrs or {}))))
+        code = CODE_INFO, **(attrs or {}))))
     return grp
 
 def require_group(parent, name, kind):
@@ -1041,9 +1044,19 @@ def describe_stream_runs(root, tuning = None):
 ################################################################################
 # The tone-marks registry at the store root: per resonator, what the user
 # said about it at any stage (bad with a reason, a note, or clearing a
-# bad mark), in order
+# bad mark), in order. A bad mark has a scope: 'local' leaves the tone
+# out of that stage's results only; 'global' also out of every later
+# stage of the same tuning (the levels below; the analyses of one
+# tuning, 06a, 06b and 07, are one level, so a global mark in any of
+# them applies to the others)
 TONE_MARKS_GROUP = 'tone_marks'
 MARK_KINDS = ('bad', 'note', 'clear')
+MARK_SCOPES = ('global', 'local')
+# Stage levels by the stage path's first part: the tuning, the stream
+# calibrations, the analyses. Anything else (e.g. the store browser's
+# marks, stage '') is level 0 and applies everywhere
+MARK_LEVELS = {'tune': 1, 'ts_cal': 2, 'photons': 3, 'hee': 3,
+               'ts_psd': 3}
 # Reasons offered when a tone is marked bad (any text can be typed)
 BAD_REASONS = ('double resonance', 'no resonance', 'weird pulse shape',
                'low or no pulses', 'high noise', 'bad fit', 'other')
@@ -1177,7 +1190,78 @@ def tone_marks_group(root, create = False):
     return create_group(root, TONE_MARKS_GROUP, 'decision',
                         attrs = dict(marks = {}))
 
-def add_tone_mark(root, res_idx, kind, text = '', stage = ''):
+def mark_level(stage):
+    """
+    Return a stage's level (``MARK_LEVELS``): 1 for a tuning's groups,
+    2 for a stream calibration's, 3 for the analyses (photons, hee,
+    ts_psd), 0 for anything else.
+
+    Parameters:
+    stage (str): the stage path, e.g. 'tune0/power_fits'.
+
+    Returns:
+    level (int): the level.
+    """
+    head = str(stage).split('/')[0]
+    for prefix, level in MARK_LEVELS.items():
+        if head == prefix or head.startswith(prefix) and \
+                head[len(prefix):].isdigit():
+            return level
+    return 0
+
+def default_mark_scope(stage):
+    """
+    Return the scope a bad mark gets by default at a stage: 'local' at
+    the analyses (level 3, not needed by later steps), 'global' at the
+    stages later steps build on.
+
+    Parameters:
+    stage (str): the stage path.
+
+    Returns:
+    scope (str): 'global' or 'local'.
+    """
+    return 'local' if mark_level(stage) == 3 else 'global'
+
+def mark_tuning(root, stage):
+    """
+    Find the tuning a stage belongs to: the tuning itself, the tuning
+    of a stream calibration's runs (its ``selection``), or of a
+    result's source sweep (its ``source`` attribute).
+
+    Parameters:
+    root (zarr.Group or None): the store root (None: unknown).
+    stage (str): the stage path.
+
+    Returns:
+    tuning (str or None): e.g. 'tune0', or None if it cannot be told.
+    """
+    parts = str(stage).split('/')
+    if mark_level(stage) == 1:
+        return parts[0]
+    if root is None or not parts[0] or parts[0] not in root:
+        return None
+    try:
+        if mark_level(stage) == 2:
+            selection = root[parts[0]].attrs.get('selection') or []
+            if selection:
+                return select_streams(root, **selection[0])[1]['tuning']
+            return None
+        grp = root
+        for part in parts:
+            if part not in grp:
+                break
+            grp = grp[part]
+            source = grp.attrs.get('source')
+            if isinstance(source, str) and mark_level(source) == 1:
+                return source.split('/')[0]
+    except Exception:
+        return None
+    return None
+
+def add_tone_mark(
+    root, res_idx, kind, text = '', stage = '', scope = None, tuning = None
+):
     """
     Record what the user said about a resonator: mark it bad with a
     reason, add a note (the tone is kept), or clear its bad mark. Entries
@@ -1190,38 +1274,129 @@ def add_tone_mark(root, res_idx, kind, text = '', stage = ''):
     text (str): the reason or note. Default ''.
     stage (str): the group the user was working in, e.g.
         'tune0/power_fits', 'ts_cal0/set0', 'photons/dark'. Default ''.
+    scope (str or None): 'local' (this stage's results only) or
+        'global' (this stage and every later one of the tuning). Default
+        None: ``default_mark_scope(stage)``; a 'clear' clears the mark
+        of this scope at this stage.
+    tuning (str or None): the tuning the stage belongs to. Default
+        None: ``mark_tuning``.
 
     Returns:
-    entry (dict): the entry written: 'kind', 'text', 'stage', 'created'.
+    entry (dict): the entry written: 'kind', 'text', 'stage', 'scope',
+        'tuning', 'created'.
 
     Raises:
-    ValueError: if ``kind`` is unknown.
+    ValueError: if ``kind`` or ``scope`` is unknown.
     """
     if kind not in MARK_KINDS:
         raise ValueError(f'kind must be one of {MARK_KINDS}, not {kind!r}')
+    if scope is None:
+        scope = default_mark_scope(stage)
+    if scope not in MARK_SCOPES:
+        raise ValueError(f'scope must be one of {MARK_SCOPES}, not '
+                         f'{scope!r}')
+    if tuning is None:
+        tuning = mark_tuning(root, stage)
     grp = tone_marks_group(root, create = True)
     marks = dict(grp.attrs.get('marks', {}))
     entry = dict(kind = kind, text = str(text).strip(), stage = str(stage),
-                 created = _now())
+                 scope = scope, tuning = tuning, created = _now())
     key = str(int(res_idx))
     marks[key] = list(marks.get(key, [])) + [entry]
     grp.attrs['marks'] = marks
     return entry
 
-def clear_tone_mark(root, res_idx, text = '', stage = ''):
+def mark_scope(entry):
     """
-    Clear a resonator's bad mark (an entry of kind 'clear').
+    Return an entry's scope, inferring it for entries written before
+    scopes existed (local at the analyses, global elsewhere).
+
+    Parameters:
+    entry (dict): a registry entry.
+
+    Returns:
+    scope (str): 'global' or 'local'.
+    """
+    return entry.get('scope') or default_mark_scope(entry.get('stage', ''))
+
+def active_bad_marks(root, res_idx):
+    """
+    Return a resonator's bad marks not cleared since: a 'clear' entry
+    clears the bad mark of its own stage and scope (an entry without a
+    scope, from before scopes existed, clears every mark of its stage).
+
+    Parameters:
+    root (zarr.Group): the store root.
+    res_idx (int): resonator index.
+
+    Returns:
+    active (list of dict): the bad entries, oldest first.
+    """
+    active = {}
+    for e in tone_marks(root, res_idx):
+        key = (e.get('stage', ''), mark_scope(e))
+        if e['kind'] == 'bad':
+            active.pop(key, None)
+            active[key] = e
+        elif e['kind'] == 'clear':
+            if e.get('scope'):
+                active.pop(key, None)
+            else:
+                for k in [k for k in active if k[0] == key[0]]:
+                    del active[k]
+    return list(active.values())
+
+def clear_tone_mark(root, res_idx, text = '', stage = '', scope = None):
+    """
+    Clear a resonator's bad mark at a stage (an entry of kind 'clear').
 
     Parameters:
     root (zarr.Group): the store root (writable).
     res_idx (int): resonator index.
     text (str): why. Default ''.
-    stage (str): the group the user was working in. Default ''.
+    stage (str): the stage of the mark to clear. Default ''.
+    scope (str or None): the scope of the mark to clear. Default None:
+        the scope of the stage's active bad mark, if any, else the
+        stage's default.
 
     Returns:
     entry (dict): the entry written.
     """
-    return add_tone_mark(root, res_idx, 'clear', text, stage)
+    if scope is None:
+        at = [e for e in active_bad_marks(root, res_idx)
+              if e.get('stage', '') == str(stage)]
+        scope = mark_scope(at[-1]) if at else None
+    return add_tone_mark(root, res_idx, 'clear', text, stage, scope)
+
+def rescope_tone_mark(root, res_idx, created, scope):
+    """
+    Change the scope of an active bad mark: its old scope is cleared
+    and the mark written again at its stage with the new scope (the
+    history keeps both).
+
+    Parameters:
+    root (zarr.Group): the store root (writable).
+    res_idx (int): resonator index.
+    created (str): the mark's ``created`` time (identifies it).
+    scope (str): 'global' or 'local'.
+
+    Returns:
+    entry (dict): the new bad entry.
+
+    Raises:
+    KeyError: if no active bad mark was created then.
+    """
+    at = [e for e in active_bad_marks(root, res_idx)
+          if e.get('created') == created]
+    if not at:
+        raise KeyError(f'res {res_idx} has no active bad mark of {created}')
+    e = at[-1]
+    if mark_scope(e) == scope:
+        return e
+    add_tone_mark(root, res_idx, 'clear', f'scope changed to {scope}',
+                  e.get('stage', ''), mark_scope(e), e.get('tuning'))
+    return add_tone_mark(root, res_idx, 'bad', e.get('text', ''),
+                         e.get('stage', ''), scope, e.get('tuning'))
 
 def tone_marks(root, res_idx = None):
     """
@@ -1241,26 +1416,40 @@ def tone_marks(root, res_idx = None):
         return list(marks.get(str(int(res_idx)), []))
     return {int(k): list(v) for k, v in marks.items()}
 
-def bad_tones(root):
+def bad_tones(root, stage = None, tuning = None):
     """
-    Return the resonators marked bad and not cleared since.
+    Return the resonators marked bad for a stage and not cleared since:
+    the local marks of that stage, and the global marks of its level or
+    an earlier one within the same tuning (a mark or a stage whose
+    tuning is unknown matches any).
 
     Parameters:
     root (zarr.Group): the store root.
+    stage (str or None): the stage asking, e.g. 'tune0/tones',
+        'photons/dark'. Default None: every global mark, of any stage
+        and tuning (e.g. for the store browser).
+    tuning (str or None): the stage's tuning. Default None:
+        ``mark_tuning``.
 
     Returns:
-    bad (dict): res_idx (int): the latest 'bad' entry.
+    bad (dict): res_idx (int): the latest bad entry that applies.
     """
+    if stage is not None and tuning is None:
+        tuning = mark_tuning(root, stage)
+    level = None if stage is None else mark_level(stage)
     out = {}
-    for r, entries in tone_marks(root).items():
-        latest = None
-        for e in entries:
-            if e['kind'] == 'bad':
-                latest = e
-            elif e['kind'] == 'clear':
-                latest = None
-        if latest is not None:
-            out[r] = latest
+    for r in tone_marks(root):
+        for e in active_bad_marks(root, r):
+            if mark_scope(e) == 'local':
+                ok = stage is not None and e.get('stage', '') == str(stage)
+            elif stage is None:
+                ok = True
+            else:
+                ok = mark_level(e.get('stage', '')) <= level and (
+                    e.get('tuning') is None or tuning is None or
+                    e.get('tuning') == tuning)
+            if ok:
+                out[r] = e
     return out
 
 def bad_reason(entry):
@@ -1271,10 +1460,12 @@ def bad_reason(entry):
     entry (dict): a 'bad' entry (``bad_tones``).
 
     Returns:
-    text (str): e.g. 'double resonance (tune0/power_fits)'.
+    text (str): e.g. 'double resonance (tune0/power_fits)', with
+        ', local' for a local mark.
     """
     stage = f" ({entry['stage']})" if entry.get('stage') else ''
-    return (entry.get('text') or 'no reason given') + stage
+    return (entry.get('text') or 'no reason given') + stage + (
+        ', local' if mark_scope(entry) == 'local' else '')
 
 def describe_tone_marks(root, res_idxs = None):
     """
@@ -1292,13 +1483,14 @@ def describe_tone_marks(root, res_idxs = None):
     keys = sorted(marks) if res_idxs is None else \
         [int(r) for r in res_idxs if int(r) in marks]
     bad = bad_tones(root)
-    lines = [f'Tone marks ({len(bad)} resonators bad, {len(marks)} with '
-             'marks or notes):']
+    lines = [f'Tone marks ({len(bad)} resonators bad globally, '
+             f'{len(marks)} with marks or notes):']
     for r in keys:
         lines.append(f'  res {r}' + (' (bad)' if r in bad else ''))
         for e in marks[r]:
             where = f" at {e['stage']}" if e.get('stage') else ''
-            lines.append(f"    {e['created']} {e['kind']}{where}: "
+            scope = f' ({mark_scope(e)})' if e['kind'] != 'note' else ''
+            lines.append(f"    {e['created']} {e['kind']}{scope}{where}: "
                          f"{e.get('text') or '-'}")
     if len(lines) == 1:
         lines.append('  none')
@@ -1668,7 +1860,7 @@ def port_tuning(src, tune, dst, cooldown = None, setup = None):
         for key in RESONATOR_ARRAYS:
             write_array(grp, key, res[key])
     ported = dict(store = src_path, group = name, time = _now(),
-                  citkid_version = citkid_version)
+                  citkid_version = citkid_version, code = CODE_INFO)
     new_tune, k = new_tuning(dst_root, dst_res,
                              attrs = dict(ported_from = ported))
     tones = load_tones(src_tune['tones'])

@@ -205,28 +205,45 @@ def describe_results(root):
         lines.append('  none')
     return '\n'.join(lines)
 
-def apply_tone_marks(root, ts, thresholds):
+def apply_tone_marks(root, ts, thresholds, stage = None):
     """
-    Mark the tones the store's tone-marks registry says are bad
-    (``daq_layout.bad_tones``) bad in a result's thresholds, with the
-    registry's reason, unless they are marked already.
+    Mark the tones the store's tone-marks registry says are bad for a
+    result (``daq_layout.bad_tones``: the global marks of its tuning
+    and the local marks of its stage) bad in the result's thresholds,
+    with the registry's reason, unless they are marked already.
 
     Parameters:
     root (zarr.Group): the store root.
-    ts (dict): the timestream.
+    ts (dict): the timestream (its ``source`` gives the tuning).
     thresholds (Thresholds or TailThresholds): the thresholds (changed in
         place).
+    stage (str or None): the result's stage, e.g. 'photons/dark'.
+        Default None: every global mark.
 
     Returns:
     marked (list of int): the resonators marked by this call.
     """
-    bad = dl.bad_tones(root)
+    bad = dl.bad_tones(root, stage, tuning = timestream_tuning(ts))
     marked = []
     for r in ts['res_idxs'].tolist():
         if int(r) in bad and not thresholds.is_bad(r):
             thresholds.set_bad(r, dl.bad_reason(bad[int(r)]))
             marked.append(int(r))
     return marked
+
+def timestream_tuning(ts):
+    """
+    Return the tuning a timestream was taken with, from its source
+    sweep.
+
+    Parameters:
+    ts (dict): the timestream (``list_timestreams``).
+
+    Returns:
+    tuning (str or None): e.g. 'tune0', or None if unknown.
+    """
+    group = str((ts.get('source') or {}).get('group', ''))
+    return group.split('/')[0] if dl.mark_level(group) == 1 else None
 
 def describe_result(grp):
     """

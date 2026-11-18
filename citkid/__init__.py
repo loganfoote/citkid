@@ -50,3 +50,54 @@ else:
         __version__ = version("citkid")
     except PackageNotFoundError:  # pragma: no cover
         __version__ = "0.0"
+
+
+def code_info(package_dir = None):
+    """
+    Describe the citkid code in use: its version and, in a git
+    checkout, the commit it runs from. Saved with every group the DAQ
+    and analysis steps create (``daq_layout``), since the version
+    number alone does not tell the code apart while it changes.
+
+    Parameters:
+    package_dir (str or None): the folder to ask git about. None
+        (default): citkid's own folder.
+
+    Returns:
+    info (dict): ``version`` (``__version__``); ``commit`` (the full
+        hash), ``branch``, ``commit_date`` (ISO 8601) and ``dirty``
+        (True if tracked files are modified) when the folder is in a
+        git checkout with git installed, else None each.
+    """
+    import subprocess
+    folder = _os.path.dirname(_os.path.abspath(__file__)) \
+        if package_dir is None else str(package_dir)
+    info = dict(version = __version__, commit = None, branch = None,
+                commit_date = None, dirty = None)
+
+    def git(*args):
+        """
+        Run a git command in the folder.
+
+        Parameters:
+        *args (str): the arguments after ``git``.
+
+        Returns:
+        out (str): its output, stripped.
+        """
+        out = subprocess.run(['git', '-C', folder, *args], check = True,
+                             capture_output = True, timeout = 10)
+        return out.stdout.decode('utf-8', 'replace').strip()
+
+    try:
+        info['commit'] = git('rev-parse', 'HEAD')
+        info['branch'] = git('rev-parse', '--abbrev-ref', 'HEAD')
+        info['commit_date'] = git('log', '-1', '--format=%cI')
+        info['dirty'] = bool(git('status', '--porcelain',
+                                 '--untracked-files=no'))
+    except Exception:
+        pass
+    return info
+
+
+CODE_INFO = code_info()

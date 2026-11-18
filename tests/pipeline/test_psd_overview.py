@@ -134,7 +134,7 @@ def test_window(qapp):
     assert win.bad[107] == 'high noise'
     assert win.curves[0].getData()[1].sum() == n_hist - 1
     assert 7 in win.outside_limits()
-    assert set(dl.bad_tones(root)) == {107}
+    assert set(dl.bad_tones(root, 'ts_psd0/timestream0')) == {107}
     assert dl.tone_marks(root, 107)[0]['stage'] == 'ts_psd0/timestream0'
     assert win.status.text().startswith('BAD: high noise')
     assert win.bad_btn.text().startswith('Clear')

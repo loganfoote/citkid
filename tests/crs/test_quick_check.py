@@ -199,6 +199,16 @@ def test_window_sweeps_on_connect(qapp, tmp_path):
     # Band edges are marked on both plots
     assert len(win._band_lines) == 2 * (len(bands['chunk_ncos']) - 1)
     assert win.sweep_btn.isEnabled() and win.save_btn.isEnabled()
+    # R (outside a box) fits the plots to the data again
+    from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
+    vb = win.mag_plot.getViewBox()
+    vb.enableAutoRange(y = False)
+    vb.setYRange(-1., 1.)
+    assert not vb.autoRangeEnabled()[1]
+    win.setFocus()
+    QtWidgets.QApplication.sendEvent(win, QtGui.QKeyEvent(
+        QtCore.QEvent.KeyPress, QtCore.Qt.Key_R, QtCore.Qt.NoModifier))
+    assert vb.autoRangeEnabled()[1]
     assert win.save_csv(tmp_path / 'p.csv')
     saved = np.genfromtxt(tmp_path / 'p.csv', delimiter = ',', names = True)
     assert np.allclose(saved['f'], f, rtol = 0, atol = 1e-6)
@@ -342,18 +352,16 @@ def test_window_modules(qapp):
                            pts_per_lw = 1.)
     wait_for(lambda: win.crs is not None)
     assert calls == [[1]] and win.modules.text() == '1'
-    # Other modules: reconnect
-    win.modules.setText('1, 2')
-    win._on_connect_clicked()
-    wait_for(lambda: len(calls) == 2 and win.sweep_btn.isEnabled())
-    assert calls[1] == [1, 2]
+    # Other modules: the sweep reconnects first (no Connect button)
+    assert not hasattr(win, 'connect_btn')
     for bad in ('', '9', '1 1', 'a'):
         win.modules.setText(bad)
-        win._on_connect_clicked()
-        assert 'Modules must be' in win.status.text() and len(calls) == 2
-    win.modules.setText('1 2')
+        win.sweep()
+        assert 'Modules must be' in win.status.text() and len(calls) == 1
+    win.modules.setText('1, 2')
     win.sweep()
     wait_for(lambda: win.result is not None and not win.worker.busy)
+    assert calls[1] == [1, 2] and win.sweep_btn.isEnabled()
     assert len(win.result) == 3 and win.save_btn.isEnabled()
     close(win)
 

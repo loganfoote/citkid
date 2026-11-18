@@ -71,21 +71,34 @@ def tone_frequencies(root, grp):
     return np.array([lookup.get(int(r), np.nan)
                      for r in grp['res_idxs'][:]], dtype = float)
 
-def _bad(grp):
+def _bad(root, grp):
     """
-    Return a result's bad marks.
+    Return a result's bad marks: its own (saved with it) and the
+    registry's marks that apply to it now (``daq_layout.bad_tones`` at
+    its stage), so a global mark made later, in any step, leaves the
+    tone out of the report.
 
     Parameters:
+    root (zarr.Group): the store root.
     grp (zarr.Group): the result.
 
     Returns:
     bad (np.array, bool), reason (np.array, str): per tone.
     """
-    n = grp['res_idxs'].shape[0]
-    if 'bad' not in grp:
-        return np.zeros(n, bool), np.array([''] * n)
-    return (np.asarray(grp['bad'][:], dtype = bool),
-            np.asarray(grp['bad_reason'][:], dtype = str))
+    res_idxs = np.asarray(grp['res_idxs'][:], dtype = int)
+    n = len(res_idxs)
+    if 'bad' in grp:
+        bad = np.asarray(grp['bad'][:], dtype = bool)
+        reason = np.asarray(grp['bad_reason'][:], dtype = str)
+    else:
+        bad, reason = np.zeros(n, bool), np.array([''] * n, dtype = str)
+    marks = dl.bad_tones(root, grp.path)
+    reason = reason.astype(object)
+    for i, r in enumerate(res_idxs):
+        if int(r) in marks and not bad[i]:
+            bad[i] = True
+            reason[i] = dl.bad_reason(marks[int(r)])
+    return bad, reason.astype(str)
 
 ################################################################################
 ################################## Lifetimes ###################################
@@ -105,7 +118,7 @@ def lifetime_table(root, grp, kind):
         ``tau`` (s), ``rate`` (pulses per second), ``n_used``,
         ``status``, ``bad``, ``bad_reason``.
     """
-    bad, reason = _bad(grp)
+    bad, reason = _bad(root, grp)
     height = np.asarray(grp['amp_ph'][:], dtype = float) * PPM \
         if kind == 'photons' else np.full(len(bad), np.nan)
     rate = np.asarray(grp['rate'][:], dtype = float) if 'rate' in grp \
@@ -431,7 +444,7 @@ def psd_group_tables(root, grp):
             s[:, cut] = np.nan
             spectra[key].append(s if np.array_equal(fb, f) and s.shape[1]
                                 == len(f) else _interp_log(f, fb, s))
-        bad, reason = _bad(t)
+        bad, reason = _bad(root, t)
         res_idxs = np.asarray(t['res_idxs'][:], dtype = int)
         d = dict(timestream = [name] * n, run = [t.attrs.get('run')] * n,
                  res_idx = res_idxs, fres = tone_frequencies(root, t),
@@ -484,7 +497,7 @@ def spectra_stats(spectra, keep):
         out[f'{kind}_mean'], out[f'{kind}_lo'], out[f'{kind}_hi'] = mean, lo, hi
     return pd.DataFrame(out)
 
-def _band(ax, f, stats, kind, color, label, style = '-'):
+def _band(ax, f, stats, kind, color, label, style = '-', db = False):
     """
     Draw a mean spectrum with its range.
 
@@ -496,21 +509,26 @@ def _band(ax, f, stats, kind, color, label, style = '-'):
     color (str): color.
     label (str): legend label.
     style (str): line style. Default '-'.
+    db (bool): If True, draw 10 log10 of the values (dBc/Hz for the
+        loop components, normalized to the carrier). Default False.
     """
     m = stats[f'{kind}_mean'].to_numpy()
     if not np.isfinite(m).any():
         return
+    lo, hi = stats[f'{kind}_lo'].to_numpy(), stats[f'{kind}_hi'].to_numpy()
+    if db:
+        with np.errstate(divide = 'ignore', invalid = 'ignore'):
+            m, lo, hi = (10 * np.log10(v) for v in (m, lo, hi))
     ax.plot(f, m, style, color = color, label = label)
-    ax.fill_between(f, stats[f'{kind}_lo'].to_numpy(),
-                    stats[f'{kind}_hi'].to_numpy(), color = color,
-                    alpha = 0.2, linewidth = 0)
+    ax.fill_between(f, lo, hi, color = color, alpha = 0.2, linewidth = 0)
 
 def _points_with_hist(fig, gs, row, points, prefix, freqs, label, log):
     """
     Draw a reduced quantity against resonant frequency (MHz) at several
     frequencies, with histograms at the side sharing the y axis. Tones
-    marked bad are left out; outliers are drawn at the edge as arrows
-    with their values and left out of the histograms and the y range.
+    marked bad are left out; outliers (beyond the y range of the other
+    values) are drawn at the edge as arrows with their values and left
+    out of the histograms and the y range.
 
     Parameters:
     fig (Figure): the figure.
@@ -553,7 +571,13 @@ def _points_with_hist(fig, gs, row, points, prefix, freqs, label, log):
         ax.set_ylim(lo, hi)
         placed = []
         for k, fo, vo, g in series:
-            _draw_outliers(ax, fo, vo, lo, hi, f'C{k}', log, placed)
+            # An outlier of its own series that lies within the range
+            # of the others is an ordinary point, not an arrow
+            inside = (vo >= lo) & (vo <= hi)
+            if inside.any():
+                ax.scatter(fo[inside], vo[inside], s = 12, color = f'C{k}')
+            _draw_outliers(ax, fo[~inside], vo[~inside], lo, hi, f'C{k}',
+                           log, placed)
         vals = np.log10(good_all) if log else good_all
         vlo, vhi = vals.min(), vals.max()
         if vlo == vhi:
@@ -660,12 +684,11 @@ def plot_psd_group(points, spectra, stats, f_reduced, title = ''):
             continue
         tag = '' if which == 'on' else ' (off resonance)'
         _band(ax, f, stats[which], 'spar', 'C1',
-              'parallel (dissipation)' + tag, style)
+              'parallel (dissipation)' + tag, style, db = True)
         _band(ax, f, stats[which], 'sper', 'C2',
-              'perpendicular (amplitude)' + tag, style)
+              'perpendicular (amplitude)' + tag, style, db = True)
     ax.set_xscale('log')
-    ax.set_yscale('log')
-    ax.set_ylabel('PSD (1/Hz)')
+    ax.set_ylabel('PSD (dBc/Hz)')
     ax.set_xlabel('Frequency (Hz)')
     ax.set_title('Amplitude / dissipation noise')
     ax.grid(True, alpha = 0.3, which = 'both')

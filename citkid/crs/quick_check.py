@@ -403,12 +403,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
             ' '.join(str(m) for m in self._module_idxs))
         self.modules.setToolTip('Modules connected to the device, e.g. 1 or '
                                 '1 2 3 4; Sweep connects to them')
-        self.connect_btn = QtWidgets.QPushButton('Connect')
-        self.connect_btn.clicked.connect(self._on_connect_clicked)
-        row = QtWidgets.QHBoxLayout()
-        row.addWidget(self.modules)
-        row.addWidget(self.connect_btn)
-        form.addRow('Modules', row)
+        form.addRow('Modules', self.modules)
         self.zone = QtWidgets.QComboBox()
         for value, label in ZONES:
             self.zone.addItem(label, value)
@@ -461,7 +456,7 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         self.status = QtWidgets.QLabel()
         self.status.setWordWrap(True)
         form.addRow(self.status)
-        self._inputs = (self.modules, self.connect_btn, self.zone,
+        self._inputs = (self.modules, self.zone,
                         self.fmin, self.fmax, self.amplitude,
                         self.qr_median, self.pts_per_lw, self.nsamps)
         self._panel.setFixedWidth(width)
@@ -608,17 +603,6 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
                 not all(1 <= m <= 8 for m in mods):
             return None
         return mods
-
-    def _on_connect_clicked(self):
-        """
-        Connect to the modules typed in the window.
-        """
-        mods = self.parse_modules()
-        if mods is None:
-            self._set_status('Modules must be numbers 1-8, e.g. "1" or '
-                             '"1 2 3 4".')
-            return
-        self.reconnect(mods)
 
     def reconnect(self, module_idxs):
         """
@@ -767,8 +751,30 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
                 line = pg.InfiniteLine(lo, pen = pen)
                 plot.addItem(line)
                 self._band_lines.append((plot, line))
-        self.mag_plot.enableAutoRange()
-        self.phase_plot.enableAutoRange()
+        self.rescale()
+
+    def rescale(self):
+        """
+        Fit both plots to their data again (the R key), e.g. after
+        zooming.
+        """
+        for plot in (self.mag_plot, self.phase_plot):
+            plot.enableAutoRange()
+
+    def keyPressEvent(self, event):
+        """
+        R: rescale the plots (outside a text or number box).
+
+        Parameters:
+        event (QKeyEvent): the key event.
+        """
+        if event.key() == QtCore.Qt.Key_R and not isinstance(
+                self.focusWidget(),
+                (QtWidgets.QLineEdit, QtWidgets.QAbstractSpinBox)):
+            self.rescale()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     ############################################################################
     def save_csv(self, path):

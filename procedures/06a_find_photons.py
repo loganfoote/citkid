@@ -409,7 +409,8 @@ def main(args):
             continued = results_grp[name]
             results, thresholds = continue_from(continued, ts, data,
                                                 settings)
-            marked = pf.apply_tone_marks(root, ts, thresholds)
+            marked = pf.apply_tone_marks(root, ts, thresholds,
+                                        f'photons/{name}')
             results, thresholds = find_photons(ts, data, settings,
                                                thresholds, interactive,
                                                results = results,
@@ -421,7 +422,8 @@ def main(args):
                                        init_hmax = INIT_HMAX,
                                        tau_skip = TAU_SKIP,
                                        tau_fit_s = TAU_FIT_S)
-            marked = pf.apply_tone_marks(root, ts, thresholds)
+            marked = pf.apply_tone_marks(root, ts, thresholds,
+                                        f'photons/{name}')
             results, thresholds = find_photons(ts, data, settings,
                                                thresholds, interactive,
                                                root = root,
@@ -437,7 +439,8 @@ def main(args):
                     raise ValueError(
                         f"the reference's filters are for another sample "
                         f"period than {ts['run']}'s: use REUSE = 'settings'")
-            marked = pf.apply_tone_marks(root, ts, thresholds)
+            marked = pf.apply_tone_marks(root, ts, thresholds,
+                                        f'photons/{name}')
             results, _ = find_photons(ts, data, settings, thresholds, False,
                                       reference = reference)
             mode = f'{args.reuse} from {ref_grp.path}'

@@ -1,6 +1,8 @@
 import numpy as np
 from citkid.res.funcs import product_s21
-from citkid.vna.gain import resonator_model, fit_gain_spline, normalize_edges
+from citkid.vna.gain import (
+    cable_delay, resonator_model, fit_gain_spline, normalize_edges
+)
 
 def test_resonator_model_matches_product(full_sweep):
     f, _, _, t = full_sweep
@@ -74,3 +76,20 @@ def test_normalize_edges_zero_rows():
 def test_normalize_edges_single_sample():
     out = normalize_edges(np.array([[1.0 + 0.5j]]))
     np.testing.assert_allclose(out, [[1.0]])
+
+
+def test_cable_delay():
+    """
+    The line fit to the gain phase gives the delay back, and a NaN with
+    too few points.
+    """
+    f = np.linspace(1e9, 2e9, 500)
+    tau = 30e-9
+    gain = 0.5 * np.exp(-2j * np.pi * tau * f + 0.3j)
+    gain[10] = np.nan
+    got, phase, fit = cable_delay(f, gain)
+    assert abs(got - tau) < 1e-13
+    assert np.isnan(phase[10]) and np.isfinite(fit).all()
+    assert np.nanmax(np.abs(phase - fit)) < 1e-9
+    got, _, _ = cable_delay(f[:1], gain[:1])
+    assert np.isnan(got)

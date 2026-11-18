@@ -679,21 +679,33 @@ def test_window_tone_marks(qapp, tones):
     win._ask_note = lambda: 'keep an eye on it'
     win.tone_list.setCurrentRow(0)
     win.toggle_bad()
-    assert dl.bad_tones(root) == {10: dl.tone_marks(root, 10)[0]}
+    # A bare reason from the dialog stand-in: the window's default
+    # scope, local to this result
+    assert dl.bad_tones(root, 'photons/x') == \
+        {10: dl.tone_marks(root, 10)[0]}
+    assert dl.bad_tones(root) == {}
     assert dl.tone_marks(root, 10)[0]['stage'] == 'photons/x'
+    assert dl.tone_marks(root, 10)[0]['scope'] == 'local'
     win.add_note()
     assert [e['kind'] for e in dl.tone_marks(root, 10)] == ['bad', 'note']
     assert 'MARKED BAD: double resonance' in win.status.text()
     assert '1 note' in win.status.text()
     win.toggle_bad()
-    assert dl.bad_tones(root) == {}
+    assert dl.bad_tones(root, 'photons/x') == {}
     assert [e['kind'] for e in dl.tone_marks(root, 10)] == \
         ['bad', 'note', 'clear']
     assert '1 note' in win.status.text()
+    # The dialog's (reason, scope) answer: a global mark
+    win._ask_reason = lambda: ('high noise', 'global')
+    win.toggle_bad()
+    assert dl.tone_marks(root, 10)[-1]['scope'] == 'global'
+    assert set(dl.bad_tones(root)) == {10}
+    win.toggle_bad()
+    assert dl.bad_tones(root) == {}
     # Cancelled dialogs write nothing
     win._ask_note = lambda: None
     win.add_note()
-    assert len(dl.tone_marks(root, 10)) == 3
+    assert len(dl.tone_marks(root, 10)) == 5
     win.close()
 
 

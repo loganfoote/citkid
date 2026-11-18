@@ -3658,7 +3658,8 @@ def test_mark_tone_bad_asks_reason(qt_app, monkeypatch):
     """
     win = _make_window(qt_app, monkeypatch)
     recorded = []
-    win._record = lambda kind, text: recorded.append((kind, text)) or True
+    win._record = lambda kind, text, scope = None: \
+        recorded.append((kind, text)) or True
     for panel in win.panels:
         panel._write_nan_outputs = MagicMock(return_value=True)
         panel.blank_plots = MagicMock()

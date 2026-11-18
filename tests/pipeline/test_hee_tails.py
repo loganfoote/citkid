@@ -237,9 +237,10 @@ def test_window_tone_marks(qapp, rays):
     win.tone_list.setCurrentRow(1)
     win.toggle_bad()
     win.add_note()
-    assert set(dl.bad_tones(root)) == {11}
+    assert set(dl.bad_tones(root, 'hee/x')) == {11}
+    assert dl.bad_tones(root) == {}    # local by default here
     assert [e['kind'] for e in dl.tone_marks(root, 11)] == ['bad', 'note']
     assert dl.tone_marks(root, 11)[0]['stage'] == 'hee/x'
     win.toggle_bad()
-    assert dl.bad_tones(root) == {}
+    assert dl.bad_tones(root, 'hee/x') == {}
     win.close()

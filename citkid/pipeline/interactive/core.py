@@ -1796,7 +1796,8 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         self._bad_reason = None
         record = getattr(self, '_record', None)
         if reason is not None and record is not None:
-            record('bad', reason)
+            # The outputs are NaN from here on, so the mark is global
+            record('bad', reason, 'global')
         update = getattr(self, '_update_marks_label', None)
         if update is not None:
             update()
@@ -1812,7 +1813,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         Returns:
         go (bool): False if cancelled.
         """
-        reason = self._ask_reason()
+        reason, _ = _marks.reason_and_scope(self._ask_reason(), 'global')
         if reason is None:
             return False
         self._bad_reason = reason
@@ -1820,12 +1821,16 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
 
     def _ask_reason(self):
         """
-        Ask why the current tone is bad (``marks.ask_reason``).
+        Ask why the current tone is bad (``marks.ask_reason``); the mark
+        is global (the outputs become NaN), shown as a box that cannot
+        be changed.
 
         Returns:
-        reason (str or None): the reason, or None if cancelled.
+        choice (tuple or None): (reason, 'global'), or None if
+            cancelled.
         """
-        return _marks.ask_reason(self, f'Mark res {self._res_idx()} bad')
+        return _marks.ask_reason(self, f'Mark res {self._res_idx()} bad',
+                                 scope = 'global', forced = True)
 
     def _mark_tone_bad(self):
         """
@@ -1868,7 +1873,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         except Exception:
             return None
 
-    def _record(self, kind, text):
+    def _record(self, kind, text, scope = None):
         """
         Write a mark on the current tone to the store's tone marks
         (``marks.record``), if the DataSet is in a store.
@@ -1876,12 +1881,15 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         Parameters:
         kind (str): 'bad', 'note' or 'clear'.
         text (str): the reason or note.
+        scope (str or None): 'global' or 'local'. Default None: the
+            stage's default.
 
         Returns:
         written (bool): True if an entry was written.
         """
         root, stage = _marks.registry(self._ds_root())
-        return _marks.record(root, self._res_idx(), kind, text, stage)
+        return _marks.record(root, self._res_idx(), kind, text, stage,
+                             scope)
 
     def _ds_root(self):
         """
@@ -1900,10 +1908,10 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         label = getattr(self, '_marks_label', None)
         if label is None:
             return
-        root, _ = _marks.registry(self._ds_root())
+        root, stage = _marks.registry(self._ds_root())
         r = self._res_idx()
         label.setText('' if root is None or r is None
-                      else _marks.mark_label(root, r))
+                      else _marks.mark_label(root, r, stage))
 
     def _auto_initialize_all(self):
         """Initialise every panel in order so upstream data is always ready."""

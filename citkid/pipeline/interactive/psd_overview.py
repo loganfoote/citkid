@@ -19,7 +19,7 @@ from ...qt_compat import (
     Qt, delete_on_close, fit_window_to_screen, forward_keys, freeze_heights,
     get_qapp, widget_font_stylesheet
 )
-from .marks import ask_note, ask_reason, mark_label, record, registry
+from .marks import ask_note, ask_reason, reason_and_scope, mark_label, record, registry
 from .photon_thresholds import _message_box
 
 # Histograms shown
@@ -149,7 +149,8 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         self._only_outside = True
         self._include_bad = True
         self._ask_reason = lambda: ask_reason(
-            self, f'Mark res {self.res_idxs[self.current()]} bad')
+            self, f'Mark res {self.res_idxs[self.current()]} bad',
+            scope = 'local')
         self._ask_note = lambda: ask_note(
             self, f'Note on res {self.res_idxs[self.current()]}')
         # Tones the analysis left out as bad keep their reason
@@ -473,7 +474,7 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
                              else 'Mark tone bad (B)')
         head = f'BAD: {self.bad[r] or "no reason given"}\n' if r in self.bad \
             else ''
-        marks = mark_label(self.root, r)
+        marks = mark_label(self.root, r, self.stage)
         if marks and r not in self.bad:
             head += marks + '\n'
         status = str(self.result['status'][i])
@@ -547,11 +548,11 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
             del self.bad[r]
             record(self.root, r, 'clear', '', self.stage)
         else:
-            reason = self._ask_reason()
+            reason, scope = reason_and_scope(self._ask_reason(), 'local')
             if reason is None:
                 return
             self.bad[r] = reason
-            record(self.root, r, 'bad', reason, self.stage)
+            record(self.root, r, 'bad', reason, self.stage, scope)
         # The histograms change too: the tone leaves or rejoins them
         self.refresh()
         self.select(i)

@@ -57,17 +57,31 @@ measured one after another. The sets are planned once, with the tuning:
 
 At any stage a tone can be marked bad with a reason, or given a note
 (the tone is kept). Both go to the store's tone marks, one history per
-resonator index, with the stage and the time. A bad tone is dropped by
-the stages after (the tuned set, averages and fits) until the mark is
-cleared. `store_browser.py` lists the marks (Tone marks tab).
+resonator index, with the stage, the tuning and the time.
 
-| Where | Mark bad | Note |
-|---|---|---|
-| `03_tune.py`, IQ series window | Mark Tone Bad (Ctrl+M); Mark All Series Bad asks keep (note) or remove (bad) | Add Note (Ctrl+T) |
-| `03_tune.py`, fq_finder window | Rejecting a tone; un-rejecting clears it | N |
-| `05_calibrate_streams.py` window | Mark tone bad (M), or a panel's Bad Data | T |
-| `06a`, `06b` windows | B (again to clear) | T |
-| `07_psds.py` | No window: marked tones are left out, plus `BAD_TONES` | |
+A bad mark has a scope, chosen in the reason dialog:
+
+- **local**: the tone is left out of that stage's results only (the
+  default in 06a, 06b and 07);
+- **global**: also out of every later stage of the same tuning (the
+  default in 03 and 05; forced in 05 and by a panel's Bad Data, where
+  the outputs become NaN). 06a, 06b and 07 count as one stage, so a
+  global mark in any of them leaves the tone out of the other two and
+  of the reports, in whatever order they run. A global mark never
+  reaches an earlier stage or another tuning.
+
+Clearing a mark (B again, un-rejecting, or the store browser) clears
+the mark of that stage and scope only. The reports apply the marks as
+they are when the report is built. `store_browser.py` lists every
+mark (Tone marks tab) and can clear one or change its scope.
+
+| Where | Mark bad | Default scope | Note |
+|---|---|---|---|
+| `03_tune.py`, IQ series window | Mark Tone Bad (Ctrl+M); Mark All Series Bad asks keep (note) or remove (bad) | global | Add Note (Ctrl+T) |
+| `03_tune.py`, fq_finder window | Rejecting a tone; un-rejecting clears it | global | N |
+| `05_calibrate_streams.py` window | Mark tone bad (M), or a panel's Bad Data | global (forced) | T |
+| `06a`, `06b` windows | B (again to clear) | local | T |
+| `07_psds.py` overview window | B (again to clear); marked tones and `BAD_TONES` are left out of the spectra | local | T |
 
 Resonances the plan drops as too close get a note automatically.
 
@@ -88,6 +102,14 @@ sweeps are never retaken (`--new` starts a new tuning).
 
 `citkid.daq_layout.port_tuning` copies `tones/`, `crs_config/` and the
 resonator list to another store (a new cooldown) without the sweeps.
+
+To tune again at the powers of an earlier tuning, set `PORT_TUNE`
+(and `PORT_STORE` for a tuning in another store) and start a new
+tuning: the plan, power sweep and power fits are skipped,
+`tones_init` is the earlier tuning's tones at the frequencies and spans
+`PREDICT` returns (`predict_fq` in the script, from the earlier `fres`
+and `qres`; `None` keeps them), and only the fq sweep, fq_finder and
+tones steps run.
 
 ## Settings
 
@@ -115,12 +137,14 @@ resonator list to another store (a new cooldown) without the sweeps.
 | `ARES_LIMITS` | Chosen powers are clipped to this, dBm |
 | `FRES_UPDATE_METHOD` | fq_finder: `'none'`, `'spacing'`, `'minS21'`, `'distance'` |
 | `RMV_GAIN_SIMPLE` | fq_finder: simple gain correction of the display |
+| `PORT_TUNE`, `PORT_STORE` | A new tuning keeps the powers of this tuning (index; `None`: a full tuning) of this store (`None`) or another |
+| `PREDICT` | `None`, or a function of the earlier `fres`, `qres` returning `fres_pred`, `qres_pred` (`predict_fq` in the script) |
 | `STEPS`, `REDOABLE` | The steps; leave them |
 
 ## Command line
 
 `--modules`, `--new`, `--redo <step>`, `--windows`, `--list-windows`,
-`--simulate`.
+`--port-tune k`, `--simulate`.
 
 # 04_stream.py: take timestreams
 
@@ -163,12 +187,14 @@ adds photons and HEEs to it.
 Opens a store read-only (another script can keep writing; **F5**
 rereads): a tree of its groups with one-line summaries, the selected
 item's attributes, the timestream runs (filter by typing, double-click
-to find the stream), the tone marks, and the notes. The Notes tab
+to find the stream), the tone marks (every entry; Clear mark, Make
+global and Make local act on the selected bad mark), and the notes.
+The Notes tab
 lists everything the report site shows notes for (the store, the VNA
 sweeps, tunings, calibration sweeps, runs, stream calibrations and
 results); select a row and edit its notes below, which are
-saved when you move to another row or tab or close the window (the one
-thing the browser writes). **Open** (Ctrl+O) chooses another store;
+saved when you move to another row or tab or close the window (with
+the tone marks, the only things the browser writes). **Open** (Ctrl+O) chooses another store;
 `--pick` starts with the dialog; `--runs` prints the runs instead of
 opening the window.
 

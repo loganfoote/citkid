@@ -69,7 +69,7 @@ from ...signal.photons import (
     PPM, DetectionSettings, OptimalFilter, fit_tau
 )
 from ... import daq_layout as dl
-from .marks import ask_note, ask_reason, mark_label
+from .marks import ask_note, ask_reason, reason_and_scope, mark_label
 
 # Default snippet: long enough for this many pulses at the median rate of
 # the tones, at least this long, or this many samples if that is longer
@@ -773,7 +773,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         head = ('MARKED BAD: ' + (self.thresholds.bad[int(self.res_idxs[i])]
                                   or 'no reason given') + '\n') if bad \
             else ''
-        marks = mark_label(self.root, self.res_idxs[i])
+        marks = mark_label(self.root, self.res_idxs[i], self.stage)
         if marks and not bad:
             head += marks + '\n'
         elif marks and 'note' in marks:
@@ -1443,11 +1443,11 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
             self.thresholds.clear_bad(r_idx)
             self._record('clear', '')
         else:
-            reason = self._ask_reason()
+            reason, scope = reason_and_scope(self._ask_reason(), 'local')
             if reason is None:
                 return
             self.thresholds.set_bad(r_idx, reason)
-            self._record('bad', reason)
+            self._record('bad', reason, scope)
         self._fill_list()
         self.select(i)
         self._refresh_overview()
@@ -1465,18 +1465,24 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
             self._record('note', note)
             self.select(i)
 
-    def _record(self, kind, text):
+    def _record(self, kind, text, scope = None):
         """
         Write a mark on the selected tone to the registry, if there is
-        one.
+        one; a clear clears this stage's mark.
 
         Parameters:
         kind (str): 'bad', 'note' or 'clear'.
         text (str): the reason or note.
+        scope (str or None): 'global' or 'local'. Default None: the
+            stage's default (local).
         """
-        if self.root is not None:
-            dl.add_tone_mark(self.root, self.res_idxs[self.current()], kind,
-                             text, self.stage)
+        if self.root is None:
+            return
+        r = self.res_idxs[self.current()]
+        if kind == 'clear':
+            dl.clear_tone_mark(self.root, r, text, self.stage)
+        else:
+            dl.add_tone_mark(self.root, r, kind, text, self.stage, scope)
 
     def ask_bad_reason(self):
         """
@@ -1487,7 +1493,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         reason (str or None): the reason, or None if cancelled.
         """
         return ask_reason(self, f'Mark res {self.res_idxs[self.current()]} '
-                          'bad')
+                          'bad', scope = 'local')
 
     ############################################################################
     def overview_values(self):

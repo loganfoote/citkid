@@ -32,12 +32,13 @@ sweep as a CSV (`f`, `i`, `q`).
 
 | Control | Effect |
 |---|---|
-| Modules | The device's modules (`1 2` for a splitter); Connect, or Sweep, applies them |
+| Modules | The device's modules (`1 2` for a splitter); Sweep connects to them |
 | Nyquist zone | 1, 2 or both, or a range by hand (From, To) |
 | Resolution | Points per linewidth at the expected median Qr: df/f = 1 / (Qr × points) |
 | Plan | Points, bands, passes and sweep time |
 | Sweep (Ctrl+R) | Takes the sweep and plots \|S21\| and phase |
 | Cancel (Esc) | Stops the sweep and clears the tones |
+| R | Rescales the plots (drag to pan, scroll to zoom) |
 
 Don't check a module another script is sweeping or streaming. `--no-gui`
 takes one sweep and saves it with `--csv`.

@@ -2,12 +2,15 @@
 03: tune a device: plan the tones, sweep the power, choose each tone's
 power and frequency in two windows, and save the tuned tones (tune{k}).
 Steps already done are skipped; --redo repeats an analysis step, --new
-starts a new tuning. Needs crs_init.py first.
+starts a new tuning. With PORT_TUNE (or --port-tune), a new tuning
+keeps that tuning's powers and only optimizes the frequencies and
+spans again, from PREDICT's guess of them. Needs crs_init.py first.
 
 Usage:
     python 03_tune.py --device deviceA --modules 1
     python 03_tune.py --device deviceA --modules 1 --redo power_fits
     python 03_tune.py --device deviceA --modules 1 --new
+    python 03_tune.py --device deviceA --modules 1 --new --port-tune 0
 """
 import argparse
 import asyncio
@@ -57,6 +60,9 @@ ANL = 0.5
 ARES_LIMITS = (-55., -35.)
 FRES_UPDATE_METHOD = 'spacing'
 RMV_GAIN_SIMPLE = True
+PORT_STORE = None
+PORT_TUNE = None
+PREDICT = None
 
 STEPS = ('plan', 'power_sweep', 'power_fits', 'fq_sweep', 'fq_finder',
          'tones')
@@ -95,6 +101,12 @@ def parse_args(argv = None):
     p.add_argument('--tune', type = int, default = None,
                    help = 'tuning to continue (default: the latest)')
     p.add_argument('--new', action = 'store_true', help = 'start a new tuning')
+    p.add_argument('--port-tune', type = int, default = PORT_TUNE,
+                   help = 'a new tuning keeps the powers of this tuning '
+                   '(of --port-store, or this store) and only optimizes '
+                   'the frequencies and spans')
+    p.add_argument('--port-store', default = PORT_STORE,
+                   help = 'the store of --port-tune (default: this one)')
     p.add_argument('--redo', default = None, choices = REDOABLE,
                    help = 'repeat this step and the ones after it')
     p.add_argument('--simulate', action = 'store_true',
@@ -110,6 +122,22 @@ def parse_args(argv = None):
     p.add_argument('--notes', default = NOTES,
                    help = 'notes saved with the data (quote multi-line text)')
     return p.parse_args(argv)
+
+def predict_fq(fres, qres):
+    """
+    Predict where the resonances of a ported tuning are now (set
+    ``PREDICT = predict_fq`` to use it; edit the body). The fq sweep of
+    the new tuning is taken around these, at the ported powers.
+
+    Parameters:
+    fres (np.array): the earlier tuning's tone frequencies in Hz.
+    qres (np.array): its spans, as quality factors.
+
+    Returns:
+    fres_pred (np.array): predicted frequencies in Hz.
+    qres_pred (np.array): predicted spans.
+    """
+    return fres, qres
 
 def save_notes(grp, notes):
     """
@@ -183,8 +211,9 @@ def done(tune, step):
     """
     if step == 'plan':
         return 'tones_init' in tune
+    ported = bool(tune.attrs.get('ported_powers'))
     if step == 'power_sweep':
-        return 'power_sweep' in tune and \
+        return ported or 'power_sweep' in tune and \
             bool(tune['power_sweep'].attrs.get('complete'))
     if step == 'power_fits':
         return 'power_choice' in tune
@@ -292,6 +321,82 @@ def plan(root, args, path):
           + f'), {len(tplan["ncos"])} tone set(s)'
           + (', extended bandwidth' if tplan['extended_bw'] else '')
           + (f', {len(fcal)} calibration tones' if len(fcal) else ''))
+    return tune
+
+def plan_from_tuning(root, args, path):
+    """
+    Start a tuning from an earlier one's tones (``--port-tune``, in
+    this store or ``--port-store``): its powers are kept
+    (``power_choice``) and the plan, power sweep and power fits are
+    skipped, so only the fq sweep, fq_finder and tones steps run.
+    ``tones_init`` holds the earlier tones at the frequencies and spans
+    ``PREDICT`` returns (None: unchanged). Another store's tuning is
+    copied in first (``daq_layout.port_tuning``, with its resonator
+    list and CRS settings).
+
+    Parameters:
+    root (zarr.Group): the store root.
+    args (argparse.Namespace): options.
+    path (str): store path.
+
+    Returns:
+    tune (zarr.Group): the new tuning.
+
+    Raises:
+    KeyError: if the earlier tuning has no tones.
+    ValueError: if ``PREDICT`` returns the wrong shapes or non-finite
+        values.
+    """
+    src_name = dl.set_name(int(args.port_tune), 'tune')
+    if args.port_store is None:
+        src_root, store = root, None
+    else:
+        store = os.path.expanduser(args.port_store)
+        src_root = dl.open_store(store)
+    src = src_root[src_name]
+    if 'tones' not in src:
+        raise KeyError(f'{src_name} has no tones to port')
+    ported = dict(store = store, group = src_name)
+    if store is None:
+        tune, k = dl.new_tuning(root, src.attrs['resonators'], attrs = dict(
+            ported_from = ported, ported_powers = True))
+        dl.write_tune_config(tune, src['crs_config'].attrs['config'])
+    else:
+        k = dl.port_tuning(src_root, int(args.port_tune), path)
+        tune = root[dl.set_name(k, 'tune')]
+        del tune['tones']    # the tones step makes the new ones
+        tune.attrs['ported_powers'] = True
+    save_notes(tune, args.notes)
+    t = dl.load_tones(src['tones'])
+    fres, qres = t['fres'], t['qres']
+    if PREDICT is not None:
+        fres, qres = (np.asarray(v, dtype = float) for v in
+                      PREDICT(fres.copy(), qres.copy()))
+        if fres.shape != t['fres'].shape or qres.shape != t['qres'].shape:
+            raise ValueError('PREDICT must return fres_pred and qres_pred '
+                             'of the same shape as fres and qres')
+        if not (np.isfinite(fres).all() and np.isfinite(qres).all()):
+            raise ValueError('PREDICT returned non-finite values')
+    init = dl.create_group(tune, 'tones_init', 'decision', attrs = dict(
+        source = f'{src_name}/tones', ported_from = ported,
+        predicted = PREDICT is not None, stream_dec = STREAM_DEC))
+    dl.save_tones(
+        init, fres, qres, np.nan, t['res_idxs'], tone_set = t['tone_set'],
+        tone_module = t['tone_module'],
+        source = dict(fres = f'{src_name}/tones/fres',
+                      qres = f'{src_name}/tones/qres'))
+    grp = dl.create_group(tune, 'power_choice', 'decision', attrs = dict(
+        notes = (args.notes or '').strip(), ported_from = ported,
+        source = f'{src_name}/tones/ares'))
+    n = len(t['ares'])
+    for name, value in (('ares', t['ares']), ('res_idxs', t['res_idxs']),
+                        ('fallback', np.zeros(n, bool)),
+                        ('user_chosen', np.zeros(n, bool))):
+        dl.write_array(grp, name, value)
+    print(f'plan: tune{k} from {src_name} of '
+          f"{store or 'this store'}: {n} tones at its powers"
+          + (', frequencies and spans predicted' if PREDICT is not None
+             else ''))
     return tune
 
 def frequency_range(fres, fmin = None, fmax = None):
@@ -530,10 +635,10 @@ def tones(tune, args):
     """
     fq, name = tune['fq_sweep'], tune.basename
     keep = (fq['reject_reason'][:] == '') & np.isfinite(fq['fres_opt'][:])
-    # Tones marked bad in the store's tone marks (any stage, not cleared
-    # since) are left out of the tuned set
+    # Tones marked bad globally in this tuning (the windows of 03, or the
+    # store browser) and not cleared since are left out of the tuned set
     root = dl.store_root(tune)
-    bad = dl.bad_tones(root)
+    bad = dl.bad_tones(root, f'{name}/tones')
     marked = np.array([int(r) in bad for r in fq['res_idxs'][:]])
     if (keep & marked).any():
         print(f"{int((keep & marked).sum())} tones marked bad in the store's "
@@ -580,7 +685,8 @@ def main(args):
     if args.new or not tunes:
         if args.redo:
             raise ValueError('--redo applies to an existing tuning')
-        tune = plan(root, args, path)
+        tune = plan_from_tuning(root, args, path) \
+            if args.port_tune is not None else plan(root, args, path)
         if tune is None:
             return None
     else:

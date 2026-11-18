@@ -63,6 +63,25 @@ def test_create_store_attrs_and_reopen(tmp_path, store):
         dl.create_store(tmp_path / 'dev.zarr', 'devA', 'cd2')
 
 
+def test_code_info(tmp_path, store):
+    """
+    The code in use is described with its commit and saved with the
+    store and every group; outside a git checkout only the version.
+    """
+    import citkid
+    info = citkid.CODE_INFO
+    assert info['version'] == citkid.__version__
+    if info['commit'] is not None:   # a git checkout with git
+        assert len(info['commit']) == 40 and isinstance(info['dirty'], bool)
+        assert info['branch'] and info['commit_date'][:2] == '20'
+    bare = citkid.code_info(tmp_path)
+    assert bare['version'] == citkid.__version__
+    assert bare['commit'] is None and bare['dirty'] is None
+    assert store.attrs['code'] == info
+    grp = dl.create_group(store, 'coded', 'analysis')
+    assert grp.attrs['code'] == info
+
+
 def test_open_store_rejects_non_layout(tmp_path):
     """
     Check that a plain zarr store is not accepted as a layout store, nor a
@@ -615,20 +634,108 @@ def test_tone_marks(tmp_path):
     assert dl.bad_reason(dl.bad_tones(root)[5]) ==         'double resonance (tune0/power_fits)'
     assert dl.bad_reason(dict(kind = 'bad', text = '')) == 'no reason given'
     text = dl.describe_tone_marks(root)
-    assert '1 resonators bad, 2 with' in text and 'res 5 (bad)' in text
-    assert 'bad at tune0/power_fits: double resonance' in text
+    assert '1 resonators bad globally, 2 with' in text
+    assert 'res 5 (bad)' in text
+    assert 'bad (global) at tune0/power_fits: double resonance' in text
     only = dl.describe_tone_marks(root, [7])
     assert 'res 7' in only and 'res 5' not in only
+    # A clear acts on the mark of its own stage (and scope): clearing
+    # at the photon stage leaves the tuning's mark
     dl.clear_tone_mark(root, 5, 'it is fine', 'photons/dark')
+    assert set(dl.bad_tones(root)) == {5}
+    dl.clear_tone_mark(root, 5, 'it is fine', 'tune0/power_fits')
     assert dl.bad_tones(root) == {}
     dl.add_tone_mark(root, 5, 'bad', 'high noise')
     assert set(dl.bad_tones(root)) == {5}
     assert dl.bad_reason(dl.bad_tones(root)[5]) == 'high noise'
     with pytest.raises(ValueError, match = 'kind'):
         dl.add_tone_mark(root, 5, 'good')
+    with pytest.raises(ValueError, match = 'scope'):
+        dl.add_tone_mark(root, 5, 'bad', 'x', scope = 'everywhere')
     # Reopened, the marks are still there
     again = zarr.open_group(tmp_path / 's.zarr', mode = 'r')
-    assert len(dl.tone_marks(again, 5)) == 4
+    assert len(dl.tone_marks(again, 5)) == 5
+
+
+def test_tone_mark_scopes(tmp_path):
+    """
+    Local marks leave a tone out of their own stage only; global marks
+    out of that stage and every later one of the same tuning (the
+    analyses being one level); clears act per stage and scope; a mark
+    can change scope; entries without a scope get the stage's default.
+    """
+    root = dl.create_store(tmp_path / 's.zarr', 'devA', 'cd1')
+    assert dl.mark_level('tune0/power_fits') == 1
+    assert dl.mark_level('ts_cal2/set0') == 2
+    assert dl.mark_level('photons/dark') == 3 == dl.mark_level('hee/x')
+    assert dl.mark_level('ts_psd1/timestream0') == 3
+    assert dl.mark_level('') == 0 and dl.mark_level('tuner/x') == 0
+    assert dl.default_mark_scope('photons/dark') == 'local'
+    assert dl.default_mark_scope('tune0/fq_sweep') == 'global'
+    # Results record their source sweep: that gives their tuning
+    ph = dl.create_group(dl.create_group(root, 'photons', 'analysis'),
+                         'dark', 'analysis', attrs = dict(
+                             source = 'tune1/cal0'))
+    assert dl.mark_tuning(root, 'photons/dark') == 'tune1'
+    assert dl.mark_tuning(root, 'tune0/tones') == 'tune0'
+    assert dl.mark_tuning(root, 'hee/none') is None
+    assert dl.mark_tuning(root, '') is None
+    # A global tuning mark reaches the analyses of its tuning only
+    e = dl.add_tone_mark(root, 1, 'bad', 'double resonance',
+                         'tune1/power_fits')
+    assert e['scope'] == 'global' and e['tuning'] == 'tune1'
+    assert set(dl.bad_tones(root, 'tune1/tones')) == {1}
+    assert set(dl.bad_tones(root, 'photons/dark')) == {1}
+    assert dl.bad_tones(root, 'tune0/tones') == {}
+    assert dl.bad_tones(root, 'hee/none', tuning = 'tune0') == {}
+    # A local analysis mark stays in its stage; a global one reaches
+    # the other analyses but not the tuning
+    dl.add_tone_mark(root, 2, 'bad', 'high noise', 'ts_psd0/timestream0')
+    dl.add_tone_mark(root, 3, 'bad', 'bad fit', 'photons/dark',
+                     scope = 'global')
+    assert set(dl.bad_tones(root, 'ts_psd0/timestream0')) == {1, 2, 3}
+    assert set(dl.bad_tones(root, 'hee/dark', tuning = 'tune1')) == {1, 3}
+    assert set(dl.bad_tones(root, 'tune1/tones')) == {1}
+    assert set(dl.bad_tones(root)) == {1, 3}
+    assert dl.bad_reason(dl.bad_tones(root, 'ts_psd0/timestream0')[2]) \
+        == 'high noise (ts_psd0/timestream0), local'
+    # Clearing at another stage, or with the other scope, changes
+    # nothing; the right one clears
+    dl.clear_tone_mark(root, 3, '', 'hee/dark')
+    dl.clear_tone_mark(root, 3, '', 'photons/dark', scope = 'local')
+    assert set(dl.bad_tones(root)) == {1, 3}
+    dl.clear_tone_mark(root, 3, '', 'photons/dark')
+    assert set(dl.bad_tones(root)) == {1}
+    assert dl.active_bad_marks(root, 3) == []
+    # Rescoping: the local mark becomes global and back
+    created = dl.active_bad_marks(root, 2)[0]['created']
+    new = dl.rescope_tone_mark(root, 2, created, 'global')
+    assert new['scope'] == 'global' and new['text'] == 'high noise'
+    assert set(dl.bad_tones(root)) == {1, 2}
+    assert [e['kind'] for e in dl.tone_marks(root, 2)] == \
+        ['bad', 'clear', 'bad']
+    assert dl.rescope_tone_mark(root, 2, new['created'], 'global') == new
+    with pytest.raises(KeyError):
+        dl.rescope_tone_mark(root, 2, 'never', 'local')
+    # Entries from before scopes existed: inferred from the stage, and
+    # an old clear clears its stage whatever the scope
+    grp = dl.tone_marks_group(root)
+    marks = dict(grp.attrs['marks'])
+    marks['7'] = [dict(kind = 'bad', text = 'old', stage = 'hee/dark',
+                       created = '2026-01-01 00:00:00')]
+    marks['8'] = [dict(kind = 'bad', text = 'old', stage = 'tune1/fq_sweep',
+                       created = '2026-01-01 00:00:00')]
+    grp.attrs['marks'] = marks
+    assert dl.mark_scope(dl.tone_marks(root, 7)[0]) == 'local'
+    assert set(dl.bad_tones(root, "hee/dark", tuning = "tune1")) == {1, 2, 7, 8}
+    assert 8 in dl.bad_tones(root, 'tune1/tones')
+    assert 8 in dl.bad_tones(root, 'photons/dark')
+    marks['8'].append(dict(kind = 'clear', text = '', stage = 'tune1/fq_sweep',
+                           created = '2026-01-02 00:00:00'))
+    grp.attrs['marks'] = marks
+    assert 8 not in dl.bad_tones(root, 'tune1/tones')
+    text = dl.describe_tone_marks(root)
+    assert 'bad (local) at hee/dark: old' in text
 
 def test_rename_hee(tmp_path):
     """

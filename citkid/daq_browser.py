@@ -46,6 +46,10 @@ RUN_COLUMNS = (('Run', 'group'), ('Name', 'name'), ('Notes', 'notes'),
 ################################################################################
 ################################### Helpers ####################################
 ################################################################################
+# The tone-marks tab's columns
+MARK_COLUMNS = ('res', 'created', 'kind', 'scope', 'stage', 'tuning',
+                'text')
+
 def first_line(text, limit = 80):
     """
     Return the first line of a text, shortened.
@@ -322,14 +326,151 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         self.runs_label = QtWidgets.QLabel()
         vbox.addWidget(self.runs_label)
         self.tabs.addTab(page, 'Timestream runs')
-        self.marks = QtWidgets.QPlainTextEdit()
-        self.marks.setReadOnly(True)
-        self.marks.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
-        self.marks.setFont(QtGui.QFontDatabase.systemFont(
-            QtGui.QFontDatabase.FixedFont))
-        self.tabs.addTab(self.marks, 'Tone marks')
+        self.tabs.addTab(self._build_marks(), 'Tone marks')
         self.tabs.addTab(self._build_notes(), 'Notes')
         return self.tabs
+
+    def _build_marks(self):
+        """
+        Build the tone-marks panel: every entry of the registry, and
+        buttons to clear the selected bad mark or change its scope
+        (local: that stage's results only; global: every later step of
+        the tuning too).
+
+        Returns:
+        page (QWidget): the panel.
+        """
+        page = QtWidgets.QWidget()
+        vbox = QtWidgets.QVBoxLayout(page)
+        self.marks_table = QtWidgets.QTableWidget()
+        self.marks_table.setColumnCount(len(MARK_COLUMNS))
+        self.marks_table.setHorizontalHeaderLabels(MARK_COLUMNS)
+        self.marks_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.marks_table.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectRows)
+        self.marks_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SingleSelection)
+        self.marks_table.verticalHeader().setVisible(False)
+        self.marks_table.horizontalHeader().setStretchLastSection(True)
+        self.marks_table.currentCellChanged.connect(
+            lambda *_a: self._update_mark_buttons())
+        vbox.addWidget(self.marks_table, stretch = 1)
+        row = QtWidgets.QHBoxLayout()
+        self.marks_label = QtWidgets.QLabel()
+        row.addWidget(self.marks_label, stretch = 1)
+        self.clear_mark_btn = QtWidgets.QPushButton('Clear mark')
+        self.clear_mark_btn.setToolTip('Clear the selected bad mark (a '
+                                       "'clear' entry is added; the "
+                                       'history stays)')
+        self.clear_mark_btn.clicked.connect(self._on_clear_mark)
+        row.addWidget(self.clear_mark_btn)
+        self.global_mark_btn = QtWidgets.QPushButton('Make global')
+        self.global_mark_btn.setToolTip('The tone also leaves every '
+                                        'later step of its tuning')
+        self.global_mark_btn.clicked.connect(
+            lambda: self._on_rescope('global'))
+        row.addWidget(self.global_mark_btn)
+        self.local_mark_btn = QtWidgets.QPushButton('Make local')
+        self.local_mark_btn.setToolTip("The tone leaves only its stage's "
+                                       'results')
+        self.local_mark_btn.clicked.connect(
+            lambda: self._on_rescope('local'))
+        row.addWidget(self.local_mark_btn)
+        vbox.addLayout(row)
+        self._mark_rows = []       # (res_idx, entry, active) per row
+        self._update_mark_buttons()
+        return page
+
+    def _fill_marks(self):
+        """
+        List every registry entry, newest last, saying which bad marks
+        are active (not cleared since), keeping the selected row.
+        """
+        current = self.marks_table.currentRow()
+        self._mark_rows = []
+        if self.root is not None:
+            for r, entries in sorted(dl.tone_marks(self.root).items()):
+                active = {e['created'] + e.get('stage', '') for e in
+                          dl.active_bad_marks(self.root, r)}
+                for e in entries:
+                    self._mark_rows.append(
+                        (r, e, e['kind'] == 'bad' and
+                         e['created'] + e.get('stage', '') in active))
+        self.marks_table.setRowCount(len(self._mark_rows))
+        n_bad = 0
+        for i, (r, e, active) in enumerate(self._mark_rows):
+            n_bad += active
+            scope = '' if e['kind'] == 'note' else dl.mark_scope(e)
+            cells = (str(r), e.get('created', ''), e['kind'] + (
+                ' (active)' if active else ''), scope, e.get('stage', ''),
+                e.get('tuning') or '', first_line(e.get('text', ''), 120))
+            for j, text in enumerate(cells):
+                self.marks_table.setItem(i, j, QtWidgets.QTableWidgetItem(
+                    text))
+        self.marks_table.resizeColumnsToContents()
+        self.marks_label.setText(
+            f'{n_bad} active bad marks, {len(self._mark_rows)} entries')
+        if 0 <= current < len(self._mark_rows):
+            self.marks_table.setCurrentCell(current, 0)
+        self._update_mark_buttons()
+
+    def _selected_mark(self):
+        """
+        Return the selected active bad mark, if any.
+
+        Returns:
+        res_idx (int or None): the resonator.
+        entry (dict or None): the entry.
+        """
+        i = self.marks_table.currentRow()
+        if 0 <= i < len(self._mark_rows) and self._mark_rows[i][2]:
+            return self._mark_rows[i][0], self._mark_rows[i][1]
+        return None, None
+
+    def _update_mark_buttons(self):
+        """
+        Enable the buttons that apply to the selected mark.
+        """
+        r, e = self._selected_mark()
+        can = e is not None and bool(self.path)
+        scope = dl.mark_scope(e) if e is not None else ''
+        self.clear_mark_btn.setEnabled(can)
+        self.global_mark_btn.setEnabled(can and scope == 'local')
+        self.local_mark_btn.setEnabled(can and scope == 'global')
+
+    def _writable_root(self):
+        """
+        Open the store for writing a mark.
+
+        Returns:
+        root (zarr.Group): the store root, writable.
+        """
+        return dl.open_store(self.path, mode = 'a')
+
+    def _on_clear_mark(self):
+        """
+        Clear the selected bad mark (the button).
+        """
+        r, e = self._selected_mark()
+        if e is None:
+            return
+        dl.clear_tone_mark(self._writable_root(), r, 'cleared in the store '
+                           'browser', e.get('stage', ''), dl.mark_scope(e))
+        self.refresh()
+
+    def _on_rescope(self, scope):
+        """
+        Change the selected bad mark's scope (the buttons).
+
+        Parameters:
+        scope (str): 'global' or 'local'.
+        """
+        r, e = self._selected_mark()
+        if e is None:
+            return
+        dl.rescope_tone_mark(self._writable_root(), r, e['created'], scope)
+        self.refresh()
 
     def _build_notes(self):
         """
@@ -665,7 +806,7 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
             self.info.setText('No store open: press Open (Ctrl+O) and '
                               'choose a .zarr directory.')
             self.attrs.setPlainText('')
-            self.marks.setPlainText('')
+            self._fill_marks()
             self.runs = []
             self._fill_runs()
             self._fill_notes()
@@ -677,7 +818,7 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         self.tree.blockSignals(False)
         self.runs = dl.stream_runs(self.root)
         self._fill_runs()
-        self.marks.setPlainText(dl.describe_tone_marks(self.root))
+        self._fill_marks()
         self._fill_notes()
         if not (current and self.select_path(current)):
             self.attrs.setPlainText(describe_item(self.root))

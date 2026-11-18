@@ -1560,7 +1560,8 @@ def test_tone_marks_follow_rejection(basic_win):
         ['bad', 'clear']
     w._ask_note = lambda: 'odd shape'
     w._add_note()
-    assert dl.tone_marks(root, res_idx)[-1] == dict(
-        kind = 'note', text = 'odd shape', stage = '',
-        created = dl.tone_marks(root, res_idx)[-1]['created'])
+    last = dl.tone_marks(root, res_idx)[-1]
+    assert (last['kind'], last['text'], last['stage']) == \
+        ('note', 'odd shape', '')
+    assert dl.tone_marks(root, res_idx)[0]['scope'] == 'global'
     assert w._marks_label.text() == '1 note'

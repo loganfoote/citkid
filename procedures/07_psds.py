@@ -342,14 +342,15 @@ def analyze_one(
     filters, ph_settings = None, None
     if ref_grp is not None:
         filters, ph_settings = psds.load_photon_reference(ref_grp)
-    exclude = {int(r): dl.bad_reason(e)
-               for r, e in dl.bad_tones(root).items()}
+    name = f'timestream{j}'
+    exclude = {int(r): dl.bad_reason(e) for r, e in dl.bad_tones(
+        root, f'{out_grp.path}/{name}',
+        tuning = str(ts['source']['group']).split('/')[0]).items()}
     exclude.update({int(r): 'BAD_TONES' for r in BAD_TONES})
     left_out = sorted(set(exclude) & set(ts['res_idxs'].tolist()))
     if left_out:
         print(f'{len(left_out)} tones left out (marked bad): res '
               f'{left_out}')
-    name = f'timestream{j}'
     bad, limits = saved.get(name, ({}, {}))
     if choice == 'load':
         exclude = {**exclude, **{int(r): v for r, v in bad.items()}}

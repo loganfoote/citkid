@@ -1231,6 +1231,8 @@ def write_system_cfg_to_zarr(crs, grp):
     grp.attrs['serial_number'] = int(np.uint16(crs.serial_number))
     grp.attrs['rfmux_version'] = str(crs.rfmux_version)
     grp.attrs['citkid_version'] = str(crs.citkid_version)
+    from .. import CODE_INFO
+    grp.attrs['code'] = dict(CODE_INFO)
 
 ################################################################################
 ############################# Sweep Helpers ####################################

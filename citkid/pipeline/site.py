@@ -416,8 +416,11 @@ def inventory(root):
     for r, entries in sorted(dl.tone_marks(root).items()):
         for e in entries:
             marks.append(dict(res_idx = int(r), kind = e.get('kind'),
+                              scope = '' if e.get('kind') == 'note'
+                              else dl.mark_scope(e),
                               text = e.get('text', ''),
                               stage = e.get('stage', ''),
+                              tuning = e.get('tuning') or '',
                               created = e.get('created', '')))
     inv['marks'] = marks
     return dl.to_jsonable(inv)
@@ -445,7 +448,7 @@ def tuning_table(root, tune):
     tones = dl.load_tones(tune['tones'])
     res_idxs = np.asarray(tones['res_idxs'], int)
     n = len(res_idxs)
-    bad_marks = dl.bad_tones(root)
+    bad_marks = dl.bad_tones(root, f'{tune.path}/tones')
     out = dict(res_idx = res_idxs, fres = np.asarray(tones['fres'], float),
                tone_set = np.asarray(tones['tone_set'], int),
                power_dbm = np.asarray(tones['ares'], float),
@@ -531,10 +534,10 @@ def calibration_tables(root, cal):
         datasets = open_calibration(root, cal)
     except KeyError:
         return out
-    bad_marks = dl.bad_tones(root)
     for name in names:
         if name not in datasets:
             continue
+        bad_marks = dl.bad_tones(root, f'{cal.path}/{name}')
         DS = datasets[name]['DS']
         res_idxs = np.asarray(DS.res_idxs[:], int)
         n = len(res_idxs)
@@ -897,17 +900,19 @@ def resonator_figure(data, r):
                 ax_s.loglog(fb, t['sxx_binned_cn'][i], lw = 1, color = color,
                             label = label + ', correlated noise removed')
             if 'spar_binned' in t and t['spar_binned'].shape[1]:
-                ax_l.loglog(fb, t['spar_binned'][i], lw = 1, color = color,
-                            label = label + ' parallel (dissipation)')
-                ax_l.loglog(fb, t['sper_binned'][i], lw = 1, ls = '--',
-                            color = color,
-                            label = label + ' perpendicular (amplitude)')
+                with np.errstate(divide = 'ignore', invalid = 'ignore'):
+                    spar = 10 * np.log10(t['spar_binned'][i])
+                    sper = 10 * np.log10(t['sper_binned'][i])
+                ax_l.semilogx(fb, spar, lw = 1, color = color,
+                              label = label + ' parallel (dissipation)')
+                ax_l.semilogx(fb, sper, lw = 1, ls = '--', color = color,
+                              label = label + ' perpendicular (amplitude)')
                 drawn_l = True
     ax_s.set_xlabel('Frequency (Hz)')
     ax_s.set_ylabel('Sxx (1/Hz)')
     ax_s.set_title('Noise' if drawn_s else 'no noise spectra', fontsize = 9)
     ax_l.set_xlabel('Frequency (Hz)')
-    ax_l.set_ylabel('PSD (1/Hz)')
+    ax_l.set_ylabel('PSD (dBc/Hz)')
     ax_l.set_title('Amplitude / dissipation noise' if drawn_l
                    else 'no loop spectra', fontsize = 9)
     for ax, drawn in ((ax_s, drawn_s), (ax_l, drawn_l)):
@@ -1472,6 +1477,7 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
                 text = s['report'], path = s['path'],
                 figures = [_rel(p['plot'], out_dir)],
                 files = [('resonators CSV', _rel(p['csv'], out_dir)),
+                         ('gain CSV', _rel(p['gain_csv'], out_dir)),
                          ('sweep info', _rel(p['info'], out_dir))]))
     body.append(section_html('VNA sweeps', versions_html('vna', items,
                                                           attachments)))
@@ -1578,8 +1584,8 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
         'click a column to sort; type to filter</p>'
         + table_html(summary, links = links, table_id = 'resonators'),
         open_ = False, filter_table = 'resonators'))
-    marks = pd.DataFrame(inv['marks'], columns = ['res_idx', 'kind', 'text',
-                                                  'stage', 'created'])
+    marks = pd.DataFrame(inv['marks'], columns = [
+        'res_idx', 'kind', 'scope', 'text', 'stage', 'tuning', 'created'])
     body.append(section_html(f'Tone marks ({len(marks)})',
                              table_html(marks, links = links,
                                         table_id = 'marks'),

@@ -197,6 +197,32 @@ def fit_gain_spline(
                       n_modeled = int(good.sum()), n_masked = len(masked),
                       frac_dropped = float(np.mean((wu == 0) & (w[use] > 0))))
 
+def cable_delay(f, gain):
+    """
+    Fit a line to the unwrapped phase of a gain profile and return the
+    cable delay it implies: phase = -2 pi tau f + phi0.
+
+    Parameters:
+    f (np.array): frequencies in Hz, ascending.
+    gain (np.array): complex gain at ``f`` (e.g. ``fit_gain_spline``).
+
+    Returns:
+    tau (float): the delay in seconds (NaN with fewer than two usable
+        points).
+    phase (np.array): the unwrapped gain phase at ``f`` in rad (NaN
+        where the gain is not finite or zero).
+    phase_fit (np.array): the fitted line at ``f`` in rad.
+    """
+    f = np.asarray(f, dtype = float)
+    gain = np.asarray(gain, dtype = complex)
+    ok = np.isfinite(gain) & (np.abs(gain) > 0)
+    phase = np.full(len(f), np.nan)
+    phase[ok] = np.unwrap(np.angle(gain[ok]))
+    if ok.sum() < 2:
+        return np.nan, phase, np.full(len(f), np.nan)
+    p = np.polyfit(f[ok], phase[ok], 1)
+    return -p[0] / (2 * np.pi), phase, np.polyval(p, f)
+
 def normalize_edges(z, n_edge = None):
     """
     Normalize the gain amplitude and phase offset of each sweep from its edge
