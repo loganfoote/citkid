@@ -202,7 +202,8 @@ def test_vna_view_script(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize('script', [
-    '01_vna_sweep.py', '02_find_resonances.py', '03_tune.py', '04_stream.py',
+    '01_vna_sweep.py', '02_find_resonances.py', '03_tune.py',
+    '04a_stream.py', '04b_stream_batch.py',
     '05_calibrate_streams.py', '06a_find_photons.py', '06b_hee.py',
     '07_psds.py',
     'archive_store.py',
@@ -550,7 +551,8 @@ def test_03_tune(tmp_path, monkeypatch, capsys, n_cal):
     # A new tuning from tune0's tones: its powers are kept, the plan,
     # power sweep and power fits are skipped, and only the frequencies
     # and spans are optimized again, from PREDICT's guess
-    monkeypatch.setattr(m, 'PREDICT', lambda f, q: (f + 5e3, q * 2.))
+    monkeypatch.setattr(m, 'PREDICT',
+                        lambda f, q, a: (f + 5e3, q * 2., a - 1.))
     assert m.main(m.parse_args(argv + ['--new', '--port-tune', '0'])) == 1
     assert calls == ['iq', 'fq', 'fq']
     root = dl.open_store(path)
@@ -561,13 +563,13 @@ def test_03_tune(tmp_path, monkeypatch, capsys, n_cal):
     init = dl.load_tones(t1['tones_init'])
     np.testing.assert_allclose(init['fres'], t0['fres'] + 5e3)
     np.testing.assert_allclose(init['qres'], t0['qres'] * 2.)
-    np.testing.assert_array_equal(t1['power_choice/ares'][:], t0['ares'])
+    np.testing.assert_allclose(t1['power_choice/ares'][:], t0['ares'] - 1.)
     assert not t1['power_choice/fallback'][:].any()
-    np.testing.assert_allclose(t1['fq_sweep/ares'][:], t0['ares'])
+    np.testing.assert_allclose(t1['fq_sweep/ares'][:], t0['ares'] - 1.)
     assert len(dl.load_tones(t1['tones'])['fres']) == len(t0['fres']) - 1
-    assert 'at its powers, frequencies and spans predicted' in \
+    assert 'at its powers, frequencies, spans and powers predicted' in \
         capsys.readouterr().out
-    monkeypatch.setattr(m, 'PREDICT', lambda f, q: (f[:1], q))
+    monkeypatch.setattr(m, 'PREDICT', lambda f, q, a: (f[:1], q, a))
     with pytest.raises(ValueError, match = 'same shape'):
         m.main(m.parse_args(argv + ['--new', '--port-tune', '1']))
     monkeypatch.setattr(m, 'PREDICT', None)
@@ -579,7 +581,7 @@ def test_03_tune(tmp_path, monkeypatch, capsys, n_cal):
                                   t['ares'])
 
 
-def test_04_stream(tmp_path, monkeypatch):
+def test_04a_stream(tmp_path, monkeypatch):
     """
     Check that step 04 opens the window on the latest tuning with tones,
     with the settings, and a connect function that attaches with global
@@ -591,7 +593,7 @@ def test_04_stream(tmp_path, monkeypatch):
                  pair_frac = 0.)
     root, truth = asyncio.run(simulate_vna_store(
         path, device_kwargs = small, verbose = False))
-    m = load_script('04_stream.py')
+    m = load_script('04a_stream.py')
     with pytest.raises(KeyError, match = '03_tune'):
         m.main(m.parse_args(['--store', str(path), '--simulate']))
     dl.save_resonators(root, 0, truth.fr.values, 4e3, 'test')
@@ -629,10 +631,11 @@ def test_04_stream(tmp_path, monkeypatch):
     # after
     from citkid.crs import board_lock
     assert seen['holder']['pid'] == os.getpid()
-    assert '04_stream.py' in seen['holder']['owner']
+    assert '04a_stream.py' in seen['holder']['owner']
     assert board_lock.holder(0) is None
     assert seen['presets'] == m.PRESETS
     assert seen['sweep_kwargs']['npoints_fine'] == m.NPOINTS_FINE
+    assert seen['fres_update'] is None
     with pytest.raises(KeyError, match = 'no tones'):
         m.main(m.parse_args(['--store', str(path), '--simulate', '--tune',
                              '1']))
@@ -643,6 +646,87 @@ def test_04_stream(tmp_path, monkeypatch):
                          '--sim-pulses']))
     assert seen['crs'].pulses == m.SIM_PULSE_SETTINGS
     assert seen['crs'].snr_db == m.SIM_SNR_DB != snr
+
+
+def test_04b_stream_batch(tmp_path, monkeypatch, capsys):
+    """
+    Step 04b calibrates the tone set (moving the tones to the sweep's
+    resonances when asked), writes its tones, takes RUNS and frees the
+    board; CALIBRATION reuses a calibration instead of sweeping again.
+    """
+    from citkid.crs import board_lock
+    from citkid.crs.sim import simulate_vna_store, simulated_crs
+    path = tmp_path / 'sim.zarr'
+    small = dict(f_lo = 1.0e9, f_hi = 1.1e9, n_banks = 1, n_per_bank = 6,
+                 pair_frac = 0.)
+    root, truth = asyncio.run(simulate_vna_store(
+        path, device_kwargs = small, verbose = False))
+    fr, qr = truth.fr.values, truth.Qr.values
+    n = len(fr)
+    dl.save_resonators(root, 0, fr, qr / 5, 'test', Qr = qr)
+    tune, _ = dl.new_tuning(root, 0)
+    crs = simulated_crs(path, [1], seed = 0, global_control = True)
+    asyncio.run(crs.attach())
+    dl.write_tune_config(tune, dict(dl.tune_config(crs), tone_sets = [
+        {'1': float(np.median(fr))}]))
+    # The tones a little off the resonances: the update moves them back
+    dl.save_tones(dl.create_group(tune, 'tones', 'decision'),
+                  fr + 0.3 * fr / qr, qr / 5, -55., np.arange(n),
+                  tone_set = np.zeros(n, int), tone_module = np.ones(n, int))
+    m = load_script('04b_stream_batch.py')
+    monkeypatch.setattr(m, 'RUNS', [
+        dict(name = 'a', dec_stage = 6, duration_s = 0.2),
+        dict(name = 'b', dec_stage = 6, duration_s = 0.1, notes = 'n')])
+    monkeypatch.setattr(m, 'NPOINTS_FINE', 60)
+    monkeypatch.setattr(m, 'NPOINTS_GAIN', 10)
+    monkeypatch.setattr(m, 'NSAMPS', 10)
+    monkeypatch.setattr(m, 'FRES_UPDATE', dict(method = 'spacing',
+                                                max_shift = 0.1))
+    # The same board for both runs, as on hardware (a new simulated one
+    # would not know the NCO settings the calibration was taken at)
+
+    async def same_board(args, root, path):
+        """
+        Stand in for connect: the board made above.
+
+        Parameters:
+        args, root, path: ignored.
+
+        Returns:
+        crs (SimulatedCRS): the board.
+        """
+        return crs
+
+    monkeypatch.setattr(m, 'connect', same_board)
+    argv = ['--store', str(path), '--simulate', '--notes', 'cold']
+    result = m.main(m.parse_args(argv))
+    assert result['calibration'] == 'tune0/cal0'
+    assert result['write'] == 'tune0/cal0/write0'
+    assert result['runs'] == [['tune0/cal0/write0/ts0'],
+                              ['tune0/cal0/write0/ts1']]
+    assert board_lock.holder(0) is None
+    root = dl.open_store(path)
+    runs = dl.stream_runs(root)
+    assert [r['name'] for r in runs] == ['a', 'b'] and runs[1]['notes'] == 'n'
+    cal = root['tune0/cal0']
+    assert cal.attrs['notes'] == 'cold'
+    up = cal.attrs['fres_update']
+    assert up['method'] == 'spacing' and up['n_updated'] >= n - 1
+    assert up['n_outside'] <= 1 and 'fres_sweep' in cal
+    step = (fr / qr * 5) / 60
+    moved = cal['fres'][:] != cal['fres_sweep'][:]
+    assert np.all(np.abs(cal['fres'][:][moved] - fr[moved]) < 6 * step[moved])
+    assert np.all(np.abs(cal['fres_sweep'][:] - fr - 0.3 * fr / qr) < 1.)
+    out = capsys.readouterr().out
+    assert 'moved to the sweep' in out and "a: ['tune0/cal0/write0/ts0']" in out
+    # Reusing the calibration: no new sweep, the tones written again
+    monkeypatch.setattr(m, 'CALIBRATION', 'tune0/cal0')
+    monkeypatch.setattr(m, 'RUNS', [dict(name = 'c', dec_stage = 6,
+                                         duration_s = 0.1)])
+    result = m.main(m.parse_args(argv))
+    assert result['calibration'] == 'tune0/cal0'
+    assert result['runs'] == [['tune0/cal0/write1/ts2']]
+    assert [c['name'] for c in dl.calibrations(root['tune0'])] == ['cal0']
 
 
 def test_archive_store_script(tmp_path, capsys):

@@ -311,6 +311,24 @@ def test_receive_blocks_calls_poll():
     poll.assert_called_once_with()
 
 
+def test_receive_blocks_cancelled():
+    """
+    A true ``cancelled`` after a batch stops the capture with
+    StreamCancelled; a false one lets it finish.
+    """
+    batches = [packets_from_frames(make_frames(4, 2, 10), 27, 0)]
+    blocks = np.zeros((1, 1, 4, 4), dtype = np.int32)
+    with patched_streamer(batches):
+        with pytest.raises(util.StreamCancelled):
+            util._receive_blocks('eth0', 27, [1], 2, 4, blocks,
+                                 lambda m: 0, Mock(), cancelled = lambda: True)
+    with patched_streamer(batches):
+        dropped = util._receive_blocks('eth0', 27, [1], 2, 4, blocks,
+                                       lambda m: 0, Mock(),
+                                       cancelled = lambda: False)
+    assert dropped == {1: 0}
+
+
 ################################################################################
 ############################### capture_to_zarr ################################
 ################################################################################

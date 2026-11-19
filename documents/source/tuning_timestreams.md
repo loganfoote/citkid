@@ -1,6 +1,6 @@
 ---
 title: "Tuning and timestreams"
-subtitle: "03_tune, 04_stream, store_browser, 05_calibrate_streams, 06a_find_photons, 06b_hee, 07_psds, 08_report_site, set_notes"
+subtitle: "03_tune, 04a_stream, 04b_stream_batch, store_browser, 05_calibrate_streams, 06a_find_photons, 06b_hee, 07_psds, 08_report_site, set_notes"
 ---
 
 # Overview
@@ -12,7 +12,8 @@ board with `crs_init.py` first (see "Getting started").
 | Script | What it does | Saves |
 |---|---|---|
 | `03_tune.py` | Plans the tones, sweeps the power, chooses each tone's power and frequency (two windows) | `tune{k}` |
-| `04_stream.py` | Window for calibrating, previewing and taking named timestream runs | `ts{n}` |
+| `04a_stream.py` | Window for calibrating, writing tones, previewing and taking named timestream runs | `ts{n}` |
+| `04b_stream_batch.py` | The same without a window: calibrate, write, take the runs in the settings | `ts{n}` |
 | `store_browser.py` | Any time: browse a store (groups, attributes, runs, tone marks, notes) | Notes, if edited |
 | `05_calibrate_streams.py` | Calibrates timestreams, in a window and then in batch | `ts_cal{c}` |
 | `06a_find_photons.py` | Finds photons and HEEs, with a threshold window | `photons/<name>` |
@@ -106,10 +107,10 @@ resonator list to another store (a new cooldown) without the sweeps.
 To tune again at the powers of an earlier tuning, set `PORT_TUNE`
 (and `PORT_STORE` for a tuning in another store) and start a new
 tuning: the plan, power sweep and power fits are skipped,
-`tones_init` is the earlier tuning's tones at the frequencies and spans
-`PREDICT` returns (`predict_fq` in the script, from the earlier `fres`
-and `qres`; `None` keeps them), and only the fq sweep, fq_finder and
-tones steps run.
+`tones_init` is the earlier tuning's tones at the frequencies, spans
+and powers `PREDICT` returns (`predict_tones` in the script, from the
+earlier `fres`, `qres` and `ares`; `None` keeps them), and only the fq
+sweep, fq_finder and tones steps run.
 
 ## Settings
 
@@ -138,7 +139,7 @@ tones steps run.
 | `FRES_UPDATE_METHOD` | fq_finder: `'none'`, `'spacing'`, `'minS21'`, `'distance'` |
 | `RMV_GAIN_SIMPLE` | fq_finder: simple gain correction of the display |
 | `PORT_TUNE`, `PORT_STORE` | A new tuning keeps the powers of this tuning (index; `None`: a full tuning) of this store (`None`) or another |
-| `PREDICT` | `None`, or a function of the earlier `fres`, `qres` returning `fres_pred`, `qres_pred` (`predict_fq` in the script) |
+| `PREDICT` | `None`, or a function of the earlier `fres`, `qres`, `ares` returning `fres_pred`, `qres_pred`, `ares_pred` (`predict_tones` in the script) |
 | `STEPS`, `REDOABLE` | The steps; leave them |
 
 ## Command line
@@ -146,28 +147,31 @@ tones steps run.
 `--modules`, `--new`, `--redo <step>`, `--windows`, `--list-windows`,
 `--port-tune k`, `--simulate`.
 
-# 04_stream.py: take timestreams
+# 04a_stream.py: take timestreams
 
 A window on one tuning (the latest with tones, or `--tune k`):
 
 | Part | What it does |
 |---|---|
 | Calibration | Calibrate the selected tone set (a target sweep, saved as `cal{j}`), once per set; pick which saved calibration to use |
-| Preview | Capture `PREVIEW_S` seconds and plot one tone as x, parallel/perpendicular to the loop, or I and Q, with its PSD if asked (not saved) |
-| Run | Name, notes, decimation stage and duration (or a `PRESETS` entry); the stream is saved as `cal{j}/write{w}/ts{n}` and listed in the run list; a name is used once per tuning |
+| Tones on the board | Write tones writes the chosen chunk of the set from its calibration (the chunks are planned for the stage set there: a fast stage takes fewer tones, so a big set is written and streamed one chunk at a time); Clear tones clears the board. Nothing else writes tones |
+| Preview | Capture `PREVIEW_S` seconds of the tones on the board and plot one tone as x, parallel/perpendicular to the loop, or I and Q, with its PSD if asked (not saved) |
+| Run | Name, notes, decimation stage and duration (or a `PRESETS` entry); the tones on the board are streamed and saved as `cal{j}/write{w}/ts{n}` and listed in the run list; a name is used once per tuning |
 | View run | Shows a run's first chunks like a capture |
+| Cancel | Stops the running calibration, capture or run at its next sweep point or packet batch; what it saved is removed (the calibration group, or the run's streams and record). No shortcut, so it is not hit by accident |
 
 A calibration is valid only while the NCO frequencies are unchanged, so
-work one tone set at a time: calibrate, preview and run, then the next
-set. Restarting the script keeps the calibrations usable unless something
-else set the NCOs in between (a power cycle, `crs_init.py`). Tones stay
-written between captures and runs. The script holds the board while its
+work one tone set at a time: calibrate, write the tones, preview and
+run, then the next set. Restarting the script keeps the calibrations
+usable unless something else set the NCOs in between (a power cycle,
+`crs_init.py`). Tones stay written between captures and runs; a
+calibration sweep clears them. The script holds the board while its
 window is open. `--simulate` streams a simulated device; `--sim-pulses`
 adds photons and HEEs to it.
 
 ## Settings
 
-{{settings:04_stream.py}}
+{{settings:04a_stream.py}}
 
 | Setting | Meaning |
 |---|---|
@@ -175,12 +179,41 @@ adds photons and HEEs to it.
 | `PREVIEW_DEC`, `PREVIEW_S` | Preview decimation stage and duration, s |
 | `PRESETS` | Runs offered in the window: name, stage, duration, notes |
 | `NPOINTS_FINE`, `NPOINTS_GAIN`, `GAIN_SPAN_FACTOR`, `NSAMPS` | Calibration sweeps, as in `03_tune.py` |
+| `FRES_UPDATE` | `None`, or `dict(method = 'spacing', max_shift = 0.1)`: after each calibration sweep, move every tone to the resonance its fine sweep shows (`method`: `'spacing'`, `'distance'` or `'minS21'`), if the move is at most `max_shift` of the sweep span; a tone whose update is farther keeps its frequency. The frequencies swept are kept as `fres_sweep` |
 | `SIM_PULSES`, `SIM_PULSE_SETTINGS` | `--simulate`: photon pulses and HEEs in the streams |
 | `SIM_SNR_DB` | Simulated S/N while pulses are on, dB (`None`: the store's) |
 
 ## Command line
 
 `--modules`, `--tune k`, `--simulate`, `--sim-pulses`.
+
+# 04b_stream_batch.py: timestreams without a window
+
+Calibrates `TONE_SET` (or reuses `CALIBRATION`), writes chunk `CHUNK`
+of its tones (planned for stage `WRITE_DEC`), takes the runs in `RUNS`
+one after another, and clears the tones. Everything is set in the
+script; nothing is asked. To take several sets, or the same set with
+other settings, loop over the script's `take` (or
+`citkid.crs.procedures.stream_batch`) from your own script, changing
+the settings between calls.
+
+## Settings
+
+{{settings:04b_stream_batch.py}}
+
+| Setting | Meaning |
+|---|---|
+| `MODULES` | Modules connected to the device |
+| `TONE_SET` | The tone set |
+| `CALIBRATION` | `None`: take a calibration sweep; or a saved one to reuse (`'tune0/cal2'`), which must be in frame |
+| `FRES_UPDATE` | As in `04a_stream.py` |
+| `WRITE_DEC`, `CHUNK` | The stage the chunks are planned for, and which chunk to write and stream (`0`: the whole set when it fits) |
+| `RUNS` | The timestreams, in order: `name`, `dec_stage`, `duration_s`, `notes` |
+| `NPOINTS_FINE`, `NPOINTS_GAIN`, `GAIN_SPAN_FACTOR`, `NSAMPS` | Calibration sweep, as in `03_tune.py` |
+
+## Command line
+
+`--modules`, `--tune k`, `--simulate`, `--notes`.
 
 # store_browser.py: look around a store
 

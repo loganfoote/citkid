@@ -2,7 +2,7 @@
 Exclusive use of a CRS board by one script, for timestreams.
 
 Streaming needs the board's whole network bandwidth, so while a script
-streams (``procedures/04_stream.py`` holds the lock for as long as its
+streams (``procedures/04a_stream.py`` holds the lock for as long as its
 window is open), no other script may use the board. The lock is a file on
 the DAQ computer, one per board (``<lock dir>/crs<serial>.lock``, holding
 the owner's process id, a description, and the start time):
@@ -170,7 +170,7 @@ def _describe(info):
     info (dict): ``pid``, ``owner``, ``since``.
 
     Returns:
-    text (str): e.g. '04_stream.py (pid 1234) since 2026-11-10 15:00:00'.
+    text (str): e.g. '04a_stream.py (pid 1234) since 2026-11-10 15:00:00'.
     """
     return (f"{info.get('owner', 'a script')} (pid {info.get('pid')}) "
             f"since {info.get('since', '?')}")

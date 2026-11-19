@@ -1,6 +1,7 @@
 """
-Interactive timestreams of a tuning: calibrate its tone sets once, preview
-them, then take named timestreams without sweeping or writing tones again.
+Interactive timestreams of a tuning: calibrate its tone sets once, write
+their tones, preview them, then take named timestreams without sweeping
+or writing tones again.
 
 ``run_stream_gui`` opens a window on a tuning (``tune{k}`` with ``tones``,
 from ``procedures/03_tune.py``):
@@ -22,19 +23,25 @@ from ``procedures/03_tune.py``):
   in the list and not used). A restarted session takes over the NCO
   settings the board still has (``CRS.recover_nco_state``), so its
   calibrations stay usable. So work one tone set at a time: calibrate
-  it, then write tones and stream as often as needed.
-- Preview: Capture writes the chosen calibration's tones (the chunk
-  holding the selected tone) and streams a few seconds into memory. Pick
+  it, write its tones, then preview and stream as often as needed.
+- Tones on the board: Write tones writes the chosen chunk of the set
+  (planned for the chosen stage: a fast stage takes fewer tones, so a
+  big set is written and streamed one chunk at a time) from its
+  calibration; Clear tones clears the board. Nothing else writes
+  tones: a preview or run streams exactly what is written and refuses
+  otherwise.
+- Preview: Capture streams the board's tones a few seconds into
+  memory. Pick
   a tone to see its timestream as the resonance frequency shift x
   (``xcal.tangent.loop_tangent_shift``), as I and Q, or parallel and
 perpendicular to
   the IQ loop, with its calibration loop and the stream in the IQ plane.
   R fits the plots to their data again. Nothing is saved.
 - Run: enter a name (and notes), a decimation stage, and a length, and
-  run: the selected tone set gets its tones written (unless they are on
-  the board) and its stream, saved under its chosen calibration and the
-  tone write (``tune{k}/cal{j}/write{w}/ts{n}``), and the run is added
-  to the tuning's run list (``crs.procedures.stream_tone_sets``).
+  run: the board's tones are streamed and saved under their
+  calibration and tone write (``tune{k}/cal{j}/write{w}/ts{n}``), and
+  the run is added to the tuning's run list
+  (``crs.procedures.stream_tone_sets`` with ``only_written``).
   Presets fill in the usual runs.
   Repeat for the next timestream. For another tone set, select it and
   calibrate it (its NCO is set, so the sets calibrated before go stale).
@@ -59,6 +66,7 @@ the board's needs a session with global control, and other sessions can't
 sweep until the stream ends and the board is back at stage 6.
 """
 import inspect
+import threading
 import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets
@@ -68,11 +76,12 @@ from ..qt_compat import (
 )
 from ..xcal.tangent import loop_tangent_shift
 from .procedures import (
-    calibrate_tone_set, calibration_in_frame, plan_stream_chunks,
-    stream_tone_sets, target_sweep, tones_written, write_set_tones
+    SweepCancelled, calibrate_tone_set, calibration_in_frame,
+    plan_stream_chunks, stream_tone_sets, target_sweep, tones_written,
+    write_set_tones
 )
 from .quick_check import AsyncWorker, ProgressClock
-from .util import get_sample_freq
+from .util import StreamCancelled, get_sample_freq
 from ..signal.psd import get_psd
 
 # Preview display modes
@@ -172,7 +181,8 @@ class StreamWindow(QtWidgets.QMainWindow):
 
     def __init__(
         self, connect, tune, preview_dec = 6, preview_s = 5., presets = (),
-        sweep_kwargs = None, title = 'Timestreams', ui_scale = 1.0
+        sweep_kwargs = None, title = 'Timestreams', ui_scale = 1.0,
+        fres_update = None
     ):
         """
         Build the window and start connecting.
@@ -190,6 +200,10 @@ class StreamWindow(QtWidgets.QMainWindow):
         sweep_kwargs (dict or None): starting calibration sweep settings
             (``target_sweep``); those in ``CAL_SETTINGS`` can be changed
             in the window. Default None (its defaults).
+        fres_update (dict or None): move the tone frequencies to the
+            resonances each calibration sweep shows, within a window
+            (``procedures.apply_fres_update``: ``method``, ``max_shift``).
+            Default None: no.
         title (str): window title. Default 'Timestreams'.
         ui_scale (float): font size multiplier. Default 1.0.
         """
@@ -203,12 +217,17 @@ class StreamWindow(QtWidgets.QMainWindow):
             raise ValueError(f'{tune.basename}/tones has no tone_module; '
                              'make the tuning with 03_tune.py')
         self.sweep_kwargs = dict(sweep_kwargs or {})
+        self.fres_update = dict(fres_update) if fres_update else None
         self.presets = [dict(p) for p in presets]
         self.cals = dl.calibrations(tune)
         self.crs, self.cal, self.preview, self.runs = None, None, None, []
         self.view = None            # a saved run shown instead of a capture
         self.chosen, self.written = {}, {}
         self.worker = AsyncWorker(self)
+        # Set to ask the running calibration, capture or run to stop;
+        # read on the background loop
+        self._cancel = threading.Event()
+        self._cancellable = False
         self._clock = ProgressClock()
         self._progress_on = False
         self._message.connect(self._set_status)
@@ -312,6 +331,31 @@ class StreamWindow(QtWidgets.QMainWindow):
         form.addRow('Use', self.cal_box)
         outer.addWidget(box)
 
+        # Tones on the board: written here, never by a preview or run
+        box = QtWidgets.QGroupBox('Tones on the board')
+        form = QtWidgets.QFormLayout(box)
+        self.write_dec = dec_box(6)
+        self.write_dec.setToolTip('The stage the chunks are planned '
+                                  'for: fast stages take fewer tones')
+        self.write_dec.valueChanged.connect(self._update_chunks)
+        self.chunk_box = QtWidgets.QComboBox()
+        self.chunk_box.setToolTip('The part of the tone set to write '
+                                  '(all of it when it fits)')
+        self.write_btn = QtWidgets.QPushButton('Write tones')
+        self.write_btn.clicked.connect(self.write_tones)
+        self.clear_btn = QtWidgets.QPushButton('Clear tones')
+        self.clear_btn.clicked.connect(self.clear_tones)
+        self.written_label = QtWidgets.QLabel()
+        self.written_label.setWordWrap(True)
+        form.addRow('Stage', self.write_dec)
+        form.addRow('Chunk', self.chunk_box)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(self.write_btn)
+        row.addWidget(self.clear_btn)
+        form.addRow(row)
+        form.addRow(self.written_label)
+        outer.addWidget(box)
+
         # Preview
         box = QtWidgets.QGroupBox('Preview (not saved)')
         form = QtWidgets.QFormLayout(box)
@@ -351,20 +395,14 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.run_dec = dec_box(6)
         self.run_dec.valueChanged.connect(self._update_buttons)
         self.run_s = secs_box(60.)
-        self.write_btn = QtWidgets.QPushButton('Write tones')
-        self.write_btn.clicked.connect(self.write_tones)
         self.run_btn = QtWidgets.QPushButton('Run')
         self.run_btn.clicked.connect(self.run)
-        self.written_label = QtWidgets.QLabel()
-        self.written_label.setWordWrap(True)
         form.addRow('Preset', self.preset_box)
         form.addRow('Name', self.name_edit)
         form.addRow('Notes', self.notes_edit)
         form.addRow('Stage', self.run_dec)
         form.addRow('Length', self.run_s)
-        form.addRow(self.write_btn)
         form.addRow(self.run_btn)
-        form.addRow(self.written_label)
         outer.addWidget(box)
 
         self.runs_list = QtWidgets.QListWidget()
@@ -395,12 +433,21 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.progress = QtWidgets.QProgressBar()
         self.progress.setTextVisible(True)
         self._show_progress(False)
-        outer.addWidget(self.progress)
+        self.cancel_btn = QtWidgets.QPushButton('Cancel')
+        self.cancel_btn.setToolTip('Stop the running calibration, capture '
+                                   'or run; what it saved is removed. '
+                                   'No shortcut, on purpose.')
+        self.cancel_btn.clicked.connect(self.cancel)
+        self.cancel_btn.setEnabled(False)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(self.progress, stretch = 1)
+        row.addWidget(self.cancel_btn)
+        outer.addLayout(row)
         self.status = QtWidgets.QLabel()
         self.status.setWordWrap(True)
         outer.addWidget(self.status)
         self._inputs = (self.set_box, self.cal_box, self.cal_notes_edit,
-                        self.preview_dec, self.preview_s, self.preset_box,
+                        self.write_dec, self.chunk_box, self.preview_dec, self.preview_s, self.preset_box,
                         self.name_edit, self.notes_edit, self.run_dec,
                         self.run_s, self.view_chunks) + \
             tuple(self.cal_params.values())
@@ -536,9 +583,12 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.progress.setValue(min(done, total))
         self.progress.setFormat(self._clock.text(done, total))
 
-    def _run_chunks(self):
+    def _chunks(self, dec):
         """
-        Return the selected tone set's chunks at the run's stage.
+        Return the selected tone set's chunks at a stage.
+
+        Parameters:
+        dec (int): the decimation stage.
 
         Returns:
         chunks (list of np.array or None): ``plan_stream_chunks``, or None
@@ -546,10 +596,63 @@ class StreamWindow(QtWidgets.QMainWindow):
         """
         try:
             return plan_stream_chunks(
-                self.tones['tone_module'][self._set_rows()],
-                self.run_dec.value())
+                self.tones['tone_module'][self._set_rows()], int(dec))
         except ValueError:
             return None
+
+    def _update_chunks(self):
+        """
+        List the selected tone set's chunks at the write stage.
+        """
+        chunks = self._chunks(self.write_dec.value()) or []
+        self.chunk_box.blockSignals(True)
+        self.chunk_box.clear()
+        for i, rows in enumerate(chunks):
+            text = f'{len(rows)} tones' if len(chunks) == 1 else \
+                f'{i + 1} of {len(chunks)}: {len(rows)} tones'
+            self.chunk_box.addItem(text, i)
+        if not chunks:
+            self.chunk_box.addItem('(none: the stage takes no tones)', None)
+        self.chunk_box.blockSignals(False)
+        self._update_buttons()
+
+    def board_ready(self):
+        """
+        Say whether the board holds tones of the chosen calibration
+        (written here with Write tones), which a preview or run needs.
+
+        Returns:
+        ready (bool): True if so.
+        """
+        w, cal = self.written, self.cal
+        return bool(w) and cal is not None and \
+            w.get('calibration') == cal['path'] and \
+            w.get('tone_set') == cal['set']
+
+    def _fits(self, dec):
+        """
+        Say whether the board's tones can stream at a stage, and
+        explain if not.
+
+        Parameters:
+        dec (int): the decimation stage.
+
+        Returns:
+        ok (bool): True if they can.
+        """
+        rows = self.cal['rows'][np.asarray(self.written['rows'])]
+        try:
+            n = len(plan_stream_chunks(self.tones['tone_module'][rows],
+                                       int(dec)))
+        except ValueError as e:
+            self._set_status(str(e))
+            return False
+        if n != 1:
+            self._set_status(f'The {len(rows)} tones on the board are too '
+                             f'many for stage {dec}: write a smaller '
+                             'chunk (set the stage above Chunk).')
+            return False
+        return True
 
     def _update_buttons(self):
         """
@@ -562,19 +665,22 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.cal_btn.setEnabled(idle)
         has_cal = self.cal is not None and self.cal['in_frame'] and \
             self.cal['set'] == self.set_box.currentData()
-        self.capture_btn.setEnabled(idle and has_cal)
-        chunks = self._run_chunks()
-        self.write_btn.setEnabled(idle and has_cal and chunks is not None
-                                  and len(chunks) == 1)
+        ready = has_cal and self.board_ready()
+        self.capture_btn.setEnabled(idle and ready)
+        self.write_btn.setEnabled(idle and has_cal and
+                                  self.chunk_box.currentData() is not None)
+        self.clear_btn.setEnabled(idle and bool(self.written))
         name = self.name_edit.text().strip()
         taken = name in self.run_names()
-        self.run_btn.setEnabled(idle and has_cal and bool(name) and
+        self.run_btn.setEnabled(idle and ready and bool(name) and
                                 not taken)
         self.run_btn.setToolTip(
             f'A run named {name!r} exists: choose another name' if taken
             else '')
         self.view_btn.setEnabled(not self.worker.busy and
                                  self.runs_list.currentRow() >= 0)
+        self.cancel_btn.setEnabled(self.worker.busy and self._cancellable
+                                   and not self._cancel.is_set())
         w = self.written
         self.written_label.setText(
             'Tones on the board: none (or unknown)' if not w else
@@ -602,6 +708,7 @@ class StreamWindow(QtWidgets.QMainWindow):
                 f"res {self.tones['res_idxs'][r]}: "
                 f"{self.tones['fres'][r] / 1e6:.4f} MHz", int(r))
         self.tone_box.blockSignals(False)
+        self._update_chunks()
         self._refresh_cals()
 
     def _refresh_cals(self, select = None):
@@ -684,7 +791,8 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.run_dec.setValue(int(p['dec_stage']))
         self.run_s.setValue(float(p['duration_s']))
 
-    def _submit(self, coro, callback, message, progress = False):
+    def _submit(self, coro, callback, message, progress = False,
+                cancellable = False):
         """
         Run a job on the background loop.
 
@@ -694,6 +802,8 @@ class StreamWindow(QtWidgets.QMainWindow):
         message (str): status message while it runs.
         progress (bool): If True, show the progress bar until it is done.
             Default False.
+        cancellable (bool): If True, the Cancel button can stop it (the
+            job reads ``self._cancel``). Default False.
         """
         def done(result, error):
             """
@@ -703,13 +813,43 @@ class StreamWindow(QtWidgets.QMainWindow):
             result: the job's result.
             error (BaseException or None): its error.
             """
+            self._cancellable = False
             self._show_progress(False)
             callback(result, error)
 
+        self._cancel.clear()
+        self._cancellable = bool(cancellable)
         self._show_progress(progress)
         self.worker.submit(coro, done)
         self._set_status(message)
         self._update_buttons()
+
+    def cancel(self):
+        """
+        Ask the running calibration, capture or run to stop (the Cancel
+        button). It stops at its next sweep point or packet batch, on
+        the background loop, and its callback reports what was removed.
+        Does nothing when no such job runs.
+        """
+        if not (self.worker.busy and self._cancellable) or \
+                self._cancel.is_set():
+            return
+        self._cancel.set()
+        self.cancel_btn.setEnabled(False)
+        self._set_status('Cancelling...')
+
+    @staticmethod
+    def _was_cancelled(error):
+        """
+        Say whether a job's error is a cancellation.
+
+        Parameters:
+        error (BaseException or None): the job's error.
+
+        Returns:
+        cancelled (bool): True if so.
+        """
+        return isinstance(error, (SweepCancelled, StreamCancelled))
 
     ############################################################################
     def _on_connected(self, crs, error):
@@ -744,6 +884,7 @@ class StreamWindow(QtWidgets.QMainWindow):
         s, kw = self.set_box.currentData(), self.cal_kwargs()
         crs, tune, report = self.crs, self.tune, self._progress.emit
         notes = self.cal_notes_edit.toPlainText()
+        cancelled, fres_update = self._cancel.is_set, self.fres_update
 
         async def job():
             """
@@ -754,12 +895,13 @@ class StreamWindow(QtWidgets.QMainWindow):
             """
             grp = await calibrate_tone_set(crs, tune, s, verbose = False,
                                            progress = report, notes = notes,
-                                           **kw)
+                                           cancelled = cancelled,
+                                           fres_update = fres_update, **kw)
             return grp.basename
 
         self._submit(job(), self._on_calibrated,
                      f'Calibrating tone set {s} ({len(self._set_rows())} '
-                     'tones)...', progress = True)
+                     'tones)...', progress = True, cancellable = True)
 
     def _on_calibrated(self, name, error):
         """
@@ -775,52 +917,55 @@ class StreamWindow(QtWidgets.QMainWindow):
             # The notes were for that calibration; the next starts empty
             self.cal_notes_edit.clear()
             self._refresh_cals(select = name)
+            up = self.tune[name].attrs.get('fres_update')
+            moved = '' if not up else (
+                f" {up['n_updated']} tone frequencies moved to the sweep's "
+                f"resonances, {up['n_outside']} kept.")
             self._set_status(f"Tone set {self.cal['set']} calibrated as "
-                             f'{name}. Capture to preview it.')
+                             f'{name}.{moved} Write the tones, then capture '
+                             'or run.')
+        elif self._was_cancelled(error):
+            self._refresh_cals(select = self.chosen.get(
+                self.set_box.currentData()))
+            self._set_status('Calibration cancelled: nothing saved, the '
+                             'tones cleared.')
         else:
             self._set_status(f'Calibration failed: {error!r}')
         self._update_buttons()
 
     def capture(self):
         """
-        Write the chosen calibration's tones (the chunk holding the
-        selected tone) unless they are on the board, and stream a preview
-        into memory.
+        Stream the tones on the board (Write tones first) into memory
+        for a preview.
         """
-        cal, t, crs = self.cal, self.tones, self.crs
-        dec, secs = self.preview_dec.value(), self.preview_s.value()
-        modules = t['tone_module'][cal['rows']]
-        try:
-            chunks = plan_stream_chunks(modules, dec)
-        except ValueError as e:
-            self._set_status(str(e))
+        if not self.board_ready():
+            self._set_status('Write the tones first.')
             return
-        r = self.tone_box.currentData()
-        pos = int(np.flatnonzero(cal['rows'] == r)[0]) if r is not None \
-            else 0
-        chunk = next(c for c in chunks if pos in c)
-        grp, written = self.tune[cal['name']], self.written
-        reuse = tones_written(written, cal['set'], chunk, cal['path'])
-        report = self._progress.emit
+        cal, crs = self.cal, self.crs
+        dec, secs = self.preview_dec.value(), self.preview_s.value()
+        if not self._fits(dec):
+            return
+        chunk = np.asarray(self.written['rows'], dtype = np.int64)
+        fres = np.asarray(self.written['fres'], dtype = np.float64)
+        report, cancelled = self._progress.emit, self._cancel.is_set
 
         async def job():
             """
-            Write the chunk if needed and stream it into memory.
+            Stream the board's tones into memory.
 
             Returns:
             preview (dict): the capture.
             """
-            fres = await write_set_tones(crs, grp, chunk, written)
             zt = await crs.stream_to_memory(secs, dec, verbose = False,
-                                            progress = report)
+                                            progress = report,
+                                            cancelled = cancelled)
             # The stream's stage: the CRS may be back at stage 6 by now
             return dict(rows = cal['rows'][chunk], pos = chunk, fres = fres,
                         zt = zt, dt = 1 / get_sample_freq(dec))
 
         self._submit(job(), self._on_captured,
-                     ('Streaming' if reuse else 'Writing and streaming')
-                     + f' {len(chunk)} tones for {secs:g} s at stage '
-                     f'{dec}...', progress = True)
+                     f'Streaming {len(chunk)} tones for {secs:g} s at '
+                     f'stage {dec}...', progress = True, cancellable = True)
 
     def _on_captured(self, preview, error):
         """
@@ -834,6 +979,8 @@ class StreamWindow(QtWidgets.QMainWindow):
             self.preview, self.view = preview, None
             self._set_status(f"Captured {preview['zt'].shape[1]:,} samples "
                              f"of {len(preview['rows'])} tones.")
+        elif self._was_cancelled(error):
+            self._set_status('Capture cancelled.')
         else:
             self._set_status(f'Capture failed: {error!r}')
         self._update_buttons()
@@ -841,16 +988,17 @@ class StreamWindow(QtWidgets.QMainWindow):
 
     def write_tones(self):
         """
-        Write the selected tone set's tones for the run's stage (when it
-        streams in one chunk), even if they are on the board already.
+        Write the chosen chunk of the selected tone set (planned for
+        the write stage) from its calibration, even if it is on the
+        board already. Previews and runs stream what is written.
         """
-        cal, chunks = self.cal, self._run_chunks()
-        if cal is None or chunks is None or len(chunks) != 1:
-            self._set_status('Write tones needs a calibration and a tone '
-                             "set that streams in one chunk at the run's "
-                             'stage.')
+        cal, chunks = self.cal, self._chunks(self.write_dec.value())
+        i = self.chunk_box.currentData()
+        if cal is None or not chunks or i is None or i >= len(chunks):
+            self._set_status('Write tones needs a calibration and a chunk '
+                             'the stage can take.')
             return
-        grp, written, rows = self.tune[cal['name']], self.written, chunks[0]
+        grp, written, rows = self.tune[cal['name']], self.written, chunks[i]
         crs = self.crs
 
         async def job():
@@ -867,6 +1015,33 @@ class StreamWindow(QtWidgets.QMainWindow):
         self._submit(job(), self._on_written,
                      f"Writing {len(rows)} tones of tone set {cal['set']}...")
 
+    def clear_tones(self):
+        """
+        Clear the board's tones (the button).
+        """
+        crs, written = self.crs, self.written
+
+        async def job():
+            """
+            Clear the tones.
+            """
+            await crs.clear_tones()
+            written.clear()
+
+        self._submit(job(), self._on_cleared, 'Clearing the tones...')
+
+    def _on_cleared(self, _result, error):
+        """
+        Report the clear (GUI thread).
+
+        Parameters:
+        _result: unused.
+        error (BaseException or None): the error.
+        """
+        self._set_status('Tones cleared.' if error is None else
+                         f'Clear failed: {error!r}')
+        self._update_buttons()
+
     def _on_written(self, n, error):
         """
         Report the write (GUI thread).
@@ -876,33 +1051,40 @@ class StreamWindow(QtWidgets.QMainWindow):
         error (BaseException or None): the write error.
         """
         if error is None:
-            self._set_status(f'{n} tones written; they stay on the board '
-                             'for the next captures and runs.')
+            self._set_status(f'{n} tones written; captures and runs stream '
+                             'them until they are cleared or written '
+                             'again.')
         else:
             self._set_status(f'Write failed: {error!r}')
         self._update_buttons()
 
     def run(self):
         """
-        Take the named timestream of the selected tone set (saved), with
-        its chosen calibration.
+        Take the named timestream of the tones on the board (Write tones
+        first), saved under their calibration.
         """
         name = self.name_edit.text().strip()
         if name in self.run_names():
             self._set_status(f'A run named {name!r} exists: choose '
                              'another name.')
             return
+        if not self.board_ready():
+            self._set_status('Write the tones first.')
+            return
         notes = self.notes_edit.toPlainText()
         dec, secs = self.run_dec.value(), self.run_s.value()
+        if not self._fits(dec):
+            return
         s, cal = self.cal['set'], self.cal['path']
         coro = stream_tone_sets(
             self.crs, self.tune, name, secs, dec, notes = notes,
             set_idxs = [s], calibrations = {s: cal}, written = self.written,
             keep_tones = True, status = self._message.emit, verbose = False,
-            progress = self._progress.emit, **self.cal_kwargs())
+            progress = self._progress.emit, only_written = True,
+            cancelled = self._cancel.is_set)
         self._submit(coro, self._on_run,
                      f'Running {name} on tone set {s} with {cal}...',
-                     progress = True)
+                     progress = True, cancellable = True)
 
     def _on_run(self, paths, error):
         """
@@ -919,6 +1101,9 @@ class StreamWindow(QtWidgets.QMainWindow):
             self._set_status(f"{run['name']}: saved {len(paths)} "
                              f"stream(s) as {run['group']}. Ready for the "
                              'next one.')
+        elif self._was_cancelled(error):
+            self._set_status('Run cancelled: its streams and record '
+                             'removed; the tones stay on the board.')
         else:
             self._set_status(f'Run failed: {error!r}')
         self._refresh_cals(select = self.chosen.get(self.set_box.currentData()))
@@ -1105,7 +1290,8 @@ class StreamWindow(QtWidgets.QMainWindow):
 
 def run_stream_gui(
     connect, tune, preview_dec = 6, preview_s = 5., presets = (),
-    sweep_kwargs = None, title = 'Timestreams', ui_scale = 1.0
+    sweep_kwargs = None, title = 'Timestreams', ui_scale = 1.0,
+    fres_update = None
 ):
     """
     Open the timestream window on a tuning and wait until it is closed.
@@ -1116,7 +1302,8 @@ def run_stream_gui(
         stage than the board's). It runs on the window's background event
         loop, which every sweep and stream then uses.
     tune (zarr.Group): the tuning, writable.
-    preview_dec, preview_s, presets, sweep_kwargs, title, ui_scale: see
+    preview_dec, preview_s, presets, sweep_kwargs, title, ui_scale,
+        fres_update: see
         ``StreamWindow``.
 
     Returns:
@@ -1126,7 +1313,7 @@ def run_stream_gui(
     win = StreamWindow(connect, tune, preview_dec = preview_dec,
                        preview_s = preview_s, presets = presets,
                        sweep_kwargs = sweep_kwargs, title = title,
-                       ui_scale = ui_scale)
+                       ui_scale = ui_scale, fres_update = fres_update)
     delete_on_close(win)
     fit_window_to_screen(win)
     win.show()

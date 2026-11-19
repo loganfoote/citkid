@@ -1586,7 +1586,7 @@ class CRS:
     @uses_board
     async def stream(
         self, ts_duration_s, dec_stage, grp, tmp_directory = None,
-        verbose = True, progress = None
+        verbose = True, progress = None, cancelled = None
     ):
         """
         Stream a timestream of the currently written tones to a Zarr group.
@@ -1632,6 +1632,10 @@ class CRS:
         progress (callable or None): if given, called as ``progress(done,
             total)`` in samples, from the elapsed time, every 0.2 s while
             streaming (``util.run_with_time_progress``). Default None.
+        cancelled (callable or None): called between packet batches on
+            the capture thread; True stops the stream with
+            ``util.StreamCancelled`` (what was saved is left to the
+            caller to remove). Default None.
 
         Returns:
         None
@@ -1679,7 +1683,8 @@ class CRS:
             dec_stage, ts_duration_s, verbose, util.capture_to_zarr,
             self.interface, self.serial_number, module_idxs, max_ntones,
             nframes, z_dest, self.ch_map,
-            cfg_grp = grp.require_group('crs_config'), progress = progress
+            cfg_grp = grp.require_group('crs_config'), progress = progress,
+            cancelled = cancelled
             )
         _warn_dropped(dropped)
 
@@ -1696,7 +1701,8 @@ class CRS:
 
     @uses_board
     async def stream_to_memory(
-        self, ts_duration_s, dec_stage, verbose = True, progress = None
+        self, ts_duration_s, dec_stage, verbose = True, progress = None,
+        cancelled = None
     ):
         """
         Stream a timestream of the currently written tones into memory and
@@ -1717,6 +1723,7 @@ class CRS:
             See self.set_decimation for details.
         verbose (bool): If True, displays a progress bar while taking data.
         progress (callable or None): see ``stream``. Default None.
+        cancelled (callable or None): see ``stream``. Default None.
 
         Returns:
         zt (np.array complex128): timestream of shape (ntones, nsamples),
@@ -1741,7 +1748,7 @@ class CRS:
         buffers, dropped = await self._capture(
             dec_stage, ts_duration_s, verbose, util.capture_to_memory,
             self.interface, self.serial_number, module_idxs, max_ntones,
-            nframes, progress = progress
+            nframes, progress = progress, cancelled = cancelled
             )
         _warn_dropped(dropped)
 
@@ -1786,7 +1793,7 @@ class CRS:
 
     async def _capture(
         self, dec_stage, ts_duration_s, verbose, capture, *args,
-        cfg_grp = None, progress = None
+        cfg_grp = None, progress = None, cancelled = None
     ):
         """
         Set the decimation stage, run a capture function, and restore the
@@ -1810,6 +1817,8 @@ class CRS:
         """
         if progress is not None and not callable(progress):
             raise TypeError('progress must be callable or None')
+        if cancelled is not None:
+            capture = functools.partial(capture, cancelled = cancelled)
         await self.set_decimation(dec_stage, verbose = verbose)
         try:
             if cfg_grp is not None:

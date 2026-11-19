@@ -424,7 +424,8 @@ class SimulatedCRS:
 
     @uses_board
     async def stream_to_memory(
-        self, ts_duration_s, dec_stage, verbose = True, progress = None
+        self, ts_duration_s, dec_stage, verbose = True, progress = None,
+        cancelled = None
     ):
         """
         Stream the written tones into memory, as S21.
@@ -441,6 +442,9 @@ class SimulatedCRS:
         progress (callable or None): called as ``progress(0, nsamples)``
             and ``progress(nsamples, nsamples)``, as the CRS reports a
             stream's progress in samples. Default None.
+        cancelled (callable or None): checked when the stream starts and
+            before it ends; True raises ``util.StreamCancelled`` as the
+            CRS does. Default None.
 
         Returns:
         zt (np.array): (ntones, nsamples) complex S21; NaN rows for tones
@@ -453,6 +457,8 @@ class SimulatedCRS:
         if not getattr(self, '_stream_tones', None):
             raise RuntimeError('write tones first (write_tones_for_stream)')
         await self.set_decimation(dec_stage)
+        if cancelled is not None and cancelled():
+            raise util.StreamCancelled('stream cancelled')
         fres, ares = self._stream_tones
         per_module = max(len(r) for r in self.ch_map.values())
         util.check_frame_rate(dec_stage, len(self.ch_map),
@@ -483,6 +489,8 @@ class SimulatedCRS:
             x['rows'] = np.flatnonzero(ok)
             zt[ok] += dzdx[:, None] * x.pop('x')
             self.pulse_log.append(x)
+        if cancelled is not None and cancelled():
+            raise util.StreamCancelled('stream cancelled')
         if progress is not None:
             progress(n, n)
         # As the CRS: a shared session puts the board back at the sweep
@@ -530,7 +538,7 @@ class SimulatedCRS:
     @uses_board
     async def stream(
         self, ts_duration_s, dec_stage, grp, tmp_directory = None,
-        verbose = True, progress = None
+        verbose = True, progress = None, cancelled = None
     ):
         """
         Stream the written tones to a zarr group, in the CRS's format
@@ -545,11 +553,13 @@ class SimulatedCRS:
         tmp_directory: ignored.
         verbose (bool): ignored.
         progress (callable or None): see ``stream_to_memory``.
+        cancelled (callable or None): see ``stream_to_memory``.
         """
         from datetime import datetime
         grp.attrs['timestamp'] = datetime.now().strftime('%Y%m%d,%H:%M:%S')
         zt = await self.stream_to_memory(ts_duration_s, dec_stage,
-                                         progress = progress)
+                                         progress = progress,
+                                         cancelled = cancelled)
         scale = np.where(np.isfinite(zt[:, 0]),
                          np.nanmax(np.abs(zt), axis = 1) / 2 ** 30, np.nan)
         counts = np.zeros((2,) + zt.shape, dtype = np.int32)

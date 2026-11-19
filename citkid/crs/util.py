@@ -577,9 +577,16 @@ def _validate_capture_inputs(module_idxs, max_ntones, nframes, serial_number):
         raise ValueError('max_ntones and nframes must be positive')
     return module_idxs, max_ntones, nframes, int(serial_number)
 
+class StreamCancelled(Exception):
+    """
+    Raised by a capture when its ``cancelled`` callable asks it to stop
+    (between packet batches). The samples received so far are dropped
+    by the caller (``procedures.stream_tone_sets`` removes the stream).
+    """
+
 def _receive_blocks(
     interface, serial_number, module_idxs, max_ntones, nframes, blocks,
-    free_slot, on_block, timeout_s = 10.0, poll = None
+    free_slot, on_block, timeout_s = 10.0, poll = None, cancelled = None
 ):
     """
     Receive streamed readout packets into per-module blocks of time samples.
@@ -603,8 +610,13 @@ def _receive_blocks(
         samples. rows is block_length except for a module's last block.
     timeout_s (float): raise an error if a module that is not finished
         receives no packets for this long, in seconds.
+    cancelled (callable or None): called between packet batches; True
+        stops the capture with ``StreamCancelled``. Default None.
     poll (callable or None): if not None, called after every batch of
         packets.
+    cancelled (callable or None): if not None, called after every batch
+        too; True stops the capture with ``StreamCancelled``. Default
+        None.
 
     Returns:
     dropped (dict): keys (int) are module indices and values (int) are the
@@ -683,10 +695,13 @@ def _receive_blocks(
                     )
             if poll is not None:
                 poll()
+            if cancelled is not None and cancelled():
+                raise StreamCancelled('stream cancelled')
     return {mi: dropped[m] for m, mi in enumerate(module_idxs)}
 
 def capture_to_memory(
-    interface, serial_number, module_idxs, max_ntones, nframes, timeout_s = 10.0
+    interface, serial_number, module_idxs, max_ntones, nframes,
+    timeout_s = 10.0, cancelled = None
 ):
     """
     Receive streamed readout packets into memory. Uses the same packet
@@ -706,6 +721,8 @@ def capture_to_memory(
     nframes (int): number of time samples to capture per module.
     timeout_s (float): raise an error if a module that is not finished
         receives no packets for this long, in seconds.
+    cancelled (callable or None): called between packet batches; True
+        stops the capture with ``StreamCancelled``. Default None.
 
     Returns:
     buffers (dict): keys (int) are module indices and values (np.array int32)
@@ -728,7 +745,7 @@ def capture_to_memory(
     dropped = _receive_blocks(
         interface, serial_number, module_idxs, max_ntones, nframes, blocks,
         free_slot = lambda m: 0, on_block = lambda m, slot, k, rows: None,
-        timeout_s = timeout_s
+        timeout_s = timeout_s, cancelled = cancelled
         )
     buffers = {mi: blocks[m, 0].reshape(nframes, max_ntones, 2)
                for m, mi in enumerate(module_idxs)}
@@ -736,7 +753,8 @@ def capture_to_memory(
 
 def capture_to_zarr(
     interface, serial_number, module_idxs, max_ntones, nframes, z_out, ch_map,
-    writer = None, nslots = STREAM_NSLOTS, timeout_s = 10.0
+    writer = None, nslots = STREAM_NSLOTS, timeout_s = 10.0,
+    cancelled = None
 ):
     """
     Receive streamed readout packets and write them to a Zarr timestream
@@ -771,6 +789,8 @@ def capture_to_zarr(
         dropped) if the writer falls this many shards behind.
     timeout_s (float): raise an error if a module that is not finished
         receives no packets for this long, in seconds.
+    cancelled (callable or None): called between packet batches; True
+        stops the capture with ``StreamCancelled``. Default None.
 
     Returns:
     dropped (dict): keys (int) are module indices and values (int) are the
@@ -881,7 +901,7 @@ def capture_to_zarr(
         dropped = _receive_blocks(
             interface, serial_number, module_idxs, max_ntones, nframes,
             blocks, free_slot, on_block, timeout_s = timeout_s,
-            poll = check_writer
+            poll = check_writer, cancelled = cancelled
             )
         work_q.put(None)
         status = status_q.get()

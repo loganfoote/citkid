@@ -1,19 +1,21 @@
 """
-04: take timestreams of a tuning's tones in a window: calibrate a tone
-set, preview, and run named timestreams (tune{k}/cal{j}/write{w}/ts{n}).
-Takes the board for itself while open. Needs crs_init.py first.
+04b: calibrate a tone set, write its tones and take the timestreams in
+RUNS without a window (tune{k}/cal{j}/write{w}/ts{n}). Needs crs_init.py
+first. To take several sets or settings in a row, loop over ``take`` (or
+``citkid.crs.procedures.stream_batch``) as ``main`` does.
 
 Usage:
-    python 04_stream.py --device deviceA --modules 1
-    python 04_stream.py --device deviceA --modules 1 --tune 0
+    python 04b_stream_batch.py --device deviceA --modules 1
+    python 04b_stream_batch.py --device deviceA --modules 1 --tune 0
 """
 import argparse
+import asyncio
 import os
 from citkid import daq_layout as dl
 from citkid.crs import board_lock
 from citkid.crs.instrument import CRS
+from citkid.crs.procedures import stream_batch
 from citkid.crs.sim import SIM_SERIAL, simulated_crs
-from citkid.crs.stream_gui import run_stream_gui
 
 ################################################################################
 ################################### Settings ###################################
@@ -25,9 +27,12 @@ COOLDOWN = 'cooldown'
 DEVICE = 'device'
 SUFFIX = ''
 MODULES = [1]
-PREVIEW_DEC = 6
-PREVIEW_S = 5.
-PRESETS = [
+TONE_SET = 0
+CALIBRATION = None
+FRES_UPDATE = None
+WRITE_DEC = 6
+CHUNK = 0
+RUNS = [
     dict(name = 'dark_dec6', dec_stage = 6, duration_s = 600.,
          notes = 'dark, long'),
     dict(name = 'dark_dec0', dec_stage = 0, duration_s = 60.,
@@ -37,11 +42,9 @@ NPOINTS_FINE = 1000
 NPOINTS_GAIN = 50
 GAIN_SPAN_FACTOR = 10
 NSAMPS = 200
-SIM_PULSES = False
-SIM_PULSE_SETTINGS = dict(rate = 20., x = 2e-6, tau = 150e-6,
-                          hee_rate = 1., hee_x = 1e-5,
-                          hee_spread = 0.5)
-SIM_SNR_DB = 80.
+
+NOTES = """
+"""
 
 ################################################################################
 ################################### Script #####################################
@@ -56,7 +59,8 @@ def parse_args(argv = None):
     Returns:
     args (argparse.Namespace): the options.
     """
-    p = argparse.ArgumentParser(description = 'Take timestreams.')
+    p = argparse.ArgumentParser(description = 'Take timestreams without a '
+                                'window.')
     p.add_argument('--serial', type = int, default = SERIAL_NUMBER)
     p.add_argument('--iface', default = INTERFACE)
     p.add_argument('--data-dir', default = DATA_DIR)
@@ -72,10 +76,8 @@ def parse_args(argv = None):
                    help = 'tuning (default: the latest with tuned tones)')
     p.add_argument('--simulate', action = 'store_true',
                    help = "stream the store's simulated device")
-    p.add_argument('--sim-pulses', action = 'store_true',
-                   default = SIM_PULSES,
-                   help = 'with --simulate: add photon pulses and HEEs '
-                   'to the streams')
+    p.add_argument('--notes', default = NOTES,
+                   help = 'notes saved with the calibration')
     return p.parse_args(argv)
 
 def store_path(args):
@@ -119,54 +121,83 @@ def find_tuning(root, k = None):
         raise KeyError(f'{tune.basename} has no tones yet: run 03_tune.py')
     return tune
 
+async def connect(args, root, path):
+    """
+    Attach to this session's modules (or the simulated board) with global
+    control and check the CRS against the store.
+
+    Parameters:
+    args (argparse.Namespace): options.
+    root (zarr.Group): the store root.
+    path (str): store path (for ``--simulate``).
+
+    Returns:
+    crs (CRS or SimulatedCRS): the attached instrument.
+    """
+    if args.simulate:
+        crs = simulated_crs(path, args.modules, seed = 200,
+                            global_control = True)
+    else:
+        crs = CRS(serial_number = args.serial, interface = args.iface,
+                  module_idxs = args.modules, global_control = True)
+    # Attaching sets the other module settings to their defaults
+    await crs.attach(full_scale_dbm = 7)
+    dl.check_crs_identity(root, crs)
+    return crs
+
+async def take(crs, tune, notes = ''):
+    """
+    Calibrate TONE_SET (or use CALIBRATION), write chunk CHUNK of its
+    tones for stage WRITE_DEC, and take RUNS. Change the settings and
+    call it again for the next set.
+
+    Parameters:
+    crs (CRS or SimulatedCRS): the attached instrument.
+    tune (zarr.Group): the tuning.
+    notes (str): notes saved with a calibration taken here. Default ''.
+
+    Returns:
+    result (dict): ``calibration``, ``write``, ``runs``
+        (``stream_batch``).
+    """
+    result = await stream_batch(
+        crs, tune, TONE_SET, RUNS, calibration = CALIBRATION,
+        fres_update = FRES_UPDATE, write_dec = WRITE_DEC, chunk = CHUNK,
+        notes = notes, status = print, npoints_fine = NPOINTS_FINE,
+        npoints_gain = NPOINTS_GAIN, npoints_rough = None, nsamps = NSAMPS,
+        gain_span_factor = GAIN_SPAN_FACTOR)
+    for r, paths in zip(RUNS, result['runs']):
+        print(f"{r['name']}: {paths}")
+    return result
+
 def main(args):
     """
-    Open the timestream window.
+    Connect, hold the board, and take the runs.
 
     Parameters:
     args (argparse.Namespace): options from ``parse_args``.
 
     Returns:
-    runs (list of list of str): stream paths of each run.
+    result (dict): ``take``'s result.
     """
     path = store_path(args)
     root = dl.open_store(path, mode = 'a')
     dl.check_store(root)
     tune = find_tuning(root, args.tune)
-
-    async def connect():
-        """
-        Attach to this session's modules (or the simulated board) and
-        check the CRS against the store.
-
-        Returns:
-        crs (CRS or SimulatedCRS): the attached instrument.
-        """
-        if args.simulate:
-            pulses = SIM_PULSE_SETTINGS if args.sim_pulses else None
-            crs = simulated_crs(path, args.modules, seed = 200,
-                                global_control = True, pulses = pulses)
-            if args.sim_pulses and SIM_SNR_DB is not None:
-                crs.snr_db = float(SIM_SNR_DB)
-        else:
-            crs = CRS(serial_number = args.serial, interface = args.iface,
-                      module_idxs = args.modules,
-                      global_control = True)
-        # Attaching sets the other module settings to their defaults
-        await crs.attach(full_scale_dbm = 7)
-        dl.check_crs_identity(root, crs)
-        return crs
-
     serial = SIM_SERIAL if args.simulate else args.serial
-    owner = f'04_stream.py ({os.path.basename(path)}, {tune.basename})'
-    # The board is this script's while the window is open
+    owner = f'04b_stream_batch.py ({os.path.basename(path)}, {tune.basename})'
     with board_lock.exclusive(serial, owner = owner):
-        return run_stream_gui(
-            connect, tune, preview_dec = PREVIEW_DEC, preview_s = PREVIEW_S,
-            presets = PRESETS, sweep_kwargs = dict(
-                npoints_fine = NPOINTS_FINE, npoints_gain = NPOINTS_GAIN,
-                npoints_rough = None, nsamps = NSAMPS,
-                gain_span_factor = GAIN_SPAN_FACTOR))
+        async def run():
+            """
+            Connect and take the runs on one event loop.
+
+            Returns:
+            result (dict): ``take``'s result.
+            """
+            crs = await connect(args, root, path)
+            return await take(crs, tune, (args.notes or '').strip())
+
+        return asyncio.run(run())
 
 if __name__ == '__main__':
     main(parse_args())

@@ -81,8 +81,8 @@ def test_exclusive_and_release(lock_dir):
 
 
 def test_other_holder_blocks_everything(lock_dir):
-    write(lock_dir / f'crs{SERIAL}.lock', other_pid(), '04_stream.py')
-    with pytest.raises(bl.BoardBusyError, match = '04_stream.py'):
+    write(lock_dir / f'crs{SERIAL}.lock', other_pid(), '04a_stream.py')
+    with pytest.raises(bl.BoardBusyError, match = '04a_stream.py'):
         bl.check_free(SERIAL)
     with pytest.raises(bl.BoardBusyError, match = 'exclusive use'):
         with bl.in_use(SERIAL):
@@ -126,9 +126,9 @@ def test_crs_methods_fail_while_another_script_streams(lock_dir):
     crs = SimulatedCRS(sim.draw_device(rng, n_banks = 1, n_per_bank = 5),
                        sim.draw_gain(rng), serial_number = SERIAL)
     asyncio.run(crs.attach())
-    write(lock_dir / f'crs{SERIAL}.lock', other_pid(), '04_stream.py')
+    write(lock_dir / f'crs{SERIAL}.lock', other_pid(), '04a_stream.py')
     freqs = np.full((2, 3), 1.0e9)
-    with pytest.raises(bl.BoardBusyError, match = '04_stream.py'):
+    with pytest.raises(bl.BoardBusyError, match = '04a_stream.py'):
         asyncio.run(crs.attach())
     with pytest.raises(bl.BoardBusyError):
         asyncio.run(crs.sweep(freqs, np.full(2, -55.), 10,

@@ -17,13 +17,14 @@ noise spectra. Run them in this order:
 | 4 | `vna_view.py` (optional): look at the sweep | VNA screening |
 | 5 | `02_find_resonances.py`: find and fit the resonances | VNA screening |
 | 6 | `03_tune.py`: tone powers and frequencies | Tuning and timestreams |
-| 7 | `04_stream.py`: take timestreams | Tuning and timestreams |
-| 8 | `store_browser.py` (optional, any time): look around the store | Tuning and timestreams |
-| 9 | `05_calibrate_streams.py`: calibrate the timestreams | Tuning and timestreams |
-| 10 | `06a_find_photons.py`: photons and high-energy events (HEEs) | Tuning and timestreams |
-| 11 | `06b_hee.py`: lifetimes from HEEs | Tuning and timestreams |
-| 12 | `07_psds.py`: noise spectra | Tuning and timestreams |
-| 13 | `08_report_site.py`: browsable pages of every device | Tuning and timestreams |
+| 7 | `04a_stream.py`: take timestreams in a window | Tuning and timestreams |
+| 8 | `04b_stream_batch.py` (instead of 04a): take timestreams without a window | Tuning and timestreams |
+| 9 | `store_browser.py` (optional, any time): look around the store | Tuning and timestreams |
+| 10 | `05_calibrate_streams.py`: calibrate the timestreams | Tuning and timestreams |
+| 11 | `06a_find_photons.py`: photons and high-energy events (HEEs) | Tuning and timestreams |
+| 12 | `06b_hee.py`: lifetimes from HEEs | Tuning and timestreams |
+| 13 | `07_psds.py`: noise spectra | Tuning and timestreams |
+| 14 | `08_report_site.py`: browsable pages of every device | Tuning and timestreams |
 
 # The environment
 
@@ -59,11 +60,12 @@ firmware needs a new store.
 
 - **Several devices**: `crs_init.py` configures the whole board; the
   other scripts attach to their own modules, so they can run
-  simultaneously on different devices. `04_stream.py` is the exception:
-  it needs the whole board while its window is open, and other scripts
-  stop with an error naming it.
+  simultaneously on different devices. `04a_stream.py` and
+  `04b_stream_batch.py` are the exception: they need the whole board
+  while they run, and other scripts stop with an error naming them.
 - **Simulated devices**: `simulate_store.py` makes a store with a
-  simulated device; `03_tune.py` and `04_stream.py` take `--simulate`.
+  simulated device; `03_tune.py`, `04a_stream.py` and
+  `04b_stream_batch.py` take `--simulate`.
 
 # CRS basics
 
@@ -76,7 +78,7 @@ firmware needs a new store.
 | Module bandwidth | 500 MHz (600 MHz with `--extended-bw`, more loss at the edges); a band at one NCO frequency is an NCO window |
 | Tone set | The tones written together when they don't all fit the modules' windows; sets are measured one after another |
 | Nyquist zones | 100-2500 MHz (zone 1) and 2500-5000 MHz (zone 2); sweeps skip 10 MHz on each side of 2500 MHz |
-| Global control | Needed for board-wide settings; `crs_init.py` and `04_stream.py` take it |
+| Global control | Needed for board-wide settings; `crs_init.py`, `04a_stream.py` and `04b_stream_batch.py` take it |
 
 ## Decimation stages
 
