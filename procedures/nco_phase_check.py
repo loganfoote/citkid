@@ -16,8 +16,8 @@ from citkid.crs.instrument import CRS
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-SERIAL_NUMBER = 1
-INTERFACE = 'enp2s0'
+from settings import SERIAL_NUMBER, INTERFACE
+
 MODULE = 1
 NCO_HZ = 6.5e8
 OFFSETS_HZ = [-150e6, -50e6, -10e6, -1e6, 1e6, 10e6, 50e6, 150e6]

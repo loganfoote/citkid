@@ -1,5 +1,5 @@
 """
-09: build one device's pages of the report site in OUT_DIR, with the
+08: build one device's pages of the report site in REPORT_DIR, with the
 report figures and tables, and the top page listing every device built
 so far. The store is STORE, --store, or chosen in a dialog. The store
 browser opens first on its Notes tab (edit notes, attach files to the
@@ -18,8 +18,9 @@ from citkid.pipeline import site
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
+from settings import REPORT_DIR
+
 STORE = None
-OUT_DIR = '~/reports'
 RES_PAGES = True
 INTERACTIVE = True
 INDEX = False
@@ -38,7 +39,7 @@ def parse_args(argv = None):
     args (argparse.Namespace): the options.
     """
     p = argparse.ArgumentParser(description = 'Build the report site.')
-    p.add_argument('--out', default = OUT_DIR, help = 'site folder')
+    p.add_argument('--out', default = REPORT_DIR, help = 'site folder')
     p.add_argument('--store', default = STORE,
                    help = 'the store (default: STORE, or a dialog)')
     p.add_argument('--force', action = 'store_true',

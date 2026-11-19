@@ -1,7 +1,8 @@
 """
-04b: calibrate a tone set, write its tones and take the timestreams in
-RUNS without a window (tune{k}/cal{j}/write{w}/ts{n}). Needs crs_init.py
-first. To take several sets or settings in a row, loop over ``take`` (or
+04b: calibrate a tone set and take the timestreams in RUNS without a
+window, each writing the tone chunks its stage needs
+(tune{k}/cal{j}/write{w}/ts{n}). Needs crs_init.py first. To take
+several sets or settings in a row, loop over ``take`` (or
 ``citkid.crs.procedures.stream_batch``) as ``main`` does.
 
 Usage:
@@ -20,28 +21,26 @@ from citkid.crs.sim import SIM_SERIAL, simulated_crs
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-SERIAL_NUMBER = 46
-INTERFACE = 'enp5s0'
-DATA_DIR = '~/data'
-COOLDOWN = 'cooldown'
-DEVICE = 'device'
-SUFFIX = ''
-MODULES = [1]
+from settings import (SERIAL_NUMBER, INTERFACE, MODULES, DATA_DIR, COOLDOWN,
+                      DEVICE, SUFFIX)
+
+# Calibration
 TONE_SET = 0
 CALIBRATION = None
 FRES_UPDATE = None
-WRITE_DEC = 6
-CHUNK = 0
+NPOINTS_FINE = 1000
+NPOINTS_GAIN = 50
+GAIN_SPAN_FACTOR = 10
+NSAMPS = 200
+
+# Timestreams
+TONE_CHUNKS = None
 RUNS = [
     dict(name = 'dark_dec6', dec_stage = 6, duration_s = 600.,
          notes = 'dark, long'),
     dict(name = 'dark_dec0', dec_stage = 0, duration_s = 60.,
          notes = 'dark, fast'),
 ]
-NPOINTS_FINE = 1000
-NPOINTS_GAIN = 50
-GAIN_SPAN_FACTOR = 10
-NSAMPS = 200
 
 NOTES = """
 """
@@ -147,8 +146,8 @@ async def connect(args, root, path):
 
 async def take(crs, tune, notes = ''):
     """
-    Calibrate TONE_SET (or use CALIBRATION), write chunk CHUNK of its
-    tones for stage WRITE_DEC, and take RUNS. Change the settings and
+    Calibrate TONE_SET (or use CALIBRATION) and take RUNS, each writing
+    its stage's tone chunks (or TONE_CHUNKS). Change the settings and
     call it again for the next set.
 
     Parameters:
@@ -157,12 +156,11 @@ async def take(crs, tune, notes = ''):
     notes (str): notes saved with a calibration taken here. Default ''.
 
     Returns:
-    result (dict): ``calibration``, ``write``, ``runs``
-        (``stream_batch``).
+    result (dict): ``calibration``, ``runs`` (``stream_batch``).
     """
     result = await stream_batch(
         crs, tune, TONE_SET, RUNS, calibration = CALIBRATION,
-        fres_update = FRES_UPDATE, write_dec = WRITE_DEC, chunk = CHUNK,
+        fres_update = FRES_UPDATE, tone_chunks = TONE_CHUNKS,
         notes = notes, status = print, npoints_fine = NPOINTS_FINE,
         npoints_gain = NPOINTS_GAIN, npoints_rough = None, nsamps = NSAMPS,
         gain_span_factor = GAIN_SPAN_FACTOR)

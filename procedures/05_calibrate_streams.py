@@ -20,10 +20,8 @@ from citkid.zarr_util import to_jsonable
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-DATA_DIR = '~/data'
-COOLDOWN = 'cooldown'
-DEVICE = 'device'
-SUFFIX = ''
+from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX
+
 CALIBRATE = [
     dict(name = 'dark_dec6', chunks = 2),
     dict(name = 'dark_dec0', chunks = (0, 2), tone_sets = [0]),

@@ -22,10 +22,9 @@ from citkid.signal.photons import DetectionSettings
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-DATA_DIR = '~/data'
-COOLDOWN = 'cooldown'
-DEVICE = 'device'
-SUFFIX = ''
+from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB
+
+# Timestreams
 CALIBRATION = None
 TIMESTREAMS = [
 ]
@@ -33,9 +32,13 @@ NAME = ''
 EVENTS = 'auto'
 PHOTONS = None
 INTERACTIVE = True
+
+# Triggers
 TRIG_NSIGMA = 6.
 COINC_WIN = 2
 HEE_MIN_MULT = 3
+
+# Tail fits
 HMIN = 0.
 HMAX = 1000.
 LEVEL = 10.
@@ -44,7 +47,6 @@ PRE_S = 0.5e-3
 POST_S = 5.e-3
 SEARCH_S = 0.3e-3
 HIGHPASS_HZ = 10.
-MEMORY_GB = 12.
 
 NOTES = """
 """

@@ -4,6 +4,7 @@ Tests for the procedure scripts in ``procedures/``, run against a fake CRS.
 import asyncio
 import importlib.util
 import os
+import sys
 import numpy as np
 import pytest
 import zarr
@@ -11,6 +12,8 @@ from citkid import daq_layout as dl
 from ..crs.fake_crs import FakeVnaCRS
 
 SCRIPTS = os.path.join(os.path.dirname(__file__), '..', '..', 'procedures')
+if SCRIPTS not in sys.path:
+    sys.path.insert(0, SCRIPTS)  # the scripts' settings.py
 
 
 def load_script(name):
@@ -365,13 +368,18 @@ def test_scripts_line_length_and_settings():
     Check the scripts keep to 80 columns and have a settings block and a
     main guard.
     """
-    for name in sorted(os.listdir(SCRIPTS)):
+    names = sorted(os.listdir(SCRIPTS)) + [
+        os.path.join('simulation', n)
+        for n in sorted(os.listdir(os.path.join(SCRIPTS, 'simulation')))]
+    for name in names:
         if not name.endswith('.py'):
             continue
         with open(os.path.join(SCRIPTS, name), encoding = 'utf-8') as fh:
             text = fh.read()
         assert all(len(line) <= 80 for line in text.splitlines()), name
-        assert 'Settings' in text and "if __name__ == '__main__':" in text
+        assert 'Settings' in text, name
+        if name != 'settings.py':
+            assert "if __name__ == '__main__':" in text, name
 
 
 def test_02_find_resonances(tmp_path, capsys):
@@ -423,8 +431,9 @@ def test_02_find_resonances(tmp_path, capsys):
     assert 'is used by' in capsys.readouterr().out
 
 
-def test_simulate_store(tmp_path):
-    m = load_script('simulate_store.py')
+def test_simulate_store(tmp_path, monkeypatch):
+    m = load_script('simulation/simulate_store.py')
+    monkeypatch.setattr(m, 'PULSES', dict(rate = 5.))
     path = tmp_path / 'sim.zarr'
     truth = asyncio.run(m.main(m.parse_args(
         ['--store', str(path), '--seed', '2', '--pts-per-lw', '2.5'])))
@@ -432,6 +441,7 @@ def test_simulate_store(tmp_path):
     assert sorted(root.group_keys()) == ['simulation', 'vna0']
     assert root['vna0'].attrs['step'] == pytest.approx(2e-5)
     assert len(truth) > 500 and root['simulation'].attrs['seed'] == 2
+    assert root['simulation'].attrs['pulses'] == dict(rate = 5.)
 
 
 @pytest.mark.parametrize('n_cal', [0, 1])
@@ -639,13 +649,11 @@ def test_04a_stream(tmp_path, monkeypatch):
     with pytest.raises(KeyError, match = 'no tones'):
         m.main(m.parse_args(['--store', str(path), '--simulate', '--tune',
                              '1']))
-    # Simulated photons and HEEs, on a quieter board
+    # Simulated photons and HEEs come from the store (simulate_store.py)
     assert seen['crs'].pulses is None
-    snr = seen['crs'].snr_db
-    m.main(m.parse_args(['--store', str(path), '--simulate',
-                         '--sim-pulses']))
-    assert seen['crs'].pulses == m.SIM_PULSE_SETTINGS
-    assert seen['crs'].snr_db == m.SIM_SNR_DB != snr
+    root['simulation'].attrs['pulses'] = dict(rate = 5.)
+    m.main(m.parse_args(['--store', str(path), '--simulate']))
+    assert seen['crs'].pulses['rate'] == 5.
 
 
 def test_04b_stream_batch(tmp_path, monkeypatch, capsys):
@@ -701,7 +709,6 @@ def test_04b_stream_batch(tmp_path, monkeypatch, capsys):
     argv = ['--store', str(path), '--simulate', '--notes', 'cold']
     result = m.main(m.parse_args(argv))
     assert result['calibration'] == 'tune0/cal0'
-    assert result['write'] == 'tune0/cal0/write0'
     assert result['runs'] == [['tune0/cal0/write0/ts0'],
                               ['tune0/cal0/write0/ts1']]
     assert board_lock.holder(0) is None

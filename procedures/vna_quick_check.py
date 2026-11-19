@@ -15,9 +15,8 @@ from citkid.crs.quick_check import run_quick_check, save_sweep_csv
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-SERIAL_NUMBER = 46
-INTERFACE = 'enp5s0'
-MODULES = [1]
+from settings import SERIAL_NUMBER, INTERFACE, MODULES
+
 NYQUIST = '1'
 AMPLITUDE = -50.
 QR_MEDIAN = 2e4

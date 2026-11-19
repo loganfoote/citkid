@@ -613,7 +613,8 @@ def load_truth(root):
 async def simulate_vna_store(
     path, device = 'simdevice', cooldown = 'sim', seed = 0, nyquist = '1',
     module_idxs = (1,), amplitude = -55., nsamps = 100, step = VNA_STEP,
-    snr_db = 40., device_kwargs = None, gain_kwargs = None, verbose = True
+    snr_db = 40., device_kwargs = None, gain_kwargs = None, verbose = True,
+    pulses = None
 ):
     """
     Make a device store holding one VNA sweep (``vna0``) of a simulated
@@ -635,6 +636,9 @@ async def simulate_vna_store(
     device_kwargs (dict or None): ``vna.simulate.draw_device`` arguments.
     gain_kwargs (dict or None): ``vna.simulate.draw_gain`` arguments.
     verbose (bool): If True (default), print progress.
+    pulses (dict or None): photon pulses and HEEs in the device's streams
+        (``SimulatedCRS``), kept in the store for ``simulated_crs``.
+        Default None: none.
 
     Returns:
     root (zarr.Group): the store root.
@@ -655,7 +659,7 @@ async def simulate_vna_store(
     save_truth(root, truth, attrs = dict(
         seed = seed, amplitude = amplitude, nsamps = nsamps, snr_db = snr_db,
         device_kwargs = device_kwargs or {}, gain_kwargs = gain_kwargs or {},
-        gain = gain))
+        gain = gain, pulses = pulses))
     return root, truth
 
 def simulated_crs(
@@ -674,7 +678,8 @@ def simulated_crs(
     global_control (bool): If True, the session may change the decimation.
         Default False.
     pulses (dict, bool, or None): photon pulses and HEEs in streams
-        (``SimulatedCRS``). Default None (none).
+        (``SimulatedCRS``). Default None: the store's (``pulses`` of
+        ``simulate_vna_store``).
 
     Returns:
     crs (SimulatedCRS): the board, not yet attached.
@@ -689,4 +694,5 @@ def simulated_crs(
     return SimulatedCRS(
         load_truth(root), gain, module_idxs, snr_db = attrs['snr_db'],
         seed = attrs['seed'] + 2 if seed is None else seed,
-        global_control = global_control, pulses = pulses)
+        global_control = global_control,
+        pulses = attrs.get('pulses') if pulses is None else pulses)

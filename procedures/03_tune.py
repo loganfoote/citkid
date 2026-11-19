@@ -30,13 +30,10 @@ from citkid.vna.fq_finder import run_fqfinder
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-SERIAL_NUMBER = 46
-INTERFACE = 'enp5s0'
-DATA_DIR = '~/data'
-COOLDOWN = 'cooldown'
-DEVICE = 'device'
-SUFFIX = ''
-MODULES = [1]
+from settings import (SERIAL_NUMBER, INTERFACE, MODULES, DATA_DIR, COOLDOWN,
+                      DEVICE, SUFFIX)
+
+# Tone plan
 RESONATORS = None
 MIN_SEP_LW = 5.
 PAIRS = 'drop_both'
@@ -47,6 +44,8 @@ CAL_MIN_SEP_LW = 10.
 WINDOWS = None
 FMIN = None
 FMAX = None
+
+# Power sweep
 POWERS = np.arange(-60., -35., 3)
 SHUFFLE = False
 SEED = 0
@@ -55,12 +54,18 @@ NPOINTS_GAIN = 50
 NPOINTS_ROUGH = None
 GAIN_SPAN_FACTOR = 10
 NSAMPS = 200
+
+# Power fits
 F_AVG = 4
 A_FIT_RANGE = (0.05, 0.8)
 ANL = 0.5
 ARES_LIMITS = (-55., -35.)
+
+# fq finder
 FRES_UPDATE_METHOD = 'spacing'
 RMV_GAIN_SIMPLE = True
+
+# Port the powers of an earlier tuning
 PORT_STORE = None
 PORT_TUNE = None
 PREDICT = None
@@ -331,8 +336,9 @@ def plan_from_tuning(root, args, path):
     """
     Start a tuning from an earlier one's tones (``--port-tune``, in
     this store or ``--port-store``): its powers are kept
-    (``power_choice``, or ``PREDICT``'s) and the plan, power sweep and power fits are
-    skipped, so only the fq sweep, fq_finder and tones steps run.
+    (``power_choice``, or ``PREDICT``'s) and the plan, power sweep and
+    power fits are skipped, so only the fq sweep, fq_finder and tones
+    steps run.
     ``tones_init`` holds the earlier tones at the frequencies, spans and
     powers ``PREDICT`` returns (None: unchanged). Another store's tuning is
     copied in first (``daq_layout.port_tuning``, with its resonator

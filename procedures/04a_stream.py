@@ -20,13 +20,17 @@ from citkid.crs.stream_gui import run_stream_gui
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-SERIAL_NUMBER = 46
-INTERFACE = 'enp5s0'
-DATA_DIR = '~/data'
-COOLDOWN = 'cooldown'
-DEVICE = 'device'
-SUFFIX = ''
-MODULES = [1]
+from settings import (SERIAL_NUMBER, INTERFACE, MODULES, DATA_DIR, COOLDOWN,
+                      DEVICE, SUFFIX)
+
+# Calibration sweep
+NPOINTS_FINE = 1000
+NPOINTS_GAIN = 50
+GAIN_SPAN_FACTOR = 10
+NSAMPS = 200
+FRES_UPDATE = None
+
+# Preview and runs
 PREVIEW_DEC = 6
 PREVIEW_S = 5.
 PRESETS = [
@@ -35,16 +39,7 @@ PRESETS = [
     dict(name = 'dark_dec0', dec_stage = 0, duration_s = 60.,
          notes = 'dark, fast'),
 ]
-NPOINTS_FINE = 1000
-NPOINTS_GAIN = 50
-GAIN_SPAN_FACTOR = 10
-NSAMPS = 200
-FRES_UPDATE = None
-SIM_PULSES = False
-SIM_PULSE_SETTINGS = dict(rate = 20., x = 2e-6, tau = 150e-6,
-                          hee_rate = 1., hee_x = 1e-5,
-                          hee_spread = 0.5)
-SIM_SNR_DB = 80.
+
 
 ################################################################################
 ################################### Script #####################################
@@ -75,10 +70,6 @@ def parse_args(argv = None):
                    help = 'tuning (default: the latest with tuned tones)')
     p.add_argument('--simulate', action = 'store_true',
                    help = "stream the store's simulated device")
-    p.add_argument('--sim-pulses', action = 'store_true',
-                   default = SIM_PULSES,
-                   help = 'with --simulate: add photon pulses and HEEs '
-                   'to the streams')
     return p.parse_args(argv)
 
 def store_path(args):
@@ -146,11 +137,8 @@ def main(args):
         crs (CRS or SimulatedCRS): the attached instrument.
         """
         if args.simulate:
-            pulses = SIM_PULSE_SETTINGS if args.sim_pulses else None
             crs = simulated_crs(path, args.modules, seed = 200,
-                                global_control = True, pulses = pulses)
-            if args.sim_pulses and SIM_SNR_DB is not None:
-                crs.snr_db = float(SIM_SNR_DB)
+                                global_control = True)
         else:
             crs = CRS(serial_number = args.serial, interface = args.iface,
                       module_idxs = args.modules,

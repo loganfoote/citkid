@@ -49,7 +49,6 @@ takes one sweep and saves it with `--csv`.
 
 | Setting | Meaning |
 |---|---|
-| `MODULES` | Modules connected to the device |
 | `NYQUIST` | `'1'` (100-2500 MHz), `'2'` (2500-5000 MHz), `'both'` |
 | `AMPLITUDE` | Tone power, dBm |
 | `QR_MEDIAN`, `PTS_PER_LW` | Expected median Qr and points per linewidth there |
@@ -77,7 +76,6 @@ Takes a full sweep of one device and saves it as the next `vna{k}`
 | Setting | Meaning |
 |---|---|
 | `SETUP` | Description saved with a new store (fridge channel, attenuators, filters) |
-| `MODULES` | Modules connected to the device |
 | `NYQUIST` | `'1'` (100-2500 MHz), `'2'` (2500-5000 MHz), `'both'` |
 | `AMPLITUDE` | Tone power, dBm |
 | `QR_MEDIAN`, `PTS_PER_LW` | Expected median Qr and points per linewidth there |
@@ -148,13 +146,16 @@ failed, fr is the finder's frequency.
 
 # Trying it on simulated data
 
-`simulate_store.py` makes a store with a VNA sweep of a simulated device
-and its true parameters. `02_find_resonances.py --store ...` then runs on it as on real data;
-`citkid.vna.simulate.compare_to_truth` compares the fits with the truth.
+`simulation/simulate_store.py` makes a store with a VNA sweep of a
+simulated device and its true parameters. `02_find_resonances.py
+--store ...` then runs on it as on real data, and `03_tune.py`,
+`04a_stream.py` and `04b_stream_batch.py` take `--simulate`.
+`citkid.vna.simulate.compare_to_truth` compares the fits with the
+truth. The simulation settings live only here, not in the scripts.
 
 ## Settings
 
-{{settings:simulate_store.py}}
+{{settings:simulation/simulate_store.py}}
 
 | Setting | Meaning |
 |---|---|
@@ -162,3 +163,4 @@ and its true parameters. `02_find_resonances.py --store ...` then runs on it as 
 | `SEED` | Device, gain and noise seed |
 | `NYQUIST`, `AMPLITUDE`, `QR_MEDIAN`, `PTS_PER_LW`, `NSAMPS` | As in `01_vna_sweep.py` |
 | `SNR_DB` | S/N per quadrature at -55 dBm with 100 samples |
+| `PULSES` | `None`, or a dict of photon pulses and HEEs in the device's streams: `rate` (photons per tone, Hz), `x` (shift), `tau` (s), `hee_rate` (Hz), `hee_x`, `hee_spread`; keys left out take the defaults |

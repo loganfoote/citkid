@@ -842,7 +842,8 @@ async def stream_tone_sets(
     crs, tune, name, duration_s, dec_stage, notes = '', set_idxs = None,
     calibrations = None, written = None, keep_tones = False, status = None,
     verbose = True, progress = None, only_written = False,
-    cancelled = None, fres_update = None, **target_sweep_kwargs
+    cancelled = None, fres_update = None, tone_chunks = None,
+    **target_sweep_kwargs
 ):
     """
     Take a named timestream of a tuning's tones, one tone set after
@@ -912,6 +913,10 @@ async def stream_tone_sets(
         taken here too), tone writes stay. Default None.
     fres_update (dict or None): of a calibration sweep taken here
         (``calibrate_tone_set``). Default None.
+    tone_chunks (list of int or None): which of the chunks planned for
+        ``dec_stage`` (``plan_stream_chunks``) to write and stream, of
+        each set; kept in the run's record. Default None: all. Not
+        used with ``only_written``.
     **target_sweep_kwargs: settings of a calibration sweep taken here
         (``target_sweep``).
 
@@ -920,9 +925,10 @@ async def stream_tone_sets(
         'tune0/cal0/write0/ts3'.
 
     Raises:
-    ValueError: if ``name`` is empty, or the tuning has a run with it;
-        with ``only_written``, if the tones are not on the board or
-        their calibration is out of frame.
+    ValueError: if ``name`` is empty, or the tuning has a run with it,
+        or a chunk in ``tone_chunks`` does not exist; with
+        ``only_written``, if the tones are not on the board or their
+        calibration is out of frame.
     SweepCancelled, util.StreamCancelled: if ``cancelled()`` returned
         True.
     """
@@ -950,6 +956,9 @@ async def stream_tone_sets(
         record['tone_set'] = sets[0]
     else:
         record['tone_sets'] = sets
+    if tone_chunks is not None:
+        tone_chunks = [int(i) for i in tone_chunks]
+        record['tone_chunks'] = tone_chunks
     n = dl.register_stream_run(tune, record)
     ts_name = set_name(n, dl.TS_PREFIX)
     paths, used = [], {}
@@ -958,7 +967,7 @@ async def stream_tone_sets(
                            notes, duration_s, dec_stage, n, ts_name, paths,
                            used, say, status, verbose, progress,
                            target_sweep_kwargs, only_written, cancelled,
-                           fres_update)
+                           fres_update, tone_chunks)
     except (SweepCancelled, util.StreamCancelled):
         # A cancelled run leaves nothing behind: its streams (whole or
         # partial) and its record go
@@ -987,7 +996,7 @@ async def _stream_sets(
     crs, tune, root, t, sets, cals, written, name, notes, duration_s,
     dec_stage, n, ts_name, paths, used, say, status, verbose, progress,
     target_sweep_kwargs, only_written = False, cancelled = None,
-    fres_update = None
+    fres_update = None, tone_chunks = None
 ):
     """
     Stream the tone sets of a run (``stream_tone_sets``), one after
@@ -1010,6 +1019,8 @@ async def _stream_sets(
     cancelled (callable or None): see ``stream_tone_sets``. Default
         None.
     fres_update (dict or None): see ``stream_tone_sets``. Default None.
+    tone_chunks (list of int or None): see ``stream_tone_sets``.
+        Default None.
     """
     for s in sets:
         idx = np.flatnonzero(t['tone_set'] == s)
@@ -1048,7 +1059,15 @@ async def _stream_sets(
             chunks = [rows]
         else:
             chunks = plan_stream_chunks(t['tone_module'][idx], dec_stage)
-        for c_i, rows in enumerate(chunks):
+        picked = list(enumerate(chunks))
+        if tone_chunks is not None and not only_written:
+            bad = [i for i in tone_chunks if not 0 <= i < len(chunks)]
+            if bad:
+                raise ValueError(f'tone set {s} has {len(chunks)} '
+                                 f'chunk(s) at stage {dec_stage}, not a '
+                                 f'chunk {bad[0]}')
+            picked = [picked[i] for i in tone_chunks]
+        for c_i, rows in picked:
             if cancelled is not None and cancelled():
                 raise util.StreamCancelled('run cancelled')
             part = f' {c_i + 1}/{len(chunks)}' if len(chunks) > 1 else ''
@@ -1083,14 +1102,16 @@ async def _stream_sets(
 
 async def stream_batch(
     crs, tune, tone_set, runs, calibration = None, fres_update = None,
-    write_dec = 6, chunk = 0, keep_tones = False, notes = '', status = None,
+    tone_chunks = None, keep_tones = False, notes = '', status = None,
     progress = None, cancelled = None, **target_sweep_kwargs
 ):
     """
-    Calibrate a tone set (or reuse a calibration), write a chunk of its
-    tones, and take one or more timestreams of them, without a window
-    (``procedures/04b_stream_batch.py``; loop over this to take sets
-    with other settings).
+    Calibrate a tone set (or reuse a calibration) and take one or more
+    timestreams of it, without a window (``procedures/04b_stream_batch.py``;
+    loop over this to take sets with other settings). Each run writes
+    the chunks its stage needs (``plan_stream_chunks``), or those in
+    ``tone_chunks``, and streams each; tones already on the board are
+    not written again.
 
     Parameters:
     crs (CRS): configured CRS instrument, with global control.
@@ -1105,9 +1126,8 @@ async def stream_batch(
         Default None: take one (``calibrate_tone_set``).
     fres_update (dict or None): of a calibration taken here
         (``apply_fres_update``). Default None.
-    write_dec (int): the stage the chunks are planned for
-        (``plan_stream_chunks``). Default 6: the whole set when it fits.
-    chunk (int): which chunk to write (and stream). Default 0.
+    tone_chunks (list of int or None): which of the chunks planned for
+        each run's stage to write and stream. Default None: all.
     keep_tones (bool): If True, leave the tones on the board afterwards.
         Default False: clear them.
     notes (str): notes saved with a calibration taken here. Default ''.
@@ -1116,12 +1136,12 @@ async def stream_batch(
         (``target_sweep``).
 
     Returns:
-    result (dict): ``calibration`` (its path), ``write`` (the write
-        group's path), ``runs`` (the stream paths of each run).
+    result (dict): ``calibration`` (its path), ``runs`` (the stream
+        paths of each run).
 
     Raises:
     ValueError: if the calibration is of another set or out of frame,
-        or there is no such chunk.
+        or a chunk in ``tone_chunks`` does not exist.
     """
     s = int(tone_set)
     root = dl.store_root(tune, mode = 'r+')
@@ -1139,14 +1159,7 @@ async def stream_batch(
         if not calibration_in_frame(crs, cal):
             raise ValueError(f'{cal.path} is out of frame (an NCO was set '
                              'since): calibrate again')
-    t = dl.load_tones(tune['tones'])
-    idx = np.flatnonzero(t['tone_set'] == s)
-    chunks = plan_stream_chunks(t['tone_module'][idx], int(write_dec))
-    if not 0 <= int(chunk) < len(chunks):
-        raise ValueError(f'tone set {s} has {len(chunks)} chunk(s) at stage '
-                         f'{write_dec}, not a chunk {chunk}')
     written = {}
-    await write_set_tones(crs, cal, chunks[int(chunk)], written)
     paths = []
     for r in runs:
         paths.append(await stream_tone_sets(
@@ -1154,13 +1167,12 @@ async def stream_batch(
             notes = r.get('notes', ''), set_idxs = [s],
             calibrations = {s: cal.path}, written = written,
             keep_tones = True, status = status, verbose = False,
-            progress = progress, only_written = True,
-            cancelled = cancelled))
-    write = written.get('write')
+            progress = progress, cancelled = cancelled,
+            tone_chunks = tone_chunks))
     if not keep_tones:
         await crs.clear_tones()
         written.clear()
-    return dict(calibration = cal.path, write = write, runs = paths)
+    return dict(calibration = cal.path, runs = paths)
 
 ################################################################################
 ################################# VNA sweeps ###################################

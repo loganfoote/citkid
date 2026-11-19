@@ -236,12 +236,19 @@ class StreamWindow(QtWidgets.QMainWindow):
         self._build_plots()
         central = QtWidgets.QWidget()
         lay = QtWidgets.QHBoxLayout(central)
-        lay.addWidget(self._panel)
+        lay.addWidget(self._scroll)
         right = QtWidgets.QVBoxLayout()
         right.addWidget(self.plots, stretch = 2)
         right.addWidget(self.psd_plot, stretch = 1)
         lay.addLayout(right, stretch = 1)
         self.setCentralWidget(central)
+        # Fit the screen: the panel scrolls when the screen is shorter
+        screen = QtWidgets.QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else None
+        h = self._panel.sizeHint().height() + 80
+        if avail is not None:
+            h = min(h, avail.height() - 80)
+        self.resize(self._scroll.width() + 900, h)
         self._on_set()
         self._set_status('Connecting to the CRS...')
         self.worker.submit(connect(), self._on_connected)
@@ -287,8 +294,45 @@ class StreamWindow(QtWidgets.QMainWindow):
             box.setValue(float(value))
             return box
 
+        self._reasons = {}
+
+        def reason_label(btn):
+            """
+            Make the label beside a button that says why it is
+            disabled (``_enable``).
+
+            Parameters:
+            btn (QPushButton): the button.
+
+            Returns:
+            label (QLabel): the label, blank while the button is
+                enabled.
+            """
+            label = QtWidgets.QLabel()
+            label.setStyleSheet('color: gray')
+            label.setFixedHeight(btn.sizeHint().height())
+            self._reasons[btn] = (label, btn.toolTip())
+            return label
+
+        def action_row(btn):
+            """
+            Put a button in a row with its reason label.
+
+            Parameters:
+            btn (QPushButton): the button.
+
+            Returns:
+            row (QHBoxLayout): the row.
+            """
+            row = QtWidgets.QHBoxLayout()
+            row.addWidget(btn)
+            row.addWidget(reason_label(btn), stretch = 1)
+            return row
+
         self._panel = QtWidgets.QWidget()
         outer = QtWidgets.QVBoxLayout(self._panel)
+        # Two columns of boxes, then the run list and status
+        left, right = QtWidgets.QVBoxLayout(), QtWidgets.QVBoxLayout()
         sets = sorted(set(self.tones['tone_set'].tolist()))
         outer.addWidget(QtWidgets.QLabel(
             f"{self.tune.basename}: {len(self.tones['fres'])} tones in "
@@ -325,11 +369,11 @@ class StreamWindow(QtWidgets.QMainWindow):
         form.addRow('Notes', self.cal_notes_edit)
         self.cal_btn = QtWidgets.QPushButton('Calibrate')
         self.cal_btn.clicked.connect(self.calibrate)
-        form.addRow(self.cal_btn)
+        form.addRow(action_row(self.cal_btn))
         self.cal_box = QtWidgets.QComboBox()
         self.cal_box.currentIndexChanged.connect(self._on_cal)
         form.addRow('Use', self.cal_box)
-        outer.addWidget(box)
+        left.addWidget(box)
 
         # Tones on the board: written here, never by a preview or run
         box = QtWidgets.QGroupBox('Tones on the board')
@@ -349,12 +393,10 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.written_label.setWordWrap(True)
         form.addRow('Stage', self.write_dec)
         form.addRow('Chunk', self.chunk_box)
-        row = QtWidgets.QHBoxLayout()
-        row.addWidget(self.write_btn)
-        row.addWidget(self.clear_btn)
-        form.addRow(row)
+        form.addRow(action_row(self.write_btn))
+        form.addRow(action_row(self.clear_btn))
         form.addRow(self.written_label)
-        outer.addWidget(box)
+        right.addWidget(box)
 
         # Preview
         box = QtWidgets.QGroupBox('Preview (not saved)')
@@ -372,11 +414,11 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.psd_box.toggled.connect(self._on_psd_box)
         form.addRow('Stage', self.preview_dec)
         form.addRow('Length', self.preview_s)
-        form.addRow(self.capture_btn)
+        form.addRow(action_row(self.capture_btn))
         form.addRow('Tone', self.tone_box)
         form.addRow('Show', self.mode_box)
         form.addRow('', self.psd_box)
-        outer.addWidget(box)
+        left.addWidget(box)
 
         # Run
         box = QtWidgets.QGroupBox('Run on the selected tone set (saved as '
@@ -402,8 +444,14 @@ class StreamWindow(QtWidgets.QMainWindow):
         form.addRow('Notes', self.notes_edit)
         form.addRow('Stage', self.run_dec)
         form.addRow('Length', self.run_s)
-        form.addRow(self.run_btn)
-        outer.addWidget(box)
+        form.addRow(action_row(self.run_btn))
+        right.addWidget(box)
+        left.addStretch(1)
+        right.addStretch(1)
+        cols = QtWidgets.QHBoxLayout()
+        cols.addLayout(left)
+        cols.addLayout(right)
+        outer.addLayout(cols)
 
         self.runs_list = QtWidgets.QListWidget()
         for r in self.tuning_runs():
@@ -425,6 +473,7 @@ class StreamWindow(QtWidgets.QMainWindow):
         row.addWidget(self.view_btn)
         row.addWidget(QtWidgets.QLabel('chunks'))
         row.addWidget(self.view_chunks)
+        row.addWidget(reason_label(self.view_btn))
         self.view_label = QtWidgets.QLabel()
         row.addWidget(self.view_label, stretch = 1)
         outer.addLayout(row)
@@ -447,11 +496,21 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.status.setWordWrap(True)
         outer.addWidget(self.status)
         self._inputs = (self.set_box, self.cal_box, self.cal_notes_edit,
-                        self.write_dec, self.chunk_box, self.preview_dec, self.preview_s, self.preset_box,
+                        self.write_dec, self.chunk_box, self.preview_dec,
+                        self.preview_s, self.preset_box,
                         self.name_edit, self.notes_edit, self.run_dec,
                         self.run_s, self.view_chunks) + \
             tuple(self.cal_params.values())
-        self._panel.setFixedWidth(self._panel.sizeHint().width() + 40)
+        self._scroll = QtWidgets.QScrollArea()
+        self._scroll.setWidget(self._panel)
+        self._scroll.setWidgetResizable(True)
+        # As wide as the panel wants, up to half the screen
+        width = self._panel.sizeHint().width() + 40
+        screen = QtWidgets.QApplication.primaryScreen()
+        if screen is not None:
+            width = min(width, screen.availableGeometry().width() // 2)
+        self._scroll.setFixedWidth(width)
+        self._scroll.setMinimumHeight(300)
         if self.presets:
             self.preset_box.setCurrentIndex(1)
 
@@ -659,26 +718,28 @@ class StreamWindow(QtWidgets.QMainWindow):
         Enable the buttons that can be used now, and say what is on the
         board.
         """
-        idle = self.crs is not None and not self.worker.busy
+        busy = self.worker.busy
         for w in self._inputs:
-            w.setEnabled(not self.worker.busy)
-        self.cal_btn.setEnabled(idle)
-        has_cal = self.cal is not None and self.cal['in_frame'] and \
-            self.cal['set'] == self.set_box.currentData()
-        ready = has_cal and self.board_ready()
-        self.capture_btn.setEnabled(idle and ready)
-        self.write_btn.setEnabled(idle and has_cal and
-                                  self.chunk_box.currentData() is not None)
-        self.clear_btn.setEnabled(idle and bool(self.written))
+            w.setEnabled(not busy)
+        wait = 'busy' if busy else \
+            'connecting to the CRS' if self.crs is None else None
+        self._enable(self.cal_btn, wait)
+        cal = wait or self._cal_reason()
+        self._enable(self.write_btn, cal or (
+            None if self.chunk_box.currentData() is not None
+            else 'the stage takes no tones'))
+        self._enable(self.clear_btn, wait or (
+            None if self.written else 'no tones written'))
+        ready = cal or (None if self.board_ready()
+                        else 'write the tones first')
+        self._enable(self.capture_btn, ready)
         name = self.name_edit.text().strip()
-        taken = name in self.run_names()
-        self.run_btn.setEnabled(idle and ready and bool(name) and
-                                not taken)
-        self.run_btn.setToolTip(
-            f'A run named {name!r} exists: choose another name' if taken
-            else '')
-        self.view_btn.setEnabled(not self.worker.busy and
-                                 self.runs_list.currentRow() >= 0)
+        self._enable(self.run_btn, ready or (
+            'enter a name' if not name else
+            f'A run named {name!r} exists: choose another name'
+            if name in self.run_names() else None))
+        self._enable(self.view_btn, 'busy' if busy else (
+            None if self.runs_list.currentRow() >= 0 else 'select a run'))
         self.cancel_btn.setEnabled(self.worker.busy and self._cancellable
                                    and not self._cancel.is_set())
         w = self.written
@@ -686,6 +747,36 @@ class StreamWindow(QtWidgets.QMainWindow):
             'Tones on the board: none (or unknown)' if not w else
             f"Tones on the board: {len(w['rows'])} of tone set "
             f"{w['tone_set']} from {w['calibration']}")
+
+    def _cal_reason(self):
+        """
+        Say why the chosen calibration cannot be used for the selected
+        tone set.
+
+        Returns:
+        reason (str or None): the reason; None if it can.
+        """
+        if self.cal is None:
+            return 'calibrate first'
+        if self.cal['set'] != self.set_box.currentData():
+            return 'the calibration is of another tone set'
+        if not self.cal['in_frame']:
+            return 'the calibration is out of frame: calibrate again'
+        return None
+
+    def _enable(self, btn, reason):
+        """
+        Enable a button, or disable it and say why beside it (and in
+        its tooltip).
+
+        Parameters:
+        btn (QPushButton): the button.
+        reason (str or None): why it is disabled; None: enable it.
+        """
+        btn.setEnabled(reason is None)
+        label, tip = self._reasons[btn]
+        label.setText('' if reason is None else reason)
+        btn.setToolTip(tip if reason is None else reason)
 
     def _set_rows(self):
         """

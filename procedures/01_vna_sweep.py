@@ -17,15 +17,11 @@ from citkid.vna.view import run_vna_view
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-SERIAL_NUMBER = 46
-INTERFACE = 'enp5s0'
-DATA_DIR = '~/data'
-COOLDOWN = 'cooldown'
-DEVICE = 'device'
-SUFFIX = ''
+from settings import (SERIAL_NUMBER, INTERFACE, MODULES, DATA_DIR, COOLDOWN,
+                      DEVICE, SUFFIX)
+
 SETUP = dict(fridge_ch = None, dac_attenuation = None, dac_filters = None,
              adc_filters = None)
-MODULES = [1]
 NYQUIST = '1'
 AMPLITUDE = -55.
 QR_MEDIAN = 2e4

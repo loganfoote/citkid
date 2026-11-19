@@ -118,7 +118,6 @@ sweep, fq_finder and tones steps run.
 
 | Setting | Meaning |
 |---|---|
-| `MODULES` | Modules connected to the device |
 | `RESONATORS` | Resonator list index (`None`: the latest) |
 | `MIN_SEP_LW` | Drop tones closer than this to another resonance, linewidths |
 | `PAIRS` | Close pairs: `'drop_both'`, or `'keep_stronger'` (the deeper dip) |
@@ -158,6 +157,7 @@ A window on one tuning (the latest with tones, or `--tune k`):
 | Preview | Capture `PREVIEW_S` seconds of the tones on the board and plot one tone as x, parallel/perpendicular to the loop, or I and Q, with its PSD if asked (not saved) |
 | Run | Name, notes, decimation stage and duration (or a `PRESETS` entry); the tones on the board are streamed and saved as `cal{j}/write{w}/ts{n}` and listed in the run list; a name is used once per tuning |
 | View run | Shows a run's first chunks like a capture |
+| Grey buttons | A grey button says beside it what it needs |
 | Cancel | Stops the running calibration, capture or run at its next sweep point or packet batch; what it saved is removed (the calibration group, or the run's streams and record). No shortcut, so it is not hit by accident |
 
 A calibration is valid only while the NCO frequencies are unchanged, so
@@ -166,8 +166,7 @@ run, then the next set. Restarting the script keeps the calibrations
 usable unless something else set the NCOs in between (a power cycle,
 `crs_init.py`). Tones stay written between captures and runs; a
 calibration sweep clears them. The script holds the board while its
-window is open. `--simulate` streams a simulated device; `--sim-pulses`
-adds photons and HEEs to it.
+window is open. `--simulate` streams the store's simulated device.
 
 ## Settings
 
@@ -175,23 +174,21 @@ adds photons and HEEs to it.
 
 | Setting | Meaning |
 |---|---|
-| `MODULES` | Modules connected to the device |
 | `PREVIEW_DEC`, `PREVIEW_S` | Preview decimation stage and duration, s |
 | `PRESETS` | Runs offered in the window: name, stage, duration, notes |
 | `NPOINTS_FINE`, `NPOINTS_GAIN`, `GAIN_SPAN_FACTOR`, `NSAMPS` | Calibration sweeps, as in `03_tune.py` |
 | `FRES_UPDATE` | `None`, or `dict(method = 'spacing', max_shift = 0.1)`: after each calibration sweep, move every tone to the resonance its fine sweep shows (`method`: `'spacing'`, `'distance'` or `'minS21'`), if the move is at most `max_shift` of the sweep span; a tone whose update is farther keeps its frequency. The frequencies swept are kept as `fres_sweep` |
-| `SIM_PULSES`, `SIM_PULSE_SETTINGS` | `--simulate`: photon pulses and HEEs in the streams |
-| `SIM_SNR_DB` | Simulated S/N while pulses are on, dB (`None`: the store's) |
 
 ## Command line
 
-`--modules`, `--tune k`, `--simulate`, `--sim-pulses`.
+`--modules`, `--tune k`, `--simulate`.
 
 # 04b_stream_batch.py: timestreams without a window
 
-Calibrates `TONE_SET` (or reuses `CALIBRATION`), writes chunk `CHUNK`
-of its tones (planned for stage `WRITE_DEC`), takes the runs in `RUNS`
-one after another, and clears the tones. Everything is set in the
+Calibrates `TONE_SET` (or reuses `CALIBRATION`), takes the runs in
+`RUNS` one after another, each writing and streaming the tone chunks
+its stage needs (or `TONE_CHUNKS`), and clears the tones. Everything
+is set in the
 script; nothing is asked. To take several sets, or the same set with
 other settings, loop over the script's `take` (or
 `citkid.crs.procedures.stream_batch`) from your own script, changing
@@ -203,11 +200,10 @@ the settings between calls.
 
 | Setting | Meaning |
 |---|---|
-| `MODULES` | Modules connected to the device |
 | `TONE_SET` | The tone set |
 | `CALIBRATION` | `None`: take a calibration sweep; or a saved one to reuse (`'tune0/cal2'`), which must be in frame |
 | `FRES_UPDATE` | As in `04a_stream.py` |
-| `WRITE_DEC`, `CHUNK` | The stage the chunks are planned for, and which chunk to write and stream (`0`: the whole set when it fits) |
+| `TONE_CHUNKS` | Which of the chunks planned for a run's stage to stream, e.g. `[0, 1]` (`None`: all) |
 | `RUNS` | The timestreams, in order: `name`, `dec_stage`, `duration_s`, `notes` |
 | `NPOINTS_FINE`, `NPOINTS_GAIN`, `GAIN_SPAN_FACTOR`, `NSAMPS` | Calibration sweep, as in `03_tune.py` |
 
@@ -367,7 +363,6 @@ by `citkid.pipeline.photon_finder.migrate_results(root)`.
 | `HIGHPASS_HZ` | Drift removal, Hz |
 | `COINC_NSIGMA`, `COINC_WIN` | Coincidences: pulses counted (filter sigma), window (± samples) |
 | `HEE_MIN_MULT` | Fewest tones of an HEE |
-| `MEMORY_GB` | Timestreams kept in memory, GB |
 
 ## Command line
 
@@ -433,7 +428,6 @@ hee/<name>/          attrs: run, tone set, calibration, events,
 | `PRE_S`, `POST_S` | Snippet before and after an event, s |
 | `SEARCH_S` | Peak search after the event, s |
 | `HIGHPASS_HZ` | Drift removal, Hz |
-| `MEMORY_GB` | Timestreams kept in memory, GB |
 
 ## Command line
 
@@ -509,7 +503,6 @@ or name.
 | `GLITCH_SIGN`, `GLITCH_NSTD`, `GLITCH_BASELINE_S`, `GLITCH_DISTANCE_S`, `GLITCH_ROUNDS` | `'peaks'`: sign of a glitch in x, threshold (sigma), baseline bin (s), least spacing (s), rounds |
 | `PHOTONS`, `GLITCH_PULSES` | `'photons'`: the photon result, and `'hee'` or `'all'` pulses |
 | `COINC_WIN`, `HEE_MIN_MULT` | High-energy events: window (± samples), fewest tones |
-| `MEMORY_GB` | Timestreams kept in memory per write, GB |
 
 ## Command line
 
@@ -560,7 +553,6 @@ without text it lists the notes).
 | Setting | Meaning |
 |---|---|
 | `STORE` | The store; `None`: a dialog |
-| `OUT_DIR` | The site folder |
 | `RES_PAGES` | One page per resonator (about 100 kB each) |
 | `INTERACTIVE` | Open the store browser on its Notes tab first |
 | `INDEX` | Also rebuild the top page (`index.html`) after the device; `--index-only` rebuilds it alone |

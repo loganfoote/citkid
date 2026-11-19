@@ -13,8 +13,8 @@ from citkid.crs.instrument import CRS
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-SERIAL_NUMBER = 46
-INTERFACE = 'enp5s0'
+from settings import SERIAL_NUMBER, INTERFACE
+
 CLOCK_SOURCE = 'VCXO'
 ANALOG_BANK_HIGH = False
 EXTENDED_BW = False

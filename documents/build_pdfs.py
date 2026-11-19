@@ -39,7 +39,7 @@ DOCUMENTS = [
     ('xcal_derivations.md', 'xcal_derivations.pdf', 'x calibration'),
 ]
 BANNER = '#' * 80
-PLACEHOLDER = re.compile(r'\{\{(settings|help):([\w.]+)\}\}')
+PLACEHOLDER = re.compile(r'\{\{(settings|help):([\w./]+)\}\}')
 
 def settings_block(script):
     """

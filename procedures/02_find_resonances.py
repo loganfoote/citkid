@@ -19,10 +19,8 @@ from citkid.vna.full_sweep import (
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-DATA_DIR = '~/data'
-COOLDOWN = 'cooldown'
-DEVICE = 'device'
-SUFFIX = ''
+from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX
+
 FINDER = 'cnn'
 SPAN_LW = 5.
 

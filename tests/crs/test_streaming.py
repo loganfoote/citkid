@@ -843,7 +843,8 @@ async def test_fres_update_and_stream_batch(tmp_path):
     assert result['calibration'] == 'tune0/cal0'
     assert result['runs'] == [['tune0/cal0/write0/ts0'],
                               ['tune0/cal0/write0/ts1']]
-    assert result['write'] == 'tune0/cal0/write0' and crs.ntones == 0
+    assert crs.ntones == 0
+    assert dl.stream_runs(root)[0].get('tone_chunks') is None
     cal = root['tune0/cal0']
     up = cal.attrs['fres_update']
     assert up == dict(method = 'spacing', max_shift = 0.1,
@@ -865,9 +866,16 @@ async def test_fres_update_and_stream_batch(tmp_path):
     assert [c['name'] for c in dl.calibrations(tune)] == ['cal0']
     with pytest.raises(ValueError, match = 'not a calibration of tone set'):
         await stream_batch(crs, tune, 0, runs, calibration = 'tune0/cal0')
-    with pytest.raises(ValueError, match = 'chunk'):
-        await stream_batch(crs, tune, 1, runs, calibration = cal,
-                           chunk = 5)
+    with pytest.raises(ValueError, match = 'not a chunk 5'):
+        await stream_batch(crs, tune, 1, [dict(
+            name = 'd', dec_stage = 6, duration_s = 0.1)],
+            calibration = cal, tone_chunks = [5])
+    assert [r['name'] for r in dl.stream_runs(root)] == ['a', 'b', 'c']
+    result = await stream_batch(crs, tune, 1, [dict(
+        name = 'd', dec_stage = 6, duration_s = 0.1)],
+        calibration = cal, tone_chunks = [0])
+    assert result['runs'] == [['tune0/cal0/write2/ts3']]
+    assert dl.stream_runs(root)[3]['tone_chunks'] == [0]
     # Calibrating set 0 moves its NCO: cal0 is out of frame
     await calibrate_tone_set(crs, tune, 0, verbose = False,
                              npoints_fine = 20, npoints_gain = 10)

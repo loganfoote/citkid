@@ -40,18 +40,25 @@ The CNN resonance finder needs `uv sync --extra cnn`.
 
 # Running the scripts
 
-Copy a script, set the settings block at its top for your setup, and run
-it. Command-line options override a setting for one run; `--help` lists
-them.
+Copy `settings.py` and the scripts into a folder for the run. Set
+`settings.py` once: it holds what every script shares, and each script
+imports it from its own folder. Set the rest of a script's settings
+block at its top (a comment line names each group of settings), and
+run it. Command-line options override a setting for one run; `--help`
+lists them.
 
-Settings every script shares:
+{{settings:settings.py}}
 
 | Setting | Meaning |
 |---|---|
 | `SERIAL_NUMBER`, `INTERFACE` | The CRS serial number and the Ethernet interface to it |
+| `MODULES` | Modules connected to the device |
 | `DATA_DIR`, `COOLDOWN`, `DEVICE` | The device store: `<DATA_DIR>/<COOLDOWN>/<DEVICE>.zarr` (`--store` gives a path instead) |
 | `SUFFIX` | Names the store `<DEVICE>_<SUFFIX>.zarr` (`''`: no suffix) |
-| `NOTES` | Text saved with the data (`--notes`) |
+| `REPORT_DIR` | The report site folder |
+| `MEMORY_GB` | Timestreams kept in memory by the analysis scripts, GB |
+
+Every script also has `NOTES`, text saved with the data (`--notes`).
 
 The store holds everything measured and analyzed. Raw data is never
 overwritten: a repeated measurement gets the next index (`vna0`, `vna1`,
@@ -63,9 +70,10 @@ firmware needs a new store.
   simultaneously on different devices. `04a_stream.py` and
   `04b_stream_batch.py` are the exception: they need the whole board
   while they run, and other scripts stop with an error naming them.
-- **Simulated devices**: `simulate_store.py` makes a store with a
-  simulated device; `03_tune.py`, `04a_stream.py` and
-  `04b_stream_batch.py` take `--simulate`.
+- **Simulated devices**: `simulation/simulate_store.py` makes a store
+  with a simulated device (its settings are the only simulation
+  settings); `03_tune.py`, `04a_stream.py` and `04b_stream_batch.py`
+  take `--simulate`.
 
 # CRS basics
 

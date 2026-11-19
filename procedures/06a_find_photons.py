@@ -22,10 +22,9 @@ from citkid.signal.photons import DetectionSettings
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-DATA_DIR = '~/data'
-COOLDOWN = 'cooldown'
-DEVICE = 'device'
-SUFFIX = ''
+from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB
+
+# Timestreams
 CALIBRATION = None
 TIMESTREAMS = [
 ]
@@ -33,6 +32,8 @@ NAME = ''
 REFERENCE = None
 REUSE = 'settings'
 INTERACTIVE = True
+
+# Pulse finding
 INIT_NSIGMA = 6.
 INIT_HMAX = 3.
 OF_ITERATIONS = 5
@@ -46,10 +47,11 @@ FILTER_POST_S = 1.0e-3
 TAU_SKIP = 2
 TAU_FIT_S = 1.e-3
 HIGHPASS_HZ = 10.
+
+# Coincidences and HEEs
 COINC_NSIGMA = 4.
 COINC_WIN = 2
 HEE_MIN_MULT = 3
-MEMORY_GB = 12.
 
 NOTES = """
 """

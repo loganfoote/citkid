@@ -20,24 +20,31 @@ from citkid.pipeline import psds
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-DATA_DIR = '~/data'
-COOLDOWN = 'cooldown'
-DEVICE = 'device'
-SUFFIX = ''
+from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB
+
+# Timestreams
 TIMESTREAMS = [
 ]
 NAME = ''
 INTERACTIVE = True
+
+# Spectra
 NBINS = 100
 FMIN_MULT = 10.
 FMAX_DIV = 10.
+
+# Common-mode removal
 CN_REMOVE = True
 CN_N_COMP = 3
 CN_N_ITER = 5
 CN_LOWPASS_HZ = None
 CN_HIGHPASS_HZ = None
 CN_FILTER_ORDER = 2
+
+# Tones left out
 BAD_TONES = []
+
+# Deglitching
 DEGLITCH = None
 GLITCH_PRE_S = 0.2e-3
 GLITCH_POST_S = 2.e-3
@@ -50,7 +57,6 @@ PHOTONS = None
 GLITCH_PULSES = 'hee'
 COINC_WIN = 2
 HEE_MIN_MULT = 3
-MEMORY_GB = 12.
 
 NOTES = """
 """

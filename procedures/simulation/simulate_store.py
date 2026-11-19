@@ -1,6 +1,7 @@
 """
 Make a store with a VNA sweep of a simulated device, for trying the
-analysis scripts (02_find_resonances.py --store ...).
+scripts (02_find_resonances.py --store ..., then --simulate in
+03_tune.py, 04a_stream.py and 04b_stream_batch.py).
 
 Usage:
     python simulate_store.py --store ~/data/sim/simdevice.zarr
@@ -23,6 +24,7 @@ QR_MEDIAN = 2e4
 PTS_PER_LW = 25.
 NSAMPS = 100
 SNR_DB = 40.
+PULSES = None
 
 NOTES = """
 """
@@ -81,7 +83,7 @@ async def main(args):
         path, seed = args.seed, nyquist = args.nyquist,
         amplitude = args.amplitude, nsamps = args.nsamps,
         step = vna_step(args.qr_median, args.pts_per_lw),
-        snr_db = args.snr_db)
+        snr_db = args.snr_db, pulses = PULSES)
     save_notes(root['vna0'], args.notes)
     print(f'Simulated {len(truth)} resonators; saved {path}')
     print(dl.tree(root, max_depth = 1))
