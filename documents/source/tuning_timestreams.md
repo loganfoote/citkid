@@ -154,7 +154,8 @@ A window on one tuning (the latest with tones, or `--tune k`):
 |---|---|
 | Calibration | Calibrate the selected tone set (a target sweep, saved as `cal{j}`), once per set; pick which saved calibration to use |
 | Tones on the board | Write tones writes the chosen chunk of the set from its calibration (the chunks are planned for the stage set there: a fast stage takes fewer tones, so a big set is written and streamed one chunk at a time); Clear tones clears the board. Nothing else writes tones |
-| Preview | Capture `PREVIEW_S` seconds of the tones on the board and plot one tone as x, parallel/perpendicular to the loop, or I and Q, with its PSD if asked (not saved) |
+| Preview | Capture `PREVIEW_S` seconds of the tones on the board (not saved) |
+| Plots | The capture or the viewed run, whichever was last (the plot title says which): one tone as x, parallel/perpendicular to the loop, or I and Q, and its PSD with Show PSD |
 | Run | Name, notes, decimation stage and duration (or a `PRESETS` entry); the tones on the board are streamed and saved as `cal{j}/write{w}/ts{n}` and listed in the run list; a name is used once per tuning |
 | View run | Shows a run's first chunks like a capture |
 | Grey buttons | A grey button says beside it what it needs |

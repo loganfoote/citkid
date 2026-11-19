@@ -410,15 +410,20 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.mode_box = QtWidgets.QComboBox()
         self.mode_box.addItems(MODES)
         self.mode_box.currentIndexChanged.connect(self._plot)
-        self.psd_box = QtWidgets.QCheckBox('PSD of the timestream')
+        self.psd_box = QtWidgets.QCheckBox('Show PSD')
         self.psd_box.toggled.connect(self._on_psd_box)
         form.addRow('Stage', self.preview_dec)
         form.addRow('Length', self.preview_s)
         form.addRow(action_row(self.capture_btn))
+        left.addWidget(box)
+
+        # Plots: of the capture or the viewed run, whichever is shown
+        box = QtWidgets.QGroupBox('Plots (the capture or the viewed run)')
+        form = QtWidgets.QFormLayout(box)
         form.addRow('Tone', self.tone_box)
         form.addRow('Show', self.mode_box)
         form.addRow('', self.psd_box)
-        left.addWidget(box)
+        right.addWidget(box)
 
         # Run
         box = QtWidgets.QGroupBox('Run on the selected tone set (saved as '
@@ -445,7 +450,7 @@ class StreamWindow(QtWidgets.QMainWindow):
         form.addRow('Stage', self.run_dec)
         form.addRow('Length', self.run_s)
         form.addRow(action_row(self.run_btn))
-        right.addWidget(box)
+        right.insertWidget(1, box)
         left.addStretch(1)
         right.addStretch(1)
         cols = QtWidgets.QHBoxLayout()
@@ -1281,6 +1286,8 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.ts_plot.clear()
         self.iq_plot.clear()
         self.psd_plot.clear()
+        self.ts_plot.setTitle(None)
+        self.psd_plot.setTitle(None)
         for plot in (self.ts_plot, self.psd_plot.getPlotItem()):
             if plot.legend is not None:
                 plot.legend.clear()
@@ -1298,6 +1305,9 @@ class StreamWindow(QtWidgets.QMainWindow):
             return
         k = int(np.flatnonzero(p['rows'] == r)[0])
         zt, f_tone = p['zt'][k], float(p['fres'][k])
+        what = p['label'] if self.view is not None else 'Preview (not saved)'
+        self.ts_plot.setTitle(f'{what}: tone {r}')
+        self.psd_plot.setTitle(f'PSD of {what}: tone {r}')
         dfr, dperp, z0, _ = loop_tangent_shift(f, z, f_tone, zt)
         step = max(1, len(zt) // MAX_IQ_POINTS)
         self.iq_plot.plot(zt.real[::step], zt.imag[::step], pen = None,
