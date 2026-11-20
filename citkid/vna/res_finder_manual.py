@@ -416,11 +416,12 @@ class ManualResFinder(QtCore.QObject):
         self.plot_overview.setMenuEnabled(False)
         self.plot_overview.hideButtons()
 
-        _stride = max(1, len(self.f) // 3000)
-        self.plot_overview.plot(
-            self.f[::_stride], self.mag_db[::_stride],
+        # Every dip shows: each pixel column keeps its min and max
+        overview_curve = self.plot_overview.plot(
+            self.f, self.mag_db,
             pen = pg.mkPen(color = (100, 200, 255, 120), width = 1),
         )
+        overview_curve.setDownsampling(auto = True, method = 'peak')
 
         self._overview_region = pg.LinearRegionItem(
             values = [float(self.f[0]), float(self.f[-1])],

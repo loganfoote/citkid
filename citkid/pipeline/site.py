@@ -299,7 +299,8 @@ def inventory(root):
             fit = fit is not None,
             n_resonators = int(res['res_idxs_all'].shape[0])
             if res is not None else None,
-            report = _attr(fit, 'report', '') if fit is not None else ''))
+            report = _attr(fit, 'report', '') if fit is not None else '',
+            in_report = dl.in_report(g)))
     inv['sweeps'] = sweeps
     tunings = []
     for k in dl.list_indices(root, 'tune'):
@@ -313,6 +314,7 @@ def inventory(root):
                       and _attr(g, 'notes', '')), '')
         tunings.append(dict(
             k = k, path = t.path, created = _attr(t, 'created', ''),
+            in_report = dl.in_report(t), name = dl.tuning_name(t),
             notes = notes, resonators = _attr(t, 'resonators'),
             n_tones = int(len(tones['res_idxs'])) if tones else None,
             n_tone_sets = int(len(np.unique(tones['tone_set'])))
@@ -326,6 +328,7 @@ def inventory(root):
                                _attr(t[c], 'tone_set'),
                                created = _attr(t[c], 'created', ''),
                                notes = _attr(t[c], 'notes', ''),
+                               in_report = dl.in_report(t[c]),
                                n_tones = int(t[c]['res_idxs'].shape[0])
                                if 'res_idxs' in t[c] else None,
                                settings = _settings_of(t[c]))
@@ -350,6 +353,7 @@ def inventory(root):
             for key, value in _settings_of(cal).items():
                 settings.setdefault(key, value)
         rec['settings'] = settings
+        rec['in_report'] = dl.in_report(run)
         runs.append(rec)
     inv['runs'] = runs
     cals = []
@@ -368,6 +372,7 @@ def inventory(root):
                              iq_fit = 'iq_popt' in sg))
         cals.append(dict(c = c, path = g.path,
                          created = _attr(g, 'created', ''),
+                         in_report = dl.in_report(g),
                          notes = _attr(g, 'notes', ''),
                          selection = _attr(g, 'selection', []), sets = sets))
     inv['calibrations'] = cals
@@ -378,6 +383,7 @@ def inventory(root):
             g = root[f'{kind}/{name}']
             item = dict(name = name, path = g.path,
                         created = _attr(g, 'created', ''),
+                        in_report = dl.in_report(g),
                         notes = _attr(g, 'notes', ''),
                         run = _attr(g, 'run'), run_name = _attr(g, 'name'),
                         tone_set = _attr(g, 'tone_set'),
@@ -404,6 +410,7 @@ def inventory(root):
         names = [n for n in g.group_keys() if n.startswith('timestream')]
         complete = 'f_reduced' in g and any('res_idxs' in g[n] for n in names)
         item = dict(p = p, path = g.path, created = _attr(g, 'created', ''),
+                    in_report = dl.in_report(g),
                     notes = _attr(g, 'notes', ''), name = _attr(g, 'name'),
                     timestreams = _attr(g, 'timestreams', []),
                     settings = _attr(g, 'settings', {}), complete = complete,
@@ -1333,6 +1340,9 @@ def _taken_table(inv, attachments = None):
                          notes = g['notes'],
                          details = f"{g['n_timestreams']} timestreams"
                          if g['complete'] else 'saved incompletely'))
+    for r, it in zip(rows, _taken_items(inv)):
+        if not it.get('in_report', True):
+            r['details'] += '; left out of the report'
     for r in rows:
         item = r['path'].split(', ')[0]
         r['attached'] = ' | '.join(
@@ -1340,6 +1350,123 @@ def _taken_table(inv, attachments = None):
             for n, p in attachment_links(attachments or {}, item))
     return pd.DataFrame(rows, columns = ['kind', 'path', 'created', 'name',
                                          'notes', 'details', 'attached'])
+
+def _taken_items(inv):
+    """
+    List the inventory's items in the order ``_taken_table`` tabulates
+    them.
+
+    Parameters:
+    inv (dict): ``inventory`` output.
+
+    Returns:
+    items (list of dict): the items.
+    """
+    items = []
+    for s in inv['sweeps']:
+        items.append(s)
+    for t in inv['tunings']:
+        items.append(t)
+        items.extend(t['cal_sweeps'])
+    items.extend(inv['runs'])
+    items.extend(inv['calibrations'])
+    items.extend(inv['photons'])
+    items.extend(inv['hee'])
+    items.extend(inv['psds'])
+    return items
+
+LEFT_OUT = 'left out of the report (unchecked in the store browser)'
+
+def _left_out(label, notes, path):
+    """
+    Make the one-line entry of an item left out of the report.
+
+    Parameters:
+    label, notes, path (str): the item's label, notes and store path.
+
+    Returns:
+    item (dict): a ``versions_html`` item with no figures or files.
+    """
+    return dict(label = label, notes = notes, path = path, text = LEFT_OUT,
+                figures = [], files = [])
+
+def _percentiles(values):
+    """
+    Return the 1st and 99th percentiles of some values, with their count.
+
+    Parameters:
+    values (array-like): the values; NaN is skipped.
+
+    Returns:
+    out (list or None): [p1, p99, n], or None if there are no values.
+    """
+    v = np.asarray(values, dtype = float)
+    v = v[np.isfinite(v)]
+    if not len(v):
+        return None
+    lo, hi = np.percentile(v, [1, 99])
+    return [float(lo), float(hi), int(len(v))]
+
+def store_overview(inv, summary):
+    """
+    Reduce a store's results to the numbers the site's top page lists.
+
+    Parameters:
+    inv (dict): ``inventory`` output.
+    summary (pd.DataFrame): ``resonator_summary`` output.
+
+    Returns:
+    overview (dict): ``notes`` (the store's), ``n_tones`` and
+        ``n_resonators`` (the latest tuning with tones and the resonator
+        list it used), ``yield_pct`` (their ratio), ``fres_mhz`` ([min,
+        max] of the tuned tones), and the 1st and 99th percentiles with
+        the count ([p1, p99, n], or None) of ``photon_tau_us``,
+        ``hee_tau_us`` and ``sxx_cn_10hz`` (Sxx after common-mode
+        removal at the reduced frequency nearest 10 Hz).
+    """
+    out = dict(notes = str((inv.get('attrs') or {}).get('notes') or ''),
+               n_tones = None, n_resonators = None, yield_pct = None,
+               fres_mhz = None, photon_tau_us = None, hee_tau_us = None,
+               sxx_cn_10hz = None)
+    tuned = [t for t in inv.get('tunings', []) if t.get('n_tones')]
+    if tuned:
+        t = tuned[-1]
+        out['n_tones'] = int(t['n_tones'])
+        res = str(t.get('resonators') or '')
+        for s in inv.get('sweeps', []):
+            if res == dl.set_name(s['k'], 'resonators') and \
+                    s.get('n_resonators'):
+                out['n_resonators'] = int(s['n_resonators'])
+                out['yield_pct'] = 100. * out['n_tones'] / out['n_resonators']
+    if len(summary) and 'fres_mhz' in summary:
+        f = summary['fres_mhz'].to_numpy(dtype = float)
+        f = f[np.isfinite(f)]
+        if len(f):
+            out['fres_mhz'] = [float(f.min()), float(f.max())]
+    for key in ('photon_tau_us', 'hee_tau_us'):
+        if key in summary:
+            out[key] = _percentiles(summary[key])
+    sxx = [c for c in summary.columns if c.startswith('sxx_cn_')]
+    if sxx:
+        out['sxx_cn_10hz'] = _percentiles(summary[sxx[0]])
+    return out
+
+def _range_text(r, fmt = '{:.3g}', unit = ''):
+    """
+    Format a [p1, p99, n] range (``_percentiles``) or [lo, hi] pair.
+
+    Parameters:
+    r (list or None): the range.
+    fmt (str): number format. Default '{:.3g}'.
+    unit (str): unit appended. Default ''.
+
+    Returns:
+    text (str): 'lo to hi unit (n)', or ''.
+    """
+    if not r:
+        return ''
+    text = f'{fmt.format(r[0])} to {fmt.format(r[1])}{unit}'
+    return text + (f' ({r[2]})' if len(r) > 2 else '')
 
 def build_device(root, out_root, force = False, dpi = FIG_DPI,
                  res_pages = True, progress = None):
@@ -1388,10 +1515,15 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
     # The existing reports: VNA sweeps and timestream results
     vna_paths = {}
     for s in inv['sweeps']:
-        if s['fit']:
+        if s['fit'] and s.get('in_report', True):
             vna_paths[s['k']] = vreport.export_vna_report(root, fig_dir,
                                                          s['k'], dpi = dpi)
-    ts_paths = treport.export_timestream_report(root, fig_dir, dpi = dpi)
+    ts_paths = treport.export_timestream_report(
+        root, fig_dir, dpi = dpi,
+        photons = [it['name'] for it in inv['photons']
+                   if it.get('in_report', True)],
+        hee = [it['name'] for it in inv['hee'] if it.get('in_report', True)],
+        groups = [g['p'] for g in inv['psds'] if g.get('in_report', True)])
     for key, path in list(ts_paths.items()) + [
             (f'vna{k}_{n}', p) for k, d in vna_paths.items()
             for n, p in d.items()]:
@@ -1417,6 +1549,7 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
         table.to_csv(csv, index = False)
         tune_figs[tune.basename] = (path, csv)
     summary = resonator_summary(data)
+    overview = store_overview(inv, summary)
     summary_csv = os.path.join(data_dir, f'{device}_resonators.csv')
     summary.to_csv(summary_csv, index = False)
     # Resonator pages
@@ -1470,7 +1603,10 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
         _taken_table(inv, attachments), raw = ('attached',))))
     items = []
     for s in reversed(inv['sweeps']):
-        if s['k'] in vna_paths:
+        if not s.get('in_report', True):
+            items.append(_left_out(f"vna{s['k']} ({s['created']})",
+                                   s['notes'], s['path']))
+        elif s['k'] in vna_paths:
             p = vna_paths[s['k']]
             items.append(dict(
                 label = f"vna{s['k']} ({s['created']})", notes = s['notes'],
@@ -1484,7 +1620,10 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
     items = []
     for t in reversed(inv['tunings']):
         name = t['path'].split('/')[-1]
-        if name in tune_figs:
+        if not t.get('in_report', True):
+            items.append(_left_out(f"{name} ({t['created']})", t['notes'],
+                                   t['path']))
+        elif name in tune_figs:
             png, csv = tune_figs[name]
             items.append(dict(
                 label = f"{name} ({t['created']})", notes = t['notes'],
@@ -1496,6 +1635,10 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
                                                       attachments)))
     items = []
     for c in reversed(inv['calibrations']):
+        if not c.get('in_report', True):
+            items.append(_left_out(f"{c['path']} ({c['created']})",
+                                   c['notes'], c['path']))
+            continue
         figs, files = [], []
         for cal, tables in data.calibrations:
             if cal.path != c['path']:
@@ -1528,6 +1671,10 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
         items = []
         for it in reversed(inv[kind]):
             key = f"lifetime_{kind}_{it['name']}"
+            if not it.get('in_report', True):
+                items.append(_left_out(f"{it['name']} ({it['created']})",
+                                       it['notes'], it['path']))
+                continue
             if key not in ts_paths:
                 continue
             figs = [_rel(ts_paths[key], out_dir)]
@@ -1553,6 +1700,11 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
     items = []
     for g in reversed(inv['psds']):
         key = f"psd{g['p']}"
+        if not g.get('in_report', True):
+            items.append(_left_out(
+                f"ts_psd{g['p']} {g.get('name') or ''} ({g['created']})",
+                g['notes'], g['path']))
+            continue
         if key not in ts_paths:
             continue
         items.append(dict(
@@ -1596,7 +1748,7 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
                            2))
     with open(manifest_path, 'w', encoding = 'utf-8') as fh:
         json.dump(dict(inv, built = dl._now(), res_pages = res_pages,
-                       attachments = attachments,
+                       attachments = attachments, overview = overview,
                        store = str(getattr(root.store, 'root',
                                            root.store))),
                   fh, indent = 1, default = str)
@@ -1626,24 +1778,37 @@ def build_index(out_root):
                 inv = json.load(fh)
             wafer, die = device_parts(inv.get('device', device))
             link = f'{cooldown}/{device}/index.html'
+            ov = inv.get('overview') or {}
+            tones = '' if ov.get('n_tones') is None else (
+                f"{ov['n_tones']}" + (
+                    f" of {ov['n_resonators']} ({ov['yield_pct']:.0f}%)"
+                    if ov.get('yield_pct') is not None else ''))
             rows.append(dict(
                 cooldown = cooldown,
                 device = f'<a href="{_esc(link)}">{_esc(wafer)}</a>',
                 die = die, suffix = inv.get('suffix', ''),
                 created = inv.get('attrs', {}).get('created', ''),
-                sweeps = len(inv.get('sweeps', [])),
-                tunings = len(inv.get('tunings', [])),
-                runs = len(inv.get('runs', [])),
-                photons = len(inv.get('photons', [])),
-                hee = len(inv.get('hee', [])),
-                noise = len(inv.get('psds', [])),
+                notes = ov.get('notes') or
+                inv.get('attrs', {}).get('notes') or '',
+                tones = tones,
+                fres_mhz = _range_text(ov.get('fres_mhz'), '{:.1f}'),
+                photon_tau_us = _range_text(ov.get('photon_tau_us'),
+                                            '{:.0f}'),
+                hee_tau_us = _range_text(ov.get('hee_tau_us'), '{:.0f}'),
+                sxx_10hz = _range_text(ov.get('sxx_cn_10hz'), '{:.2g}'),
                 built = inv.get('built', '')))
     table = pd.DataFrame(rows, columns = [
-        'cooldown', 'device', 'die', 'suffix', 'created', 'sweeps',
-        'tunings', 'runs', 'photons', 'hee', 'noise', 'built'])
+        'cooldown', 'device', 'die', 'suffix', 'created', 'notes',
+        'tones', 'fres_mhz', 'photon_tau_us', 'hee_tau_us', 'sxx_10hz',
+        'built'])
     body = ('<p class="small">Type under a heading to filter; click a '
             'heading to sort. A device folder copied in from another '
-            'site is listed after the next build.</p>'
+            'site is listed after the next build. tones: tuned tones of '
+            'the latest tuning, of the resonances found (yield); '
+            'fres_mhz: their range; photon_tau_us, hee_tau_us, sxx_10hz: '
+            'the 1st to 99th percentile over the tones (count), the '
+            'latest result of each tone, Sxx after common-mode removal '
+            'at 10 Hz in 1/Hz.</p>'
             + table_html(table, raw = ('device',), filters = True))
     path = os.path.join(out_root, 'index.html')
     with open(path, 'w', encoding = 'utf-8') as fh:

@@ -678,6 +678,35 @@ def test_find_tuning(tmp_path):
         dl.new_tuning(root, 0, name = 'warm')
 
 
+def test_dependents_and_delete(tmp_path):
+    """
+    Dependents are the groups whose attributes refer to an item (or
+    anything under it), in turn; deleting takes them along.
+    """
+    root = dl.create_store(tmp_path / 's.zarr', 'd', 'c')
+    vna = dl.create_group(root, 'vna0', 'raw')
+    dl.create_group(vna, 'full_sweep_fit', 'analysis')
+    dl.create_group(root, 'resonators0', 'decision',
+                    attrs = dict(source = 'vna0/full_sweep_fit'))
+    t, _ = dl.new_tuning(root, 0)
+    dl.create_group(root, 'ts_psd0', 'analysis',
+                    attrs = dict(timestreams = [dict(run = 'tune0/x')]))
+    dl.create_group(root, 'vna1', 'raw')
+    assert dl.dependents(root, 'vna0') == ['resonators0', 'tune0',
+                                           'ts_psd0']
+    assert dl.dependents(root, 'vna0/full_sweep_fit') == [
+        'resonators0', 'tune0', 'ts_psd0']
+    assert dl.dependents(root, 'tune0') == ['ts_psd0']
+    assert dl.dependents(root, 'vna1') == []
+    assert dl.item_name(t) == 'tune0' and dl.item_name(vna) is None
+    assert dl.delete_item(root, 'tune0') == ['tune0', 'ts_psd0']
+    assert sorted(root.group_keys()) == ['resonators0', 'vna0', 'vna1']
+    dl.set_in_report(root, 'vna1', False)
+    assert not dl.in_report(root['vna1']) and dl.in_report(root['vna0'])
+    with pytest.raises(ValueError, match = 'no name'):
+        dl.rename_item(root, 'vna1', 'x')
+
+
 def test_tone_mark_scopes(tmp_path):
     """
     Local marks leave a tone out of their own stage only; global marks

@@ -15,6 +15,7 @@ import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets
 from .. import daq_layout as dl
+from ..qt_compat import add_help
 from ..qt_compat import (
     Qt, delete_on_close, fit_window_to_screen, get_qapp, hint_label,
     widget_font_stylesheet
@@ -122,6 +123,13 @@ class VnaViewWindow(QtWidgets.QMainWindow):
             'Drag to pan, scroll to zoom (both plots follow in frequency), '
             'right-drag to zoom one axis, R to fit the data again.'))
         self.setCentralWidget(central)
+        add_help(self, 'VNA sweep', [
+            ('Keyboard', [('R', 'Rescale the plots'),
+                          ('H', 'Show / hide this help')]),
+            ('Buttons', [('Unwrap phase', 'Unwrap the phase plot')]),
+            ('Mouse', [('Scroll / drag', 'Zoom / pan a plot'),
+                       ('Right-click', 'Plot menu (axes, log scale, export)')]),
+        ])
         self.set_data(self.f, self.z, bands)
 
     def _build_plots(self):

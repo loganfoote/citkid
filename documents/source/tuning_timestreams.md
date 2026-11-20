@@ -101,7 +101,7 @@ sweeps are never retaken.
 | power_sweep | Target sweep at each power in `POWERS` | `power_sweep/set{i}` |
 | power_fits | IQ series window: IQ loop fits at every power, $a_\mathrm{nl}$ vs power per resonator; the power where $a_\mathrm{nl}$ reaches `ANL` is marked (Shift+click or drag to choose another); no fit: the median of the others; clipped to `ARES_LIMITS` | `power_fits`, `power_choice` |
 | fq_sweep | Target sweep at the chosen powers | `fq_sweep` |
-| fq_finder | Window: set each tone's frequency and span, or reject it; resumes where it stopped | `fres_opt`, `qres_opt`, `reject_reason` |
+| fq_finder | Window: set each tone's frequency and span, or reject it (the tone's power is shown); resumes where it stopped | `fres_opt`, `qres_opt`, `reject_reason` |
 | tones | The tuned tones, without rejected and bad-marked ones | `tones` |
 
 `citkid.daq_layout.port_tuning` copies `tones/`, `crs_config/` and the
@@ -140,7 +140,7 @@ sweep, fq_finder and tones steps run.
 | `A_FIT_RANGE` | $a_\mathrm{nl}$ range of the $a_\mathrm{nl}$ vs power fits |
 | `ANL` | Target $a_\mathrm{nl}$ |
 | `ARES_LIMITS` | Chosen powers are clipped to this, dBm |
-| `FRES_UPDATE_METHOD` | fq_finder: `'none'`, `'spacing'`, `'minS21'`, `'distance'` |
+| `FRES_UPDATE_METHOD`, `NPOINTS_UPDATE` | fq_finder's starting frequencies: `'none'`, `'spacing'` (the point of fastest motion around the loop), `'spacing_fit'` (a Lorentzian fit to that motion, the point when the fit fails), `'minS21'`, `'distance'`; only the points within `NPOINTS_UPDATE` of the swept frequency are considered (`None`: all) |
 | `RMV_GAIN_SIMPLE` | fq_finder: simple gain correction of the display |
 | `PORT_TUNE`, `PORT_STORE` | A new tuning keeps the powers of this tuning (name or index; `None`: a full tuning) of this store (`None`) or the store at this path |
 | `PREDICT` | `None`, or a function of the earlier `fres`, `qres`, `ares` returning `fres_pred`, `qres_pred`, `ares_pred` (`predict_tones` in the script) |
@@ -160,7 +160,7 @@ A window on one tuning (the latest with tones, or `--tune name`):
 | Calibration | Calibrate the selected tone set (a target sweep, saved as `cal{j}`), once per set; pick which saved calibration to use |
 | Tones on the board | Write tones writes the chosen chunk of the set from its calibration (the chunks are planned for the stage set there: a fast stage takes fewer tones, so a big set is written and streamed one chunk at a time); Clear tones clears the board. Nothing else writes tones |
 | Preview | Capture `PREVIEW_S` seconds of the tones on the board (not saved) |
-| Plots | The capture or the viewed run, whichever was last (the plot title says which): one tone as x, parallel/perpendicular to the loop, or I and Q, and its PSD with Show PSD |
+| Plots | The capture or the viewed run, whichever was last (the plot title says which): one tone as x, parallel/perpendicular to the loop, or I and Q, its PSD with Show PSD, and without the mean of each series with Subtract offset |
 | Run | Name, notes, decimation stage and duration (or a `PRESETS` entry); the tones on the board are streamed and saved as `cal{j}/write{w}/ts{n}` and listed in the run list; a name is used once per tuning |
 | View run | Shows a run's first chunks like a capture |
 | Grey buttons | A grey button says beside it what it needs |
@@ -183,7 +183,7 @@ window is open. `--simulate` streams the store's simulated device.
 | `PREVIEW_DEC`, `PREVIEW_S` | Preview decimation stage and duration, s |
 | `PRESETS` | Runs offered in the window: name, stage, duration, notes |
 | `NPOINTS_FINE`, `NPOINTS_GAIN`, `GAIN_SPAN_FACTOR`, `NSAMPS` | Calibration sweeps, as in `03_tune.py` |
-| `FRES_UPDATE` | `None`, or `dict(method = 'spacing', max_shift = 0.1)`: after each calibration sweep, move every tone to the resonance its fine sweep shows (`method`: `'spacing'`, `'distance'` or `'minS21'`), if the move is at most `max_shift` of the sweep span; a tone whose update is farther keeps its frequency. The frequencies swept are kept as `fres_sweep` |
+| `FRES_UPDATE` | `None`, or `dict(method = 'spacing', max_shift = 0.1, npoints_update = None)`: after each calibration sweep, move every tone to the resonance its fine sweep shows (`method`: `'spacing'`, `'spacing_fit'`, `'distance'` or `'minS21'`, as in `03_tune.py`; only the points within `npoints_update` of the swept frequency are considered, `None`: all), if the move is at most `max_shift` of the sweep span; a tone whose update is farther keeps its frequency. The frequencies swept are kept as `fres_sweep` |
 
 ## Command line
 
@@ -228,8 +228,13 @@ The Notes tab
 lists everything the report site shows notes for (the store, the VNA
 sweeps, tunings, calibration sweeps, runs, stream calibrations and
 results); select a row and edit its notes below, which are
-saved when you move to another row or tab or close the window (with
-the tone marks, the only things the browser writes). **Open** (Ctrl+O) chooses another store;
+saved when you move to another row or tab or close the window.
+**Rename...** changes the name of a tuning, run, PSD group or photon
+or HEE result (references follow). **Delete...** removes the item
+from the store with everything that depends on it (a resonator list
+with its tunings, a run with its results, ...), after asking, and
+asking again when something depends on it. **H** shows the help.
+**Open** (Ctrl+O) chooses another store;
 `--pick` starts with the dialog; `--runs` prints the runs instead of
 opening the window.
 
@@ -519,12 +524,17 @@ or name.
 
 Builds a static site (plain HTML, opens from the drive): one page per
 device store, from the results in the store, and a top page of every
-device built so far. Each run builds one store (`STORE`, `--store`, or
+device built so far with the store's notes and its reduced numbers:
+tuned tones of the resonances found (yield), their frequency range,
+and the 1st to 99th percentile of the photon and HEE lifetimes and
+of Sxx at 10 Hz. Each run builds one store (`STORE`, `--store`, or
 a dialog). The store browser opens first on its Notes tab: edit the
-notes of any item, or **Attach file...** to copy a file (a photo, a
-plot, a PDF) into the site next to that item, linked from the page and
-never put in the store (**Remove file...** takes one away again);
-close the browser to build. A report that exists is not replaced
+notes of any item, uncheck its **Report** box to leave it out of the
+report (the page then shows one line saying what it is, with its
+notes; the choice is kept in the store), or **Attach file...** to
+copy a file (a photo, a plot, a PDF) into the site next to that
+item, linked from the page and never put in the store (**Remove
+file...** takes one away again); close the browser to build. A report that exists is not replaced
 without asking: a popup offers to keep the attached files and
 `notes.md` (rebuilding the pages), to overwrite everything, or to stop;
 without the window, `--update` or `--overwrite` decide. Only reduced

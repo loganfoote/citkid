@@ -449,6 +449,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         title: str = "FQ Finder", ui_scale: float = 1.0,
         fres_update_method: str = "none", start_idx: int = 0,
         rmv_gain_simple: bool = False, load_saved: bool = False,
+        ares = None, npoints_update = None,
     ):
         """
         Initialize the window, prepare the data and zarr arrays, and build the
@@ -480,8 +481,16 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             instead of the input values, for resonators that were saved. If
             False (default), existing arrays are kept but the input values
             are shown.
+        ares (array-like or None): the tone powers of the sweep in dBm,
+            length M, shown with each resonator. Default None: not
+            shown.
+        npoints_update (int or None): the automatic update considers
+            only the points within this many of the input ``fres``
+            (``update_fres``). Default None: the whole sweep.
         """
         super().__init__()
+        self._ares = None if ares is None else \
+            np.asarray(ares, dtype = np.float64)
         delete_on_close(self)  # destroy on the GUI thread when closed
         self.setWindowTitle(title)
 
@@ -499,7 +508,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         # Apply automatic fres update before starting interactive session
         fres = _update_fres(
             self._f, self._z, fres, qres, res_idxs,
-            method=fres_update_method,
+            method=fres_update_method, npoints_update=npoints_update,
         )
         self._fres_work = fres.copy()
         self._qres_work = qres.copy()
@@ -865,9 +874,11 @@ class FqFinderWindow(QtWidgets.QMainWindow):
 
         # Update status
         n_tot = len(self._interactive_indices)
+        power = '' if self._ares is None or not np.isfinite(
+            self._ares[ri]) else f'   ares {self._ares[ri]:.1f} dBm'
         self._status_label.setText(
             f"Resonator {int(res_idx)}   "
-            f"({self._cursor + 1}/{n_tot})"
+            f"({self._cursor + 1}/{n_tot}){power}"
         )
         self._update_marks_label()
 
@@ -1569,7 +1580,8 @@ def _report_save_error(future):
 
 def run_fqfinder(
     f, z, fres, qres, res_idxs, zarr_grp, title = "FQ Finder", ui_scale = 1.0,
-    fres_update_method = "none", rmv_gain_simple = False,
+    fres_update_method = "none", rmv_gain_simple = False, ares = None,
+    npoints_update = None,
 ):
     """
     Launch the interactive resonance frequency and Q-factor finder.
@@ -1608,13 +1620,19 @@ def run_fqfinder(
         ``citkid.res.fres.update_fres``. Can be 'none' (default,
         uses the input ``fres`` as the starting point), 'minS21' (minimum
         of |S21| after subtracting a linear baseline), 'spacing' (point of
-        maximum adjacent IQ spacing), or 'distance' (point furthest from the
-        off-resonance IQ value). Saved values loaded from ``zarr_grp`` are
-        not updated.
+        maximum adjacent IQ spacing), 'spacing_fit' (a Lorentzian fit to
+        the spacing around that point), or 'distance' (point furthest
+        from the off-resonance IQ value). Saved values loaded from
+        ``zarr_grp`` are not updated.
     rmv_gain_simple (bool): If True, apply a simple gain correction to
         ``z`` before displaying: divide each row by the median
         off-resonance amplitude, then rotate so the off-resonance mean lies
         on the positive real axis. Default False.
+    ares (array-like or None): the sweep's tone powers in dBm, length
+        M, shown with each resonator. Default None: not shown.
+    npoints_update (int or None): the automatic update considers only
+        the points within this many of the input ``fres``. Default
+        None: the whole sweep.
 
     Raises:
     RuntimeError: if the user cancels the startup dialog.
@@ -1649,6 +1667,8 @@ def run_fqfinder(
         start_idx=start_idx,
         rmv_gain_simple=rmv_gain_simple,
         load_saved=load_saved,
+        ares=ares,
+        npoints_update=npoints_update,
     )
     if not win._interactive_indices:
         print("All resonators are calibration tones; their input fres and "

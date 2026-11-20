@@ -574,6 +574,64 @@ def plan_stream_datasets(root, selection):
                 source = src['group']))
     return groups
 
+def calibrated_timestream(
+    root, timestream, cal = None, tone_set = None, rows = None,
+    outputs = ('xt',)
+):
+    """
+    Open a stream calibration and apply it to one timestream in memory
+    (``open_calibration``, ``photon_finder.list_timestreams``,
+    ``apply_stream_calibration``), for an analysis of your own
+    (``procedures/analysis_template.py``).
+
+    Parameters:
+    root (zarr.Group): the store root.
+    timestream (str or int): a run name (its latest run), or an index in
+        the calibration's timestream list.
+    cal (zarr.Group, str, int or None): the calibration: a ``ts_cal{c}``
+        group, its name, or its index c. None (default): the latest.
+    tone_set (int or None): the run's tone set, when it has several.
+        None (default): the first.
+    rows (list of int or None): DataSet rows to apply. None (default):
+        every calibrated row of the tone set (``ts['rows']``).
+    outputs (sequence of str): calibration outputs per sample, e.g.
+        'xt', 'thetat', 'At'. Default ('xt',).
+
+    Returns:
+    DS (DataSet): the tone set's DataSet (its tone parameters: ``fres``,
+        ``qres``, ``ares``, ``res_idxs``; per row ``ff``, ``zf``, ...).
+    ts (dict): the timestream (``list_timestreams``): ``dt``, ``rows``,
+        ``res_idxs``, ``source``, ``start``, ``stop``, ...
+    out (dict): output name: array (len(rows), nsamples), rows in the
+        order of ``rows``.
+
+    Raises:
+    KeyError: if there is no such calibration or timestream.
+    """
+    from . import photon_finder as pf
+    if cal is None:
+        cals = dl.list_indices(root, 'ts_cal')
+        if not cals:
+            raise KeyError('the store has no ts_cal group: run '
+                           '05_calibrate_streams.py first')
+        cal = cals[-1]
+    if isinstance(cal, (int, np.integer)):
+        cal = dl.set_name(int(cal), 'ts_cal')
+    datasets = open_calibration(root, cal)
+    timestreams = pf.list_timestreams(root, datasets)
+    chosen = pf.select_timestreams(timestreams, [timestream])
+    if tone_set is not None:
+        chosen = [t for t in chosen if int(t['tone_set']) == int(tone_set)]
+        if not chosen:
+            raise KeyError(f'timestream {timestream!r} has no tone set '
+                           f'{tone_set}')
+    ts = chosen[0]
+    DS = datasets[ts['dataset']]['DS']
+    rows = list(ts['rows']) if rows is None else [int(r) for r in rows]
+    out = apply_stream_calibration(DS, root, ts['source'], rows = rows,
+                                   outputs = outputs)
+    return DS, ts, out
+
 def open_calibration(root, cal):
     """
     Reopen the DataSets of a stream calibration (``ts_cal{c}``, made by

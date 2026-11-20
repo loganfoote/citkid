@@ -76,6 +76,16 @@ firmware needs a new store.
   settings); `03_tune.py`, `04a_stream.py` and `04b_stream_batch.py`
   take `--simulate`.
 
+# Your own analysis
+
+`analysis_template.py` has no main script: copy its lines into your own
+code. It opens the store, applies a stream calibration to one
+timestream in memory (`calibrated_timestream`: the calibration and the
+run by name or index; `xt`, `thetat`, `At` per tone and sample), reads
+the tone parameters from the DataSet (`fres`, `qres`, `ares`,
+`res_idxs`; `ff`, `zf`, `xf`, `thetaf` per row), reaches the raw stream,
+and saves reduced results in a group of the store.
+
 # CRS basics
 
 | Term | Meaning |

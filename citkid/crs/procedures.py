@@ -66,7 +66,7 @@ async def target_sweep(
     nsamps (int): number of samples to average over per sweep point. 
     fres_update_method (str): method for updating the tone frequencies after
         the rough sweep, if npoints_rough is not None. Can be 'spacing'
-        (default), 'distance', or 'minS21'. See
+        (default), 'spacing_fit', 'distance', or 'minS21'. See
         ``citkid.res.fres.update_fres``.
     verbose (bool): If True, displays progress bars while taking data.
     progress (callable or None): if given, called as ``progress(done,
@@ -608,7 +608,8 @@ async def write_stream_chunk(
     return await crs.write_tones_for_stream(fres, ares, grp = grp,
                                             ch_map = ch_map)
 
-def apply_fres_update(cal, method = 'spacing', max_shift = 0.1):
+def apply_fres_update(cal, method = 'spacing', max_shift = 0.1,
+                      npoints_update = None):
     """
     Move a calibration's tone frequencies to the resonances its fine
     sweep shows (``res.fres.update_fres``), each within a window around
@@ -621,10 +622,13 @@ def apply_fres_update(cal, method = 'spacing', max_shift = 0.1):
 
     Parameters:
     cal (zarr.Group): the calibration (``calibrate_tone_set``), writable.
-    method (str): 'spacing' (default), 'distance' or 'minS21'
-        (``update_fres``).
+    method (str): 'spacing' (default), 'spacing_fit', 'distance' or
+        'minS21' (``update_fres``).
     max_shift (float): the largest move allowed, as a fraction of each
         tone's fine sweep span. Default 0.1.
+    npoints_update (int or None): only the sweep points within this
+        many points of the swept frequency are considered
+        (``update_fres``). Default None: the whole sweep.
 
     Returns:
     n_updated (int): tones moved.
@@ -634,7 +638,7 @@ def apply_fres_update(cal, method = 'spacing', max_shift = 0.1):
     f, z = cal['fine_sweep/f'][:], cal['fine_sweep/z'][:]
     fres0 = cal['fres_sweep'][:] if 'fres_sweep' in cal else cal['fres'][:]
     new = update_fres(f, z, fres0, cal['qres'][:], cal['res_idxs'][:],
-                      method = method)
+                      method = method, npoints_update = npoints_update)
     span = np.abs(f[:, -1] - f[:, 0])
     inside = np.abs(new - fres0) <= float(max_shift) * span
     out = np.where(inside, new, fres0)
@@ -644,6 +648,7 @@ def apply_fres_update(cal, method = 'spacing', max_shift = 0.1):
     n_updated, n_outside = int((out != fres0).sum()), int((~inside).sum())
     cal.attrs['fres_update'] = dict(method = str(method),
                                     max_shift = float(max_shift),
+                                    npoints_update = npoints_update,
                                     n_updated = n_updated,
                                     n_outside = n_outside)
     return n_updated, n_outside

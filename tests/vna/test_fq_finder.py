@@ -1054,6 +1054,20 @@ def test_status_label_shows_resonator_index(basic_win):
     assert res_idx_str in text
 
 
+def test_status_label_shows_power(qapp, tmp_path):
+    """
+    With ``ares``, the status says the tone's power.
+    """
+    f = np.tile(np.linspace(1e9, 1e9 + 1e5, 50), (2, 1))
+    z = np.ones_like(f, dtype = complex)
+    zg = zarr.open_group(str(tmp_path / 'z.zarr'), mode = 'w')
+    w = FqFinderWindow(f, z, [1e9, 1e9], [1e4, 1e4], [0, 1], zg,
+                       ares = [-50., -47.5])
+    w._load_resonator()
+    assert 'ares -50.0 dBm' in w._status_label.text()
+    w.close()
+
+
 def test_status_label_shows_cursor_position(basic_win):
     w = basic_win
     w._load_resonator()

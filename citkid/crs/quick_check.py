@@ -25,6 +25,7 @@ import time
 import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
+from ..qt_compat import add_help
 from ..qt_compat import (
     Qt, delete_on_close, fit_window_to_screen, get_qapp,
     widget_font_stylesheet
@@ -359,6 +360,16 @@ class QuickCheckWindow(QtWidgets.QMainWindow):
         lay.addWidget(self._panel)
         lay.addWidget(self.plots, stretch = 1)
         self.setCentralWidget(central)
+        add_help(self, 'VNA quick check', [
+            ('Buttons', [
+                ('Sweep (Ctrl+R)', 'Sweep the typed modules with the settings'),
+                ('Cancel (Esc)', 'Stop the sweep at its next point'),
+                ('Save data (CSV)...', 'Save the sweep shown')]),
+            ('Keyboard', [('R', 'Rescale the plots'),
+                          ('H', 'Show / hide this help')]),
+            ('Mouse', [('Scroll / drag', 'Zoom / pan a plot'),
+                       ('Right-click', 'Plot menu (axes, log scale, export)')]),
+        ])
         self._update_plan()
         self.reconnect(self._module_idxs)
 

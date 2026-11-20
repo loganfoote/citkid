@@ -23,6 +23,8 @@ from citkid.qt_compat import set_theme
 from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, LIGHT_MODE
 
 FINDER = 'cnn'
+FMIN = None
+FMAX = None
 SPAN_LW = 5.
 
 STEPS = ('find', 'manual', 'fit', 'resonators')
@@ -55,6 +57,10 @@ def parse_args(argv = None):
     p.add_argument('--sweep', type = int, default = None,
                    help = 'VNA sweep index (default: the latest)')
     p.add_argument('--finder', default = FINDER, choices = ['cnn', 'auto'])
+    p.add_argument('--fmin', type = float, default = FMIN,
+                   help = 'look for resonances from this frequency, Hz')
+    p.add_argument('--fmax', type = float, default = FMAX,
+                   help = 'look for resonances up to this frequency, Hz')
     p.add_argument('--redo', default = None, choices = STEPS,
                    help = 'repeat this step and the ones after it')
     p.add_argument('--no-manual', action = 'store_true',
@@ -112,13 +118,23 @@ def todo(step, done, args):
 
 def find(f, z, grp, args):
     """
-    Find candidate resonances (``fres_auto``).
+    Find candidate resonances (``fres_auto``), within --fmin and
+    --fmax if given.
 
     Parameters:
     f, z (np.array): the sweep.
     grp (zarr.Group): the ``vna{k}`` group.
     args (argparse.Namespace): options.
     """
+    keep = np.ones(len(f), dtype = bool)
+    if args.fmin is not None:
+        keep &= f >= float(args.fmin)
+    if args.fmax is not None:
+        keep &= f <= float(args.fmax)
+    if not keep.all():
+        f, z = f[keep], z[keep]
+        print(f'find: {int(keep.sum())} of {len(keep)} points, '
+              f'{f[0] / 1e6:.3f} to {f[-1] / 1e6:.3f} MHz')
     if args.finder == 'cnn':
         from citkid.vna.res_finder_cnn import run_res_finder_cnn
         run_res_finder_cnn(f, z, grp, overwrite = True)

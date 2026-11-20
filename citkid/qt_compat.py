@@ -895,6 +895,19 @@ def help_html(title, sections):
     return ''.join(parts)
 
 
+def add_help(window, title, sections):
+    """
+    Give a window a help dialog on the H key (``toggle_help_dialog``).
+
+    Parameters:
+    window (QWidget): the window.
+    title (str): the dialog's heading.
+    sections (list): ``(heading, [(keys, description), ...])`` pairs
+        (``help_html``).
+    """
+    _QtWidgets.QShortcut(_QtGui.QKeySequence('H'), window,
+                         lambda: toggle_help_dialog(window, title, sections))
+
 def toggle_help_dialog(window, title, sections):
     """
     Show or hide a window's help dialog (the H key), building it on first

@@ -370,3 +370,76 @@ def test_update_fres_input_fres_not_mutated(f1d):
     res_idxs = np.array([0, 1, 2])
     update_fres(fs, zs, fres, fres.copy(), res_idxs, method='distance')
     np.testing.assert_array_equal(fres, original)
+
+
+# ---------------------------------------------------------------------------
+# npoints_update and spacing_fit
+# ---------------------------------------------------------------------------
+
+def _loop_sweep(f, f0, w, noise = 0., seed = 0):
+    """
+    A resonance loop in IQ: S21 = 1 - 1 / (1 + 2j (f - f0) / w), plus
+    Gaussian noise of standard deviation ``noise``.
+    """
+    rng = np.random.default_rng(seed)
+    z = 1 - 1 / (1 + 2j * (f - f0) / w)
+    return z + noise * (rng.standard_normal(len(f))
+                        + 1j * rng.standard_normal(len(f)))
+
+
+def test_update_window_limits_the_points():
+    from citkid.res.fres import update_window
+    f = np.tile(np.arange(10.), (2, 1))
+    inside = update_window(f, np.array([3.2, 9.]), 1)
+    assert inside[0].tolist() == [i in (2, 3, 4) for i in range(10)]
+    assert inside[1].tolist() == [i in (8, 9) for i in range(10)]
+    assert update_window(f, np.array([3., 9.]), None).all()
+    assert update_window(f, None, 2).all()
+    with pytest.raises(ValueError):
+        update_window(f, np.array([3., 9.]), -1)
+
+
+@pytest.mark.parametrize('method', ['minS21', 'spacing', 'distance',
+                                    'spacing_fit'])
+def test_npoints_update_keeps_a_far_resonance_out(method):
+    """
+    Two resonances in one sweep: without a window the deeper one wins;
+    within npoints_update of the old frequency the near one does.
+    """
+    f = np.linspace(1e9, 1e9 + 2e6, 400)
+    near, far = 1e9 + 0.5e6, 1e9 + 1.5e6
+    z = (1 - 0.6 / (1 + 2j * (f - near) / 40e3)) * \
+        (1 - 0.9 / (1 + 2j * (f - far) / 40e3))
+    fres = np.array([1e9 + 0.52e6])
+    full = update_fres(f[None], z[None], fres, [1e4], [0], method = method)
+    assert abs(full[0] - far) < 20e3
+    windowed = update_fres(f[None], z[None], fres, [1e4], [0],
+                           method = method, npoints_update = 40)
+    assert abs(windowed[0] - near) < 20e3
+
+
+def test_spacing_fit_is_finer_than_the_point():
+    """
+    On a noisy loop the fitted centre is closer to the truth than the
+    peak point, and lands between points; a flat sweep falls back.
+    """
+    from citkid.res.fres import update_fr_spacing_fit
+    f = np.linspace(1e9 - 1e5, 1e9 + 1e5, 101)        # 2 kHz steps
+    f0, w = 1e9 + 700., 30e3
+    errs_fit, errs_pt, fallbacks = [], [], 0
+    for seed in range(20):
+        z = _loop_sweep(f, f0, w, noise = 0.02, seed = seed)
+        fr, fell = update_fr_spacing_fit(f, z, return_fallback = True)
+        fallbacks += int(fell)
+        errs_pt.append(abs(update_fr_spacing(f, z) - f0))
+        if not fell:
+            errs_fit.append(abs(fr - f0))
+    assert fallbacks <= 2
+    assert np.median(errs_fit) < np.median(errs_pt)
+    assert np.median(errs_fit) < 1e3
+    # Batch form, with a flat sweep that cannot be fit
+    z2 = np.stack([_loop_sweep(f, f0, w), np.ones(len(f), complex)])
+    fr, fell = update_fr_spacing_fit(np.tile(f, (2, 1)), z2,
+                                     return_fallback = True)
+    assert fell.tolist() == [False, True] and abs(fr[0] - f0) < 200.
+    assert fr[1] in f

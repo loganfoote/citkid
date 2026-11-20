@@ -138,6 +138,7 @@ failed, fr is the finder's frequency.
 | Setting | Meaning |
 |---|---|
 | `FINDER` | `'cnn'` (needs PyTorch) or `'auto'` (interactive) |
+| `FMIN`, `FMAX` | Look for resonances in this range only, Hz (`None`: the whole sweep) |
 | `SPAN_LW` | Target sweep span, linewidths (`qres = Qr / SPAN_LW`) |
 
 ## Command line

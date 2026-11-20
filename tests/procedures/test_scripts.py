@@ -378,7 +378,7 @@ def test_scripts_line_length_and_settings():
             text = fh.read()
         assert all(len(line) <= 80 for line in text.splitlines()), name
         assert 'Settings' in text, name
-        if name != 'settings.py':
+        if name not in ('settings.py', 'analysis_template.py'):
             assert "if __name__ == '__main__':" in text, name
 
 
@@ -2123,6 +2123,21 @@ def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
     assert manifest['device'] == device and manifest['res_pages'] is True
     assert len(manifest['runs']) >= 2 and manifest['tunings']
     assert manifest['photons'] and manifest['hee'] and manifest['psds']
+    ov = manifest['overview']
+    assert ov['n_tones'] and ov['fres_mhz'][0] <= ov['fres_mhz'][1]
+    assert ov['photon_tau_us'] and ov['photon_tau_us'][2] >= 1
+    assert ov['sxx_cn_10hz'] and ov['sxx_cn_10hz'][0] > 0
+    top = (out / 'index.html').read_text('utf-8')
+    assert 'photon_tau_us' in top and ' to ' in top
+    # The template's helper: the calibration applied to one run
+    from citkid.pipeline.stream_sources import calibrated_timestream
+    name = manifest['runs'][0]['name']
+    DS, ts, got = calibrated_timestream(root, name,
+                                        outputs = ('xt', 'thetat', 'At'))
+    assert ts['name'] == name and got['xt'].shape[0] == len(ts['rows'])
+    assert got['At'].shape == got['xt'].shape == got['thetat'].shape
+    assert len(DS.fres[list(ts['rows'])]) == len(ts['rows'])
+    assert np.isfinite(got['xt']).any()
     n_tones = len(root['tune0/tones/res_idxs'][:])
     pages = sorted((dev / 'res').glob('res*.html'))
     assert len(pages) == n_tones

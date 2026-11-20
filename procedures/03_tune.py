@@ -69,6 +69,7 @@ ARES_LIMITS = (-60., -35.)
 
 # fq finder
 FRES_UPDATE_METHOD = 'spacing'
+NPOINTS_UPDATE = None
 RMV_GAIN_SIMPLE = True
 
 # Port the powers of an earlier tuning
@@ -647,7 +648,9 @@ def fq_finder(tune):
         res_idxs = fq['res_idxs'][:], zarr_grp = fq,
         title = f'FQ Finder: {tune.basename}',
         fres_update_method = FRES_UPDATE_METHOD,
-        rmv_gain_simple = RMV_GAIN_SIMPLE)
+        rmv_gain_simple = RMV_GAIN_SIMPLE,
+        ares = fq['ares'][:] if 'ares' in fq else None,
+        npoints_update = NPOINTS_UPDATE)
 
 def tones(tune, args):
     """

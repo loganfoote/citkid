@@ -6,6 +6,7 @@ import numpy as np
 import os
 import pytest
 from pyqtgraph.Qt import QtWidgets
+from citkid.qt_compat import Qt
 from citkid import daq_layout as dl
 from citkid.daq_browser import (
     StoreBrowserWindow, describe_item, first_line, format_value,
@@ -236,10 +237,12 @@ def test_attachments(qapp, store, tmp_path):
     qapp.processEvents()
     assert not win.attach_btn.isEnabled()
     win.tabs.setCurrentIndex(3)
-    rows = {win.notes_table.item(i, 0).text(): i
+    # The Report column comes first in a report
+    assert win.notes_table.horizontalHeaderItem(0).text() == 'Report'
+    rows = {win.notes_table.item(i, 1).text(): i
             for i in range(win.notes_table.rowCount())}
     win.notes_table.setCurrentCell(rows['tune0'], 0)
-    assert win.attach_btn.isEnabled()
+    assert win.attach_btn.isEnabled() and win.attach_btn.isVisible()
     f = tmp_path / 'wiring.txt'
     f.write_text('photo of the wiring')
     rel = win.attach_file(str(f))
@@ -335,3 +338,105 @@ def test_run_store_browser(qapp, store, monkeypatch):
                         staticmethod(lambda *a, **k: ''))
     QtCore.QTimer.singleShot(50, close_window)
     assert run_store_browser() is None
+
+
+def test_report_boxes_rename_delete(qapp, tmp_path, monkeypatch):
+    """
+    Without a site folder the attach buttons are hidden; with one, the
+    Report boxes save ``in_report``. Rename changes a run's or tuning's
+    name; Delete removes an item and what depends on it after asking.
+    """
+    path = tmp_path / 'devB.zarr'
+    root = dl.create_store(path, 'devB', 'cd1')
+    dl.save_resonators(root, 0, [1e9, 1.1e9], 2e4, 'x')
+    tune, _ = dl.new_tuning(root, 0, name = 'warm')
+    dl.save_tones(dl.create_group(tune, 'tones', 'decision'),
+                  [1e9, 1.1e9], 3e4, -50., [0, 1], tone_set = [0, 0])
+    cal = dl.create_group(tune, 'cal0', 'raw', attrs = dict(
+        tone_set = 0, complete = True, nsamps = 100))
+    cal.create_array('fres', data = np.full(2, 1e9))
+    cal.create_array('res_idxs', data = np.arange(2))
+    w = dl.create_group(cal, 'write0', 'raw')
+    w.create_array('sweep_rows', data = np.arange(2))
+    st = dl.create_group(w, 'ts0', 'raw', attrs = dict(
+        name = 'dark', dec_stage = 6, duration_s = 2., run = 0))
+    st.create_array('z', data = np.zeros((2, 2, 8), dtype = np.int32),
+                    chunks = (1, 1, 4))
+    st.create_array('counts_to_s21', data = np.ones(2))
+    st.create_array('dt', data = np.array(0.25))
+    dl.register_stream_run(tune, dict(
+        name = 'dark', notes = '', dec_stage = 6, duration_s = 2.,
+        tuning = 'tune0', tones = 'tune0/tones', resonators = 'resonators0',
+        complete = True, tone_set = 0, calibration = 'tune0/cal0',
+        paths = [st.path]))
+    # A result depending on the run, and one on that result
+    ph = dl.create_group(root, 'photons/dark', 'analysis', attrs = dict(
+        source = 'tune0/cal0/write0/ts0', run = 0))
+    ph.create_array('tau', data = np.ones(2))
+    dl.create_group(root, 'hee/dark', 'analysis', attrs = dict(
+        settings = dict(photons = 'dark'), source = 'ts_cal0/x'))
+    win = StoreBrowserWindow(path, title = 't')
+    win.show()
+    qapp.processEvents()
+    assert not win.attach_btn.isVisible() and win._report_col is None
+    win.tabs.setCurrentIndex(3)
+    rows = {win.notes_table.item(i, 0).text(): i
+            for i in range(win.notes_table.rowCount())}
+    # Rename a tuning and a run
+    win.notes_table.setCurrentCell(rows['tune0'], 0)
+    assert win.rename_btn.isEnabled() and win.delete_btn.isEnabled()
+    assert win.rename_selected('cold') == 'tune0'
+    assert dl.tuning_name(dl.open_store(path)['tune0']) == 'cold'
+    rows = {win.notes_table.item(i, 0).text(): i
+            for i in range(win.notes_table.rowCount())}
+    win.notes_table.setCurrentCell(rows['ts0 dark'], 0)
+    win.rename_selected('dark2')
+    r = dl.open_store(path)
+    assert dl.stream_runs(r)[0]['name'] == 'dark2'
+    assert r['tune0/cal0/write0/ts0'].attrs['name'] == 'dark2'
+    # Rename a photon result: its group moves and references follow
+    rows = {win.notes_table.item(i, 0).text(): i
+            for i in range(win.notes_table.rowCount())}
+    win.notes_table.setCurrentCell(rows['photons/dark'], 0)
+    assert win.rename_selected('lights') == 'photons/lights'
+    r = dl.open_store(path)
+    assert 'lights' in r['photons'] and 'dark' not in r['photons']
+    assert r['hee/dark'].attrs['settings']['photons'] == 'lights'
+    # A sweep has no name
+    rows = {win.notes_table.item(i, 0).text(): i
+            for i in range(win.notes_table.rowCount())}
+    win.notes_table.setCurrentCell(rows['(store)'], 0)
+    assert not win.rename_btn.isEnabled() and not win.delete_btn.isEnabled()
+    # Delete the run: its stream and the results that depend on it go
+    win.notes_table.setCurrentCell(rows['ts0 dark2'], 0)
+    assert dl.dependents(r, 'tune0/cal0/write0/ts0') == ['photons/lights']
+    answers = []
+    monkeypatch.setattr(QtWidgets.QMessageBox, 'question',
+                        lambda *a, **k: answers.pop(0))
+    answers[:] = [QtWidgets.QMessageBox.No]
+    assert win.delete_selected() == []
+    answers[:] = [QtWidgets.QMessageBox.Yes, QtWidgets.QMessageBox.No]
+    assert win.delete_selected() == []
+    answers[:] = [QtWidgets.QMessageBox.Yes, QtWidgets.QMessageBox.Yes]
+    assert win.delete_selected() == ['tune0/cal0/write0/ts0',
+                                     'photons/lights']
+    r = dl.open_store(path)
+    assert 'ts0' not in r['tune0/cal0/write0'] and 'photons' in r
+    assert 'lights' not in r['photons'] and 'dark' in r['hee']
+    assert dl.stream_runs(r)[0]['paths'] == []
+    win.close()
+    # The Report boxes, for a report
+    win = StoreBrowserWindow(path, title = 't', site_dir = str(tmp_path))
+    win.show()
+    qapp.processEvents()
+    win.tabs.setCurrentIndex(3)
+    rows = {win.notes_table.item(i, 1).text(): i
+            for i in range(win.notes_table.rowCount())}
+    box = win.notes_table.item(rows['tune0'], 0)
+    assert box.checkState() == Qt.Checked
+    box.setCheckState(Qt.Unchecked)
+    r = dl.open_store(path)
+    assert not dl.in_report(r['tune0'])
+    assert [e['in_report'] for e in dl.notes_entries(r)
+            if e['path'] == 'tune0'] == [False]
+    win.close()

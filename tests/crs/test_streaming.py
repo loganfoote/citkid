@@ -761,7 +761,7 @@ def test_stream_window_cancel(qapp, tmp_path):
                                            npoints_gain = 10))
     wait_for(lambda: win.crs is not None)
     assert not win.cancel_btn.isEnabled()
-    win.cancel()
+    win.cancel(ask = False)
     assert not win._cancel.is_set()
     # A calibration cancelled during its first pass
     win.set_box.setCurrentIndex(1)
@@ -770,7 +770,7 @@ def test_stream_window_cancel(qapp, tmp_path):
     win.calibrate()
     assert win.cancel_btn.isEnabled() and not win.cal_btn.isEnabled()
     wait_for(lambda: reports and reports[-1] > 0)
-    win.cancel()
+    win.cancel(ask = False)
     assert 'Cancelling' in win.status.text()
     assert not win.cancel_btn.isEnabled()
     wait_for(lambda: not win.worker.busy)
@@ -786,7 +786,7 @@ def test_stream_window_cancel(qapp, tmp_path):
     wait_for(lambda: 'written;' in win.status.text() and not win.worker.busy)
     win.capture()
     assert win.cancel_btn.isEnabled()
-    win.cancel()
+    win.cancel(ask = False)
     wait_for(lambda: not win.worker.busy)
     wait_for(lambda: 'Capture cancelled' in win.status.text())
     assert win.preview is None and win.capture_btn.isEnabled()
@@ -795,7 +795,7 @@ def test_stream_window_cancel(qapp, tmp_path):
     win.name_edit.setText('gone')
     win.run()
     assert win.cancel_btn.isEnabled()
-    win.cancel()
+    win.cancel(ask = False)
     wait_for(lambda: not win.worker.busy)
     wait_for(lambda: 'Run cancelled' in win.status.text())
     assert win.runs == [] and dl.stream_runs(root) == []
@@ -850,6 +850,7 @@ async def test_fres_update_and_stream_batch(tmp_path):
     cal = root['tune0/cal0']
     up = cal.attrs['fres_update']
     assert up == dict(method = 'spacing', max_shift = 0.1,
+                      npoints_update = None,
                       n_updated = len(set1) - 1, n_outside = 1)
     np.testing.assert_allclose(cal['fres_sweep'][:], fres[set1])
     got = cal['fres'][:]

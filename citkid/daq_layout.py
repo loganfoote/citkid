@@ -30,7 +30,9 @@ This module is bookkeeping: it creates and checks groups, saves and loads
 the layout's arrays, ports tunings between stores, and archives stores. It
 does no measurement and no analysis.
 """
+import json
 import os
+import shutil
 import re
 import zipfile
 from datetime import datetime
@@ -1176,10 +1178,13 @@ def notes_entries(root):
         order: ``path`` (the group; a run's first stream group),
         ``label`` ('(store)', the path, or 'ts{n} name' for a run),
         ``kind`` ('store', the group's kind, or 'timestream run'),
-        ``notes`` (str) and ``run`` (None, or (tuning, n) for a run).
+        ``notes`` (str), ``run`` (None, or (tuning, n) for a run),
+        ``in_report`` (bool, ``in_report``) and ``name`` (str, or None
+        for an item without a name: ``item_name``).
     """
     entries = [dict(path = '', label = '(store)', kind = 'store',
-                    notes = str(root.attrs.get('notes') or ''), run = None)]
+                    notes = str(root.attrs.get('notes') or ''), run = None,
+                    in_report = True, name = None)]
     groups = []
     for name in root.group_keys():
         g = root[name]
@@ -1195,16 +1200,238 @@ def notes_entries(root):
         entries.append(dict(path = g.path, label = g.path,
                             kind = str(g.attrs.get('kind')),
                             notes = str(g.attrs.get('notes') or ''),
-                            run = None))
+                            run = None, in_report = in_report(g),
+                            name = item_name(g)))
     for run in stream_runs(root):
         if not run.get('paths') or not run.get('tuning'):
             continue
         entries.append(dict(
             path = run['paths'][0], label = f"{run['group']} {run['name']}",
             kind = 'timestream run', notes = str(run.get('notes') or ''),
-            run = (run['tuning'], int(run['run']))))
+            run = (run['tuning'], int(run['run'])),
+            in_report = in_report(run), name = str(run.get('name') or '')))
     entries[1:] = sorted(entries[1:], key = lambda e: _natural(e['path']))
     return entries
+
+def in_report(item):
+    """
+    Say whether an item is shown in full in the report (attribute or
+    run-record field ``in_report``; ``set_in_report``). Default True.
+
+    Parameters:
+    item (zarr.Group or dict): a group, or a run record.
+
+    Returns:
+    shown (bool): True if so.
+    """
+    attrs = item if isinstance(item, dict) else item.attrs
+    return bool(attrs.get('in_report', True))
+
+def set_in_report(root, path, flag, run = None):
+    """
+    Choose whether the report shows an item in full (``in_report``) or
+    as one line saying what it is, with its notes.
+
+    Parameters:
+    root (zarr.Group): the store root, writable.
+    path (str): the group's path ('' for the store).
+    flag (bool): True to show it in full.
+    run (tuple or None): (tuning, n) for a timestream run: the flag goes
+        in its run record. Default None.
+    """
+    if run is not None:
+        update_stream_run(root[run[0]], int(run[1]), in_report = bool(flag))
+    else:
+        (root[path] if path else root).attrs['in_report'] = bool(flag)
+
+def item_name(grp):
+    """
+    Return a group's name, for the items that have one: a tuning
+    (``tuning_name``), a PSD group or a photon or HEE result (its group
+    name).
+
+    Parameters:
+    grp (zarr.Group): the group.
+
+    Returns:
+    name (str or None): the name; None for an item without one.
+    """
+    path = grp.path
+    if re.fullmatch(r'tune\d+', path):
+        return tuning_name(grp)
+    if re.fullmatch(r'ts_psd\d+', path):
+        return str(grp.attrs.get('name') or '')
+    if re.fullmatch(r'(photons|hee)/[^/]+', path):
+        return grp.basename
+    return None
+
+def rename_item(root, path, name, run = None):
+    """
+    Rename an item: a timestream run (its record and streams), a tuning
+    or a PSD group (attribute ``name``), or a photon or HEE result (its
+    group is renamed on disk and every reference to it in the store's
+    attributes follows).
+
+    Parameters:
+    root (zarr.Group): the store root, writable (a local directory
+        store for a photon or HEE result).
+    path (str): the item's path (a run's first stream).
+    name (str): the new name.
+    run (tuple or None): (tuning, n) for a timestream run. Default None.
+
+    Returns:
+    path (str): the item's path afterwards.
+
+    Raises:
+    ValueError: if the name is blank or taken, or the item has no name.
+    """
+    name = str(name).strip()
+    if not name or '/' in name:
+        raise ValueError('the name must not be blank or hold a /')
+    if run is not None:
+        tuning, n = run[0], int(run[1])
+        others = {r['name'] for r in stream_runs(root, tuning)
+                  if int(r['run']) != n}
+        if name in others:
+            raise ValueError(f'{tuning} has a run named {name!r}')
+        tune = root[tuning]
+        update_stream_run(tune, n, name = name)
+        rec = tune[STREAMS_GROUP].attrs['runs'][n]
+        for p in rec.get('paths') or []:
+            if p in root:
+                root[p].attrs['name'] = name
+        return path
+    grp = root[path]
+    if re.fullmatch(r'tune\d+', path):
+        other = find_tuning(root, name)
+        if other is not None and other.path != path:
+            raise ValueError(f'a tuning named {name!r} exists')
+        grp.attrs['name'] = name
+        return path
+    if re.fullmatch(r'ts_psd\d+', path):
+        grp.attrs['name'] = name
+        return path
+    if re.fullmatch(r'(photons|hee)/[^/]+', path):
+        kind, old = path.split('/')
+        new_path = f'{kind}/{name}'
+        if new_path in root:
+            raise ValueError(f'{new_path} exists')
+        store = root.store
+        if not isinstance(store, zarr.storage.LocalStore) or \
+                store.read_only:
+            raise ValueError('renaming a result needs a local directory '
+                             'store opened with mode \'a\'')
+        base = os.path.abspath(str(store.root))
+        os.rename(os.path.join(base, kind, old),
+                  os.path.join(base, kind, name))
+        for g in _all_groups(root):
+            text = json.dumps(to_jsonable(dict(g.attrs)))
+            new = re.sub(r'"' + re.escape(path) + r'(?=["/])',
+                         '"' + new_path, text)
+            new = re.sub(r'("photons": )"' + re.escape(old) + '"',
+                         r'\1"' + name + '"', new) if kind == 'photons' \
+                else new
+            if new != text:
+                g.attrs.clear()
+                g.attrs.update(json.loads(new))
+        return new_path
+    raise ValueError(f'{path} has no name to change')
+
+def _all_groups(root, depth = 4):
+    """
+    List the store's groups, to a depth.
+
+    Parameters:
+    root (zarr.Group): the store root.
+    depth (int): levels below the root. Default 4.
+
+    Returns:
+    groups (list of zarr.Group): the groups, parents first.
+    """
+    out = []
+
+    def walk(grp, left):
+        for name in sorted(grp.group_keys(), key = _natural):
+            child = grp[name]
+            out.append(child)
+            if left > 1:
+                walk(child, left - 1)
+
+    walk(root, depth)
+    return out
+
+def _under(path, paths):
+    """
+    Say whether a path is one of some paths or under one of them.
+
+    Parameters:
+    path (str): the path.
+    paths (list of str): the paths.
+
+    Returns:
+    under (bool): True if so.
+    """
+    return any(path == p or path.startswith(p + '/') for p in paths)
+
+def dependents(root, paths):
+    """
+    Find what depends on some items: the groups whose attributes refer
+    to one of them, or to anything under one (a resonator list's source
+    sweep, a tuning's resonator list, a result's calibration and
+    streams, ...), and in turn what refers to those. The run lists and
+    the tone marks are not counted.
+
+    Parameters:
+    root (zarr.Group): the store root.
+    paths (str or list of str): the items' paths.
+
+    Returns:
+    found (list of str): the dependent groups' paths, outermost only
+        (nothing under another found path, or under ``paths``).
+    """
+    paths = [paths] if isinstance(paths, str) else [str(p) for p in paths]
+    groups = [g for g in _all_groups(root)
+              if g.basename not in (STREAMS_GROUP, TONE_MARKS_GROUP)]
+    texts = {g.path: json.dumps(to_jsonable(dict(g.attrs))) for g in groups}
+    found = []
+    while True:
+        targets = paths + found
+        pattern = re.compile('"(?:' + '|'.join(re.escape(p) for p in targets)
+                             + ')(?:/[^"]*)?"')
+        new = [p for p, text in texts.items()
+               if p not in found and not _under(p, targets)
+               and pattern.search(text)]
+        if not new:
+            break
+        found += new
+    return [p for p in found
+            if not any(p != q and p.startswith(q + '/') for q in found)]
+
+def delete_item(root, path, run = None):
+    """
+    Delete an item from the store, with everything that depends on it
+    (``dependents``). A run's streams go; its record stays with no
+    streams (its index is kept). Tone marks on the item stay.
+
+    Parameters:
+    root (zarr.Group): the store root, writable.
+    path (str): the group's path (a run's first stream).
+    run (tuple or None): (tuning, n) for a timestream run: all its
+        streams are deleted. Default None.
+
+    Returns:
+    deleted (list of str): the paths deleted, the item first.
+    """
+    if run is not None:
+        rec = root[run[0]][STREAMS_GROUP].attrs['runs'][int(run[1])]
+        paths = [p for p in rec.get('paths') or [] if p in root]
+    else:
+        paths = [str(path)]
+    deps = dependents(root, paths)
+    for p in paths + deps:
+        parent, _, leaf = p.rpartition('/')
+        del (root[parent] if parent else root)[leaf]
+    return paths + deps
 
 def list_notes(root):
     """

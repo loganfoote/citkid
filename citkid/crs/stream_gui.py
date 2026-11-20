@@ -72,6 +72,7 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets
 from .. import daq_layout as dl
 from ..qt_compat import fg
+from ..qt_compat import add_help
 from ..qt_compat import (
     delete_on_close, fit_window_to_screen, get_qapp, widget_font_stylesheet
 )
@@ -203,7 +204,8 @@ class StreamWindow(QtWidgets.QMainWindow):
             in the window. Default None (its defaults).
         fres_update (dict or None): move the tone frequencies to the
             resonances each calibration sweep shows, within a window
-            (``procedures.apply_fres_update``: ``method``, ``max_shift``).
+            (``procedures.apply_fres_update``: ``method``, ``max_shift``,
+            ``npoints_update``).
             Default None: no.
         title (str): window title. Default 'Timestreams'.
         ui_scale (float): font size multiplier. Default 1.0.
@@ -243,6 +245,31 @@ class StreamWindow(QtWidgets.QMainWindow):
         right.addWidget(self.psd_plot, stretch = 1)
         lay.addLayout(right, stretch = 1)
         self.setCentralWidget(central)
+        add_help(self, 'Timestreams', [
+            ('Steps', [
+                ('Calibration', 'Calibrate the selected tone set (saved as '
+                 'cal{j}); Use picks a saved calibration'),
+                ('Tones on the board', 'Write tones writes the chosen chunk of '
+                 'the set for the stage (fast stages take fewer tones); Clear '
+                 'tones clears the board; nothing else writes tones'),
+                ('Preview', 'Capture a few seconds of the tones on the board '
+                 '(not saved)'),
+                ('Plots', 'The capture or the viewed run: one tone as x, '
+                 'parallel / perpendicular to the loop, or I and Q; Show PSD '
+                 'adds its spectrum; Subtract offset removes the mean of '
+                 'each series'),
+                ('Run', 'Stream the tones on the board and save them as '
+                 'cal{j}/write{w}/ts{n}; a name is used once per tuning'),
+                ('View run', 'Show a saved run like a capture (its first '
+                 'chunks)'),
+                ('Cancel', 'Stop the running calibration, capture or run after '
+                 'asking; what it saved is removed'),
+                ('', 'A grey button says beside it what it needs')]),
+            ('Keyboard', [('R', 'Rescale the plots'),
+                          ('H', 'Show / hide this help')]),
+            ('Mouse', [('Scroll / drag', 'Zoom / pan a plot'),
+                       ('Right-click', 'Plot menu (axes, log scale, export)')]),
+        ])
         # Fit the screen: the panel scrolls when the screen is shorter
         screen = QtWidgets.QApplication.primaryScreen()
         avail = screen.availableGeometry() if screen else None
@@ -332,7 +359,8 @@ class StreamWindow(QtWidgets.QMainWindow):
 
         self._panel = QtWidgets.QWidget()
         outer = QtWidgets.QVBoxLayout(self._panel)
-        # Two columns of boxes, then the run list and status
+        # Two columns, in the order of the steps: calibrate and write
+        # tones on the left, preview, plots and run on the right
         left, right = QtWidgets.QVBoxLayout(), QtWidgets.QVBoxLayout()
         sets = sorted(set(self.tones['tone_set'].tolist()))
         outer.addWidget(QtWidgets.QLabel(
@@ -397,7 +425,7 @@ class StreamWindow(QtWidgets.QMainWindow):
         form.addRow(action_row(self.write_btn))
         form.addRow(action_row(self.clear_btn))
         form.addRow(self.written_label)
-        right.addWidget(box)
+        left.addWidget(box)
 
         # Preview
         box = QtWidgets.QGroupBox('Preview (not saved)')
@@ -413,17 +441,24 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.mode_box.currentIndexChanged.connect(self._plot)
         self.psd_box = QtWidgets.QCheckBox('Show PSD')
         self.psd_box.toggled.connect(self._on_psd_box)
+        self.offset_box = QtWidgets.QCheckBox('Subtract offset')
+        self.offset_box.setToolTip('Subtract the mean of each series '
+                                   'shown (I and Q separately)')
+        self.offset_box.toggled.connect(self._plot)
         form.addRow('Stage', self.preview_dec)
         form.addRow('Length', self.preview_s)
         form.addRow(action_row(self.capture_btn))
-        left.addWidget(box)
+        right.addWidget(box)
 
         # Plots: of the capture or the viewed run, whichever is shown
         box = QtWidgets.QGroupBox('Plots (the capture or the viewed run)')
         form = QtWidgets.QFormLayout(box)
         form.addRow('Tone', self.tone_box)
         form.addRow('Show', self.mode_box)
-        form.addRow('', self.psd_box)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(self.psd_box)
+        row.addWidget(self.offset_box)
+        form.addRow('', row)
         right.addWidget(box)
 
         # Run
@@ -451,7 +486,7 @@ class StreamWindow(QtWidgets.QMainWindow):
         form.addRow('Stage', self.run_dec)
         form.addRow('Length', self.run_s)
         form.addRow(action_row(self.run_btn))
-        right.insertWidget(1, box)
+        right.addWidget(box)
         left.addStretch(1)
         right.addStretch(1)
         cols = QtWidgets.QHBoxLayout()
@@ -496,7 +531,7 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.cancel_btn.setToolTip('Stop the running calibration, capture '
                                    'or run; what it saved is removed. '
                                    'No shortcut, on purpose.')
-        self.cancel_btn.clicked.connect(self.cancel)
+        self.cancel_btn.clicked.connect(lambda: self.cancel())
         self.cancel_btn.setEnabled(False)
         row = QtWidgets.QHBoxLayout()
         row.addWidget(self.progress, stretch = 1)
@@ -934,16 +969,28 @@ class StreamWindow(QtWidgets.QMainWindow):
         self._set_status(message)
         self._update_buttons()
 
-    def cancel(self):
+    def cancel(self, ask = True):
         """
         Ask the running calibration, capture or run to stop (the Cancel
-        button). It stops at its next sweep point or packet batch, on
-        the background loop, and its callback reports what was removed.
-        Does nothing when no such job runs.
+        button), after asking whether to. It stops at its next sweep
+        point or packet batch, on the background loop, and its
+        callback reports what was removed. Does nothing when no such
+        job runs.
+
+        Parameters:
+        ask (bool): If True (default), ask in a box first.
         """
         if not (self.worker.busy and self._cancellable) or \
                 self._cancel.is_set():
             return
+        if ask:
+            box = QtWidgets.QMessageBox
+            answer = box.question(
+                self, 'Cancel', 'Stop the running calibration, capture '
+                'or run? What it saved so far is removed.',
+                box.Yes | box.No, box.No)
+            if answer != box.Yes:
+                return
         self._cancel.set()
         self.cancel_btn.setEnabled(False)
         self._set_status('Cancelling...')
@@ -1341,6 +1388,8 @@ class StreamWindow(QtWidgets.QMainWindow):
         else:
             series = [('parallel (dfr)', dfr), ('perpendicular', dperp)]
             self.ts_plot.setLabel('left', 'Hz')
+        if self.offset_box.isChecked():
+            series = [(name, y - np.nanmean(y)) for name, y in series]
         for (name, y), pen in zip(series, ('c', 'm')):
             self.ts_plot.plot(t, y, pen = pen, name = name)
         if self.psd_box.isChecked():

@@ -22,6 +22,7 @@ import numpy as np
 import zarr
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 from . import daq_layout as dl
+from .qt_compat import add_help
 from .qt_compat import (
     Qt, delete_on_close, fit_window_to_screen, get_qapp, hint_label,
     widget_font_stylesheet
@@ -86,7 +87,7 @@ def summarize(item):
         return f'{tuple(item.shape)} {item.dtype}'
     a = item.attrs
     parts = []
-    if a.get('name'):
+    if a.get('name') and str(a['name']) != item.basename:
         parts.append(str(a['name']))
     if 'tone_set' in a:
         parts.append(f"set {a['tone_set']}")
@@ -270,6 +271,27 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
             'attributes. Double-click a run in the Timestream runs tab to '
             'find its stream. F5 rereads the store, Ctrl+O opens another.'))
         self.setCentralWidget(central)
+        add_help(self, 'Store browser', [
+            ('Buttons', [
+                ('Open... (Ctrl+O)', 'Choose a store'),
+                ('Refresh (F5)', 'Reread the store (another script may be '
+                 'writing it)')]),
+            ('Tabs', [
+                ('Attributes', "The selected item's attributes; expand a group "
+                 'to read its contents'),
+                ('Timestream runs', 'Every run; double-click one to find its '
+                 'stream'),
+                ('Tone marks', 'The bad marks and notes on tones: clear one, '
+                 'or '
+                 'make it global (later stages too) or local (its stage only)'),
+                ('Notes', 'Edit the notes of the store, a step, a result or a '
+                 'run (saved by themselves); Rename changes the name of a '
+                 'tuning, run, PSD group or result; Delete removes an item and '
+                 'what depends on it, after asking; for a report, the Report '
+                 'column leaves unchecked items out of it, and Attach file '
+                 'copies a file into the report next to the item')]),
+            ('Keyboard', [('H', 'Show / hide this help')]),
+        ])
         if root is not None:
             self.open_path(root, path)
         else:
@@ -485,8 +507,15 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         page = QtWidgets.QWidget()
         vbox = QtWidgets.QVBoxLayout(page)
         self.notes_table = QtWidgets.QTableWidget()
-        self.notes_table.setColumnCount(3)
-        self.notes_table.setHorizontalHeaderLabels(['Item', 'Kind', 'Notes'])
+        # For a report (site_dir), a first column of boxes chooses what
+        # the report shows in full; the rest is one line each
+        self._report_col = 0 if self.site_dir is not None else None
+        self._col0 = 1 if self.site_dir is not None else 0
+        headers = (['Report'] if self.site_dir is not None else []) + \
+            ['Item', 'Kind', 'Notes']
+        self.notes_table.setColumnCount(len(headers))
+        self.notes_table.setHorizontalHeaderLabels(headers)
+        self.notes_table.itemChanged.connect(self._on_report_toggled)
         self.notes_table.setEditTriggers(
             QtWidgets.QAbstractItemView.NoEditTriggers)
         self.notes_table.setSelectionBehavior(
@@ -500,18 +529,33 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         row = QtWidgets.QHBoxLayout()
         self.notes_label = QtWidgets.QLabel()
         row.addWidget(self.notes_label, stretch = 1)
+        self.rename_btn = QtWidgets.QPushButton('Rename...')
+        self.rename_btn.setToolTip('Change the name of the selected '
+                                   'tuning, run, PSD group or result')
+        self.rename_btn.clicked.connect(self._on_rename)
+        self.rename_btn.setEnabled(False)
+        row.addWidget(self.rename_btn)
+        self.delete_btn = QtWidgets.QPushButton('Delete...')
+        self.delete_btn.setToolTip('Delete the selected item from the '
+                                   'store, with what depends on it, '
+                                   'after asking')
+        self.delete_btn.clicked.connect(lambda: self.delete_selected())
+        self.delete_btn.setEnabled(False)
+        row.addWidget(self.delete_btn)
         self.attach_btn = QtWidgets.QPushButton('Attach file...')
         self.attach_btn.setToolTip('Copy a file into the report site next '
                                    "to this item's notes (not into the "
                                    'store)')
         self.attach_btn.clicked.connect(self._on_attach)
         self.attach_btn.setEnabled(False)
+        self.attach_btn.setVisible(self.site_dir is not None)
         row.addWidget(self.attach_btn)
         self.detach_btn = QtWidgets.QPushButton('Remove file...')
         self.detach_btn.setToolTip("Remove one of this item's attached "
                                    'files from the report site')
         self.detach_btn.clicked.connect(self._on_detach)
         self.detach_btn.setEnabled(False)
+        self.detach_btn.setVisible(self.site_dir is not None)
         row.addWidget(self.detach_btn)
         vbox.addLayout(row)
         self.notes_edit = QtWidgets.QPlainTextEdit()
@@ -536,12 +580,19 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
             else []
         self.notes_table.setRowCount(len(self._notes))
         for i, e in enumerate(self._notes):
+            if self._report_col is not None:
+                box = QtWidgets.QTableWidgetItem()
+                box.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled |
+                             Qt.ItemIsSelectable)
+                box.setCheckState(Qt.Checked if e['in_report']
+                                  else Qt.Unchecked)
+                self.notes_table.setItem(i, self._report_col, box)
             for j, text in enumerate((e['label'], e['kind'],
                                       first_line(e['notes'], 120))):
-                self.notes_table.setItem(i, j, QtWidgets.QTableWidgetItem(
-                    text))
-        self.notes_table.resizeColumnToContents(0)
-        self.notes_table.resizeColumnToContents(1)
+                self.notes_table.setItem(
+                    i, j + self._col0, QtWidgets.QTableWidgetItem(text))
+        for j in range(self._col0 + 2):
+            self.notes_table.resizeColumnToContents(j)
         self._notes_dirty = {}
         self._notes_row = None
         writable = bool(self.path) and not str(self.path).endswith('.zip')
@@ -585,7 +636,121 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
                                    self._notes_row is not None and
                                    self.root is not None)
         self._update_detach()
+        self._update_item_buttons()
         self._notes_loading = False
+
+    def _update_item_buttons(self):
+        """
+        Enable Rename for a selected item that has a name and Delete for
+        any selected item but the store (a writable store).
+        """
+        e = self._notes[self._notes_row] if self._notes_row is not None \
+            else None
+        writable = e is not None and not self.notes_edit.isReadOnly()
+        self.rename_btn.setEnabled(writable and e.get('name') is not None)
+        self.delete_btn.setEnabled(writable and e['kind'] != 'store')
+
+    def _on_report_toggled(self, item):
+        """
+        Save a change of an item's Report box (the report shows an
+        unchecked item as one line).
+
+        Parameters:
+        item (QTableWidgetItem): the box.
+        """
+        if self._notes_loading or self._report_col is None or \
+                item.column() != self._report_col or not self.path:
+            return
+        e = self._notes[item.row()]
+        flag = item.checkState() == Qt.Checked
+        if flag == e['in_report']:
+            return
+        dl.set_in_report(self._writable_root(), e['path'], flag,
+                         run = e['run'])
+        e['in_report'] = flag
+
+    def _on_rename(self):
+        """
+        Ask a new name for the selected item (the Rename button).
+        """
+        e = self._notes[self._notes_row] if self._notes_row is not None \
+            else None
+        if e is None or e.get('name') is None:
+            return
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, 'Rename', f"New name of {e['label']}:",
+            QtWidgets.QLineEdit.Normal, e['name'])
+        if ok and name.strip() and name.strip() != e['name']:
+            self.rename_selected(name.strip())
+
+    def rename_selected(self, name):
+        """
+        Rename the selected item (``daq_layout.rename_item``) and reread
+        the store. An error is shown in a box.
+
+        Parameters:
+        name (str): the new name.
+
+        Returns:
+        path (str or None): the item's path afterwards; None on an error.
+        """
+        e = self._notes[self._notes_row] if self._notes_row is not None \
+            else None
+        if e is None or not self.path:
+            return None
+        self.flush_notes(refresh = False)
+        try:
+            path = dl.rename_item(self._writable_root(), e['path'], name,
+                                  run = e['run'])
+        except (ValueError, OSError, KeyError) as err:
+            QtWidgets.QMessageBox.warning(self, 'Rename', str(err))
+            return None
+        self.refresh()
+        return path
+
+    def delete_selected(self, ask = True):
+        """
+        Delete the selected item from the store, with what depends on
+        it (``daq_layout.delete_item``), after asking once, and again
+        when something depends on it.
+
+        Parameters:
+        ask (bool): If True (default), ask first.
+
+        Returns:
+        deleted (list of str): the paths deleted (none if refused).
+        """
+        e = self._notes[self._notes_row] if self._notes_row is not None \
+            else None
+        if e is None or e['kind'] == 'store' or not self.path:
+            return []
+        root = self._writable_root()
+        if e['run'] is not None:
+            rec = root[e['run'][0]][dl.STREAMS_GROUP].attrs['runs'][
+                int(e['run'][1])]
+            paths = [p for p in rec.get('paths') or [] if p in root]
+        else:
+            paths = [e['path']]
+        deps = dl.dependents(root, paths)
+        if ask:
+            box = QtWidgets.QMessageBox
+            text = f"Delete {e['label']} from the store? This cannot be " \
+                'undone.'
+            if deps:
+                text += ('\n\nThese depend on it and will be deleted too:'
+                         '\n' + '\n'.join(deps))
+            if box.question(self, 'Delete', text, box.Yes | box.No,
+                            box.No) != box.Yes:
+                return []
+            if deps and box.question(
+                    self, 'Delete', f"Really delete {e['label']} and the "
+                    f'{len(deps)} item(s) that depend on it?',
+                    box.Yes | box.No, box.No) != box.Yes:
+                return []
+        self.flush_notes(refresh = False)
+        deleted = dl.delete_item(root, e['path'], run = e['run'])
+        self.refresh()
+        return deleted
 
     def _update_detach(self):
         """
@@ -735,7 +900,7 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
             else:
                 dl.set_notes(root, e['path'], text)
             e['notes'] = text.strip()
-            self.notes_table.item(row, 2).setText(
+            self.notes_table.item(row, self._col0 + 2).setText(
                 first_line(e['notes'], 120))
             saved.append(e['label'])
         self._notes_dirty = {}

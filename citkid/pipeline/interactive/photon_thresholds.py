@@ -61,6 +61,7 @@ Close the window (or press Done) to keep the thresholds and results.
 import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtGui, QtWidgets
+from ...qt_compat import add_help
 from ...qt_compat import (
     PlainAxisItem, Qt, delete_on_close, fit_window_to_screen, forward_keys,
     freeze_heights, get_qapp, run_responsive, widget_font_stylesheet
@@ -264,6 +265,25 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         lay.addWidget(self._panel)
         lay.addWidget(self.plots_widget, stretch = 1)
         self.setCentralWidget(central)
+        add_help(self, 'Photon thresholds', [
+            ('Keyboard', [
+                ('A / D', 'Previous / next tone'),
+                ('Ctrl+R', 'Rerun the tone with the thresholds typed'),
+                ('Ctrl+F', 'Apply the fitted thresholds'),
+                ('Ctrl+D', "Revert the tone to the script's thresholds"),
+                ('B', 'Mark the tone bad (or clear the mark), with a reason'),
+                ('T', 'Add a note on the tone'),
+                ('O', 'Open the tone overview'),
+                ('R', 'Rescale the plots'),
+                ('H', 'Show / hide this help')]),
+            ('Buttons', [
+                ('Only tones outside', 'List only the tones outside the '
+                 'window'),
+                ('Include tones marked bad', 'List them too'),
+                ('Done', 'Save and close')]),
+            ('Mouse', [('Scroll / drag', 'Zoom / pan a plot'),
+                       ('Right-click', 'Plot menu (axes, log scale, export)')]),
+        ])
         self._fill_list()
         self.tone_list.setCurrentRow(0)
 

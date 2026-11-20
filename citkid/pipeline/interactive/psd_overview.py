@@ -15,6 +15,7 @@ marks go to the result and to the store's tone marks.
 import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtWidgets
+from ...qt_compat import add_help
 from ...qt_compat import (
     Qt, delete_on_close, fit_window_to_screen, forward_keys, freeze_heights,
     get_qapp, widget_font_stylesheet
@@ -274,6 +275,21 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         freeze_heights(right, skip = (self.tone_list, self.spec_plot))
         lay.addWidget(panel)
         self.setCentralWidget(central)
+        add_help(self, 'Noise spectra', [
+            ('Keyboard', [
+                ('A / D', 'Previous / next tone'),
+                ('B', 'Mark the tone bad (or clear the mark), with a reason'),
+                ('T', 'Add a note on the tone'),
+                ('H', 'Show / hide this help')]),
+            ('Buttons', [
+                ('After common-mode removal', 'Show the spectra after it'),
+                ('Only tones outside', 'List only the tones outside the '
+                 'window'),
+                ('Include tones marked bad', 'List them too'),
+                ('Done', 'Save and close')]),
+            ('Mouse', [('Scroll / drag', 'Zoom / pan a plot'),
+                       ('Right-click', 'Plot menu (axes, log scale, export)')]),
+        ])
         self.resize(int(1100 * self._ui_scale), int(750 * self._ui_scale))
 
     ############################################################################
