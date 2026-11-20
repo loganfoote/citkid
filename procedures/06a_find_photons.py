@@ -18,11 +18,12 @@ from citkid import daq_layout as dl
 from citkid.pipeline import photon_finder as pf
 from citkid.pipeline.stream_sources import open_calibration
 from citkid.signal.photons import DetectionSettings
+from citkid.qt_compat import set_theme
 
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB
+from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB, LIGHT_MODE
 
 # Timestreams
 CALIBRATION = None
@@ -358,6 +359,7 @@ def main(args):
         ``thresholds``), or None if only listed; with ``--refit-tau``,
         the new decay times per result.
     """
+    set_theme(LIGHT_MODE)
     root = dl.open_store(store_path(args), mode = 'a')
     dl.check_store(root)
     cals = dl.list_indices(root, 'ts_cal')

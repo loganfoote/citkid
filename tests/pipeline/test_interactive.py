@@ -265,7 +265,7 @@ def test_analysis_window_panel_save_cancel_skips_persist_when_downstream_stale(
 
 @pytest.mark.parametrize(
     'key, method',
-    [('2', '_run_through_panel'), ('Shift+2', '_run_panel_by_index')]
+    [('2', '_run_through_panel')]
 )
 def test_analysis_window_number_shortcuts(qt_app, monkeypatch, key, method):
     win = _make_window(qt_app, monkeypatch)
@@ -875,7 +875,7 @@ def test_worker_skips_rows_saved_in_one_mask_read(qt_app, monkeypatch):
 
 @pytest.mark.parametrize(
     'key, method',
-    [('2', '_run_through_panel'), ('Shift+2', '_run_panel_by_index')]
+    [('2', '_run_through_panel')]
 )
 def test_series_window_number_shortcuts(qt_app, monkeypatch, key, method):
     win = _make_series_window(qt_app, monkeypatch)
@@ -2354,7 +2354,7 @@ def help_text(win):
 def test_analysis_window_help(qt_app, monkeypatch):
     win = _make_window(qt_app, monkeypatch)
     text = help_text(win)
-    for item in ('Shift+1-9', 'Run+', 'Bad Data', 'Reset Mask', 'Shift+drag'):
+    for item in ('1-9', 'Run', 'Bad Data', 'Reset Mask', 'Shift+drag'):
         assert item in text
     with patch.object(
         QtWidgets.QMessageBox, 'question',

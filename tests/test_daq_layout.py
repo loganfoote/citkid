@@ -657,6 +657,27 @@ def test_tone_marks(tmp_path):
     assert len(dl.tone_marks(again, 5)) == 5
 
 
+def test_find_tuning(tmp_path):
+    """
+    Tunings are found by index, group name, digits or name; the name
+    defaults to the group name and must be unique.
+    """
+    root = dl.create_store(tmp_path / 's.zarr', 'd', 'c')
+    assert dl.find_tuning(root) is None
+    dl.create_group(root, 'resonators0', 'decision')
+    t0, _ = dl.new_tuning(root, 0)
+    t1, _ = dl.new_tuning(root, 0, name = 'warm')
+    assert dl.tuning_name(t0) == 'tune0' and dl.tuning_name(t1) == 'warm'
+    assert dl.find_tuning(root).basename == 'tune1'
+    for which in (0, '0', 'tune0', ' tune0 '):
+        assert dl.find_tuning(root, which).basename == 'tune0'
+    assert dl.find_tuning(root, 'warm').basename == 'tune1'
+    assert dl.find_tuning(root, 'cold') is None
+    assert dl.find_tuning(root, 7) is None
+    with pytest.raises(ValueError, match = 'exists'):
+        dl.new_tuning(root, 0, name = 'warm')
+
+
 def test_tone_mark_scopes(tmp_path):
     """
     Local marks leave a tone out of their own stage only; global marks

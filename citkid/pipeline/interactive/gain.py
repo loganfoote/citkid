@@ -63,16 +63,11 @@ class GainFitPanel(StepPanel):
 
         self._run_btn = QtWidgets.QPushButton("Run")
         self._run_btn.setFixedWidth(50)
-        self._run_btn.clicked.connect(self._on_run_clicked)
-        ctrl.addWidget(self._run_btn)
-
-        self._run_through_btn = QtWidgets.QPushButton("Run+")
-        self._run_through_btn.setFixedWidth(55)
-        self._run_through_btn.setToolTip(
-            "Run this panel and all following panels")
-        self._run_through_btn.clicked.connect(
+        self._run_btn.setToolTip(
+            "Run this panel and the panels after it")
+        self._run_btn.clicked.connect(
             lambda: self.run_from_here.emit())
-        ctrl.addWidget(self._run_through_btn)
+        ctrl.addWidget(self._run_btn)
 
         self._save_btn = QtWidgets.QPushButton("Save")
         self._save_btn.setFixedWidth(60)

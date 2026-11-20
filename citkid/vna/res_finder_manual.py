@@ -9,6 +9,7 @@ visualization, and undo support.
 import numpy as np
 import zarr
 import pyqtgraph as pg
+from ..qt_compat import fg, log_box_style
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 import os
 
@@ -344,9 +345,7 @@ class ManualResFinder(QtCore.QObject):
         self.log_text = QtWidgets.QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setMaximumHeight(100)
-        style = ("background-color: #2b2b2b; color: #ffffff; "
-                 "font-family: monospace;")
-        self.log_text.setStyleSheet(style)
+        self.log_text.setStyleSheet(log_box_style())
         log_proxy = QtWidgets.QGraphicsProxyWidget()
         log_proxy.setWidget(self.log_text)
         self.win.addItem(log_proxy, row = 4, col = 0, colspan = 2)
@@ -426,7 +425,7 @@ class ManualResFinder(QtCore.QObject):
         self._overview_region = pg.LinearRegionItem(
             values = [float(self.f[0]), float(self.f[-1])],
             brush = pg.mkBrush(255, 255, 255, 30),
-            pen = pg.mkPen('w', width = 1),
+            pen = pg.mkPen(fg(), width = 1),
             movable = True,
         )
         self.plot_overview.addItem(self._overview_region)
@@ -500,7 +499,7 @@ class ManualResFinder(QtCore.QObject):
         )
         # Fres markers on IQ plot
         self.iq_fres_scatter = pg.ScatterPlotItem(
-            size = 14, pen = pg.mkPen('w', width = 1)
+            size = 14, pen = pg.mkPen(fg(), width = 1)
         )
         self.plot_iq.addItem(self.iq_fres_scatter)
         # Hidden until toggled on (iq_visible already set in __init__)

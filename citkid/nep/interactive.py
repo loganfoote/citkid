@@ -8,6 +8,7 @@ The fit itself is ``fitter.fit_nep_photon``; this module only holds UI state.
 
 import numpy as np
 import pyqtgraph as pg
+from ..qt_compat import fg
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
 from ..qt_compat import (
@@ -328,7 +329,7 @@ class NEPFitWindow(QtWidgets.QMainWindow):
         self._plot.addItem(self._curve, ignoreBounds=True)
         # The line lives in the view's log10 coordinates.
         self._line = pg.InfiniteLine(angle=90, movable=True,
-                                     pen=pg.mkPen('w', width=1.5,
+                                     pen=pg.mkPen(fg(), width=1.5,
                                                   style=QtCore.Qt.DashLine))
         self._line.sigPositionChanged.connect(self._on_line_moved)
         self._plot.addItem(self._line, ignoreBounds=True)

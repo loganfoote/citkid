@@ -25,6 +25,7 @@ applies.
 """
 import numpy as np
 import pyqtgraph as pg
+from ...qt_compat import fg
 from pyqtgraph.Qt import QtGui, QtWidgets
 from ...qt_compat import (
     PlainAxisItem, Qt, delete_on_close, fit_window_to_screen, forward_keys,
@@ -275,7 +276,7 @@ class HeeTailWindow(QtWidgets.QMainWindow):
             pen = pg.mkPen((80, 160, 255, 110)), name = 'pulses',
             connect = 'finite')
         self.avg_curve = self.pulse_plot.plot(
-            pen = pg.mkPen('w', width = 2), name = 'mean',
+            pen = pg.mkPen(fg(), width = 2), name = 'mean',
             connect = 'finite')
         self.fit_curve = self.pulse_plot.plot(
             pen = pg.mkPen('y', width = 2, style = Qt.DashLine),

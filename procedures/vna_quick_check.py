@@ -11,11 +11,12 @@ import asyncio
 from citkid.crs.instrument import CRS
 from citkid.crs.procedures import vna_range, vna_step, vna_sweep
 from citkid.crs.quick_check import run_quick_check, save_sweep_csv
+from citkid.qt_compat import set_theme
 
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-from settings import SERIAL_NUMBER, INTERFACE, MODULES
+from settings import SERIAL_NUMBER, INTERFACE, MODULES, LIGHT_MODE
 
 NYQUIST = '1'
 AMPLITUDE = -50.
@@ -110,6 +111,7 @@ def main(args):
         result (tuple or None): the window's last sweep (``f``, ``z``,
             ``bands``), or None.
     """
+    set_theme(LIGHT_MODE)
     if args.no_gui:
         return asyncio.run(sweep_once(args))
     return run_quick_check(

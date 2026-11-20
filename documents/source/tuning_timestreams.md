@@ -88,9 +88,12 @@ Resonances the plan drops as too close get a note automatically.
 
 # 03_tune.py: make a tuning
 
-Creates `tune{k}` in these steps. Done steps are skipped; `--redo
+Creates a tuning, `tune{k}`, in these steps. `TUNING` names it: the
+name (or index) of an existing tuning continues that one, a new name
+starts a new one, and `None` continues the latest. Tunings made
+before names are named `tune{k}`. Done steps are skipped; `--redo
 power_fits`, `fq_finder` or `tones` repeats one and those after it;
-sweeps are never retaken (`--new` starts a new tuning).
+sweeps are never retaken.
 
 | Step | What it does | Saves |
 |---|---|---|
@@ -104,9 +107,10 @@ sweeps are never retaken (`--new` starts a new tuning).
 `citkid.daq_layout.port_tuning` copies `tones/`, `crs_config/` and the
 resonator list to another store (a new cooldown) without the sweeps.
 
-To tune again at the powers of an earlier tuning, set `PORT_TUNE`
-(and `PORT_STORE` for a tuning in another store) and start a new
-tuning: the plan, power sweep and power fits are skipped,
+To tune again at the powers of an earlier tuning, give `TUNING` a new
+name and set `PORT_TUNE` to the earlier tuning's name or index (and
+`PORT_STORE` to its store's path when it is in another store): the
+plan, power sweep and power fits are skipped,
 `tones_init` is the earlier tuning's tones at the frequencies, spans
 and powers `PREDICT` returns (`predict_tones` in the script, from the
 earlier `fres`, `qres` and `ares`; `None` keeps them), and only the fq
@@ -118,6 +122,7 @@ sweep, fq_finder and tones steps run.
 
 | Setting | Meaning |
 |---|---|
+| `TUNING` | The tuning's name (or index): continued if it exists, else made (`None`: the latest, or a first one) |
 | `RESONATORS` | Resonator list index (`None`: the latest) |
 | `MIN_SEP_LW` | Drop tones closer than this to another resonance, linewidths |
 | `PAIRS` | Close pairs: `'drop_both'`, or `'keep_stronger'` (the deeper dip) |
@@ -128,7 +133,7 @@ sweep, fq_finder and tones steps run.
 | `FMIN`, `FMAX` | Tone frequency range, Hz (`None`: no limit) |
 | `POWERS` | Power sweep, dBm |
 | `SHUFFLE`, `SEED` | Randomize the order of each tone's powers |
-| `NPOINTS_FINE`, `NPOINTS_GAIN`, `NPOINTS_ROUGH` | Sweep points per tone (rough: `None` for none) |
+| `NPOINTS_FINE`, `NPOINTS_GAIN` | Sweep points per tone |
 | `GAIN_SPAN_FACTOR` | Gain sweep span, in fine sweep spans |
 | `NSAMPS` | Samples averaged per point |
 | `F_AVG` | Fine sweep points averaged in the fits |
@@ -137,18 +142,18 @@ sweep, fq_finder and tones steps run.
 | `ARES_LIMITS` | Chosen powers are clipped to this, dBm |
 | `FRES_UPDATE_METHOD` | fq_finder: `'none'`, `'spacing'`, `'minS21'`, `'distance'` |
 | `RMV_GAIN_SIMPLE` | fq_finder: simple gain correction of the display |
-| `PORT_TUNE`, `PORT_STORE` | A new tuning keeps the powers of this tuning (index; `None`: a full tuning) of this store (`None`) or another |
+| `PORT_TUNE`, `PORT_STORE` | A new tuning keeps the powers of this tuning (name or index; `None`: a full tuning) of this store (`None`) or the store at this path |
 | `PREDICT` | `None`, or a function of the earlier `fres`, `qres`, `ares` returning `fres_pred`, `qres_pred`, `ares_pred` (`predict_tones` in the script) |
 | `STEPS`, `REDOABLE` | The steps; leave them |
 
 ## Command line
 
-`--modules`, `--new`, `--redo <step>`, `--windows`, `--list-windows`,
-`--port-tune k`, `--simulate`.
+`--modules`, `--tuning name`, `--redo <step>`, `--windows`,
+`--list-windows`, `--port-tune name`, `--simulate`.
 
 # 04a_stream.py: take timestreams
 
-A window on one tuning (the latest with tones, or `--tune k`):
+A window on one tuning (the latest with tones, or `--tune name`):
 
 | Part | What it does |
 |---|---|
@@ -182,7 +187,7 @@ window is open. `--simulate` streams the store's simulated device.
 
 ## Command line
 
-`--modules`, `--tune k`, `--simulate`.
+`--modules`, `--tune name`, `--simulate`.
 
 # 04b_stream_batch.py: timestreams without a window
 
@@ -210,7 +215,7 @@ the settings between calls.
 
 ## Command line
 
-`--modules`, `--tune k`, `--simulate`, `--notes`.
+`--modules`, `--tune name`, `--simulate`, `--notes`.
 
 # store_browser.py: look around a store
 

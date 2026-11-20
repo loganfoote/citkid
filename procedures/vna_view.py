@@ -10,11 +10,12 @@ import argparse
 import os
 from citkid import daq_layout as dl
 from citkid.vna.view import run_vna_view
+from citkid.qt_compat import set_theme
 
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX
+from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, LIGHT_MODE
 
 VNA = None
 
@@ -70,6 +71,7 @@ def main(args):
     Returns:
     k (int): index of the sweep shown.
     """
+    set_theme(LIGHT_MODE)
     path = store_path(args)
     k = run_vna_view(path, args.vna)
     print(f'Viewed vna{k} of {path}')

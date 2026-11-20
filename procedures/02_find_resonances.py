@@ -15,11 +15,12 @@ from citkid import daq_layout as dl
 from citkid.vna.full_sweep import (
     measured_depths, resonator_list, run_full_sweep_fit
 )
+from citkid.qt_compat import set_theme
 
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX
+from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, LIGHT_MODE
 
 FINDER = 'cnn'
 SPAN_LW = 5.
@@ -240,6 +241,7 @@ def main(args):
     Returns:
     k (int or None): the sweep index, or None if stopped early.
     """
+    set_theme(LIGHT_MODE)
     path = store_path(args)
     root = dl.open_store(path, mode = 'a')
     dl.check_store(root)

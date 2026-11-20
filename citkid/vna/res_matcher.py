@@ -36,6 +36,7 @@ from typing import List, Optional, Tuple, Set
 import numpy as np
 import zarr
 import pyqtgraph as pg
+from ..qt_compat import fg, log_box_style
 from pyqtgraph.Qt import QtCore, QtWidgets, QtGui
 
 from ..qt_compat import (
@@ -1015,7 +1016,7 @@ class ResMatcher:
         self.log_text.setReadOnly(True)
         self.log_text.setMaximumHeight(180)
         self.log_text.setStyleSheet(
-            'background-color:#2b2b2b; color:#ffffff; font-family:monospace;'
+            log_box_style()
         )
         layout.addWidget(self.log_text)
 
@@ -1104,7 +1105,7 @@ class ResMatcher:
         self._overview_region = pg.LinearRegionItem(
             values=[f_lo, f_lo + 10e6],
             brush=pg.mkBrush(255, 255, 255, 30),
-            pen=pg.mkPen('w', width=1),
+            pen=pg.mkPen(fg(), width=1),
             movable=True,
         )
         self.plot_overview.addItem(self._overview_region)
@@ -1158,11 +1159,11 @@ class ResMatcher:
         # Separate selection markers for DS1 (circles) and DS2 (squares)
         self.scatter_sel_ds1_mag = pg.ScatterPlotItem(
             symbol='o', size=18,
-            pen=pg.mkPen('w', width=3), brush=pg.mkBrush(None),
+            pen=pg.mkPen(fg(), width=3), brush=pg.mkBrush(None),
         )
         self.scatter_sel_ds2_mag = pg.ScatterPlotItem(
             symbol='s', size=18,
-            pen=pg.mkPen('w', width=3), brush=pg.mkBrush(None),
+            pen=pg.mkPen(fg(), width=3), brush=pg.mkBrush(None),
         )
         self.plot_mag.addItem(self.scatter_ds1_mag)
         self._vb_mag2.addItem(self.scatter_ds2_mag)
@@ -1209,11 +1210,11 @@ class ResMatcher:
         # Separate selection markers for DS1 (circles) and DS2 (squares)
         self.scatter_sel_ds1_phase = pg.ScatterPlotItem(
             symbol='o', size=18,
-            pen=pg.mkPen('w', width=3), brush=pg.mkBrush(None),
+            pen=pg.mkPen(fg(), width=3), brush=pg.mkBrush(None),
         )
         self.scatter_sel_ds2_phase = pg.ScatterPlotItem(
             symbol='s', size=18,
-            pen=pg.mkPen('w', width=3), brush=pg.mkBrush(None),
+            pen=pg.mkPen(fg(), width=3), brush=pg.mkBrush(None),
         )
         self.plot_phase.addItem(self.scatter_ds1_phase)
         self._vb_phase2.addItem(self.scatter_ds2_phase)

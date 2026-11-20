@@ -246,6 +246,54 @@ def _use_system_ui_font(app):
     app.setFont(font)
 
 
+_LIGHT = False
+
+def set_theme(light = False):
+    """
+    Choose the plot theme of every citkid window opened afterwards:
+    pyqtgraph's background and foreground, and the colour ``fg``
+    returns for lines drawn in the foreground colour.
+
+    Parameters:
+    light (bool): If True, white plots with black axes and text, for
+        screens where the dark theme has too little contrast. Default
+        False: black plots.
+    """
+    global _LIGHT
+    _LIGHT = bool(light)
+    _pg.setConfigOptions(background = 'w' if _LIGHT else 'k',
+                         foreground = 'k' if _LIGHT else 'w')
+
+def is_light():
+    """
+    Say whether the light theme is on (``set_theme``).
+
+    Returns:
+    light (bool): True if so.
+    """
+    return _LIGHT
+
+def fg():
+    """
+    Return the plot foreground colour of the theme (``set_theme``), for
+    pens that must stand out from the background.
+
+    Returns:
+    color (str): 'k' with the light theme, else 'w'.
+    """
+    return 'k' if _LIGHT else 'w'
+
+def log_box_style():
+    """
+    Return the stylesheet of a monospace log box in the theme's colours.
+
+    Returns:
+    style (str): the stylesheet.
+    """
+    colors = 'background-color: #f4f4f4; color: #000000; ' if _LIGHT \
+        else 'background-color: #2b2b2b; color: #ffffff; '
+    return colors + 'font-family: monospace;'
+
 def get_qapp(name=None):
     """
     Return the QApplication, creating it with high-DPI scaling if needed.

@@ -57,6 +57,7 @@ lists them.
 | `SUFFIX` | Names the store `<DEVICE>_<SUFFIX>.zarr` (`''`: no suffix) |
 | `REPORT_DIR` | The report site folder |
 | `MEMORY_GB` | Timestreams kept in memory by the analysis scripts, GB |
+| `LIGHT_MODE` | `True`: white plots with black text in every window, for screens where the dark plots lack contrast |
 
 Every script also has `NOTES`, text saved with the data (`--notes`).
 

@@ -71,6 +71,7 @@ import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets
 from .. import daq_layout as dl
+from ..qt_compat import fg
 from ..qt_compat import (
     delete_on_close, fit_window_to_screen, get_qapp, widget_font_stylesheet
 )
@@ -463,8 +464,12 @@ class StreamWindow(QtWidgets.QMainWindow):
             self.runs_list.addItem(self._run_label(r))
         self.runs_list.currentRowChanged.connect(self._on_run_selected)
         self.runs_list.itemDoubleClicked.connect(lambda _: self.view_run())
+        # Short by default; takes the spare height of a taller window
+        self.runs_list.setMinimumHeight(80)
+        self.runs_list.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
+                                     QtWidgets.QSizePolicy.Ignored)
         outer.addWidget(QtWidgets.QLabel('Runs of this tuning'))
-        outer.addWidget(self.runs_list)
+        outer.addWidget(self.runs_list, stretch = 1)
         # View a saved run in the plots: its first chunks
         row = QtWidgets.QHBoxLayout()
         self.view_btn = QtWidgets.QPushButton('View run')
@@ -797,15 +802,24 @@ class StreamWindow(QtWidgets.QMainWindow):
         """
         List the selected tone set's tones and calibrations.
         """
+        self._fill_tones(self._set_rows())
+        self._update_chunks()
+        self._refresh_cals()
+
+    def _fill_tones(self, rows):
+        """
+        List tones in the Tone box.
+
+        Parameters:
+        rows (array-like int): indices into the tuning's tones.
+        """
         self.tone_box.blockSignals(True)
         self.tone_box.clear()
-        for r in self._set_rows():
+        for r in rows:
             self.tone_box.addItem(
                 f"res {self.tones['res_idxs'][r]}: "
                 f"{self.tones['fres'][r] / 1e6:.4f} MHz", int(r))
         self.tone_box.blockSignals(False)
-        self._update_chunks()
-        self._refresh_cals()
 
     def _refresh_cals(self, select = None):
         """
@@ -1262,9 +1276,10 @@ class StreamWindow(QtWidgets.QMainWindow):
         """
         if error is None:
             self.view = view
+            # A run of another set: list its tones, changing no
+            # setting (the chosen set, calibration, stages stay)
             if self.set_box.currentData() != view['tone_set']:
-                self.set_box.setCurrentIndex(
-                    self.set_box.findData(view['tone_set']))
+                self._fill_tones(view['rows'])
             if self.tone_box.currentData() not in view['rows']:
                 self.tone_box.setCurrentIndex(
                     self.tone_box.findData(int(view['rows'][0])))
@@ -1314,7 +1329,7 @@ class StreamWindow(QtWidgets.QMainWindow):
                           symbol = 'o', symbolSize = 3,
                           symbolBrush = pg.mkBrush(255, 120, 60, 120))
         self.iq_plot.plot([z0.real], [z0.imag], pen = None, symbol = '+',
-                          symbolSize = 14, symbolPen = 'w')
+                          symbolSize = 14, symbolPen = fg())
         t = np.arange(len(zt)) * p['dt']
         mode = self.mode_box.currentIndex()
         if mode == 2:

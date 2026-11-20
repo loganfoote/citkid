@@ -166,8 +166,8 @@ class StatusLabel(QtWidgets.QLabel):
 
 # Help dialog sections shared by the pipeline windows
 PANEL_HELP = ('Panel buttons', [
-    ('Run', "Run the panel's steps with its current settings"),
-    ('Run+', 'Run the panel, then every panel after it'),
+    ('Run', 'Run the panel with its current settings, then every panel '
+            'after it'),
     ('Save', "Save the panel's results (they are also saved when you move "
              'to another data index)'),
     ('Bad Data', "Mark the panel's results bad (NaN) for this data index"),
@@ -1121,13 +1121,13 @@ class DefaultStepPanel(StepPanel):
     """
     Generic fallback panel for steps that have no registered custom panel.
 
-    Displays the step names, a *Run+* button, and a status indicator.
+    Displays the step names, a *Run* button, and a status indicator.
     On success it calls ``trigger_downstream`` to cascade re-runs.
     """
 
     def setup_ui(self):
         """
-        Build the step-name label, Run, Run+, and Save buttons, and status.
+        Build the step-name label, Run and Save buttons, and status.
         """
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
@@ -1137,15 +1137,11 @@ class DefaultStepPanel(StepPanel):
         layout.addStretch()
 
         self._run_btn = QtWidgets.QPushButton("Run")
-        self._run_btn.clicked.connect(self._on_run_clicked)
-        layout.addWidget(self._run_btn)
-
-        self._run_through_btn = QtWidgets.QPushButton("Run+")
-        self._run_through_btn.setToolTip(
-            "Run this panel and all following panels")
-        self._run_through_btn.clicked.connect(
+        self._run_btn.setToolTip(
+            "Run this panel and the panels after it")
+        self._run_btn.clicked.connect(
             lambda: self.run_from_here.emit())
-        layout.addWidget(self._run_through_btn)
+        layout.addWidget(self._run_btn)
 
         self._save_btn = QtWidgets.QPushButton("Save")
         self._save_btn.clicked.connect(self._on_save_clicked)
@@ -1404,16 +1400,11 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         QtGui.QShortcut(QtGui.QKeySequence("T"), self,
                         activated=self._add_note)
 
-        # Number keys 1-9: run panel N and all following ("Run +", 1-indexed).
-        # Shift+N: run panel N only.
+        # Number keys 1-9: run panel N and all following (1-indexed).
         for idx in range(1, 10):
             seq = str(idx)
             _sc = QtGui.QShortcut(QtGui.QKeySequence(seq), self)
             _sc.activated.connect(lambda _i=idx-1: self._run_through_panel(_i))
-            _sc_shift = QtGui.QShortcut(QtGui.QKeySequence(f"Shift+{seq}"),
-                                        self)
-            _sc_shift.activated.connect(
-                lambda _i=idx-1: self._run_panel_by_index(_i))
 
         self._fit_to_screen(round(1200 * ui_scale))
         # Initialise panels in order once the event loop is running so that
@@ -1712,8 +1703,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             ('Keyboard', [
                 ('A / D  or  Left / Right', 'Previous / next data index'),
                 ('R', 'Rescale every plot'),
-                ('1-9', 'Run panel N and every panel after it (Run+)'),
-                ('Shift+1-9', 'Run panel N only'),
+                ('1-9', 'Run panel N and every panel after it'),
                 ('M', "Mark the tone bad with a reason (every panel's "
                       "outputs NaN; recorded in the store's tone marks)"),
                 ('T', "Add a note on the tone to the store's tone marks "

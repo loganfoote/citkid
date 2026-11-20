@@ -16,12 +16,13 @@ from citkid.crs import board_lock
 from citkid.crs.instrument import CRS
 from citkid.crs.sim import SIM_SERIAL, simulated_crs
 from citkid.crs.stream_gui import run_stream_gui
+from citkid.qt_compat import set_theme
 
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
 from settings import (SERIAL_NUMBER, INTERFACE, MODULES, DATA_DIR, COOLDOWN,
-                      DEVICE, SUFFIX)
+                      DEVICE, SUFFIX, LIGHT_MODE)
 
 # Calibration sweep
 NPOINTS_FINE = 1000
@@ -66,8 +67,9 @@ def parse_args(argv = None):
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device)')
     p.add_argument('--modules', type = int, nargs = '+', default = MODULES)
-    p.add_argument('--tune', type = int, default = None,
-                   help = 'tuning (default: the latest with tuned tones)')
+    p.add_argument('--tune', default = None,
+                   help = 'tuning, by name or index (default: the '
+                   'latest with tuned tones)')
     p.add_argument('--simulate', action = 'store_true',
                    help = "stream the store's simulated device")
     return p.parse_args(argv)
@@ -94,7 +96,8 @@ def find_tuning(root, k = None):
 
     Parameters:
     root (zarr.Group): the store root.
-    k (int or None): tuning index. None: the latest with ``tones``.
+    k (int, str or None): tuning index or name (``daq_layout.find_tuning``).
+        None: the latest with ``tones``.
 
     Returns:
     tune (zarr.Group): the tuning.
@@ -108,7 +111,9 @@ def find_tuning(root, k = None):
         if not done:
             raise KeyError('no tuning has tones yet: run 03_tune.py')
         k = done[-1]
-    tune = root[dl.set_name(k, 'tune')]
+    tune = dl.find_tuning(root, k)
+    if tune is None:
+        raise KeyError(f'no tuning {k!r}')
     if 'tones' not in tune:
         raise KeyError(f'{tune.basename} has no tones yet: run 03_tune.py')
     return tune
@@ -123,6 +128,7 @@ def main(args):
     Returns:
     runs (list of list of str): stream paths of each run.
     """
+    set_theme(LIGHT_MODE)
     path = store_path(args)
     root = dl.open_store(path, mode = 'a')
     dl.check_store(root)
@@ -156,7 +162,7 @@ def main(args):
             connect, tune, preview_dec = PREVIEW_DEC, preview_s = PREVIEW_S,
             presets = PRESETS, sweep_kwargs = dict(
                 npoints_fine = NPOINTS_FINE, npoints_gain = NPOINTS_GAIN,
-                npoints_rough = None, nsamps = NSAMPS,
+                nsamps = NSAMPS,
                 gain_span_factor = GAIN_SPAN_FACTOR),
             fres_update = FRES_UPDATE)
 

@@ -18,11 +18,12 @@ from citkid.pipeline import hee_finder as cf
 from citkid.pipeline import photon_finder as pf
 from citkid.pipeline.stream_sources import open_calibration
 from citkid.signal.photons import DetectionSettings
+from citkid.qt_compat import set_theme
 
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB
+from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB, LIGHT_MODE
 
 # Timestreams
 CALIBRATION = None
@@ -305,6 +306,7 @@ def main(args):
     out (dict or None): result name: dict(``results``, ``events``,
         ``thresholds``), or None if only listed.
     """
+    set_theme(LIGHT_MODE)
     root = dl.open_store(store_path(args), mode = 'a')
     dl.check_store(root)
     cals = dl.list_indices(root, 'ts_cal')

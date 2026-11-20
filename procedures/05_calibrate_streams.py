@@ -16,11 +16,12 @@ from citkid.pipeline.stream_sources import (
     open_stream_dataset, plan_stream_datasets
 )
 from citkid.zarr_util import to_jsonable
+from citkid.qt_compat import set_theme
 
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX
+from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, LIGHT_MODE
 
 CALIBRATE = [
     dict(name = 'dark_dec6', chunks = 2),
@@ -151,6 +152,7 @@ def main(args):
     Returns:
     datasets (dict or None): name: DataSet, or None if only listed.
     """
+    set_theme(LIGHT_MODE)
     path = store_path(args)
     root = dl.open_store(path, mode = 'a')
     dl.check_store(root)

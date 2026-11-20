@@ -739,15 +739,17 @@ def tunings_using(root, name):
     return [set_name(j, 'tune') for j in list_indices(root, 'tune')
             if root[set_name(j, 'tune')].attrs.get('resonators') == name]
 
-def new_tuning(root, resonators, attrs = None):
+def new_tuning(root, resonators, attrs = None, name = None):
     """
     Create the next tuning, ``tune{k}``, recording the resonator list its
-    ``res_idxs`` refer to.
+    ``res_idxs`` refer to and its name.
 
     Parameters:
     root (zarr.Group): store root, writable.
     resonators (int or str): resonator list index or group name.
     attrs (dict or None): more attributes. Default None.
+    name (str or None): the tuning's name (attr ``name``), to refer to
+        it by (``find_tuning``). Default None: ``tune{k}``.
 
     Returns:
     grp (zarr.Group): the new tuning.
@@ -755,13 +757,61 @@ def new_tuning(root, resonators, attrs = None):
 
     Raises:
     KeyError: if the resonator list doesn't exist.
+    ValueError: if a tuning with ``name`` exists.
     """
-    name = resonators if isinstance(resonators, str) else \
+    res = resonators if isinstance(resonators, str) else \
         set_name(int(resonators), RESONATORS_PREFIX)
-    if name not in root:
-        raise KeyError(f'no resonator list {name!r}')
-    return new_indexed_group(root, 'tune', 'decision',
-                             attrs = dict(attrs or {}, resonators = name))
+    if res not in root:
+        raise KeyError(f'no resonator list {res!r}')
+    if name is not None and find_tuning(root, str(name)) is not None:
+        raise ValueError(f'a tuning named {name!r} exists')
+    grp, k = new_indexed_group(root, 'tune', 'decision',
+                               attrs = dict(attrs or {}, resonators = res))
+    grp.attrs['name'] = grp.basename if name is None else str(name)
+    return grp, k
+
+def tuning_name(tune):
+    """
+    Return a tuning's name: its ``name`` attribute, else its group name
+    (``tune{k}``, tunings made before names).
+
+    Parameters:
+    tune (zarr.Group): the tuning.
+
+    Returns:
+    name (str): the name.
+    """
+    return str(tune.attrs.get('name') or tune.basename)
+
+def find_tuning(root, which = None):
+    """
+    Find a tuning by index or name.
+
+    Parameters:
+    root (zarr.Group): store root.
+    which (int, str or None): a tuning index, its group name
+        ('tune2'), a string of digits ('2'), or its name (``tuning_name``,
+        the latest if several share it). None (default): the latest
+        tuning.
+
+    Returns:
+    tune (zarr.Group or None): the tuning; None if there is none.
+    """
+    ks = list_indices(root, 'tune')
+    if which is None:
+        return root[set_name(ks[-1], 'tune')] if ks else None
+    if isinstance(which, str):
+        key = which.strip()
+        m = re.fullmatch(r'(?:tune)?(\d+)', key)
+        if m is None:
+            for k in reversed(ks):
+                t = root[set_name(k, 'tune')]
+                if tuning_name(t) == key:
+                    return t
+            return None
+        which = int(m.group(1))
+    return root[set_name(int(which), 'tune')] if int(which) in ks \
+        else None
 
 ################################################################################
 ################################### Tones ######################################

@@ -16,5 +16,6 @@ DEVICE = 'device'
 SUFFIX = ''
 REPORT_DIR = '~/reports'
 MEMORY_GB = 12.
+LIGHT_MODE = False
 
 ################################################################################

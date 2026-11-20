@@ -44,8 +44,7 @@ R           auto-scale all plots
 B           mark the selected series point bad
 ⇧B          mark all series points bad
 Ctrl+⇧B     mark the selected series point and all points with larger x bad
-1, 2, …     run panel N and all following panels (same as its "Run +")
-Shift+N     run panel N only
+1, 2, …     run panel N and all following panels (same as its Run)
 H           show / hide the help dialog
 
 Mouse (series plot):
@@ -60,6 +59,7 @@ import threading
 import numpy as np
 import zarr
 import pyqtgraph as pg
+from ...qt_compat import fg
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
 
 from ..analysis import AnalysisRunner
@@ -724,14 +724,11 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         sc_b.activated.connect(self._mark_all_bad)
         QtGui.QShortcut(QtGui.QKeySequence('H'), self,
                         activated=self._toggle_help)
-        # N: run panel N and all following ("Run +"). Shift+N: panel N only.
+        # N: run panel N and all following
         for idx in range(1, 10):
             _sc = QtGui.QShortcut(QtGui.QKeySequence(str(idx)), self)
             _sc.activated.connect(
                 lambda _i=idx - 1: self._run_through_panel(_i))
-            _sc_s = QtGui.QShortcut(QtGui.QKeySequence(f'Shift+{idx}'), self)
-            _sc_s.activated.connect(
-                lambda _i=idx - 1: self._run_panel_by_index(_i))
 
         self._fit_to_screen(round(1400 * ui_scale))
         QtCore.QTimer.singleShot(0, self._auto_initialize_all)
@@ -1098,7 +1095,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         # Ring marker for the currently selected series index
         self._selected_marker = pg.ScatterPlotItem(
             size=16,
-            pen=pg.mkPen('w', width=2),
+            pen=pg.mkPen(fg(), width=2),
             brush=pg.mkBrush(0, 0, 0, 0),
         )
         self._plot_series.addItem(self._selected_marker)
@@ -1109,15 +1106,22 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._xy_fit_curve = None
         if self._xy_fit is not None:
             self._xy_fit_curve = pg.PlotDataItem(
-                [], [], pen=pg.mkPen('w', width=1.5, style=_Qt.DashLine))
+                [], [], pen=pg.mkPen(fg(), width=1.5, style=_Qt.DashLine))
             self._plot_series.addItem(self._xy_fit_curve, ignoreBounds=True)
 
         # Optional chosen-x line (y_target): dashed where the fit chose the
         # x, solid where the user did. Dragging it, or Shift+clicking the
         # plot, chooses an x. Kept out of auto-ranging like the fit curve.
         self._chosen_x_line = None
+        self._y_target_line = None
         if self._y_target is not None:
             color = (255, 170, 0)
+            # The target itself, as a horizontal line
+            self._y_target_line = pg.InfiniteLine(
+                angle=0, pos=self._y_target,
+                pen=pg.mkPen(color, width=1, style=_Qt.DashLine))
+            self._plot_series.addItem(self._y_target_line,
+                                      ignoreBounds=True)
             self._chosen_x_pens = {
                 False: pg.mkPen(color, width=2, style=_Qt.DashLine),
                 True: pg.mkPen(color, width=2),
@@ -3305,6 +3309,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             return
         self._y_target = value
         self._xy_store.y_target = value
+        if self._y_target_line is not None:
+            self._y_target_line.setPos(value)
         self._recompute_fit_chosen_x()
         self._update_chosen_x()
 

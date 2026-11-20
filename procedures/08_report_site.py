@@ -14,11 +14,12 @@ import argparse
 import os
 from citkid import daq_layout as dl
 from citkid.pipeline import site
+from citkid.qt_compat import set_theme
 
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-from settings import REPORT_DIR
+from settings import REPORT_DIR, LIGHT_MODE
 
 STORE = None
 RES_PAGES = True
@@ -102,6 +103,7 @@ def main(args):
         (empty when it was up to date or with ``--index-only``); None if
         no store was chosen.
     """
+    set_theme(LIGHT_MODE)
     if args.index_only:
         print(f'Site: {site.build_index(args.out)}')
         return []

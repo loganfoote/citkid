@@ -11,11 +11,12 @@ import argparse
 import os
 from citkid import daq_layout as dl
 from citkid.daq_browser import run_store_browser
+from citkid.qt_compat import set_theme
 
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX
+from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, LIGHT_MODE
 
 PICK = False
 
@@ -76,6 +77,7 @@ def main(args):
     path (str or None): the store's path (the one chosen in the dialog),
         or None if none was opened.
     """
+    set_theme(LIGHT_MODE)
     path = store_path(args)
     if args.runs:
         root = dl.open_store(path)

@@ -656,8 +656,10 @@ def test_stream_window(qapp, tmp_path):
     assert v['zt'].shape == (len(rows0), run0['nsamples']) and \
         v['zt'].dtype == np.complex64
     assert v['f'].shape[0] == len(rows0) and v['z'].shape == v['f'].shape
-    assert win.set_box.currentData() == 1
+    # The chosen set and settings stay; the Tone box lists the run's
+    assert win.set_box.currentData() == 0
     assert win.tone_box.currentData() in v['rows']
+    assert win.tone_box.count() == len(v['rows'])
     assert 'Showing ts0 (dark_dec6)' in win.status.text()
     assert len(win.ts_plot.listDataItems()) >= 1
     assert len(win.iq_plot.listDataItems()) == 3

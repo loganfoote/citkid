@@ -16,11 +16,12 @@ import os
 import numpy as np
 from citkid import daq_layout as dl
 from citkid.pipeline import psds
+from citkid.qt_compat import set_theme
 
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB
+from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB, LIGHT_MODE
 
 # Timestreams
 TIMESTREAMS = [
@@ -249,6 +250,7 @@ def main(args):
     out (dict or None): timestream group name: ``analyze_timestream``
         output, or None if only listed.
     """
+    set_theme(LIGHT_MODE)
     root = dl.open_store(store_path(args), mode = 'a')
     dl.check_store(root)
     timestreams, datasets = psds.list_timestreams(root)

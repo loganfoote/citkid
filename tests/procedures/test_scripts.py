@@ -563,10 +563,19 @@ def test_03_tune(tmp_path, monkeypatch, capsys, n_cal):
     # and spans are optimized again, from PREDICT's guess
     monkeypatch.setattr(m, 'PREDICT',
                         lambda f, q, a: (f + 5e3, q * 2., a - 1.))
-    assert m.main(m.parse_args(argv + ['--new', '--port-tune', '0'])) == 1
+    # Porting needs a new name: an existing tuning is not continued
+    with pytest.raises(ValueError, match = 'new name'):
+        m.main(m.parse_args(argv + ['--port-tune', '0']))
+    with pytest.raises(KeyError, match = 'no tuning'):
+        m.main(m.parse_args(argv + ['--tuning', '5']))
+    assert m.main(m.parse_args(argv + ['--tuning', 'ported',
+                                       '--port-tune', '0'])) == 1
     assert calls == ['iq', 'fq', 'fq']
     root = dl.open_store(path)
     t1 = root['tune1']
+    assert dl.tuning_name(t1) == 'ported' and \
+        dl.tuning_name(root['tune0']) == 'tune0'
+    assert dl.find_tuning(root, 'ported').basename == 'tune1'
     assert t1.attrs['ported_powers'] and 'power_sweep' not in t1
     assert t1.attrs['ported_from'] == dict(store = None, group = 'tune0')
     t0 = dl.load_tones(root['tune0/tones'])
@@ -581,7 +590,8 @@ def test_03_tune(tmp_path, monkeypatch, capsys, n_cal):
         capsys.readouterr().out
     monkeypatch.setattr(m, 'PREDICT', lambda f, q, a: (f[:1], q, a))
     with pytest.raises(ValueError, match = 'same shape'):
-        m.main(m.parse_args(argv + ['--new', '--port-tune', '1']))
+        m.main(m.parse_args(argv + ['--tuning', 'p2', '--port-tune',
+                                    'ported']))
     monkeypatch.setattr(m, 'PREDICT', None)
     # The tuning ports without its sweeps
     dl.port_tuning(path, 0, tmp_path / 'b.zarr')
