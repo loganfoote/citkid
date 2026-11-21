@@ -161,7 +161,7 @@ truth. The simulation settings live only here, not in the scripts.
 | Setting | Meaning |
 |---|---|
 | `STORE` | Path of the new store |
-| `SEED` | Device, gain and noise seed |
+| `SEED` | Random seed of the simulated device, gain and noise (the same seed gives the same store) |
 | `NYQUIST`, `AMPLITUDE`, `QR_MEDIAN`, `PTS_PER_LW`, `NSAMPS` | As in `01_vna_sweep.py` |
 | `SNR_DB` | S/N per quadrature at -55 dBm with 100 samples |
 | `PULSES` | `None`, or a dict of photon pulses and HEEs in the device's streams: `rate` (photons per tone, Hz), `x` (shift), `tau` (s), `hee_rate` (Hz), `hee_x`, `hee_spread`; keys left out take the defaults |

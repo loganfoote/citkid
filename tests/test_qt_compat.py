@@ -213,10 +213,34 @@ def test_get_qapp_creates_app_with_mkqapp():
     with patch.object(qt_compat._QtWidgets.QApplication, 'instance',
                       return_value=None), \
          patch.object(qt_compat._pg, 'mkQApp', return_value=sentinel) as mk, \
-         patch.object(qt_compat, '_use_system_ui_font') as use_font:
+         patch.object(qt_compat, '_use_system_ui_font') as use_font, \
+         patch.object(qt_compat, 'set_app_icon') as set_icon:
         assert qt_compat.get_qapp('My GUI') is sentinel
     mk.assert_called_once_with('My GUI')
     use_font.assert_called_once_with(sentinel)
+    set_icon.assert_called_once_with(sentinel)
+
+
+def test_app_icon_from_file_or_drawn(qapp, tmp_path):
+    """
+    Every window gets the icon: the shipped icon.png, or the built-in
+    drawing when the file is missing; the application's icon is set.
+    """
+    import os
+    from citkid import qt_compat
+    assert os.path.exists(qt_compat.ICON_PATH)
+    icon = qt_compat.app_icon()
+    assert not icon.isNull() and icon.pixmap(64).width() == 64
+    with patch.object(qt_compat, 'ICON_PATH', str(tmp_path / 'none.png')):
+        drawn = qt_compat.app_icon()
+    assert not drawn.isNull() and drawn.pixmap(32).width() == 32
+    pix = qt_compat.draw_icon(48)
+    assert pix.width() == 48 and not pix.isNull()
+    qt_compat.set_app_icon(qapp)
+    assert not qapp.windowIcon().isNull()
+    win = qt_compat._QtWidgets.QMainWindow()
+    assert not win.windowIcon().isNull()
+    win.deleteLater()
 
 
 def test_delete_on_close_destroys_window_only_when_closed(qapp):

@@ -1,0 +1,53 @@
+% LaTeX header for the citkid PDFs (build_pdfs.py passes it to pandoc).
+% Every script section starts a page under a dark band; subsections are
+% blue headings with a rule; sub-subsections carry a blue bar; tables
+% are striped with blue rules; plain code blocks are shaded.
+% pandoc's template wraps \paragraph and \subparagraph in a way titlesec
+% cannot parse: put the originals back first
+\ifdefined\oldparagraph\let\paragraph\oldparagraph\fi
+\ifdefined\oldsubparagraph\let\subparagraph\oldsubparagraph\fi
+\usepackage[explicit]{titlesec}
+\usepackage{etoolbox}
+\usepackage{mdframed}
+\definecolor{secblue}{RGB}{31,58,96}
+\definecolor{subblue}{RGB}{41,88,140}
+\definecolor{rowblue}{RGB}{233,240,248}
+\definecolor{ruleblue}{RGB}{140,170,205}
+\definecolor{codegray}{RGB}{244,244,244}
+
+% Sections: each on a new page, except the first (it follows the title)
+\newif\iffirstsection
+\firstsectiontrue
+\newcommand{\sectionbreak}{%
+  \iffirstsection\global\firstsectionfalse\else\clearpage\fi}
+\titleformat{\section}[block]
+  {\normalfont\Large\bfseries\color{white}}{}{0pt}
+  {\colorbox{secblue}{\parbox{\dimexpr\textwidth-2\fboxsep\relax}
+    {\strut #1\strut}}}
+\titlespacing*{\section}{0pt}{0pt}{1.2em}
+
+% Subsections
+\titleformat{\subsection}[block]
+  {\normalfont\large\bfseries\color{subblue}}{}{0pt}{#1}
+  [{\color{ruleblue}\titlerule[0.8pt]}]
+\titlespacing*{\subsection}{0pt}{1.8em}{0.7em}
+
+% Sub-subsections
+\titleformat{\subsubsection}[block]
+  {\normalfont\normalsize\bfseries\color{subblue}}{}{0pt}
+  {{\color{subblue}\rule[-0.25ex]{3pt}{1.1em}}\hspace{0.5em}#1}
+\titlespacing*{\subsubsection}{0pt}{1.2em}{0.4em}
+
+% Tables: striped rows, blue rules, a little more room
+\AtBeginEnvironment{longtable}{%
+  \rowcolors{2}{rowblue}{white}%
+  \arrayrulecolor{ruleblue}%
+  \renewcommand{\arraystretch}{1.2}}
+\setlength{\heavyrulewidth}{1.2pt}
+\setlength{\lightrulewidth}{0.8pt}
+
+% Plain code blocks (layouts, listings): shaded
+\surroundwithmdframed[backgroundcolor=codegray, linecolor=codegray,
+  linewidth=0.5pt, innerleftmargin=6pt, innerrightmargin=6pt,
+  innertopmargin=4pt, innerbottommargin=4pt, skipabove=6pt,
+  skipbelow=6pt]{verbatim}

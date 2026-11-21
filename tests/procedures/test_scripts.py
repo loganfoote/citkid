@@ -2567,3 +2567,88 @@ def test_06_names_the_calibration_with_the_timestream(
         assert pf.calibrations_with(root, 'nope') == []
     finally:
         del root['ts_cal8']
+
+
+def test_04c_power_sweep(tmp_path, monkeypatch, capsys):
+    """
+    Step 04c sets the power at each point (the hook), calibrates the tone
+    set (or reuses an earlier point's calibration) and takes RUNS named
+    after the point, and saves the point's name with the sweep and the
+    runs; --from starts at a later point.
+    """
+    from citkid.crs.sim import simulate_vna_store, simulated_crs
+    path = tmp_path / 'sim.zarr'
+    small = dict(f_lo = 1.0e9, f_hi = 1.1e9, n_banks = 1, n_per_bank = 6,
+                 pair_frac = 0.)
+    root, truth = asyncio.run(simulate_vna_store(
+        path, device_kwargs = small, verbose = False))
+    fr, qr = truth.fr.values, truth.Qr.values
+    n = len(fr)
+    dl.save_resonators(root, 0, fr, qr / 5, 'test', Qr = qr)
+    tune, _ = dl.new_tuning(root, 0)
+    crs = simulated_crs(path, [1], seed = 0, global_control = True)
+    asyncio.run(crs.attach())
+    dl.write_tune_config(tune, dict(dl.tune_config(crs), tone_sets = [
+        {'1': float(np.median(fr))}]))
+    dl.save_tones(dl.create_group(tune, 'tones', 'decision'),
+                  fr, qr / 5, -55., np.arange(n),
+                  tone_set = np.zeros(n, int), tone_module = np.ones(n, int))
+    m = load_script('04c_power_sweep.py')
+    monkeypatch.setattr(m, 'POINTS', [dict(name = 'BBT40K'),
+                                      dict(name = 'BBT80K', cal = 'BBT40K')])
+    monkeypatch.setattr(m, 'RUNS', [dict(dec_stage = 6, duration_s = 0.2),
+                                    dict(dec_stage = 6, duration_s = 0.1)])
+    monkeypatch.setattr(m, 'NPOINTS_FINE', 60)
+    monkeypatch.setattr(m, 'NPOINTS_GAIN', 10)
+    monkeypatch.setattr(m, 'NSAMPS', 10)
+    monkeypatch.setattr(m, 'FRES_UPDATE', None)
+    set_calls = []
+    monkeypatch.setattr(m, 'set_optical_power',
+                        lambda name: set_calls.append(name))
+
+    async def same_board(args, root, path):
+        """
+        Stand in for connect: the board made above.
+
+        Parameters:
+        args, root, path: ignored.
+
+        Returns:
+        crs (SimulatedCRS): the board.
+        """
+        return crs
+
+    monkeypatch.setattr(m, 'connect', same_board)
+    argv = ['--store', str(path), '--simulate']
+    results = m.main(m.parse_args(argv))
+    assert set_calls == ['BBT40K', 'BBT80K']
+    assert list(results) == ['BBT40K', 'BBT80K']
+    root = dl.open_store(path)
+    # The second point reused the first's calibration: one sweep,
+    # named after the point it was taken for
+    assert results['BBT40K']['calibration'] == 'tune0/cal0'
+    assert results['BBT80K']['calibration'] == 'tune0/cal0'
+    assert root['tune0/cal0'].attrs['point'] == 'BBT40K'
+    assert 'BBT40K' in root['tune0/cal0'].attrs['notes']
+    assert [c['name'] for c in dl.calibrations(root['tune0'])] == ['cal0']
+    runs = dl.stream_runs(root)
+    assert [r['name'] for r in runs] == [
+        'BBT40K_dec6', 'BBT40K_dec6_2', 'BBT80K_dec6', 'BBT80K_dec6_2']
+    assert all(r['point'] == r['name'].split('_')[0] for r in runs)
+    assert 'power_w' not in runs[0] and runs[0]['notes'] == 'BBT40K'
+    # --from starts at a later point; a point reusing a sweep by path
+    monkeypatch.setattr(m, 'POINTS', [dict(name = 'BBT40K'),
+                                      dict(name = 'BBT80K',
+                                           cal = 'tune0/cal0')])
+    results = m.main(m.parse_args(argv + ['--from', 'BBT80K']))
+    assert list(results) == ['BBT80K'] and len(set_calls) == 3
+    assert results['BBT80K']['calibration'] == 'tune0/cal0'
+    runs = dl.stream_runs(dl.open_store(path))
+    assert [r['name'] for r in runs[4:]] == ['BBT80K_dec6_3',
+                                            'BBT80K_dec6_4']
+    with pytest.raises(KeyError, match = 'no point'):
+        m.main(m.parse_args(argv + ['--from', 'nope']))
+    # Reusing a point not taken before it is refused
+    monkeypatch.setattr(m, 'POINTS', [dict(name = 'X', cal = 'Y')])
+    with pytest.raises(KeyError, match = 'not an earlier point'):
+        m.main(m.parse_args(argv))

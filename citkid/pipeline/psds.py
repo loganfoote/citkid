@@ -33,6 +33,7 @@ from ..signal import photons as ph
 from ..signal.psd import bin_psd, get_psd
 from ..xcal.corr import calc_cm, remove_cm
 from ..xcal.reduced_params import get_sxx_reduced
+from ..signal.basic_filt import decimate
 from ..zarr_util import to_jsonable
 from . import photon_finder as pf
 from .stream_sources import apply_stream_calibration, open_calibration
@@ -412,12 +413,15 @@ def deglitch_peaks(
         sign as x).
     n_glitches (np.array, (N,)): glitches per row.
     frac (np.array, (N,)): fraction of samples replaced per row.
+    idxs (list of np.array): the glitch samples of each row (empty for
+        a row skipped), for ``reapply_glitches``.
     """
     x = np.atleast_2d(np.asarray(x, dtype = np.float64))
     n, T = x.shape
     clean = x.copy()
     n_glitches = np.zeros(n, dtype = np.int64)
     frac = np.zeros(n)
+    found = [np.zeros(0, dtype = np.int64) for _ in range(n)]
     dtbin = min(float(baseline_s), T * dt)
     for i in range(n):
         if not np.isfinite(x[i]).all():
@@ -429,7 +433,30 @@ def deglitch_peaks(
         c, frac[i] = _replace(ts, idxs, pre, post)
         clean[i] = sign * c
         n_glitches[i] = len(idxs)
-    return clean, n_glitches, frac
+        found[i] = np.asarray(idxs, dtype = np.int64)
+    return clean, n_glitches, frac, found
+
+def reapply_glitches(x, idxs, sign = -1, pre = 1, post = 1):
+    """
+    Replace the samples around glitches found earlier (``deglitch_peaks``)
+    in a timestream computed again, e.g. with a changed calibration:
+    the pulses sit at the same samples, so no search is needed.
+
+    Parameters:
+    x (np.array, (T,)): the timestream.
+    idxs (array-like): the glitch samples.
+    sign (int): sign of a glitch in x. Default -1.
+    pre, post (int): samples replaced before and after each glitch.
+        Default 1 each.
+
+    Returns:
+    clean (np.array, (T,)): the median-subtracted, cleaned timestream
+        (sign as x).
+    frac (float): fraction of samples replaced.
+    """
+    c, frac = _replace(sign * np.asarray(x, dtype = np.float64), idxs,
+                       pre, post)
+    return sign * c, frac
 
 def load_photon_reference(ref_grp):
     """
@@ -549,7 +576,10 @@ def analyze_timestream(
         'peaks' or 'photons'), ``glitch_pre_s``, ``glitch_post_s``,
         ``glitch_sign``, ``glitch_nstd``, ``glitch_baseline_s``,
         ``glitch_distance_s``, ``glitch_rounds``, ``glitch_pulses``,
-        ``coinc_win``, ``hee_min_mult``, ``memory_gb``.
+        ``coinc_win``, ``hee_min_mult``, ``memory_gb``; optionally
+        ``modes_rate_hz``: keep each write's common modes decimated to
+        this sample rate (``modes_dec``, ``dt_dec`` per write), for
+        ``nep.sweep`` to take out of a tone computed again.
     filters (dict or None): res_idx: optimal filter, for ``deglitch`` =
         'photons' (``load_photon_reference``). Default None.
     photon_settings (DetectionSettings or None): with ``filters``.
@@ -572,6 +602,8 @@ def analyze_timestream(
         units squared per Hz, and ``sfactor_reduced`` (10 log10 of their
         ratio at ``f_reduced``, dB), and with ``cn_remove``:
         ``sxx_reduced_cn``, ``sxx_binned_cn``,
+        ``glitch_idxs`` (per tone: the glitch samples found with
+        ``deglitch`` = 'peaks', else empty),
         ``cn_weights`` ((ntones, n_comp), NaN-padded), ``writes`` (list
         per write: ``index``, ``name``, ``rows``, ``n_comp``,
         ``sxx_binned`` of the common modes, ``sigma_iter``).
@@ -607,7 +639,8 @@ def analyze_timestream(
         n_glitches = np.zeros(n, dtype = np.int64), glitch_frac = np.zeros(n),
         sxx_reduced = np.full((n, nf), np.nan), sxx_binned = None,
         spar_binned = None, sper_binned = None,
-        sfactor_reduced = np.full((n, nf), np.nan), writes = [])
+        sfactor_reduced = np.full((n, nf), np.nan), writes = [],
+        glitch_idxs = [np.zeros(0, dtype = np.int64) for _ in range(n)])
     if s['cn_remove']:
         k_max = max(0, min(int(s['cn_n_comp']), n - 1))
         out.update(sxx_reduced_cn = np.full((n, nf), np.nan),
@@ -661,13 +694,15 @@ def analyze_timestream(
             out['sfactor_reduced'][idx] = 10 * np.log10(sr_par / sr_per)
         del par, perp
         if s['deglitch'] == 'peaks':
-            x, ng, fr = deglitch_peaks(
+            x, ng, fr, found = deglitch_peaks(
                 x, dt, sign = int(s['glitch_sign']),
                 nstd = float(s['glitch_nstd']),
                 baseline_s = float(s['glitch_baseline_s']),
                 distance = max(1, int(round(s['glitch_distance_s'] / dt))),
                 nrounds = int(s['glitch_rounds']), pre = pre, post = post)
             out['n_glitches'][idx], out['glitch_frac'][idx] = ng, fr
+            for i, g in zip(idx, found):
+                out['glitch_idxs'][i] = g
         elif s['deglitch'] == 'photons':
             x, ng, fr = deglitch_photons(
                 x, dt, ts['res_idxs'][idx], filters, photon_settings,
@@ -691,9 +726,15 @@ def analyze_timestream(
             fbA, sA, _ = psd_summary(cm['A'], dt, np.zeros(0), **bins)
         else:
             fbA, sA = np.zeros(0), np.zeros((0, 0))
-        out['writes'].append(dict(
+        write = dict(
             index = w, name = name, rows = rows, n_comp = cm['n_comp'],
-            f_binned = fbA, sxx_binned = sA, sigma_iter = cm['sigma_iter']))
+            f_binned = fbA, sxx_binned = sA, sigma_iter = cm['sigma_iter'])
+        if s.get('modes_rate_hz') and cm['n_comp']:
+            # The modes at a low sample rate, to take out of a tone
+            # computed again later without finding them again
+            A, dt_dec = decimate(cm['A'], dt, float(s['modes_rate_hz']))
+            write.update(modes_dec = A.astype(np.float32), dt_dec = dt_dec)
+        out['writes'].append(write)
     for key in ('sxx_binned', 'sxx_binned_cn', 'spar_binned', 'sper_binned'):
         if key in out and out[key] is None:
             out[key] = np.zeros((n, 0))
@@ -739,7 +780,8 @@ def save_timestream(grp, ts, result, settings, bad = None, limits = None):
     ``n_glitches``, ``glitch_frac``, ``sxx_reduced`` (1/Hz, at
     ``f_reduced``), ``sxx_binned`` (1/Hz, at ``f_binned``),
     ``spar_binned``, ``sper_binned`` (the loop components parallel and
-    perpendicular to the loop, normalized units squared per Hz), ``sfactor_reduced``
+    perpendicular to the loop, normalized units squared per Hz),
+    ``sfactor_reduced``
     (10 log10 of their ratio at ``f_reduced``, dB); with
     common-mode removal also ``sxx_reduced_cn``, ``sxx_binned_cn``,
     ``cn_weights`` ((ntones, n_comp)), and ``common_modes/write{k}/``

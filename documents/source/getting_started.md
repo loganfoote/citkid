@@ -19,12 +19,14 @@ noise spectra. Run them in this order:
 | 6 | `03_tune.py`: tone powers and frequencies | Tuning and timestreams |
 | 7 | `04a_stream.py`: take timestreams in a window | Tuning and timestreams |
 | 8 | `04b_stream_batch.py` (instead of 04a): take timestreams without a window | Tuning and timestreams |
-| 9 | `store_browser.py` (optional, any time): look around the store | Tuning and timestreams |
+| 8b | `04c_power_sweep.py` (for a sweep): timestreams at each optical power | Tuning and timestreams |
+| 9 | `store_browser.py` (optional, any time): look around the store | this one |
 | 10 | `05_calibrate_streams.py`: calibrate the timestreams | Tuning and timestreams |
 | 11 | `06a_find_photons.py`: photons and high-energy events (HEEs) | Tuning and timestreams |
 | 12 | `06b_hee.py`: lifetimes from HEEs | Tuning and timestreams |
 | 13 | `07_psds.py`: noise spectra | Tuning and timestreams |
 | 14 | `08_report_site.py`: browsable pages of every device | Tuning and timestreams |
+| 15 | `09_nep.py` (for a sweep, instead of 05 and 07): NEP from a power sweep | Tuning and timestreams |
 
 # The environment
 
@@ -60,6 +62,8 @@ lists them.
 | `LIGHT_MODE` | `True`: white plots with black text in every window, for screens where the dark plots lack contrast |
 
 Every script also has `NOTES`, text saved with the data (`--notes`).
+Every window has the citkid icon; replace `citkid/icon.png` to change
+it.
 
 The store holds everything measured and analyzed. Raw data is never
 overwritten: a repeated measurement gets the next index (`vna0`, `vna1`,
@@ -136,3 +140,32 @@ while another script is measuring.
 ## Command line
 
 `--clock SMA`, `--bank-high`, `--extended-bw`.
+
+# store_browser.py: look around a store
+
+Opens a store read-only (another script can keep writing; **F5**
+rereads): a tree of its groups with one-line summaries, the selected
+item's attributes, the timestream runs (filter by typing, double-click
+to find the stream), the tone marks (every entry; Clear mark, Make
+global and Make local act on the selected bad mark), and the notes.
+The Notes tab
+lists everything the report site shows notes for (the store, the VNA
+sweeps, tunings, calibration sweeps, runs, stream calibrations and
+results); select a row and edit its notes below, which are
+saved when you move to another row or tab or close the window.
+**Rename...** changes the name of a tuning, run, PSD group or photon
+or HEE result (references follow). **Delete...** removes the item
+from the store with everything that depends on it (a resonator list
+with its tunings, a run with its results, ...), after asking, and
+asking again when something depends on it. **H** shows the help.
+**Open** (Ctrl+O) chooses another store;
+`--pick` starts with the dialog; `--runs` prints the runs instead of
+opening the window.
+
+## Settings
+
+{{settings:store_browser.py}}
+
+| Setting | Meaning |
+|---|---|
+| `PICK` | Choose the store in a file dialog |

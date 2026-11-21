@@ -74,7 +74,7 @@ notebooks = ["jupyterlab>=4.5.0"]
 "Bug Reports" = "https://github.com/loganfoote/citkid/issues"
 
 [tool.setuptools]
-package-data = {}
+package-data = {"citkid" = ["icon.png"]}
 
 [tool.uv]
 # uv.lock is the source of truth for the development environment. The

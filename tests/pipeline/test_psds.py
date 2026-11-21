@@ -158,16 +158,24 @@ def test_deglitch_peaks():
         for w in where:
             x[i, w:w + 5] -= 2e-5 * np.exp(-np.arange(5) / 2)
     x[1, :10] = np.nan
-    clean, n, frac = psds.deglitch_peaks(x, dt, sign = -1, nstd = 6.,
-                                         baseline_s = 1., distance = 10,
-                                         pre = 2, post = 8)
+    clean, n, frac, idxs = psds.deglitch_peaks(
+        x, dt, sign = -1, nstd = 6., baseline_s = 1., distance = 10,
+        pre = 2, post = 8)
     np.testing.assert_array_equal(n, [3, 0, 1])
+    assert [len(g) for g in idxs] == [3, 0, 1]
+    assert all(abs(g - w) <= 2 for g, w in zip(sorted(idxs[0]),
+                                               [1000, 20000, 30000]))
+    # The same cut applied to the timestream computed again (here
+    # scaled, as a calibration change would), no search
+    again, frac2 = psds.reapply_glitches(2 * x[0], idxs[0], sign = -1,
+                                         pre = 2, post = 8)
+    assert frac2 == pytest.approx(frac[0]) and np.abs(again).max() < 1.2e-5
     np.testing.assert_allclose(frac[[0, 2]], [30 / T, 10 / T])
     assert frac[1] == 0 and np.isnan(clean[1, 0])
     assert np.abs(clean[0]).max() < 6e-6 and np.abs(clean[2]).max() < 6e-6
     # The sign matters: nothing found looking for positive glitches
-    _, n_pos, _ = psds.deglitch_peaks(x, dt, sign = 1, nstd = 6.,
-                                      baseline_s = 1.)
+    _, n_pos, _, _ = psds.deglitch_peaks(x, dt, sign = 1, nstd = 6.,
+                                         baseline_s = 1.)
     np.testing.assert_array_equal(n_pos, 0)
 
 

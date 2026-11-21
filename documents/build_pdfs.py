@@ -112,6 +112,11 @@ def expand(text):
         return f'```{lang}\n{body}\n```'
 
     text = PLACEHOLDER.sub(fill, text)
+    # Two-column tables (a name, then its meaning): the second column gets
+    # three times the width of the first (pandoc takes the dash counts
+    # of the separator line as relative widths)
+    text = re.sub(r'^\|-+\|-+\|$', '|----|------------|', text,
+                  flags = re.MULTILINE)
     lines = text.splitlines()
     head = []
     if lines and lines[0].strip() == '---':
@@ -142,6 +147,10 @@ def build(source, output, title):
         subprocess.run(
             ['pandoc', md, '-o', out, '--pdf-engine=xelatex',
              '-V', 'geometry:margin=0.9in', '-V', 'fontsize=10pt',
+             # 'table' reaches xcolor (striped tables); header.tex
+             # styles the headings, tables and code blocks
+             '-V', 'classoption=table',
+             '-H', os.path.join(HERE, 'header.tex'),
              '-V', 'colorlinks=true', '-V', 'linkcolor=blue',
              # TeX Gyre Pagella (text) and DejaVu Sans Mono (code), both in
              # TeX Live, have the symbols used (≈, ≤, box lines)

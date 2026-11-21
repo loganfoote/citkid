@@ -1,3 +1,4 @@
+import numpy as np
 from scipy.signal import butter, filtfilt, sosfiltfilt
 
 def bandpass_filter(x, dt, f0, f1, order = 8):
@@ -109,3 +110,35 @@ def get_cutoff(dt, f_cutoff):
     """
     nyquist = 0.5 / dt
     return f_cutoff / nyquist
+
+
+def decimate(x, dt, rate_hz):
+    """
+    Lower a timestream's sample rate to about ``rate_hz`` with an
+    anti-aliasing FIR filter (``scipy.signal.decimate``, zero phase), in
+    steps of at most 10, so a spectrum well below the new Nyquist
+    frequency is unchanged.
+
+    Parameters:
+    x (np.array, (T,) or (N, T)): the timestream(s).
+    dt (float): sample period, s.
+    rate_hz (float): wanted sample rate, Hz. The result's rate is the
+        closest at or above it that an integer factor gives; a rate at
+        or above the current one leaves ``x`` as it is.
+
+    Returns:
+    y (np.array): the decimated timestream(s).
+    dt_out (float): its sample period, s.
+    """
+    from scipy.signal import decimate as _decimate
+    y = np.asarray(x, dtype = np.float64)
+    q_total = int(np.floor(1. / (dt * rate_hz)))
+    if q_total < 2:
+        return y, float(dt)
+    dt_out = float(dt)
+    while q_total >= 2:
+        q = min(10, q_total)
+        y = _decimate(y, q, ftype = 'fir', zero_phase = True, axis = -1)
+        dt_out *= q
+        q_total //= q
+    return y, dt_out

@@ -1,6 +1,6 @@
 ---
 title: "Tuning and timestreams"
-subtitle: "03_tune, 04a_stream, 04b_stream_batch, store_browser, 05_calibrate_streams, 06a_find_photons, 06b_hee, 07_psds, 08_report_site, set_notes"
+subtitle: "03_tune, 04a_stream, 04b_stream_batch, 04c_power_sweep, 05_calibrate_streams, 06a_find_photons, 06b_hee, 07_psds, 08_report_site, 09_nep, set_notes"
 ---
 
 # Overview
@@ -14,12 +14,13 @@ board with `crs_init.py` first (see "Getting started").
 | `03_tune.py` | Plans the tones, sweeps the power, chooses each tone's power and frequency (two windows) | `tune{k}` |
 | `04a_stream.py` | Window for calibrating, writing tones, previewing and taking named timestream runs | `ts{n}` |
 | `04b_stream_batch.py` | The same without a window: calibrate, write, take the runs in the settings | `ts{n}` |
-| `store_browser.py` | Any time: browse a store (groups, attributes, runs, tone marks, notes) | Notes, if edited |
+| `04c_power_sweep.py` | At each point of a power sweep: set the power, calibrate (or reuse), take the runs; the point's name is saved with them | `ts{n}` |
 | `05_calibrate_streams.py` | Calibrates timestreams, in a window and then in batch | `ts_cal{c}` |
 | `06a_find_photons.py` | Finds photons and HEEs, with a threshold window | `photons/<name>` |
 | `06b_hee.py` | Fits HEE tails pulse by pulse, with a threshold window | `hee/<name>` |
 | `07_psds.py` | Noise spectra before and after common-mode removal | `ts_psd{p}` |
 | `08_report_site.py` | Browsable pages of every device: what was taken, the figures, one page per resonator | Files in a folder |
+| `09_nep.py` | NEP from a power sweep: calibration, IQ fits, spectra, responsivity and photon-noise fits, with a review window (replaces 05 and 07 for a sweep) | `nep/<name>` |
 | `set_notes.py` | Any time: add notes to the store or a group, shown on the pages | `notes` attributes |
 
 ```text
@@ -32,7 +33,8 @@ board with `crs_init.py` first (see "Getting started").
   ts_cal{c}/            stream calibrations (05)
   photons/<name>/       photon results (06a), one per timestream
   hee/<name>/        HEE tails (06b), one per timestream
-  ts_psd{p}/            noise spectra (07)
+  ts_psd{p}/            noise spectra (07, 09)
+  nep/<name>/           NEP of a power sweep (09)
   tone_marks/           bad marks and notes on tones, from every stage
 ```
 
@@ -73,7 +75,8 @@ A bad mark has a scope, chosen in the reason dialog:
 
 Clearing a mark (B again, un-rejecting, or the store browser) clears
 the mark of that stage and scope only. The reports apply the marks as
-they are when the report is built. `store_browser.py` lists every
+they are when the report is built. `store_browser.py` (see Getting
+started) lists every
 mark (Tone marks tab) and can clear one or change its scope.
 
 | Where | Mark bad | Default scope | Note |
@@ -139,13 +142,13 @@ sweep, fq_finder and tones steps run.
 | `NSAMPS` | Samples averaged per point |
 | `F_AVG` | Fine sweep points averaged in the fits |
 | `A_FIT_RANGE` | $a_\mathrm{nl}$ range of the $a_\mathrm{nl}$ vs power fits |
-| `ANL` | Target $a_\mathrm{nl}$ |
+| `ANL` | Target $a_\mathrm{nl}$: each tone's power is the one where its $a_\mathrm{nl}$ vs power fit reaches this |
 | `ARES_LIMITS` | Chosen powers are clipped to this, dBm |
 | `FRES_UPDATE_METHOD`, `NPOINTS_UPDATE` | fq_finder's starting frequencies: `'none'`, `'spacing'` (the point of fastest motion around the loop), `'spacing_fit'` (a Lorentzian fit to that motion, the point when the fit fails), `'minS21'`, `'distance'`; only the points within `NPOINTS_UPDATE` of the swept frequency are considered (`None`: all) |
 | `RMV_GAIN_SIMPLE` | fq_finder: simple gain correction of the display |
 | `PORT_TUNE`, `PORT_STORE` | A new tuning keeps the powers of this tuning (name or index; `None`: a full tuning) of this store (`None`) or the store at this path |
 | `PREDICT` | `None`, or a function of the earlier `fres`, `qres`, `ares` returning `fres_pred`, `qres_pred`, `ares_pred` (`predict_tones` in the script) |
-| `STEPS`, `REDOABLE` | The steps; leave them |
+| `STEPS`, `REDOABLE` | The steps of a tuning in order, and those `--redo` may run again; leave them |
 
 ## Command line
 
@@ -208,7 +211,7 @@ the settings between calls.
 
 | Setting | Meaning |
 |---|---|
-| `TONE_SET` | The tone set |
+| `TONE_SET` | Index of the tone set to calibrate and stream |
 | `CALIBRATION` | `None`: take a calibration sweep; or a saved one to reuse (`'tune0/cal2'`), which must be in frame |
 | `FRES_UPDATE` | As in `04a_stream.py` |
 | `TONE_CHUNKS` | Which of the chunks planned for a run's stage to stream, e.g. `[0, 1]` (`None`: all) |
@@ -219,34 +222,36 @@ the settings between calls.
 
 `--modules`, `--tuning name`, `--simulate`, `--notes`.
 
-# store_browser.py: look around a store
+# 04c_power_sweep.py: a sweep of optical power
 
-Opens a store read-only (another script can keep writing; **F5**
-rereads): a tree of its groups with one-line summaries, the selected
-item's attributes, the timestream runs (filter by typing, double-click
-to find the stream), the tone marks (every entry; Clear mark, Make
-global and Make local act on the selected bad mark), and the notes.
-The Notes tab
-lists everything the report site shows notes for (the store, the VNA
-sweeps, tunings, calibration sweeps, runs, stream calibrations and
-results); select a row and edit its notes below, which are
-saved when you move to another row or tab or close the window.
-**Rename...** changes the name of a tuning, run, PSD group or photon
-or HEE result (references follow). **Delete...** removes the item
-from the store with everything that depends on it (a resonator list
-with its tunings, a run with its results, ...), after asking, and
-asking again when something depends on it. **H** shows the help.
-**Open** (Ctrl+O) chooses another store;
-`--pick` starts with the dialog; `--runs` prints the runs instead of
-opening the window.
+At each point of `POINTS` (a name, e.g. the blackbody temperature), the
+script calls `set_optical_power` (edit it for the setup; it also
+waits for the power to settle), calibrates `TONE_SET` and takes
+`RUNS` as `04b_stream_batch.py` does, naming each run
+`<point>_dec<stage>` (`_2`, `_3`, ... when the name is taken). The
+point's name is saved with its runs and its calibration sweep, and
+`09_nep.py` maps the names to powers. A point with `cal` reuses the
+calibration of an earlier point of the sweep (its name) or a saved
+sweep (its path) instead of taking one; this suits a single NCO
+window only, since with several the sets are retuned at each point.
+A sweep taken by hand works the same way: name the runs, and give
+`POINTS` in 09 with the run names.
 
 ## Settings
 
-{{settings:store_browser.py}}
+{{settings:04c_power_sweep.py}}
 
 | Setting | Meaning |
 |---|---|
-| `PICK` | Choose the store in a file dialog |
+| `TONE_SET` | Tone set calibrated and streamed at every point |
+| `POINTS` | The points in order: `dict(name = ...)`, with `cal = 'name'` (an earlier point) or `cal = 'tune0/cal2'` to reuse a calibration |
+| `RUNS` | Timestreams at each point: `dec_stage`, `duration_s` (and `notes`); the names come from the point |
+| `TONE_CHUNKS`, `FRES_UPDATE`, `NPOINTS_FINE`, `NPOINTS_GAIN`, `GAIN_SPAN_FACTOR`, `NSAMPS` | As in `04b_stream_batch.py` |
+
+## Command line
+
+`--from name` (start at that point, e.g. after a stop), `--tuning
+name`, `--simulate`, `--notes`.
 
 # 05_calibrate_streams.py: calibrate timestreams
 
@@ -377,15 +382,15 @@ by `citkid.pipeline.photon_finder.migrate_results(root)`.
 | `TONES_BEFORE_WINDOW` | Tones detected before the window opens (`None`: all). The others are listed "not run" and run when selected, when thresholds are applied to all tones, or with the window's thresholds when it closes |
 | `WINDOW_FIRST_ONLY` | Open the window on the first chosen timestream only; the others take its result as the reference (`REUSE`) |
 | `INIT_NSIGMA`, `INIT_HMAX` | First pass: peak threshold (noise sigma) and upper cut (times the median peak) |
-| `OF_ITERATIONS` | Optimal-filter iterations |
+| `OF_ITERATIONS` | Rounds of optimal filtering: each round builds the template and filter from the pulses the last one found in the height window |
 | `HMIN`, `HMAX` | Height window of single photons, kHz/GHz |
 | `HMIN_FALSE_FRAC`, `HMIN_AUTO_MAX` | Choose `HMIN` automatically (`None`: fixed), up to this height |
 | `TEMPLATE_PRE_S`, `TEMPLATE_POST_S` | Template before and after the maximum, s |
 | `FILTER_POST_S` | The filter uses this much of the template after the maximum, s |
 | `TAU_SKIP`, `TAU_FIT_S` | Decay fit: samples skipped after the maximum, fit length, s |
-| `HIGHPASS_HZ` | Drift removal, Hz |
+| `HIGHPASS_HZ` | Cutoff of the highpass (a running median) applied to x before the detection, to remove drifts, Hz |
 | `COINC_NSIGMA`, `COINC_WIN` | Coincidences: pulses counted (filter sigma), window (± samples) |
-| `HEE_MIN_MULT` | Fewest tones of an HEE |
+| `HEE_MIN_MULT` | Fewest tones that must see an event for it to count as high-energy |
 
 ## Command line
 
@@ -449,10 +454,10 @@ hee/<name>/          attrs: run, tone set, calibration, events,
 | `TRIG_NSIGMA`, `COINC_WIN`, `HEE_MIN_MULT` | Triggers: threshold (noise sigma), largest gap within an event (samples), fewest tones |
 | `HMIN`, `HMAX` | Peak height window of the pulses fitted, kHz/GHz |
 | `LEVEL` | A tail begins where the pulse falls below this, kHz/GHz |
-| `FIT_S` | Fit length, s |
+| `FIT_S` | Length of the exponential fit of the mean tail, from its alignment point, s |
 | `PRE_S`, `POST_S` | Snippet before and after an event, s |
-| `SEARCH_S` | Peak search after the event, s |
-| `HIGHPASS_HZ` | Drift removal, Hz |
+| `SEARCH_S` | Each tone's pulse peak is looked for within this time after the event, s |
+| `HIGHPASS_HZ` | Cutoff of the highpass applied to x before the fits, to remove drifts, Hz |
 
 ## Command line
 
@@ -473,10 +478,28 @@ with `--no-gui`, `--new`, `--load` or `--overwrite` decide.
 
 | Step | What it does |
 |---|---|
-| Deglitch (optional) | `'peaks'`: each tone's peaks above `GLITCH_NSTD` sigma; `'photons'`: a photon result's filters (`PHOTONS`) and its HEEs (`GLITCH_PULSES = 'all'`: every pulse); `GLITCH_PRE_S` to `GLITCH_POST_S` around each glitch is replaced with noise |
+| Deglitch (optional) | Pulses are cut out of each timestream before the spectra, by peak finding or with a photon result's filters (see Deglitching below) |
 | Spectra | $S_{xx}$ per tone: reduced values (the mean within 20% of 0.1, 0.3, 1, 3, 10, ... Hz, from `FMIN_MULT` / duration to Nyquist / 2 / `FMAX_DIV`) and `NBINS` logarithmic bins; also the spectra of the loop components, parallel to the loop ($r\theta$, dissipation) and perpendicular to it ($A$, amplitude), and their ratio in dB at the reduced frequencies, the s-factor. The droop of the CRS decimation filters is undone (the rfmux transfer function), and the spectra end at 0.8 of the Nyquist frequency |
 | Common modes | Per tone write, `CN_N_COMP` modes by `citkid.xcal.corr.calc_cm` (`CN_N_ITER` iterations; highpass `CN_HIGHPASS_HZ` while finding the weights, lowpass `CN_LOWPASS_HZ` on the modes while iterating; the removed modes are unfiltered), then the spectra again on the cleaned tones, and the modes' spectra |
 | Review | The overview window on the raw spectra, before the common modes (skip it with `INTERACTIVE = False` or `--no-gui`); tones marked bad there stay out of the common-mode fit |
+
+## Deglitching
+
+A pulse (a photon or a high-energy event) adds power to the spectrum
+at every frequency, so for the noise alone the pulses are found
+first and the samples around each one are replaced with Gaussian
+noise of the tone's own level. `DEGLITCH` picks how they are found:
+
+| `DEGLITCH` | How the pulses are found |
+|---|---|
+| `None` | Not at all: the spectra include the pulses |
+| `'peaks'` | Peak finding on each tone alone: no photon result needed. Slow drifts are removed first by binning the timestream to `GLITCH_BASELINE_S` bins and subtracting that baseline, so the threshold applies to the fast noise. `GLITCH_SIGN` says which way a pulse goes in x (`-1`: a pulse lowers the frequency, the usual case). A peak counts when it exceeds `GLITCH_NSTD` standard deviations of the baseline-subtracted timestream; peaks closer than `GLITCH_DISTANCE_S` are one pulse. `GLITCH_ROUNDS` repeats the search: the pulses found in a round are removed and the standard deviation is taken again without them, so the next round catches the smaller pulses that the large ones hid by inflating the threshold. Two rounds is usually enough; one is fine for a quiet timestream |
+| `'photons'` | The optimal filters of a photon result (`PHOTONS`, from `06a_find_photons.py`) find the pulses, as the photon search did. `GLITCH_PULSES = 'hee'` cuts only the high-energy events (`COINC_WIN`, `HEE_MIN_MULT`, as in 06a) and leaves the photons in; `'all'` cuts every pulse |
+
+Either way, `GLITCH_PRE_S` before and `GLITCH_POST_S` after each
+pulse are replaced; `GLITCH_POST_S` should cover the pulse tail, a few
+lifetimes. Each tone's result records the pulses cut and the fraction
+of samples replaced (`n_glitches`, `glitch_frac`).
 
 ## The window
 
@@ -515,19 +538,24 @@ or name.
 | `TIMESTREAMS` | Index as listed, run name, or `dict(name = ..., or run = n, tone_sets = [...], cal = c)`; empty: list them |
 | `NAME` | Name of this set of spectra |
 | `INTERACTIVE` | Review each timestream in the overview window |
-| `NBINS` | Logarithmic bins |
+| `NBINS` | Number of logarithmic frequency bins of the binned spectra |
 | `FMIN_MULT` | Lowest frequency, times 1 / duration |
 | `FMAX_DIV` | Highest reduced frequency: Nyquist / 2 / this |
-| `CN_REMOVE`, `CN_N_COMP`, `CN_N_ITER` | Common-mode removal, components, iterations |
+| `CN_REMOVE`, `CN_N_COMP`, `CN_N_ITER` | Remove the common modes (`True`); how many modes to remove; iterations of the fit of the weights |
 | `CN_LOWPASS_HZ` | On the modes while iterating (`None`: Nyquist / 10) |
 | `CN_HIGHPASS_HZ` | While finding the weights (`None`: `FMIN_MULT` / duration; `0`: off) |
-| `CN_FILTER_ORDER` | Order of both filters |
+| `CN_FILTER_ORDER` | Order of the highpass and lowpass filters above |
 | `BAD_TONES` | Resonators left out, besides the tone marks |
-| `DEGLITCH` | `None`, `'peaks'`, or `'photons'` |
-| `GLITCH_PRE_S`, `GLITCH_POST_S` | Replaced around each glitch, s |
-| `GLITCH_SIGN`, `GLITCH_NSTD`, `GLITCH_BASELINE_S`, `GLITCH_DISTANCE_S`, `GLITCH_ROUNDS` | `'peaks'`: sign of a glitch in x, threshold (sigma), baseline bin (s), least spacing (s), rounds |
-| `PHOTONS`, `GLITCH_PULSES` | `'photons'`: the photon result, and `'hee'` or `'all'` pulses |
-| `COINC_WIN`, `HEE_MIN_MULT` | High-energy events: window (± samples), fewest tones |
+| `DEGLITCH` | `None` (keep the pulses), `'peaks'`, or `'photons'`: see Deglitching |
+| `GLITCH_PRE_S`, `GLITCH_POST_S` | Time replaced before and after each pulse, s |
+| `GLITCH_SIGN` | `'peaks'`: direction of a pulse in x (`-1`: downward) |
+| `GLITCH_NSTD` | `'peaks'`: peak threshold, in standard deviations of the baseline-subtracted timestream |
+| `GLITCH_BASELINE_S` | `'peaks'`: bin length of the slow baseline subtracted first, s |
+| `GLITCH_DISTANCE_S` | `'peaks'`: peaks closer than this are one pulse, s |
+| `GLITCH_ROUNDS` | `'peaks'`: searches, each with the threshold taken without the pulses found so far |
+| `PHOTONS` | `'photons'`: name of the photon result whose filters find the pulses |
+| `GLITCH_PULSES` | `'photons'`: `'hee'` cuts the high-energy events only, `'all'` every pulse |
+| `COINC_WIN`, `HEE_MIN_MULT` | `'photons'`: an event spans pulses within ± this many samples, and needs this many tones to count as high-energy |
 
 ## Command line
 
@@ -591,3 +619,78 @@ without text it lists the notes).
 
 `--store path`, `--update`, `--overwrite`, `--no-res-pages`,
 `--no-gui`, `--index-only`.
+
+# 09_nep.py: NEP from a power sweep
+
+Takes the points of a sweep (`POINTS`: the point names of 04c, or run
+names, with their incident powers), calibrates each point's timestream
+and fits its resonances
+(the 05 steps, one DataSet per calibration sweep), computes the spectra
+with peak removal and common-mode removal (as 07, saved as a PSD set),
+and per tone:
+
+| Step | What it does |
+|---|---|
+| x(P) | The IQ fits' $f_r$ at each power relative to the lowest power; a point whose fit failed is NaN (never the calibration's frequency) |
+| Responsivity | `citkid.responsivity` fit of x(P) for $R_0$, $P_0$, $x_0$ (at least 4 points); $R_0 \geq 0$ (x rising with power) is not a KID response and gives no NEP |
+| NEP(P) | $\sqrt{S_{xx}(P)} / |R(P)|$ at `FREQ_HZ`, with $R(P) = R_0 (1 + P / P_0)^{-1/2}$ |
+| Photon noise | `citkid.nep` fit of NEP(P) from `p_min` up for $\eta$; NEPinc is the NEP at the lowest power, NEPabs $= \eta \,$ NEPinc |
+
+The result is `nep/<NAME>`; running again resumes its review
+(`--overwrite` computes it again). The photon frequency `NU` is one
+value, or a dict of resonator index to frequency with a `'default'`.
+
+## The window
+
+The tone list (`*` reviewed, `x` bad; boxes to show only the tones
+outside the overview limits, with or without the bad ones), the point
+to edit and **Calibration...** (C): the calibration and IQ fit panels of
+this tone at that point. When they close, the tone's $f_r$ and
+$S_{xx}$ there are recomputed from its new calibration without searching
+again: the glitch positions found in the batch are cut again, and the
+common modes found in the batch are taken out with weights fitted anew.
+`p_min` (the box, in units of the highest power, or the dashed line)
+refits the photon noise; **Apply p_min to all** gives it to every tone.
+B marks the tone bad (local to this result), T adds a note, O opens the
+overview ($R_0$, $P_0$, $x_0$, $\eta$, NEPinc, NEPabs with draggable
+limits), R rescales.
+
+**Done** runs the final pass: the points whose calibrations changed get
+their spectra computed again in full (peak search and common modes),
+every tone is fitted again, and the window opens again on the final
+values with the overview. Done again, with nothing changed, finishes.
+
+```text
+nep/<name>/             attrs: points, calibration, psd, freq_hz, nu,
+                        settings, limits, changed
+                        res_idxs, nu, power_w, rows (tone, point)
+                        per tone and point: fr, x, sxx, nep
+                        per tone: R0, P0, x0 (and _err), f1, eta,
+                        eta_err, n_fit, p_min, nep_inc, nep_abs,
+                        status, bad, bad_reason
+    review/point{j}/    glitch positions and decimated common modes
+```
+
+## Settings
+
+{{settings:09_nep.py}}
+
+| Setting | Meaning |
+|---|---|
+| `NAME` | Result name (`nep/<NAME>`; the calibration and PSD set are named so too) |
+| `POINTS` | `{'BBT40K': 1e-15, ...}`: the point names (04c) or run names and their incident powers in W; a point taken twice is given by its run names |
+| `TUNING` | Only this tuning's runs (`None`: every tuning) |
+| `CALIBRATION` | Stream calibration to continue, by name or index (`None`: one named `NAME`) |
+| `NU` | Photon frequency, Hz: one value, or `dict(res_idx = Hz, ..., default = Hz)` |
+| `FREQ_HZ` | Frequency of $S_{xx}$ for the NEP (on the reduced grid 0.1, 0.3, 1, 3, 10, ... Hz) |
+| `F_AVG` | Fine sweep points averaged in the fits |
+| `INTERACTIVE` | Open the review window |
+| `BAD_TONES` | Resonators left out, besides the tone marks |
+| `NBINS`, `FMIN_MULT`, `FMAX_DIV`, `CN_*` | Spectra and common modes, as in `07_psds.py` |
+| `MODES_RATE_HZ` | Sample rate the common modes are kept at for the review, Hz (well above `FREQ_HZ`) |
+| `DEGLITCH`, `GLITCH_*` | Peak removal, as in `07_psds.py` (`GLITCH_NSTD` 12: only the largest spikes) |
+
+## Command line
+
+`--name`, `--tuning name`, `--cal name`, `--overwrite`, `--no-gui`,
+`--notes`.

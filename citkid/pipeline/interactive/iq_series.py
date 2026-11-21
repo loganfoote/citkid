@@ -2939,12 +2939,26 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         """
         x = self._get_x_array(self._data_idx)
         y = self._get_y_array(self._data_idx)
-        for i, (xi, yi, si_item) in enumerate(zip(x, y, self._scatter_items)):
-            coords = self._plot_coords(xi, yi)
-            if coords is None:
+        coords = [self._plot_coords(xi, yi) for xi, yi in zip(x, y)]
+        ys = [c[1] for c in coords if c is not None]
+        mid = (min(ys) + max(ys)) / 2 if ys else 0.
+        for i, (xi, c, si_item) in enumerate(zip(x, coords,
+                                                 self._scatter_items)):
+            if c is not None:
+                r, g, b = _series_color(i, self._n_series)
+                si_item.setData([c[0]], [c[1]], data=[i], symbol='o',
+                                pen=pg.mkPen(None),
+                                brush=pg.mkBrush(r, g, b, 200))
+                continue
+            # No y (marked bad, or not fit): an X at mid-height, so the
+            # point can still be found and clicked
+            cx = self._plot_coords(xi, 1.)
+            if cx is None:
                 si_item.setData([], [])
             else:
-                si_item.setData([coords[0]], [coords[1]], data=[i])
+                si_item.setData([cx[0]], [mid], data=[i], symbol='x',
+                                pen=pg.mkPen(fg(), width=2),
+                                brush=pg.mkBrush(0, 0, 0, 0))
         self._update_selected_marker()
         self._refresh_xy_fit()
         if rescale:

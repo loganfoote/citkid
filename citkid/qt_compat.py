@@ -39,6 +39,7 @@ It also provides window helpers shared by all citkid GUIs:
 """
 
 import math as _math
+import os as _os
 import sys as _sys
 import threading as _threading
 import warnings as _warnings
@@ -391,6 +392,7 @@ def get_qapp(name=None):
             )
         app = _pg.mkQApp(name)
         _use_system_ui_font(app)
+        set_app_icon(app)
         return app
     dpis = _unscaled_hidpi_screens(app)
     if dpis:
@@ -404,6 +406,91 @@ def get_qapp(name=None):
         )
     return app
 
+
+# The icon of every citkid window: replace the file to change it
+ICON_PATH = _os.path.join(_os.path.dirname(__file__), 'icon.png')
+
+def draw_icon(size = 256):
+    """
+    Draw the built-in icon: the IQ loop of a resonance (a ring of sweep
+    points, dense near resonance) with "citkid" in the middle, in
+    white on a Caltech-orange rounded square.
+
+    Parameters:
+    size (int): pixels on a side. Default 256.
+
+    Returns:
+    pixmap (QPixmap): the icon.
+    """
+    pix = _QtGui.QPixmap(size, size)
+    pix.fill(_QtCore.Qt.transparent)
+    p = _QtGui.QPainter(pix)
+    p.setRenderHint(_QtGui.QPainter.Antialiasing)
+    p.setPen(_QtCore.Qt.NoPen)
+    p.setBrush(_QtGui.QColor(255, 108, 12))     # Caltech orange
+    r = size * 0.18
+    p.drawRoundedRect(0, 0, size, size, r, r)
+    # The IQ loop: the sweep's points, z = 1 - 1 / (1 + 2j Q x), lie
+    # on a circle, dense far from resonance and sparse through the
+    # dip (x from -3 to 3 in Q x)
+    cx, cy, rad = size * 0.5, size * 0.5, size * 0.36
+    ring = _QtGui.QPen(_QtGui.QColor(255, 255, 255, 110), size * 0.045)
+    p.setPen(ring)
+    p.setBrush(_QtCore.Qt.NoBrush)
+    p.drawEllipse(_QtCore.QPointF(cx, cy), rad, rad)
+    p.setPen(_QtCore.Qt.NoPen)
+    p.setBrush(_QtGui.QColor(255, 255, 255))
+    n = 28
+    for i in range(n):
+        qx = -3. + 6. * i / (n - 1)
+        z = 1 - 1 / (1 + 2j * qx)      # circle of diameter 1 at 0.5
+        pt = _QtCore.QPointF(cx + 2 * rad * (z.real - 0.5),
+                             cy - 2 * rad * z.imag)
+        p.drawEllipse(pt, size * 0.028, size * 0.028)
+    # The name, as large as fits in the loop
+    font = _QtGui.QFont('Arial')
+    font.setBold(True)
+    font.setPixelSize(int(size * 0.19))
+    p.setFont(font)
+    p.setPen(_QtGui.QColor(255, 255, 255))
+    p.drawText(_QtCore.QRectF(0, 0, size, size), _QtCore.Qt.AlignCenter,
+               'citkid')
+    p.end()
+    return pix
+
+def app_icon():
+    """
+    Return the icon of the citkid windows: ``ICON_PATH`` (icon.png next
+    to this module) if it exists, else the built-in drawing
+    (``draw_icon``).
+
+    Returns:
+    icon (QIcon): the icon.
+    """
+    if _os.path.exists(ICON_PATH):
+        icon = _QtGui.QIcon(ICON_PATH)
+        if not icon.isNull():
+            return icon
+    return _QtGui.QIcon(draw_icon())
+
+def set_app_icon(app):
+    """
+    Give every window of an application the citkid icon
+    (``app_icon``). On Windows the process is also given its own
+    application id, so the taskbar shows the icon instead of
+    Python's.
+
+    Parameters:
+    app (QApplication): the application.
+    """
+    if _sys.platform == 'win32':
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                'citkid')
+        except Exception:
+            pass
+    app.setWindowIcon(app_icon())
 
 def available_screen_geometry():
     """

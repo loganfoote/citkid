@@ -3800,3 +3800,32 @@ def test_mark_tone_bad_asks_reason(qt_app, monkeypatch):
         return_value=QtWidgets.QMessageBox.Yes
     ):
         win.close()
+
+
+def test_series_points_without_y_are_drawn_as_x_markers(qt_app, monkeypatch):
+    """
+    A series point without a y (marked bad, or not fit) is drawn as an X
+    at mid-height of the others instead of vanishing, so it can still be
+    clicked; it gets its dot back when it has a value again.
+    """
+    win = _make_series_window(qt_app, monkeypatch, nrows=2)
+    di = win._data_idx
+    win._x_cache[di] = np.array([1., 2.])
+    win._y_cache[di] = np.array([10., np.nan])
+    win._get_x_array = lambda _di: win._x_cache[di]
+    win._get_y_array = lambda _di: win._y_cache[di]
+    win._update_series_scatter()
+    dot, cross = win._scatter_items
+    assert dot.opts['symbol'] == 'o' and list(dot.getData()[1]) == [10.]
+    assert cross.opts['symbol'] == 'x'
+    assert list(cross.getData()[0]) == [2.] and list(cross.getData()[1]) == [10.]
+    assert cross.points()[0].data() == 1
+    win._y_cache[di] = np.array([10., 30.])
+    win._update_series_scatter()
+    assert cross.opts['symbol'] == 'o' and list(cross.getData()[1]) == [30.]
+    # Without any y, the X sits at 0; without an x, nothing is drawn
+    win._y_cache[di] = np.array([np.nan, np.nan])
+    win._x_cache[di] = np.array([1., np.nan])
+    win._update_series_scatter()
+    assert list(dot.getData()[1]) == [0.] and len(cross.getData()[0]) == 0
+    _close(win)
