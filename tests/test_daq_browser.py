@@ -152,27 +152,27 @@ def test_window(qapp, store):
     # itself on a row change, a tab change, or closing
     labels = [win.notes_table.item(i, 0).text()
               for i in range(win.notes_table.rowCount())]
-    assert labels == ['(store)', 'ts_cal0', 'tune0', 'tune0/cal0',
-                      'ts0 dark0', 'tune0/cal1', 'ts1 dark1']
+    assert labels == ['(store)', 'resonators0', 'ts_cal0', 'tune0',
+                      'tune0/cal0', 'ts0 dark0', 'tune0/cal1', 'ts1 dark1']
     kinds = [win.notes_table.item(i, 1).text()
              for i in range(win.notes_table.rowCount())]
-    assert kinds[0] == 'store' and kinds[4] == 'timestream run'
-    assert win.notes_table.item(3, 2).text() == 'after warm-up'
-    assert win.notes_table.item(6, 2).text() == 'lights off ...'
+    assert kinds[0] == 'store' and kinds[5] == 'timestream run'
+    assert win.notes_table.item(4, 2).text() == 'after warm-up'
+    assert win.notes_table.item(7, 2).text() == 'lights off ...'
     win.tabs.setCurrentIndex(3)
-    win.notes_table.setCurrentCell(2, 0)
+    win.notes_table.setCurrentCell(3, 0)
     assert 'Notes of tune0' in win.notes_label.text()
     win.notes_edit.setPlainText('retuned after warm-up')
     win.notes_table.setCurrentCell(0, 0)
     assert dl.open_store(store)['tune0'].attrs['notes'] == \
         'retuned after warm-up'
-    assert win.notes_table.item(2, 2).text() == 'retuned after warm-up'
+    assert win.notes_table.item(3, 2).text() == 'retuned after warm-up'
     win.notes_edit.setPlainText('cooled on Monday')
     win.tabs.setCurrentIndex(0)
     assert dl.open_store(store).attrs['notes'] == 'cooled on Monday'
     assert dl.list_notes(dl.open_store(store))[0] == ('', 'cooled on Monday')
     # A run's notes go to its record and its stream group; saved on close
-    win.notes_table.setCurrentCell(6, 0)
+    win.notes_table.setCurrentCell(7, 0)
     win.notes_edit.setPlainText('lights on')
     win.close()
     root = dl.open_store(store)
@@ -439,4 +439,77 @@ def test_report_boxes_rename_delete(qapp, tmp_path, monkeypatch):
     assert not dl.in_report(r['tune0'])
     assert [e['in_report'] for e in dl.notes_entries(r)
             if e['path'] == 'tune0'] == [False]
+    win.close()
+
+
+def test_kind_tabs_select_and_summarize(qapp, store, monkeypatch):
+    """
+    The left tabs list the store's items by kind with counts; picking an
+    item in any of them (or a run, or a tree group) shows its summary
+    with links to what it was made from and what depends on it, its
+    attributes and its notes row; a summary link selects that item in
+    its own tab; Open in store tree shows its group; Reveal folder opens
+    its directory.
+    """
+    from citkid import daq_browser
+    win = StoreBrowserWindow(store, title = 't')
+    win.show()
+    qapp.processEvents()
+    titles = [win.kinds.tabText(i) for i in range(win.kinds.count())]
+    assert titles[:5] == ['VNA sweeps', 'Resonators (1)', 'Tunings (1)',
+                          'Calibration sweeps (2)', 'Runs (2)']
+    assert titles[-1] == 'Store' and 'Stream calibrations (1)' in titles
+    assert win.kinds.widget(win.kinds.count() - 1) is win.tree
+    # Nothing selected: the store's summary
+    assert 'devA' in win.summary.toPlainText()
+    assert 'Runs: 2' in win.summary.toPlainText()
+    # A calibration sweep: summary, attributes, notes row, buttons
+    table = win.kind_tables['Calibration sweeps']
+    assert table.rowCount() == 2 and table.item(0, 0).text() == 'tune0/cal0'
+    assert table.item(0, 4).text() == 'after warm-up'
+    table.setCurrentCell(0, 0)
+    text = win.summary.toPlainText()
+    assert text.startswith('tune0/cal0') and 'Calibration sweeps' in text
+    assert 'after warm-up' in text
+    deps = dl.dependents(dl.open_store(store), ['tune0/cal0'])
+    assert ('Depends on it' in text) == bool(deps)
+    assert win.attrs.toPlainText().startswith('tune0/cal0')
+    assert win.notes_table.item(win.notes_table.currentRow(), 0).text() == \
+        'tune0/cal0'
+    assert win.delete_btn.isEnabled() and win.summary_delete_btn.isEnabled()
+    assert win.tree_btn.isEnabled() and win.reveal_btn.isEnabled()
+    assert not win.rename_btn.isEnabled()      # a sweep has no name
+    # A run: its record in the summary, made from its sweep and tuning
+    win.runs_table.setCurrentCell(1, 0)
+    text = win.summary.toPlainText()
+    assert text.startswith('ts1 dark1') and 'stage 6' in text
+    assert 'Made from: tune0/cal1, tune0' in text
+    assert win.rename_btn.isEnabled()
+    assert win.notes_table.item(win.notes_table.currentRow(), 0).text() == \
+        'ts1 dark1'
+    # A summary link selects the item in its own tab
+    from pyqtgraph.Qt import QtCore
+    win._on_anchor(QtCore.QUrl('item:tune0'))
+    assert win.kinds.tabText(win.kinds.currentIndex()) == 'Tunings (1)'
+    assert win.kind_tables['Tunings'].currentRow() == 0
+    assert win.summary.toPlainText().startswith('tune0')
+    # Filtering keeps the counts honest
+    win.kind_filters['Calibration sweeps'].setText('warm')
+    assert win.kind_tables['Calibration sweeps'].rowCount() == 1
+    assert win.kind_labels['Calibration sweeps'].text() == '1 of 2'
+    win.kind_filters['Calibration sweeps'].setText('')
+    # Open in store tree and Reveal folder act on the selection
+    win.select_item_path('tune0/cal1')
+    win._open_in_tree()
+    assert win.kinds.currentWidget() is win.tree
+    assert win.current_path() == 'tune0/cal1'
+    opened = []
+    monkeypatch.setattr(daq_browser, 'open_folder', opened.append)
+    folder = win.reveal_selected()
+    assert folder == os.path.join(os.path.normpath(str(store)), 'tune0',
+                                  'cal1') and opened == [folder]
+    # A tree group that is no item still gets a summary
+    win.select_path('tune0/cal1/write0')
+    assert 'write0' in win.summary.toPlainText()
+    assert not win.rename_btn.isEnabled()
     win.close()

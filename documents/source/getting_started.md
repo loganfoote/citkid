@@ -13,20 +13,21 @@ noise spectra. Run them in this order:
 |---|---|---|
 | 1 | `crs_init.py`: configure the board (after a power cycle) | this one |
 | 2 | `vna_quick_check.py` (optional): check the wiring | VNA screening |
-| 3 | `01_vna_sweep.py`: full VNA sweep | VNA screening |
+| 3 | `1_vna_sweep.py`: full VNA sweep | VNA screening |
 | 4 | `vna_view.py` (optional): look at the sweep | VNA screening |
-| 5 | `02_find_resonances.py`: find and fit the resonances | VNA screening |
-| 6 | `03_tune.py`: tone powers and frequencies | Tuning and timestreams |
-| 7 | `04a_stream.py`: take timestreams in a window | Tuning and timestreams |
-| 8 | `04b_stream_batch.py` (instead of 04a): take timestreams without a window | Tuning and timestreams |
-| 8b | `04c_power_sweep.py` (for a sweep): timestreams at each optical power | Tuning and timestreams |
-| 9 | `store_browser.py` (optional, any time): look around the store | this one |
-| 10 | `05_calibrate_streams.py`: calibrate the timestreams | Tuning and timestreams |
-| 11 | `06a_find_photons.py`: photons and high-energy events (HEEs) | Tuning and timestreams |
-| 12 | `06b_hee.py`: lifetimes from HEEs | Tuning and timestreams |
-| 13 | `07_psds.py`: noise spectra | Tuning and timestreams |
-| 14 | `08_report_site.py`: browsable pages of every device | Tuning and timestreams |
-| 15 | `09_nep.py` (for a sweep, instead of 05 and 07): NEP from a power sweep | Tuning and timestreams |
+| 5 | `2_find_resonances.py`: find and fit the resonances | VNA screening |
+| 6 | `3_tune.py`: tone powers and frequencies | Tuning and timestreams |
+| 7 | `4a_stream.py`: take timestreams in a window | Tuning and timestreams |
+| 8 | `4b_stream_batch.py` (instead of 4a): take timestreams without a window | Tuning and timestreams |
+| 9 | `4c_power_sweep.py` (for a power sweep): timestreams at each optical power | NEP |
+| 10 | `store_browser.py` (optional, any time): look around the store | this one |
+| 10b | `view_timestreams.py` (optional, any time): look at saved timestreams | Tuning and timestreams |
+| 11 | `5_calibrate_streams.py`: calibrate the timestreams | Tuning and timestreams |
+| 12 | `6a_find_photons.py`: photons and high-energy events (HEEs) | Timestream analysis |
+| 13 | `6b_hee.py`: lifetimes from HEEs | Timestream analysis |
+| 14 | `6c_psds.py`: noise spectra | Timestream analysis |
+| 15 | `6d_nep.py` (for a power sweep, instead of 5 and 6c): NEP from a power sweep | NEP |
+| 16 | `7_report_site.py`: browsable pages of every device | Report |
 
 # The environment
 
@@ -72,23 +73,13 @@ firmware needs a new store.
 
 - **Several devices**: `crs_init.py` configures the whole board; the
   other scripts attach to their own modules, so they can run
-  simultaneously on different devices. `04a_stream.py` and
-  `04b_stream_batch.py` are the exception: they need the whole board
+  simultaneously on different devices. `4a_stream.py` and
+  `4b_stream_batch.py` are the exception: they need the whole board
   while they run, and other scripts stop with an error naming them.
 - **Simulated devices**: `simulation/simulate_store.py` makes a store
   with a simulated device (its settings are the only simulation
-  settings); `03_tune.py`, `04a_stream.py` and `04b_stream_batch.py`
+  settings); `3_tune.py`, `4a_stream.py` and `4b_stream_batch.py`
   take `--simulate`.
-
-# Your own analysis
-
-`analysis_template.py` has no main script: copy its lines into your own
-code. It opens the store, applies a stream calibration to one
-timestream in memory (`calibrated_timestream`: the calibration and the
-run by name or index; `xt`, `thetat`, `At` per tone and sample), reads
-the tone parameters from the DataSet (`fres`, `qres`, `ares`,
-`res_idxs`; `ff`, `zf`, `xf`, `thetaf` per row), reaches the raw stream,
-and saves reduced results in a group of the store.
 
 # CRS basics
 
@@ -101,7 +92,7 @@ and saves reduced results in a group of the store.
 | Module bandwidth | 500 MHz (600 MHz with `--extended-bw`, more loss at the edges); a band at one NCO frequency is an NCO window |
 | Tone set | The tones written together when they don't all fit the modules' windows; sets are measured one after another |
 | Nyquist zones | 100-2500 MHz (zone 1) and 2500-5000 MHz (zone 2); sweeps skip 10 MHz on each side of 2500 MHz |
-| Global control | Needed for board-wide settings; `crs_init.py`, `04a_stream.py` and `04b_stream_batch.py` take it |
+| Global control | Needed for board-wide settings; `crs_init.py`, `4a_stream.py` and `4b_stream_batch.py` take it |
 
 ## Decimation stages
 
@@ -144,23 +135,35 @@ while another script is measuring.
 # store_browser.py: look around a store
 
 Opens a store read-only (another script can keep writing; **F5**
-rereads): a tree of its groups with one-line summaries, the selected
-item's attributes, the timestream runs (filter by typing, double-click
-to find the stream), the tone marks (every entry; Clear mark, Make
-global and Make local act on the selected bad mark), and the notes.
-The Notes tab
-lists everything the report site shows notes for (the store, the VNA
-sweeps, tunings, calibration sweeps, runs, stream calibrations and
-results); select a row and edit its notes below, which are
-saved when you move to another row or tab or close the window.
-**Rename...** changes the name of a tuning, run, PSD group or photon
-or HEE result (references follow). **Delete...** removes the item
-from the store with everything that depends on it (a resonator list
-with its tunings, a run with its results, ...), after asking, and
-asking again when something depends on it. **H** shows the help.
-**Open** (Ctrl+O) chooses another store;
-`--pick` starts with the dialog; `--runs` prints the runs instead of
-opening the window.
+rereads). The left side lists what the procedures made, one tab per
+kind, each a table filtered by typing; the last tab, **Store**, is the
+store's own tree of groups and arrays for when the layout matters. The
+right side is about the item selected in any of them:
+
+| Right tab | Shows |
+|---|---|
+| Summary | What the item is and when it was made, its notes, what it was made from and what depends on it (links that select those items); Open in store tree, Reveal folder, Rename..., Delete... |
+| Attributes | Its attributes as saved; for an array, its shape, dtype, chunks and first values |
+| Tone marks | Every bad mark and note on a tone; Clear mark, Make global and Make local act on the selected bad mark |
+| Notes | The notes of the store and of every item; select a row and edit below (saved when you move on); Rename..., Delete... |
+
+| Left tab | Lists |
+|---|---|
+| VNA sweeps, Resonators, Tunings, Calibration sweeps | What the VNA and tuning scripts made |
+| Runs | Every timestream run (name, notes, stage, length, tone set, calibration, tuning, chunks) |
+| Stream calibrations, Photons, HEEs, Spectra, NEP | The analyses |
+| Store | The tree; expand a group to read its contents |
+
+**Rename...** changes the name of a tuning, run, PSD group, NEP sweep
+or photon or HEE result (references follow). **Delete...** removes the
+item from the store with everything that depends on it (a resonator
+list with its tunings, a run with its results, ...), after asking, and
+asking again when something depends on it; the Summary lists what would
+go. Double-click an item, or **Open in store tree**, to see its group;
+**Reveal folder** opens its directory in the file browser; a right-click
+offers the same. **H** shows the help. **Open** (Ctrl+O) chooses another
+store; `--pick` starts with the dialog; `--runs` prints the runs instead
+of opening the window.
 
 ## Settings
 

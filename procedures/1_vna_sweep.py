@@ -3,8 +3,8 @@
 of the device store. Needs crs_init.py first.
 
 Usage:
-    python 01_vna_sweep.py --device deviceA --modules 1 --nyquist both
-    python 01_vna_sweep.py --device deviceA --modules 1 --view
+    python 1_vna_sweep.py --device deviceA --modules 1 --nyquist both
+    python 1_vna_sweep.py --device deviceA --modules 1 --view
 """
 import argparse
 import asyncio

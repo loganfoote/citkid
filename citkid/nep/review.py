@@ -1,6 +1,6 @@
 """
 Review window of a power sweep's NEP analysis (``nep.sweep.PowerSweep``,
-``procedures/09_nep.py``).
+``procedures/6d_nep.py``).
 
 Left: the tone list (``*`` reviewed, ``x`` bad; the boxes above it list
 only the tones outside the overview's limits, with or without the tones

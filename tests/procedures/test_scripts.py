@@ -21,7 +21,7 @@ def load_script(name):
     Import a procedure script as a module.
 
     Parameters:
-    name (str): file name, e.g. '01_vna_sweep.py'.
+    name (str): file name, e.g. '1_vna_sweep.py'.
 
     Returns:
     module (module): the script's module (its ``__main__`` block not run).
@@ -205,10 +205,10 @@ def test_vna_view_script(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize('script', [
-    '01_vna_sweep.py', '02_find_resonances.py', '03_tune.py',
-    '04a_stream.py', '04b_stream_batch.py',
-    '05_calibrate_streams.py', '06a_find_photons.py', '06b_hee.py',
-    '07_psds.py',
+    '1_vna_sweep.py', '2_find_resonances.py', '3_tune.py',
+    '4a_stream.py', '4b_stream_batch.py',
+    '5_calibrate_streams.py', '6a_find_photons.py', '6b_hee.py',
+    '6c_psds.py',
     'archive_store.py',
     'vna_view.py', 'store_browser.py'])
 def test_store_path_suffix(script, tmp_path):
@@ -301,7 +301,7 @@ def test_vna_view_script_window(tmp_path):
 
 @pytest.mark.asyncio
 async def test_01_vna_sweep(monkeypatch, tmp_path):
-    m = load_script('01_vna_sweep.py')
+    m = load_script('1_vna_sweep.py')
     fake = FakeVnaCRS(modules = (3,), fres = (1.2e9,))
     made = fake_factory(monkeypatch, m, fake)
     argv = ['--data-dir', str(tmp_path), '--cooldown', 'cd1', '--device',
@@ -334,7 +334,7 @@ async def test_01_vna_sweep_view(monkeypatch, tmp_path):
     With --view (or the VIEW setting), the sweep opens in the view window
     once saved; --no-view overrides the setting.
     """
-    m = load_script('01_vna_sweep.py')
+    m = load_script('1_vna_sweep.py')
     fake_factory(monkeypatch, m, FakeVnaCRS(modules = (1,)))
     seen = []
 
@@ -389,7 +389,7 @@ def test_02_find_resonances(tmp_path, capsys):
     tuning uses is kept.
     """
     from citkid.crs.sim import simulate_vna_store
-    m = load_script('02_find_resonances.py')
+    m = load_script('2_find_resonances.py')
     path = tmp_path / 'sim.zarr'
     small = dict(f_lo = 1.0e9, f_hi = 1.1e9, n_banks = 1, n_per_bank = 12,
                  pair_frac = 0.)
@@ -459,7 +459,7 @@ def test_03_tune(tmp_path, monkeypatch, capsys, n_cal):
         path, device_kwargs = small, verbose = False))
     dl.save_resonators(root, 0, truth.fr.values, truth.Qr.values / 5,
                        'test', Qr = truth.Qr.values)
-    m = load_script('03_tune.py')
+    m = load_script('3_tune.py')
     monkeypatch.setattr(m, 'POWERS', np.array([-60., -55., -50.]))
     monkeypatch.setattr(m, 'NPOINTS_FINE', 40)
     monkeypatch.setattr(m, 'NPOINTS_GAIN', 10)
@@ -648,8 +648,8 @@ def test_04a_stream(tmp_path, monkeypatch):
                  pair_frac = 0.)
     root, truth = asyncio.run(simulate_vna_store(
         path, device_kwargs = small, verbose = False))
-    m = load_script('04a_stream.py')
-    with pytest.raises(KeyError, match = '03_tune'):
+    m = load_script('4a_stream.py')
+    with pytest.raises(KeyError, match = '3_tune'):
         m.main(m.parse_args(['--store', str(path), '--simulate']))
     dl.save_resonators(root, 0, truth.fr.values, 4e3, 'test')
     for _ in range(2):
@@ -686,7 +686,7 @@ def test_04a_stream(tmp_path, monkeypatch):
     # after
     from citkid.crs import board_lock
     assert seen['holder']['pid'] == os.getpid()
-    assert '04a_stream.py' in seen['holder']['owner']
+    assert '4a_stream.py' in seen['holder']['owner']
     assert board_lock.holder(0) is None
     assert seen['presets'] == m.PRESETS
     assert seen['sweep_kwargs']['npoints_fine'] == m.NPOINTS_FINE
@@ -726,7 +726,7 @@ def test_04b_stream_batch(tmp_path, monkeypatch, capsys):
     dl.save_tones(dl.create_group(tune, 'tones', 'decision'),
                   fr + 0.3 * fr / qr, qr / 5, -55., np.arange(n),
                   tone_set = np.zeros(n, int), tone_module = np.ones(n, int))
-    m = load_script('04b_stream_batch.py')
+    m = load_script('4b_stream_batch.py')
     monkeypatch.setattr(m, 'RUNS', [
         dict(name = 'a', dec_stage = 6, duration_s = 0.2),
         dict(name = 'b', dec_stage = 6, duration_s = 0.1, notes = 'n')])
@@ -825,7 +825,7 @@ def test_05_calibrate_streams(tmp_path, monkeypatch, capsys):
         return tune
 
     asyncio.run(take())
-    m = load_script('05_calibrate_streams.py')
+    m = load_script('5_calibrate_streams.py')
     argv = ['--store', str(tmp_path / 's.zarr'), '--no-gui']
     monkeypatch.setattr(m, 'CALIBRATE', [])
     assert m.main(m.parse_args(argv)) is None
@@ -932,7 +932,7 @@ def test_03_tune_keep_stronger(tmp_path, monkeypatch):
         path, device_kwargs = small, verbose = False))
     fres = np.array([1.00e9, 1.02e9, 1.02e9 + 1e3, 1.05e9])
     Qr = np.full(4, 2e4)
-    m = load_script('03_tune.py')
+    m = load_script('3_tune.py')
     monkeypatch.setattr(m, 'PAIRS', 'keep_stronger')
     argv = m.parse_args(['--store', str(path), '--simulate'])
     # The second of the close pair (index 2) is deeper
@@ -964,7 +964,7 @@ def test_03_tune_windows(tmp_path, monkeypatch, capsys):
         path, device_kwargs = dense, step = 1e-4, verbose = False))
     dl.save_resonators(root, 0, truth.fr.values, truth.Qr.values / 5,
                        'test', Qr = truth.Qr.values)
-    m = load_script('03_tune.py')
+    m = load_script('3_tune.py')
     monkeypatch.setattr(m, 'STREAM_DEC', 0)
     monkeypatch.setattr(m, 'MIN_SEP_LW', 0.)
     argv = ['--store', str(path), '--simulate']
@@ -998,7 +998,7 @@ def test_03_tune_frequency_range(tmp_path, monkeypatch, capsys):
     fr = np.sort(truth.fr.values)
     dl.save_resonators(root, 0, fr, np.full(len(fr), 2e4), 'test',
                        Qr = np.full(len(fr), 1e5))
-    m = load_script('03_tune.py')
+    m = load_script('3_tune.py')
     monkeypatch.setattr(m, 'MIN_SEP_LW', 0.)
     argv = ['--store', str(path), '--simulate']
     root = dl.open_store(path, mode = 'a')
@@ -1079,7 +1079,7 @@ def photon_store(tmp_path_factory):
         await stream_tone_sets(crs, tune, 'dark0b', 1.5, 0, **kw)
 
     asyncio.run(take())
-    m5 = load_script('05_calibrate_streams.py')
+    m5 = load_script('5_calibrate_streams.py')
     m5.CALIBRATE = [dict(name = 'dark0'), dict(name = 'dark0b')]
     m5.main(m5.parse_args(['--store', str(tmp / 's.zarr'), '--no-gui']))
     return tmp / 's.zarr', crs.pulse_log
@@ -1152,7 +1152,7 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
     from citkid.pipeline import photon_finder as pf
     from citkid.zarr_util import copy_group
     path, log = photon_store
-    m = load_script('06a_find_photons.py')
+    m = load_script('6a_find_photons.py')
     argv = ['--store', str(path)]
     monkeypatch.setattr(m, 'TIMESTREAMS', [])
     assert m.main(m.parse_args(argv)) is None
@@ -1557,12 +1557,12 @@ def test_06b_hee(photon_store, monkeypatch, capsys):
     from citkid.pipeline import hee_finder as cf
     from citkid.pipeline import photon_finder as pf
     path, log = photon_store
-    m = load_script('06b_hee.py')
+    m = load_script('6b_hee.py')
     argv = ['--store', str(path)]
     if 'dark0_set0' not in pf.list_results(dl.open_store(path)):
         # The photon result of run 0's tone set 0 (made by the 06a test
         # when the whole file runs)
-        m6 = load_script('06a_find_photons.py')
+        m6 = load_script('6a_find_photons.py')
         monkeypatch.setattr(m6, 'TIMESTREAMS', [0])
         m6.main(m6.parse_args(argv + ['--no-gui']))
     monkeypatch.setattr(m, 'LEVEL', 3.)
@@ -1751,7 +1751,7 @@ def test_07_psds(photon_store, monkeypatch, capsys):
     import citkid.pipeline.interactive.psd_overview as po
     from citkid.pipeline import psds
     path, _ = photon_store
-    m = load_script('07_psds.py')
+    m = load_script('6c_psds.py')
     windows = []
     marking = []
 
@@ -1918,7 +1918,7 @@ def test_07_psds(photon_store, monkeypatch, capsys):
         m.main(m.parse_args(argv + ['--deglitch', 'photons', '--new']))
     root = dl.open_store(path, mode = 'a')
     if 'photons' not in root or 'dark0_set0' not in root['photons']:
-        m6 = load_script('06a_find_photons.py')
+        m6 = load_script('6a_find_photons.py')
         monkeypatch.setattr(m6, 'TIMESTREAMS', [0])
         m6.main(m6.parse_args(argv + ['--no-gui']))
     m.main(m.parse_args(argv + ['--deglitch', 'photons', '--photons',
@@ -2027,7 +2027,7 @@ def test_07_psds_uncalibrated(photon_store, monkeypatch, capsys):
     """
     import citkid.pipeline.interactive.psd_overview as po
     path, _ = photon_store
-    m = load_script('07_psds.py')
+    m = load_script('6c_psds.py')
     monkeypatch.setattr(po, 'run_psd_overview', lambda *a, **k: ({}, {}))
     root = dl.open_store(path, mode = 'a')
     arr = root['ts_cal0/set0_cal0/poly_x/data']
@@ -2067,7 +2067,7 @@ def test_export_s21_h5(tmp_path, monkeypatch, capsys):
         m.main(m.parse_args(['--store', str(path), '--no-gui',
                              '--out', str(tmp_path)]))
     dl.write_array(root['vna0'], 'fres_auto', truth.fr.values[::-1])
-    m2 = load_script('02_find_resonances.py')
+    m2 = load_script('2_find_resonances.py')
     m2.main(m2.parse_args(['--store', str(path), '--no-manual']))
     out = m.main(m.parse_args(['--store', str(path), '--no-gui',
                                '--out', str(tmp_path)]))
@@ -2109,7 +2109,7 @@ def test_add_loop_psds(photon_store, monkeypatch, capsys):
     import citkid.pipeline.interactive.psd_overview as po
     path, _ = photon_store
     argv = ['--store', str(path)]
-    m7 = load_script('07_psds.py')
+    m7 = load_script('6c_psds.py')
     monkeypatch.setattr(po, 'run_psd_overview', lambda *a, **k: ({}, {}))
     monkeypatch.setattr(m7, 'TIMESTREAMS', [0])
     m7.main(m7.parse_args(argv + ['--name', 'loop']))
@@ -2160,22 +2160,22 @@ def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
     root = dl.open_store(path)
     store_argv = ['--store', str(path)]
     if 'dark0_set0' not in pf.list_results(root):
-        m6 = load_script('06a_find_photons.py')
+        m6 = load_script('6a_find_photons.py')
         monkeypatch.setattr(m6, 'TIMESTREAMS', [0])
         m6.main(m6.parse_args(store_argv + ['--no-gui']))
     if 'dark0_set0' not in cf.list_results(root):
-        m6b = load_script('06b_hee.py')
+        m6b = load_script('6b_hee.py')
         monkeypatch.setattr(m6b, 'TIMESTREAMS', [0])
         m6b.main(m6b.parse_args(store_argv + ['--no-gui']))
     if not dl.list_indices(root, 'ts_psd'):
-        m7 = load_script('07_psds.py')
+        m7 = load_script('6c_psds.py')
         monkeypatch.setattr(po, 'run_psd_overview',
                             lambda *a, **k: ({}, {}))
         monkeypatch.setattr(m7, 'TIMESTREAMS', [0])
         m7.main(m7.parse_args(store_argv + ['--name', 'site']))
     root = dl.open_store(path)
     device, cooldown = root.attrs['device'], root.attrs['cooldown']
-    m = load_script('08_report_site.py')
+    m = load_script('7_report_site.py')
     out = tmp_path / 'reports'
     argv = ['--store', str(path), '--out', str(out), '--no-gui',
             '--update']
@@ -2352,7 +2352,7 @@ def test_06_tones_before_window(photon_store, monkeypatch, capsys):
     """
     import citkid.pipeline.interactive.photon_thresholds as pt
     path, _ = photon_store
-    m = load_script('06a_find_photons.py')
+    m = load_script('6a_find_photons.py')
     argv = ['--store', str(path), '--overwrite']
     windows = []
 
@@ -2415,7 +2415,7 @@ def test_06b_tones_before_window(photon_store, monkeypatch, capsys):
     """
     import citkid.pipeline.interactive.hee_tails as ct
     path, _ = photon_store
-    m = load_script('06b_hee.py')
+    m = load_script('6b_hee.py')
     argv = ['--store', str(path), '--overwrite']
     windows = []
 
@@ -2488,7 +2488,7 @@ def test_05_window_saves_global_prerequisites(tmp_path, monkeypatch, capsys):
                                npoints_gain = 20, verbose = False)
 
     asyncio.run(take())
-    m = load_script('05_calibrate_streams.py')
+    m = load_script('5_calibrate_streams.py')
     argv = ['--store', str(tmp_path / 's.zarr')]
     monkeypatch.setattr(m, 'CALIBRATE', [dict(name = 'dark6')])
     app = get_qapp('t')
@@ -2553,7 +2553,7 @@ def test_06_names_the_calibration_with_the_timestream(
     dl.create_group(root, 'ts_cal8', 'analysis', attrs = dict(
         selection = [], name = 'empty'))
     try:
-        m = load_script('06a_find_photons.py')
+        m = load_script('6a_find_photons.py')
         monkeypatch.setattr(m, 'TIMESTREAMS', ['dark0'])
         with pytest.raises(KeyError, match = r"no timestream 'dark0' in "
                            r"ts_cal8 \('empty'\); it is in ts_cal0 "
@@ -2593,7 +2593,7 @@ def test_04c_power_sweep(tmp_path, monkeypatch, capsys):
     dl.save_tones(dl.create_group(tune, 'tones', 'decision'),
                   fr, qr / 5, -55., np.arange(n),
                   tone_set = np.zeros(n, int), tone_module = np.ones(n, int))
-    m = load_script('04c_power_sweep.py')
+    m = load_script('4c_power_sweep.py')
     monkeypatch.setattr(m, 'POINTS', [dict(name = 'BBT40K'),
                                       dict(name = 'BBT80K', cal = 'BBT40K')])
     monkeypatch.setattr(m, 'RUNS', [dict(dec_stage = 6, duration_s = 0.2),

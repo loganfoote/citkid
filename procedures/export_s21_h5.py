@@ -163,7 +163,7 @@ def main(args):
     vnas = sweeps_with_resonators(root)
     if not vnas:
         raise KeyError(f'{store} has no VNA sweep with fitted resonators: '
-                       'run 02_find_resonances.py first')
+                       'run 2_find_resonances.py first')
     k = args.vna
     if k is None:
         k = vnas[0] if len(vnas) == 1 else pick_vna(root, vnas, gui)

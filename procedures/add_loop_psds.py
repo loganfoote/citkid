@@ -1,8 +1,8 @@
 """
 Temporary: add the loop-component spectra (spar_binned, sper_binned,
-sfactor_reduced) to PSD groups made before 07_psds.py computed them,
+sfactor_reduced) to PSD groups made before 6c_psds.py computed them,
 in place, with each group's own settings (with the CRS decimation droop
-undone and the spectra ending at 0.8 of the Nyquist frequency, as 07
+undone and the spectra ending at 0.8 of the Nyquist frequency, as 6c
 does now; the group's Sxx stays as it was). Groups that have them are
 skipped.
 

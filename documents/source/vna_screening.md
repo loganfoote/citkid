@@ -1,6 +1,6 @@
 ---
 title: "VNA screening"
-subtitle: "vna_quick_check, 01_vna_sweep, vna_view, 02_find_resonances"
+subtitle: "vna_quick_check, 1_vna_sweep, vna_view, 2_find_resonances"
 ---
 
 # Overview
@@ -12,10 +12,10 @@ started").
 | Script | When | What it does | Saves |
 |---|---|---|---|
 | `vna_quick_check.py` | Any time | Quick sweeps in a window | A CSV, if asked |
-| `01_vna_sweep.py` | Once per device or setup | Full VNA sweep | `vna{k}` |
+| `1_vna_sweep.py` | Once per device or setup | Full VNA sweep | `vna{k}` |
 | `vna_view.py` | After a sweep | Shows a saved sweep | Nothing |
-| `02_find_resonances.py` | After each sweep | Finds, checks and fits the resonances | `full_sweep_fit`, `resonators{k}` |
-| `export_s21_h5.py` | After `02_find_resonances.py` | The sweep as an s21 h5 file (`f`, `i`, `q`, `fres`), for the resonance-finder tools | One `.h5` file |
+| `2_find_resonances.py` | After each sweep | Finds, checks and fits the resonances | `full_sweep_fit`, `resonators{k}` |
+| `export_s21_h5.py` | After `2_find_resonances.py` | The sweep as an s21 h5 file (`f`, `i`, `q`, `fres`), for the resonance-finder tools | One `.h5` file |
 
 ```text
 <device>.zarr/
@@ -58,7 +58,7 @@ takes one sweep and saves it with `--csv`.
 
 `--modules`, `--nyquist`, `--no-gui --csv file.csv`.
 
-# 01_vna_sweep.py: full VNA sweep
+# 1_vna_sweep.py: full VNA sweep
 
 Takes a full sweep of one device and saves it as the next `vna{k}`
 (creating the store with `SETUP` if needed).
@@ -71,7 +71,7 @@ Takes a full sweep of one device and saves it as the next `vna{k}`
 
 ## Settings
 
-{{settings:01_vna_sweep.py}}
+{{settings:1_vna_sweep.py}}
 
 | Setting | Meaning |
 |---|---|
@@ -105,7 +105,7 @@ ramp. No CRS needed.
 
 `--vna k`.
 
-# 02_find_resonances.py: find and fit the resonances
+# 2_find_resonances.py: find and fit the resonances
 
 Runs on the latest sweep (or `--sweep k`), without the CRS:
 
@@ -133,7 +133,7 @@ failed, fr is the finder's frequency.
 
 ## Settings
 
-{{settings:02_find_resonances.py}}
+{{settings:2_find_resonances.py}}
 
 | Setting | Meaning |
 |---|---|
@@ -148,9 +148,9 @@ failed, fr is the finder's frequency.
 # Trying it on simulated data
 
 `simulation/simulate_store.py` makes a store with a VNA sweep of a
-simulated device and its true parameters. `02_find_resonances.py
---store ...` then runs on it as on real data, and `03_tune.py`,
-`04a_stream.py` and `04b_stream_batch.py` take `--simulate`.
+simulated device and its true parameters. `2_find_resonances.py
+--store ...` then runs on it as on real data, and `3_tune.py`,
+`4a_stream.py` and `4b_stream_batch.py` take `--simulate`.
 `citkid.vna.simulate.compare_to_truth` compares the fits with the
 truth. The simulation settings live only here, not in the scripts.
 
@@ -162,6 +162,6 @@ truth. The simulation settings live only here, not in the scripts.
 |---|---|
 | `STORE` | Path of the new store |
 | `SEED` | Random seed of the simulated device, gain and noise (the same seed gives the same store) |
-| `NYQUIST`, `AMPLITUDE`, `QR_MEDIAN`, `PTS_PER_LW`, `NSAMPS` | As in `01_vna_sweep.py` |
+| `NYQUIST`, `AMPLITUDE`, `QR_MEDIAN`, `PTS_PER_LW`, `NSAMPS` | As in `1_vna_sweep.py` |
 | `SNR_DB` | S/N per quadrature at -55 dBm with 100 samples |
 | `PULSES` | `None`, or a dict of photon pulses and HEEs in the device's streams: `rate` (photons per tone, Hz), `x` (shift), `tau` (s), `hee_rate` (Hz), `hee_x`, `hee_spread`; keys left out take the defaults |

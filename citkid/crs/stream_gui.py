@@ -4,7 +4,7 @@ their tones, preview them, then take named timestreams without sweeping
 or writing tones again.
 
 ``run_stream_gui`` opens a window on a tuning (``tune{k}`` with ``tones``,
-from ``procedures/03_tune.py``):
+from ``procedures/3_tune.py``):
 
 - Calibration: pick a tone set and the sweep settings (fine and gain
   points, samples per point, gain span), add notes if you like (saved
@@ -102,9 +102,9 @@ CAL_SETTINGS = (
     ('gain_span_factor', 'Gain span factor', (1.1, 1000.), False),
 )
 
-def load_run_view(root, run, set_rows, chunks = 1, tone = None):
+def load_run_view(root, run, set_rows, chunks = 1, tone = None, start = 0):
     """
-    Read the first chunks of a saved run's stream, with the calibration
+    Read some chunks of a saved run's stream, with the calibration
     loop of its tones, in the shape of a capture (``StreamWindow``'s
     ``preview``) plus the loop.
 
@@ -119,13 +119,16 @@ def load_run_view(root, run, set_rows, chunks = 1, tone = None):
     tone (int or None): a tone index of the tuning: the stream holding it
         is read (a set streams in several writes at fast stages). None
         (default), or a tone in none of them: the first stream.
+    start (int): the first chunk read. Default 0.
 
     Returns:
     view (dict): ``rows`` (tone indices of the tuning), ``fres`` (the
         tones' written frequencies), ``zt`` (complex64 S21 timestreams,
         (ntones, nsamples)), ``dt``, ``f``, ``z`` (the calibration sweep
         of those tones), ``tone_set``, ``calibration``, ``source`` (the
-        stream's path), ``label``, ``chunks`` (read, of ``n_chunks``).
+        stream's path), ``label``, ``chunks`` (read, of ``n_chunks``),
+        ``start`` (the first chunk), ``t0`` (its time from the run's
+        start, s).
 
     Raises:
     KeyError: if the run has no streams on a calibration of the store.
@@ -142,8 +145,12 @@ def load_run_view(root, run, set_rows, chunks = 1, tone = None):
             chosen = (path, write, rows)
     path, write, rows = chosen
     stream = root[path]
-    n = int(run['chunk_samples']) * max(int(chunks), 1)
-    z = stream['z'][:, :, :n]
+    n_chunks = int(run.get('n_chunks', 1))
+    start = min(max(int(start), 0), max(n_chunks - 1, 0))
+    per = int(run['chunk_samples'])
+    a = start * per
+    n = per * max(int(chunks), 1)
+    z = stream['z'][:, :, a:a + n]
     scale = np.asarray(stream['counts_to_s21'][...])
     zt = ((z[0] + 1j * z[1]) * scale[:, None]).astype(np.complex64)
     sweep_rows = write['sweep_rows'][:]
@@ -154,8 +161,84 @@ def load_run_view(root, run, set_rows, chunks = 1, tone = None):
         z = cal['fine_sweep/z'][:][sweep_rows],
         tone_set = int(run.get('tone_set')), calibration = cal.path,
         source = path, label = f"{run['group']} ({run.get('name')})",
-        chunks = (min(int(chunks), int(run.get('n_chunks', 1))),
-                  int(run.get('n_chunks', 1))))
+        chunks = (min(int(chunks), n_chunks - start), n_chunks),
+        start = start,
+        t0 = a * float(np.asarray(stream['dt'][...])))
+
+def plot_view(ts_plot, iq_plot, psd_plot, cal, p, r, mode = 0,
+              offset = False, show_psd = False, label = ''):
+    """
+    Draw one tone of a capture or a saved run: the calibration loop with
+    the timestream's points on it, the timestream in the chosen form,
+    and its PSD.
+
+    Parameters:
+    ts_plot, iq_plot (PlotItem): the timestream and IQ plots.
+    psd_plot (PlotWidget): the PSD plot.
+    cal (dict or None): ``rows``, ``f``, ``z`` of the calibration
+        sweep (``load_run_view``, or a calibration's loop). None:
+        nothing is drawn.
+    p (dict or None): the timestreams: ``rows``, ``zt``, ``fres``,
+        ``dt`` and optionally ``t0`` (``load_run_view``, or a capture).
+        None: only the loop.
+    r (int or None): the tone (an index of the tuning's tones).
+    mode (int): ``MODES`` index: 0 x, 1 parallel / perpendicular, 2 I
+        and Q. Default 0.
+    offset (bool): If True, subtract each series' mean. Default False.
+    show_psd (bool): If True, draw the PSD too. Default False.
+    label (str): what is shown, for the titles. Default ''.
+    """
+    ts_plot.clear()
+    iq_plot.clear()
+    psd_plot.clear()
+    ts_plot.setTitle(None)
+    psd_plot.setTitle(None)
+    for plot in (ts_plot, psd_plot.getPlotItem()):
+        if plot.legend is not None:
+            plot.legend.clear()
+    if cal is None or r is None or r not in cal['rows']:
+        return
+    c = int(np.flatnonzero(cal['rows'] == r)[0])
+    f, z = cal['f'][c], cal['z'][c]
+    # The sweep as points, bigger than the timestream's
+    iq_plot.plot(z.real, z.imag, pen = None, symbol = 'o',
+                 symbolSize = 7, symbolPen = None,
+                 symbolBrush = pg.mkBrush(120, 180, 255, 200))
+    if p is None or r not in p['rows']:
+        return
+    k = int(np.flatnonzero(p['rows'] == r)[0])
+    zt, f_tone = p['zt'][k], float(p['fres'][k])
+    ts_plot.setTitle(f'{label}: tone {r}')
+    psd_plot.setTitle(f'PSD of {label}: tone {r}')
+    dfr, dperp, z0, _ = loop_tangent_shift(f, z, f_tone, zt)
+    step = max(1, len(zt) // MAX_IQ_POINTS)
+    iq_plot.plot(zt.real[::step], zt.imag[::step], pen = None,
+                 symbol = 'o', symbolSize = 3,
+                 symbolBrush = pg.mkBrush(255, 120, 60, 120))
+    iq_plot.plot([z0.real], [z0.imag], pen = None, symbol = '+',
+                 symbolSize = 14, symbolPen = fg())
+    t = np.arange(len(zt)) * p['dt'] + float(p.get('t0', 0.))
+    if mode == 2:
+        series = [('I', zt.real), ('Q', zt.imag)]
+        ts_plot.setLabel('left', 'S21')
+    elif mode == 0:
+        series = [('x', dfr / f_tone)]
+        ts_plot.setLabel('left', 'x = dfr / fr')
+    else:
+        series = [('parallel (dfr)', dfr), ('perpendicular', dperp)]
+        ts_plot.setLabel('left', 'Hz')
+    if offset:
+        series = [(name, y - np.nanmean(y)) for name, y in series]
+    for (name, y), pen in zip(series, ('c', 'm')):
+        ts_plot.plot(t, y, pen = pen, name = name)
+    if show_psd:
+        psd_plot.setLabel('left', PSD_LABELS[mode])
+        for (name, y), pen in zip(series, ('c', 'm')):
+            f, psd = get_psd(y - np.mean(y), p['dt'], return_freqs = True)
+            ok = (f > 0) & (psd > 0)
+            psd_plot.plot(f[ok], psd[ok], pen = pen, name = name)
+    for plot in (ts_plot, iq_plot, psd_plot):
+        plot.enableAutoRange()
 
 class StreamWindow(QtWidgets.QMainWindow):
     """
@@ -220,7 +303,7 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.tones = dl.load_tones(tune['tones'])
         if 'tone_module' not in self.tones:
             raise ValueError(f'{tune.basename}/tones has no tone_module; '
-                             'make the tuning with 03_tune.py')
+                             'make the tuning with 3_tune.py')
         self.sweep_kwargs = dict(sweep_kwargs or {})
         self.fres_update = dict(fres_update) if fres_update else None
         self.presets = [dict(p) for p in presets]
@@ -692,7 +775,7 @@ class StreamWindow(QtWidgets.QMainWindow):
         tones = dl.load_tones(tune['tones'])
         if 'tone_module' not in tones:
             raise ValueError(f'{tune.basename}/tones has no tone_module; '
-                             'make the tuning with 03_tune.py')
+                             'make the tuning with 3_tune.py')
         if self.written and self.crs is not None and not self.worker.busy:
             self.clear_tones()
         self.tune, self.tones = tune, tones
@@ -1440,66 +1523,19 @@ class StreamWindow(QtWidgets.QMainWindow):
     ############################################################################
     def _plot(self):
         """
-        Plot the selected tone's preview and calibration loop.
+        Plot the selected tone's preview and calibration loop
+        (``plot_view``): a saved run brings its own calibration loop, a
+        capture uses the chosen calibration's.
         """
-        self.ts_plot.clear()
-        self.iq_plot.clear()
-        self.psd_plot.clear()
-        self.ts_plot.setTitle(None)
-        self.psd_plot.setTitle(None)
-        for plot in (self.ts_plot, self.psd_plot.getPlotItem()):
-            if plot.legend is not None:
-                plot.legend.clear()
         r = self.tone_box.currentData()
-        # A saved run brings its own calibration loop; a capture uses the
-        # chosen calibration's
         cal = self.view if self.view is not None else self.cal
-        if cal is None or r is None or r not in cal['rows']:
-            return
-        c = int(np.flatnonzero(cal['rows'] == r)[0])
-        f, z = cal['f'][c], cal['z'][c]
-        # The sweep as points, bigger than the timestream's
-        self.iq_plot.plot(z.real, z.imag, pen = None, symbol = 'o',
-                          symbolSize = 7, symbolPen = None,
-                          symbolBrush = pg.mkBrush(120, 180, 255, 200))
         p = self.view if self.view is not None else self.preview
-        if p is None or r not in p['rows']:
-            return
-        k = int(np.flatnonzero(p['rows'] == r)[0])
-        zt, f_tone = p['zt'][k], float(p['fres'][k])
-        what = p['label'] if self.view is not None else 'Preview (not saved)'
-        self.ts_plot.setTitle(f'{what}: tone {r}')
-        self.psd_plot.setTitle(f'PSD of {what}: tone {r}')
-        dfr, dperp, z0, _ = loop_tangent_shift(f, z, f_tone, zt)
-        step = max(1, len(zt) // MAX_IQ_POINTS)
-        self.iq_plot.plot(zt.real[::step], zt.imag[::step], pen = None,
-                          symbol = 'o', symbolSize = 3,
-                          symbolBrush = pg.mkBrush(255, 120, 60, 120))
-        self.iq_plot.plot([z0.real], [z0.imag], pen = None, symbol = '+',
-                          symbolSize = 14, symbolPen = fg())
-        t = np.arange(len(zt)) * p['dt']
-        mode = self.mode_box.currentIndex()
-        if mode == 2:
-            series = [('I', zt.real), ('Q', zt.imag)]
-            self.ts_plot.setLabel('left', 'S21')
-        elif mode == 0:
-            series = [('x', dfr / f_tone)]
-            self.ts_plot.setLabel('left', 'x = dfr / fr')
-        else:
-            series = [('parallel (dfr)', dfr), ('perpendicular', dperp)]
-            self.ts_plot.setLabel('left', 'Hz')
-        if self.offset_box.isChecked():
-            series = [(name, y - np.nanmean(y)) for name, y in series]
-        for (name, y), pen in zip(series, ('c', 'm')):
-            self.ts_plot.plot(t, y, pen = pen, name = name)
-        if self.psd_box.isChecked():
-            self.psd_plot.setLabel('left', PSD_LABELS[mode])
-            for (name, y), pen in zip(series, ('c', 'm')):
-                f, psd = get_psd(y - np.mean(y), p['dt'],
-                                 return_freqs = True)
-                ok = (f > 0) & (psd > 0)
-                self.psd_plot.plot(f[ok], psd[ok], pen = pen, name = name)
-        self.rescale()
+        label = p['label'] if self.view is not None else \
+            'Preview (not saved)'
+        plot_view(self.ts_plot, self.iq_plot, self.psd_plot, cal, p, r,
+                  mode = self.mode_box.currentIndex(),
+                  offset = self.offset_box.isChecked(),
+                  show_psd = self.psd_box.isChecked(), label = label)
 
     def _on_psd_box(self, show):
         """

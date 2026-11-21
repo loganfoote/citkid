@@ -2,10 +2,10 @@
 Noise spectra of calibrated timestreams, before and after common-mode
 removal: the multi-tone bookkeeping around ``signal.psd``,
 ``xcal.reduced_params``, ``xcal.corr`` and ``signal.deglitch`` for
-07_psds.py.
+6c_psds.py.
 
 A timestream is one tone set of one run (``ts{n}``) over the whole run,
-with a stream calibration (``ts_cal{c}``, made by 05_calibrate_streams.py)
+with a stream calibration (``ts_cal{c}``, made by 5_calibrate_streams.py)
 that covers its tone set; ``list_timestreams`` lists every such pair over
 every calibration in the store, so each chosen timestream can use a
 different calibration. Its x comes from the raw streams in memory
@@ -99,7 +99,7 @@ def describe_timestreams(timestreams):
             f"{t['tone_set']}, {n * t['dt']:.4g} s at {1 / t['dt']:.4g} Hz, "
             f"{len(t['rows'])} tones, {t['cal']}/{t['dataset']}")
     if len(lines) == 1:
-        lines.append('  none (run 05_calibrate_streams.py first)')
+        lines.append('  none (run 5_calibrate_streams.py first)')
     return '\n'.join(lines)
 
 def select_timestreams(timestreams, choice):
@@ -461,7 +461,7 @@ def reapply_glitches(x, idxs, sign = -1, pre = 1, post = 1):
 def load_photon_reference(ref_grp):
     """
     Read the optimal filters of a photon result (``photons/<name>``, made
-    by 06a_find_photons.py), for finding the pulses of other timestreams.
+    by 6a_find_photons.py), for finding the pulses of other timestreams.
 
     Parameters:
     ref_grp (zarr.Group): the result.
@@ -865,7 +865,7 @@ def load_timestream(grp):
 
 def find_group(root, p):
     """
-    Find a result of 07_psds.py by index or name.
+    Find a result of 6c_psds.py by index or name.
 
     Parameters:
     root (zarr.Group): the store root.
@@ -888,7 +888,7 @@ def find_group(root, p):
 
 def matching_group(root, name, timestreams):
     """
-    Find the latest result of 07_psds.py that a run would make again.
+    Find the latest result of 6c_psds.py that a run would make again.
 
     Parameters:
     root (zarr.Group): the store root.
@@ -913,7 +913,7 @@ def matching_group(root, name, timestreams):
 
 def saved_review(grp):
     """
-    Read the overview window's review back from a result of 07_psds.py.
+    Read the overview window's review back from a result of 6c_psds.py.
 
     Parameters:
     grp (zarr.Group): the result (``ts_psd{p}``).
@@ -939,7 +939,7 @@ def saved_review(grp):
 
 def describe_group(grp):
     """
-    Describe a result of 07_psds.py: its timestreams, review and notes.
+    Describe a result of 6c_psds.py: its timestreams, review and notes.
 
     Parameters:
     grp (zarr.Group): the result.
@@ -964,7 +964,7 @@ def describe_group(grp):
 
 def load_group(root, p):
     """
-    Read a result of 07_psds.py: its reduced frequencies and every
+    Read a result of 6c_psds.py: its reduced frequencies and every
     timestream's spectra.
 
     Parameters:
@@ -984,7 +984,7 @@ def load_group(root, p):
 
 def describe_results(root):
     """
-    Describe the previous results of 07_psds.py, one line each.
+    Describe the previous results of 6c_psds.py, one line each.
 
     Parameters:
     root (zarr.Group): the store root.

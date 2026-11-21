@@ -1,6 +1,6 @@
 """
 Find photons in raw timestreams with a stream calibration (``ts_cal{c}``,
-made by 05_calibrate_streams.py): the multi-tone bookkeeping around
+made by 5_calibrate_streams.py): the multi-tone bookkeeping around
 ``signal.photons``.
 
 A timestream here is one tone set of one run (``ts{n}``), over the whole
@@ -1127,7 +1127,7 @@ def load_results(grp, settings = None):
     """
     Read a saved photon result (``save_timestream``) back as detection
     results and thresholds, to continue choosing thresholds in the window
-    (06a_find_photons.py's ``CONTINUE``) without running the detection
+    (6a_find_photons.py's ``CONTINUE``) without running the detection
     again.
 
     Parameters:

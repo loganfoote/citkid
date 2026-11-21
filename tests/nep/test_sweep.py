@@ -138,7 +138,7 @@ def power_store(tmp_path, n_points = 4):
     dl.save_tones(dl.create_group(tune, 'tones', 'decision'),
                   fr, qr / 5, -55., np.arange(n),
                   tone_set = np.zeros(n, int), tone_module = np.ones(n, int))
-    m = load_script('04c_power_sweep.py')
+    m = load_script('4c_power_sweep.py')
     m.POINTS = [dict(name = f'P{j}') for j in range(n_points)]
     m.RUNS = [dict(dec_stage = 6, duration_s = 0.5)]
     m.NPOINTS_FINE, m.NPOINTS_GAIN, m.NSAMPS = 60, 10, 10
@@ -171,7 +171,7 @@ def test_sweep_batch_recompute_and_reload(tmp_path, capsys):
     """
     from ..procedures.test_scripts import load_script
     path = power_store(tmp_path)
-    m = load_script('09_nep.py')
+    m = load_script('6d_nep.py')
     m.NAME = 'bb'
     m.NU = 150e9
     m.CN_N_COMP = 1

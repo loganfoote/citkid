@@ -7,8 +7,8 @@ report; close it to build). A store that has not changed since its last
 build is left alone.
 
 Usage:
-    python 08_report_site.py
-    python 08_report_site.py --store Z:/cd/deviceA_screen.zarr --no-gui
+    python 7_report_site.py
+    python 7_report_site.py --store Z:/cd/deviceA_screen.zarr --no-gui
 """
 import argparse
 import os

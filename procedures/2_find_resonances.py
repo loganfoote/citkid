@@ -4,9 +4,9 @@ default) and save the resonator list for tuning (resonators{k}). Steps
 already done are skipped; --redo repeats one. No CRS needed.
 
 Usage:
-    python 02_find_resonances.py --device deviceA
-    python 02_find_resonances.py --device deviceA --finder auto
-    python 02_find_resonances.py --device deviceA --redo fit
+    python 2_find_resonances.py --device deviceA
+    python 2_find_resonances.py --device deviceA --finder auto
+    python 2_find_resonances.py --device deviceA --redo fit
 """
 import argparse
 import os
@@ -199,7 +199,7 @@ def resonator_depths(root, k, fit_grp, fres, Qr):
     """
     Measure the resonator list's dip depths on the gain-removed sweep
     (``full_sweep.measured_depths``). They rank close pairs for
-    ``PAIRS = 'keep_stronger'`` in 03_tune.py.
+    ``PAIRS = 'keep_stronger'`` in 3_tune.py.
 
     Parameters:
     root (zarr.Group): the store root.

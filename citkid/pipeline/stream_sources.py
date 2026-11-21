@@ -542,7 +542,7 @@ def plan_stream_datasets(root, selection):
     Parameters:
     root (zarr.Group): the store root.
     selection (list of dict): choices of streams, each the keyword
-        arguments of ``daq_layout.select_streams`` (e.g. 05's
+        arguments of ``daq_layout.select_streams`` (e.g. 5's
         ``CALIBRATE``).
 
     Returns:
@@ -627,7 +627,7 @@ def calibrated_timestream(
         cals = dl.list_indices(root, 'ts_cal')
         if not cals:
             raise KeyError('the store has no ts_cal group: run '
-                           '05_calibrate_streams.py first')
+                           '5_calibrate_streams.py first')
         cal = cals[-1]
     if isinstance(cal, (int, np.integer)):
         cal = dl.set_name(int(cal), 'ts_cal')
@@ -649,7 +649,7 @@ def calibrated_timestream(
 def open_calibration(root, cal):
     """
     Reopen the DataSets of a stream calibration (``ts_cal{c}``, made by
-    05_calibrate_streams.py), e.g. to apply them to whole runs
+    5_calibrate_streams.py), e.g. to apply them to whole runs
     (``apply_stream_calibration``).
 
     Parameters:
@@ -666,7 +666,7 @@ def open_calibration(root, cal):
     KeyError: if the group records no selection of streams, or has no
         DataSet for a tone set the selection needs (e.g. a calibration
         made by an earlier version, with one DataSet per decimation
-        stage: calibrate again with 05_calibrate_streams.py).
+        stage: calibrate again with 5_calibrate_streams.py).
     """
     cal = root[cal] if isinstance(cal, str) else cal
     if 'selection' not in cal.attrs:
@@ -679,7 +679,7 @@ def open_calibration(root, cal):
             raise KeyError(
                 f'{cal.path} has no DataSet {name!r} for tone set '
                 f"{g['tone_set']} (it has {have}): it was made by another "
-                'version of 05_calibrate_streams.py; run it again to '
+                'version of 5_calibrate_streams.py; run it again to '
                 'calibrate the streams in the current layout')
         grp = cal[name]
         DS = open_stream_dataset(

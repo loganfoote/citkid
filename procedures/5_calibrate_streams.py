@@ -4,8 +4,8 @@ in batch, into ts_cal{c}. With CALIBRATE empty, lists the runs. No CRS
 needed.
 
 Usage:
-    python 05_calibrate_streams.py --device deviceA
-    python 05_calibrate_streams.py --device deviceA --no-gui
+    python 5_calibrate_streams.py --device deviceA
+    python 5_calibrate_streams.py --device deviceA --no-gui
 """
 import argparse
 import re

@@ -2,13 +2,13 @@
 04c: take a sweep of optical power: at each point, set the power
 (``set_optical_power``, edited for the setup and settling there),
 calibrate the tone set (or reuse a calibration) and take the
-timestreams in RUNS (``stream_batch``, as 04b). The point's name is
-saved with its calibration sweep and its runs, for 09_nep.py, where
+timestreams in RUNS (``stream_batch``, as 4b). The point's name is
+saved with its calibration sweep and its runs, for 6d_nep.py, where
 the names are mapped to powers. Needs crs_init.py first.
 
 Usage:
-    python 04c_power_sweep.py --device deviceA --modules 1
-    python 04c_power_sweep.py --device deviceA --modules 1 --from BBT80K
+    python 4c_power_sweep.py --device deviceA --modules 1
+    python 4c_power_sweep.py --device deviceA --modules 1 --from BBT80K
 """
 import argparse
 import asyncio
@@ -134,13 +134,13 @@ def find_tuning(root, k = None):
         done = [j for j in dl.list_indices(root, 'tune')
                 if 'tones' in root[dl.set_name(j, 'tune')]]
         if not done:
-            raise KeyError('no tuning has tones yet: run 03_tune.py')
+            raise KeyError('no tuning has tones yet: run 3_tune.py')
         k = done[-1]
     tune = dl.find_tuning(root, k)
     if tune is None:
         raise KeyError(f'no tuning {k!r}')
     if 'tones' not in tune:
-        raise KeyError(f'{tune.basename} has no tones yet: run 03_tune.py')
+        raise KeyError(f'{tune.basename} has no tones yet: run 3_tune.py')
     return tune
 
 async def connect(args, root, path):
@@ -296,7 +296,7 @@ def main(args):
     dl.check_store(root)
     tune = find_tuning(root, args.tuning)
     serial = SIM_SERIAL if args.simulate else args.serial
-    owner = f'04c_power_sweep.py ({os.path.basename(path)}, {tune.basename})'
+    owner = f'4c_power_sweep.py ({os.path.basename(path)}, {tune.basename})'
     with board_lock.exclusive(serial, owner = owner):
         async def run():
             """

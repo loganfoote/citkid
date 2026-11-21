@@ -6,9 +6,9 @@ averaged, and the average is fitted; check the level in a window; save
 one result per timestream (hee/<name>). No CRS needed.
 
 Usage:
-    python 06b_hee.py --device deviceA
-    python 06b_hee.py --device deviceA --events triggers
-    python 06b_hee.py --device deviceA --continue
+    python 6b_hee.py --device deviceA
+    python 6b_hee.py --device deviceA --events triggers
+    python 6b_hee.py --device deviceA --continue
 """
 import argparse
 import copy
@@ -203,12 +203,12 @@ def pick_events(root, ts, data, name, settings, args):
     # A result saved without its HEEs (interrupted) has no events
     if have and 'hee/events' not in root[pf.PHOTONS_GROUP][ph_name]:
         print(f'photons/{ph_name} holds no HEEs (saved '
-              'incompletely): run 06a_find_photons.py on it again')
+              'incompletely): run 6a_find_photons.py on it again')
         have = False
     if args.events == 'photons' and not have:
         raise KeyError(f'no photon result photons/{ph_name} with HEEs '
                        'to take the events from: run '
-                       "06a_find_photons.py, or use EVENTS = 'triggers'")
+                       "6a_find_photons.py, or use EVENTS = 'triggers'")
     if args.events != 'triggers' and have:
         grp = root[pf.PHOTONS_GROUP][ph_name]
         return cf.events_from_photons(grp), f'photons/{ph_name}'
@@ -351,7 +351,7 @@ def main(args):
     cals = dl.list_indices(root, 'ts_cal')
     if not cals:
         raise KeyError('the store has no ts_cal group: run '
-                       '05_calibrate_streams.py first')
+                       '5_calibrate_streams.py first')
     cal = dl.find_calibration(root, args.cal)
     if cal is None:
         names = ', '.join(

@@ -5,10 +5,10 @@ a window, and save one result per timestream (photons/<name>). No CRS
 needed.
 
 Usage:
-    python 06a_find_photons.py --device deviceA
-    python 06a_find_photons.py --device deviceA --continue
-    python 06a_find_photons.py --device deviceA --reference dark --reuse filter
-    python 06a_find_photons.py --device deviceA --refit-tau
+    python 6a_find_photons.py --device deviceA
+    python 6a_find_photons.py --device deviceA --continue
+    python 6a_find_photons.py --device deviceA --reference dark --reuse filter
+    python 6a_find_photons.py --device deviceA --refit-tau
 """
 import argparse
 import dataclasses
@@ -387,7 +387,7 @@ def main(args):
     cals = dl.list_indices(root, 'ts_cal')
     if not cals:
         raise KeyError('the store has no ts_cal group: run '
-                       '05_calibrate_streams.py first')
+                       '5_calibrate_streams.py first')
     cal = dl.find_calibration(root, args.cal)
     if cal is None:
         names = ', '.join(

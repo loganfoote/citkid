@@ -7,9 +7,9 @@ review, or overwriting it. With TIMESTREAMS empty, lists the timestreams.
 No CRS needed.
 
 Usage:
-    python 07_psds.py --device deviceA --name dark
-    python 07_psds.py --device deviceA --name dark --load --no-gui
-    python 07_psds.py --device deviceA --deglitch photons --photons dark
+    python 6c_psds.py --device deviceA --name dark
+    python 6c_psds.py --device deviceA --name dark --load --no-gui
+    python 6c_psds.py --device deviceA --deglitch photons --photons dark
 """
 import argparse
 import os

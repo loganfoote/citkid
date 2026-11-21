@@ -2,7 +2,7 @@
 Diagnostic: does setting a module's NCO to the frequency it already has
 change the board's phase frame? Reads a few tones' phases before and
 after NCO settings and prints the changes. Nothing is saved. Close
-04a_stream.py first.
+4a_stream.py first.
 
 Usage:
     python nco_phase_check.py --module 2 --nco 6.5e8 --repeats 5

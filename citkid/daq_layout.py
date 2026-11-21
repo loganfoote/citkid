@@ -9,12 +9,12 @@ procedure guides in ``documents/procedures/``).
 ├── resonators{k}/         resonators found on vna{k} (res_idxs_all, ...)
 ├── tune{k}/               tunings: crs_config/, tones_init/, tones/, ...
 │   │                      (attrs['resonators']: the list they use)
-│   ├── cal{j}/            calibration sweep of one tone set (04)
+│   ├── cal{j}/            calibration sweep of one tone set (4)
 │   │   └── write{w}/      tones written for streaming
 │   │       └── ts{n}/     stream of run n
 │   └── streams/           run list (attrs['runs'])
-├── ts_cal{c}/             stream calibrations (05)
-└── ts_photons{p}/         photon results (06)
+├── ts_cal{c}/             stream calibrations (5)
+└── ts_photons{p}/         photon results (6)
 ```
 
 Calibrated timestreams are never saved: analyses apply a calibration to
@@ -1141,7 +1141,7 @@ def describe_stream_runs(root, tuning = None):
 # bad mark), in order. A bad mark has a scope: 'local' leaves the tone
 # out of that stage's results only; 'global' also out of every later
 # stage of the same tuning (the levels below; the analyses of one
-# tuning, 06a, 06b and 07, are one level, so a global mark in any of
+# tuning, 6a, 6b and 6c, are one level, so a global mark in any of
 # them applies to the others)
 TONE_MARKS_GROUP = 'tone_marks'
 MARK_KINDS = ('bad', 'note', 'clear')
@@ -1230,13 +1230,13 @@ def notes_entries(root):
     groups = []
     for name in root.group_keys():
         g = root[name]
-        if name.startswith(('vna', 'ts_cal', 'ts_psd')):
+        if name.startswith(('vna', 'resonators', 'ts_cal', 'ts_psd')):
             groups.append(g)
         elif name.startswith('tune'):
             groups.append(g)
             groups += [g[sub] for sub in g.group_keys()
                        if sub.startswith('cal')]
-        elif name in ('photons', 'hee'):
+        elif name in ('photons', 'hee', 'nep'):
             groups += [g[sub] for sub in g.group_keys()]
     for g in groups:
         entries.append(dict(path = g.path, label = g.path,
@@ -1254,6 +1254,110 @@ def notes_entries(root):
             in_report = in_report(run), name = str(run.get('name') or '')))
     entries[1:] = sorted(entries[1:], key = lambda e: _natural(e['path']))
     return entries
+
+# The kinds of items a store holds, as the store browser lists them: the
+# kind's title and how an entry of ``notes_entries`` is recognized
+ITEM_KINDS = (
+    ('VNA sweeps', r'vna\d+'), ('Resonators', r'resonators\d+'),
+    ('Tunings', r'tune\d+'), ('Calibration sweeps', r'tune\d+/cal\d+'),
+    ('Runs', 'run'), ('Stream calibrations', r'ts_cal\d+'),
+    ('Photons', r'photons/[^/]+'), ('HEEs', r'hee/[^/]+'),
+    ('Spectra', r'ts_psd\d+'), ('NEP', r'nep/[^/]+'))
+
+def item_kind(entry):
+    """
+    Return the kind of a ``notes_entries`` entry (``ITEM_KINDS``).
+
+    Parameters:
+    entry (dict): the entry.
+
+    Returns:
+    kind (str or None): the kind's title; None for the store or an item
+        of no listed kind.
+    """
+    if entry.get('run') is not None:
+        return 'Runs'
+    for title, pattern in ITEM_KINDS:
+        if pattern != 'run' and re.fullmatch(pattern, entry['path']):
+            return title
+    return None
+
+def made_from(root, path):
+    """
+    List the items an item was made from: the paths of existing groups
+    that its attributes name (its calibration, tuning, resonator list,
+    reference result, ...).
+
+    Parameters:
+    root (zarr.Group): the store root.
+    path (str): the item's path.
+
+    Returns:
+    paths (list of str): the groups, in attribute order, each once.
+    """
+    out = []
+    try:
+        attrs = dict(root[path].attrs)
+    except KeyError:
+        return out
+
+    def visit(value):
+        """
+        Collect the group paths among a value's strings.
+        """
+        if isinstance(value, str):
+            p = value.strip('/')
+            if p and p != path and '/' in p + '/' and p not in out \
+                    and re.fullmatch(r'[\w./-]+', p) and p in root \
+                    and isinstance(root[p], zarr.Group):
+                out.append(p)
+        elif isinstance(value, (list, tuple)):
+            for v in value:
+                visit(v)
+        elif isinstance(value, dict):
+            for v in value.values():
+                visit(v)
+
+    for key in sorted(attrs, key = lambda k: (k == 'notes', k)):
+        if key in ('notes', 'kind', 'name', 'created', 'code'):
+            continue
+        visit(attrs[key])
+    return out
+
+def store_inventory(root):
+    """
+    List a store's items by kind, for the store browser: what each
+    procedure made, in the order it was made, without the groups
+    underneath (tone writes, streams, DataSets).
+
+    Parameters:
+    root (zarr.Group): the store root.
+
+    Returns:
+    items (dict): kind title (``ITEM_KINDS``, in that order): list of
+        ``notes_entries`` entries, each with ``created`` (str), ``made``
+        (``made_from``), and for a run its record's fields (``record``).
+    """
+    items = {title: [] for title, _ in ITEM_KINDS}
+    records = {(r['tuning'], int(r['run'])): r for r in stream_runs(root)
+               if r.get('tuning')}
+    for e in notes_entries(root):
+        kind = item_kind(e)
+        if kind is None:
+            continue
+        e = dict(e, kind_title = kind)
+        if e['run'] is not None:
+            rec = records.get((e['run'][0], int(e['run'][1])), {})
+            e['record'] = rec
+            e['created'] = str(rec.get('created') or '')
+            e['made'] = [p for p in (rec.get('calibration'),
+                                     rec.get('tuning')) if p]
+        else:
+            e['record'] = None
+            e['created'] = str(root[e['path']].attrs.get('created') or '')
+            e['made'] = made_from(root, e['path'])
+        items[kind].append(e)
+    return items
 
 def in_report(item):
     """
@@ -1305,7 +1409,7 @@ def item_name(grp):
         return calibration_name(grp)
     if re.fullmatch(r'ts_psd\d+', path):
         return str(grp.attrs.get('name') or '')
-    if re.fullmatch(r'(photons|hee)/[^/]+', path):
+    if re.fullmatch(r'(photons|hee|nep)/[^/]+', path):
         return grp.basename
     return None
 
@@ -1362,7 +1466,7 @@ def rename_item(root, path, name, run = None):
     if re.fullmatch(r'ts_psd\d+', path):
         grp.attrs['name'] = name
         return path
-    if re.fullmatch(r'(photons|hee)/[^/]+', path):
+    if re.fullmatch(r'(photons|hee|nep)/[^/]+', path):
         kind, old = path.split('/')
         new_path = f'{kind}/{name}'
         if new_path in root:

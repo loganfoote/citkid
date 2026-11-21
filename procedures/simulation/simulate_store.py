@@ -1,7 +1,7 @@
 """
 Make a store with a VNA sweep of a simulated device, for trying the
-scripts (02_find_resonances.py --store ..., then --simulate in
-03_tune.py, 04a_stream.py and 04b_stream_batch.py).
+scripts (2_find_resonances.py --store ..., then --simulate in
+3_tune.py, 4a_stream.py and 4b_stream_batch.py).
 
 Usage:
     python simulate_store.py --store ~/data/sim/simdevice.zarr

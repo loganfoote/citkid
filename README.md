@@ -63,17 +63,17 @@ environment as in step 5.
 
 ### The CNN resonance finder (optional)
 The CNN resonance finder (`citkid.vna.res_finder_cnn`), which
-`procedures/02_find_resonances.py` uses by default to find the resonances
+`procedures/2_find_resonances.py` uses by default to find the resonances
 of a full VNA sweep, needs PyTorch. PyTorch is not installed by `uv sync`;
 install it with the `cnn` extra:
 ```bash
 uv sync --extra cnn
 ```
 Without it, everything else works, but running the CNN finder (the `find`
-step of `02_find_resonances.py`, or `run_res_finder_cnn`) raises an
+step of `2_find_resonances.py`, or `run_res_finder_cnn`) raises an
 `ImportError` saying that the CNN finder needs PyTorch and how to install
 it. Until PyTorch is installed, use the interactive automatic finder
-instead: `02_find_resonances.py --finder auto`. Run `uv sync --extra cnn`
+instead: `2_find_resonances.py --finder auto`. Run `uv sync --extra cnn`
 again after pulling changes, since a plain `uv sync` removes the extra.
 
 ## Installation with pip

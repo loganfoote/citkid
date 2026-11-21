@@ -1,7 +1,7 @@
 """
 Browsable report site: a static HTML site (no server, no extra
 dependency) with one page per device store, built from what the store
-holds (08_report_site.py).
+holds (7_report_site.py).
 
 Layout of the site::
 
@@ -519,7 +519,7 @@ def plot_tuning_summary(table, title = ''):
 def calibration_tables(root, cal):
     """
     Tabulate the IQ fits of a stream calibration's DataSets, where
-    05_calibrate_streams.py fit them (``FIT_IQ``).
+    5_calibrate_streams.py fit them (``FIT_IQ``).
 
     Parameters:
     root (zarr.Group): the store root.

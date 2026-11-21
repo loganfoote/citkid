@@ -394,6 +394,10 @@ def get_qapp(name=None):
         _use_system_ui_font(app)
         set_app_icon(app)
         return app
+    # An application made elsewhere (a notebook, an IDE): the icon too
+    icon = getattr(app, 'windowIcon', None)
+    if callable(icon) and icon().isNull():
+        set_app_icon(app)
     dpis = _unscaled_hidpi_screens(app)
     if dpis:
         _warnings.warn(

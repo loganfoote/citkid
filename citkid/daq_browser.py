@@ -1,23 +1,28 @@
 """
 Interactive browser of a device store.
 
-``run_store_browser`` opens a window on a store (``citkid.daq_layout``):
-a tree of its groups and arrays on the left (sweeps, resonator lists,
-tunings with their calibrations, tone writes and streams, stream
-calibrations, photon results), each with its kind and a one-line summary
-(a timestream's name and notes, a calibration's tone set, an array's
-shape), and on the right the attributes of the selected item (notes and
-settings, as saved) or, for an array, its shape, dtype, chunks, and the
-first values. A second tab lists the timestream runs of every tuning
-(name, notes, stage, length, tone set, calibration), filtered by typing;
-double-clicking a run selects its stream in the tree. Open (Ctrl+O)
-picks another store in a file dialog. Nothing is written; the store is
-opened read-only, so it can be browsed while a script is writing to it
-(Refresh, F5, rereads it). ``procedures/store_browser.py`` is the
-script.
+``run_store_browser`` opens a window on a store (``citkid.daq_layout``).
+The left side lists what the procedures made, one tab per kind (VNA
+sweeps, resonator lists, tunings, calibration sweeps, timestream runs,
+stream calibrations, photon and HEE results, spectra, NEP sweeps;
+``daq_layout.store_inventory``), each a table filtered by typing, and a
+last tab with the store's own tree of groups and arrays for when the
+layout matters. The right side is about the selected item, whichever
+tab it was chosen in: a summary (what it is, when, its notes, what it
+was made from and what depends on it, as links), its attributes (or an
+array's shape and first values), the tone marks, and the notes editor
+with Rename and Delete. Double-click, or Open in store tree, shows the
+item's group in the tree; Reveal folder opens its directory in the file
+browser; a right-click gives the same actions. Open (Ctrl+O) picks
+another store. The store is opened read-only for browsing (Refresh, F5,
+rereads it); notes, marks, names and deletions are written through a
+writable handle. ``procedures/store_browser.py`` is the script.
 """
+import html
 import json
 import os
+import subprocess
+import sys
 import numpy as np
 import zarr
 from pyqtgraph.Qt import QtCore, QtGui, QtWidgets
@@ -43,6 +48,9 @@ RUN_COLUMNS = (('Run', 'group'), ('Name', 'name'), ('Notes', 'notes'),
                ('Tone set', 'tone_set'), ('Calibration', 'calibration'),
                ('Tuning', 'tuning'), ('Chunks', 'n_chunks'),
                ('Created', 'created'))
+
+# Columns of the kind tables (all kinds but the runs)
+KIND_COLUMNS = ('Item', 'Name', 'Created', 'Made from', 'Notes')
 
 ################################################################################
 ################################### Helpers ####################################
@@ -191,21 +199,41 @@ def store_label(root, path = None):
         parts.append(f"citkid {a['citkid_version']}")
     return '; '.join(parts)
 
+def open_folder(folder):
+    """
+    Open a directory in the system's file browser.
+
+    Parameters:
+    folder (str): the directory.
+    """
+    if sys.platform == 'win32':
+        os.startfile(folder)
+    elif sys.platform == 'darwin':
+        subprocess.Popen(['open', folder])
+    else:
+        subprocess.Popen(['xdg-open', folder])
+
 ################################################################################
 #################################### Window ####################################
 ################################################################################
 class StoreBrowserWindow(QtWidgets.QMainWindow):
     """
-    Window browsing a store: the tree of its groups and arrays on the
-    left, the selected item's attributes or the list of timestream runs
-    on the right.
+    Window browsing a store: the items by kind (and the store's tree)
+    on the left, the selected item (summary, attributes, tone marks,
+    notes) on the right.
 
     Attributes:
     root (zarr.Group or None): the store root (read-only); None while no
         store is open.
     path (str or None): the store's path, if known.
+    kinds (QTabWidget): the left tabs: one table per kind
+        (``kind_tables``), the runs table, and the store tree.
+    kind_tables (dict): kind title: QTableWidget.
+    items (dict): ``daq_layout.store_inventory`` of the store shown.
     tree (QTreeWidget): the store's groups and arrays (children are read
         when a group is expanded).
+    summary (QTextBrowser): the selected item's summary, with links to
+        the items it was made from and those that depend on it.
     attrs (QPlainTextEdit): the selected item's description.
     runs_table (QTableWidget): the timestream runs.
     runs (list of dict): the runs shown (``daq_layout.stream_runs``).
@@ -236,6 +264,9 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         self.site_dir = site_dir
         self.root, self.path = None, None
         self.runs, self._shown_runs = [], []
+        self.items = {}
+        self._selected = None       # path of the item shown on the right
+        self._selecting = False
         self._title = title
         self.setWindowTitle(title)
         if ui_scale and ui_scale != 1.0:
@@ -247,7 +278,7 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         self.info.setTextInteractionFlags(Qt.TextSelectableByMouse)
         lay.addWidget(self.info)
         split = QtWidgets.QSplitter()
-        split.addWidget(self._build_tree())
+        split.addWidget(self._build_kinds())
         split.addWidget(self._build_tabs())
         split.setStretchFactor(0, 1)
         split.setStretchFactor(1, 1)
@@ -267,20 +298,28 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         row.addStretch(1)
         lay.addLayout(row)
         lay.addWidget(hint_label(
-            'Expand a group to read its contents; click an item for its '
-            'attributes. Double-click a run in the Timestream runs tab to '
-            'find its stream. F5 rereads the store, Ctrl+O opens another.'))
+            'Pick a kind on the left and click an item: the right side '
+            'shows it. Double-click shows its group in the store tree; '
+            'right-click for Rename, Delete and Reveal folder. F5 rereads '
+            'the store, Ctrl+O opens another.'))
         self.setCentralWidget(central)
         add_help(self, 'Store browser', [
             ('Buttons', [
                 ('Open... (Ctrl+O)', 'Choose a store'),
                 ('Refresh (F5)', 'Reread the store (another script may be '
                  'writing it)')]),
-            ('Tabs', [
-                ('Attributes', "The selected item's attributes; expand a group "
-                 'to read its contents'),
-                ('Timestream runs', 'Every run; double-click one to find its '
-                 'stream'),
+            ('Left tabs', [
+                ('One per kind', 'What the procedures made: VNA sweeps, '
+                 'resonator lists, tunings, calibration sweeps, runs, '
+                 'stream calibrations, photons, HEEs, spectra, NEP; type '
+                 'to filter; double-click to show the item in the tree'),
+                ('Store', "The store's groups and arrays; expand a group "
+                 'to read its contents')]),
+            ('Right tabs', [
+                ('Summary', 'What the selected item is, its notes, what '
+                 'it was made from and what depends on it (links); Open '
+                 'in store tree and Reveal folder'),
+                ('Attributes', "The selected item's attributes, as saved"),
                 ('Tone marks', 'The bad marks and notes on tones: clear one, '
                  'or '
                  'make it global (later stages too) or local (its stage only)'),
@@ -297,35 +336,67 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         else:
             self.refresh()
 
-    def _build_tree(self):
+    def _build_kinds(self):
         """
-        Build the tree of groups and arrays.
+        Build the left tabs: a table per kind of item, the runs table,
+        and the store tree.
 
         Returns:
-        tree (QTreeWidget): the tree.
+        kinds (QTabWidget): the tabs.
         """
-        self.tree = QtWidgets.QTreeWidget()
-        self.tree.setHeaderLabels(['Name', 'Kind', 'Summary'])
-        self.tree.setColumnWidth(0, 180)
-        self.tree.setColumnWidth(1, 70)
-        self.tree.itemExpanded.connect(self._on_expanded)
-        self.tree.currentItemChanged.connect(self._on_current)
-        return self.tree
+        self.kinds = QtWidgets.QTabWidget()
+        self.kinds.setUsesScrollButtons(True)
+        self.kind_tables, self.kind_filters, self.kind_labels = {}, {}, {}
+        self._kind_rows = {}        # kind: entries shown, by row
+        for title, _ in dl.ITEM_KINDS:
+            if title == 'Runs':
+                self.kinds.addTab(self._build_runs(), title)
+                continue
+            page = QtWidgets.QWidget()
+            vbox = QtWidgets.QVBoxLayout(page)
+            edit = QtWidgets.QLineEdit()
+            edit.setPlaceholderText(f'Filter the {title.lower()}')
+            edit.setClearButtonEnabled(True)
+            edit.textChanged.connect(
+                lambda _t, title = title: self._fill_kind(title))
+            vbox.addWidget(edit)
+            table = QtWidgets.QTableWidget()
+            table.setColumnCount(len(KIND_COLUMNS))
+            table.setHorizontalHeaderLabels(list(KIND_COLUMNS))
+            table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+            table.setSelectionBehavior(
+                QtWidgets.QAbstractItemView.SelectRows)
+            table.setSelectionMode(
+                QtWidgets.QAbstractItemView.SingleSelection)
+            table.verticalHeader().setVisible(False)
+            table.horizontalHeader().setStretchLastSection(True)
+            table.currentCellChanged.connect(
+                lambda row, _c, _pr, _pc, title = title:
+                self._on_kind_row(title, row))
+            table.cellDoubleClicked.connect(
+                lambda row, _c, title = title: self._open_in_tree())
+            table.setContextMenuPolicy(Qt.CustomContextMenu)
+            table.customContextMenuRequested.connect(
+                lambda pos, table = table: self._context_menu(table, pos))
+            vbox.addWidget(table, stretch = 1)
+            label = QtWidgets.QLabel()
+            vbox.addWidget(label)
+            self.kind_tables[title] = table
+            self.kind_filters[title] = edit
+            self.kind_labels[title] = label
+            self.kinds.addTab(page, title)
+        self.kinds.addTab(self._build_tree(), 'Store')
+        self.kinds.currentChanged.connect(lambda _i: self.flush_notes())
+        return self.kinds
 
-    def _build_tabs(self):
+    def _build_runs(self):
         """
-        Build the attributes panel and the runs table.
+        Build the runs tab: the table of every timestream run, filtered
+        by typing.
 
         Returns:
-        tabs (QTabWidget): the tabs.
+        page (QWidget): the tab.
         """
-        self.tabs = QtWidgets.QTabWidget()
-        self.attrs = QtWidgets.QPlainTextEdit()
-        self.attrs.setReadOnly(True)
-        self.attrs.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
-        self.attrs.setFont(QtGui.QFontDatabase.systemFont(
-            QtGui.QFontDatabase.FixedFont))
-        self.tabs.addTab(self.attrs, 'Attributes')
         page = QtWidgets.QWidget()
         vbox = QtWidgets.QVBoxLayout(page)
         self.filter_edit = QtWidgets.QLineEdit()
@@ -342,12 +413,87 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
             QtWidgets.QAbstractItemView.NoEditTriggers)
         self.runs_table.setSelectionBehavior(
             QtWidgets.QAbstractItemView.SelectRows)
+        self.runs_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SingleSelection)
         self.runs_table.verticalHeader().setVisible(False)
         self.runs_table.cellDoubleClicked.connect(self._on_run_activated)
+        self.runs_table.currentCellChanged.connect(self._on_run_row)
+        self.runs_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.runs_table.customContextMenuRequested.connect(
+            lambda pos: self._context_menu(self.runs_table, pos))
         vbox.addWidget(self.runs_table, stretch = 1)
         self.runs_label = QtWidgets.QLabel()
         vbox.addWidget(self.runs_label)
-        self.tabs.addTab(page, 'Timestream runs')
+        return page
+
+    def _build_tree(self):
+        """
+        Build the tree of groups and arrays.
+
+        Returns:
+        tree (QTreeWidget): the tree.
+        """
+        self.tree = QtWidgets.QTreeWidget()
+        self.tree.setHeaderLabels(['Name', 'Kind', 'Summary'])
+        self.tree.setColumnWidth(0, 180)
+        self.tree.setColumnWidth(1, 70)
+        self.tree.itemExpanded.connect(self._on_expanded)
+        self.tree.currentItemChanged.connect(self._on_current)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(
+            lambda pos: self._context_menu(self.tree, pos))
+        return self.tree
+
+    def _build_summary(self):
+        """
+        Build the summary tab: the selected item's description with
+        links, and the buttons that act on it.
+
+        Returns:
+        page (QWidget): the tab.
+        """
+        page = QtWidgets.QWidget()
+        vbox = QtWidgets.QVBoxLayout(page)
+        self.summary = QtWidgets.QTextBrowser()
+        self.summary.setOpenLinks(False)
+        self.summary.anchorClicked.connect(self._on_anchor)
+        vbox.addWidget(self.summary, stretch = 1)
+        row = QtWidgets.QHBoxLayout()
+        self.tree_btn = QtWidgets.QPushButton('Open in store tree')
+        self.tree_btn.setToolTip("Show the item's group in the Store tab")
+        self.tree_btn.clicked.connect(self._open_in_tree)
+        self.reveal_btn = QtWidgets.QPushButton('Reveal folder')
+        self.reveal_btn.setToolTip("Open the item's directory in the "
+                                   'file browser')
+        self.reveal_btn.clicked.connect(self.reveal_selected)
+        self.summary_rename_btn = QtWidgets.QPushButton('Rename...')
+        self.summary_rename_btn.clicked.connect(self._on_rename)
+        self.summary_delete_btn = QtWidgets.QPushButton('Delete...')
+        self.summary_delete_btn.clicked.connect(
+            lambda: self.delete_selected())
+        for b in (self.tree_btn, self.reveal_btn, self.summary_rename_btn,
+                  self.summary_delete_btn):
+            b.setEnabled(False)
+            row.addWidget(b)
+        row.addStretch(1)
+        vbox.addLayout(row)
+        return page
+
+    def _build_tabs(self):
+        """
+        Build the attributes panel and the runs table.
+
+        Returns:
+        tabs (QTabWidget): the tabs.
+        """
+        self.tabs = QtWidgets.QTabWidget()
+        self.tabs.addTab(self._build_summary(), 'Summary')
+        self.attrs = QtWidgets.QPlainTextEdit()
+        self.attrs.setReadOnly(True)
+        self.attrs.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+        self.attrs.setFont(QtGui.QFontDatabase.systemFont(
+            QtGui.QFontDatabase.FixedFont))
+        self.tabs.addTab(self.attrs, 'Attributes')
         self.tabs.addTab(self._build_marks(), 'Tone marks')
         self.tabs.addTab(self._build_notes(), 'Notes')
         return self.tabs
@@ -627,6 +773,8 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
             if files:
                 text += '; attached: ' + ', '.join(files)
             self.notes_label.setText(text)
+            if not self._selecting and e['kind'] != 'store':
+                self._select_item(e['path'], notes_row = False)
         else:
             self._notes_row = None
             self.notes_edit.setPlainText('')
@@ -649,6 +797,12 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         writable = e is not None and not self.notes_edit.isReadOnly()
         self.rename_btn.setEnabled(writable and e.get('name') is not None)
         self.delete_btn.setEnabled(writable and e['kind'] != 'store')
+        self.summary_rename_btn.setEnabled(self.rename_btn.isEnabled())
+        self.summary_delete_btn.setEnabled(self.delete_btn.isEnabled())
+        here = e is not None and e['kind'] != 'store'
+        self.tree_btn.setEnabled(here)
+        self.reveal_btn.setEnabled(here and bool(self.path) and
+                                   not str(self.path).endswith('.zip'))
 
     def _on_report_toggled(self, item):
         """
@@ -928,6 +1082,7 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         self.flush_notes(refresh = False)
         new_root = dl.open_store(root)
         self.root, self.path = new_root, path
+        self._selected = None
         name = os.path.basename(os.path.normpath(path)) if path \
             else self.root.attrs.get('device', 'store')
         self.setWindowTitle(f'{self._title}: {name}')
@@ -971,9 +1126,12 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
             self.info.setText('No store open: press Open (Ctrl+O) and '
                               'choose a .zarr directory.')
             self.attrs.setPlainText('')
+            self.summary.setHtml('')
             self._fill_marks()
             self.runs = []
             self._fill_runs()
+            self.items = {}
+            self._fill_kinds()
             self._fill_notes()
             return
         self.root = dl.open_store(self.path if self.path else self.root)
@@ -983,10 +1141,19 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         self.tree.blockSignals(False)
         self.runs = dl.stream_runs(self.root)
         self._fill_runs()
+        self.items = dl.store_inventory(self.root)
+        self._fill_kinds()
         self._fill_marks()
         self._fill_notes()
+        selected = self._selected
         if not (current and self.select_path(current)):
             self.attrs.setPlainText(describe_item(self.root))
+        if selected and selected in self.root:
+            if not self.select_item_path(selected):
+                self._select_item(selected)
+        else:
+            self._selected = None
+            self.summary.setHtml(self._store_html())
 
     def _add_children(self, parent, grp):
         """
@@ -1050,6 +1217,9 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         except (KeyError, OSError, ValueError) as e:
             self.attrs.setPlainText(f'{path}\n\nCould not read it: {e!r}\n'
                                     'Refresh (F5) if the store changed.')
+            return
+        if not self._selecting:
+            self._select_item(path, attrs = False)
 
     def current_path(self):
         """
@@ -1125,7 +1295,317 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         r = self._shown_runs[row]
         paths = r.get('paths') or []
         if paths and self.select_path(paths[0]):
+            self.kinds.setCurrentWidget(self.tree)
             self.tabs.setCurrentWidget(self.attrs)
+
+    def _on_run_row(self, row, _col = 0, _prev_row = -1, _prev_col = -1):
+        """
+        Show the run selected in the runs table.
+
+        Parameters:
+        row (int): the table row (-1: none).
+        _col, _prev_row, _prev_col (int): unused.
+        """
+        if self._selecting or not (0 <= row < len(self._shown_runs)):
+            return
+        paths = self._shown_runs[row].get('paths') or []
+        if paths:
+            self._select_item(paths[0])
+
+    ############################################################################
+    def _fill_kinds(self):
+        """
+        Fill every kind table from the inventory, and show the counts.
+        """
+        for title in self.kind_tables:
+            self._fill_kind(title)
+        for i, (title, _) in enumerate(dl.ITEM_KINDS):
+            n = len(self.runs) if title == 'Runs' else \
+                len(self.items.get(title, []))
+            self.kinds.setTabText(i, f'{title} ({n})' if n else title)
+
+    def _fill_kind(self, title):
+        """
+        Fill one kind's table with its items containing the filter text,
+        keeping the selection.
+
+        Parameters:
+        title (str): the kind.
+        """
+        table = self.kind_tables[title]
+        text = self.kind_filters[title].text().strip().lower()
+        entries = self.items.get(title, [])
+        shown = [e for e in entries if not text or any(
+            text in str(v).lower() for v in (
+                e['label'], e['name'], e['created'], ' '.join(e['made']),
+                e['notes']))]
+        self._selecting = True
+        table.setRowCount(len(shown))
+        for i, e in enumerate(shown):
+            values = (e['label'], e['name'] or '', e['created'],
+                      ', '.join(e['made']), first_line(e['notes'], 120))
+            for j, v in enumerate(values):
+                table.setItem(i, j, QtWidgets.QTableWidgetItem(str(v)))
+        self._kind_rows[title] = shown
+        for j in range(len(KIND_COLUMNS) - 1):
+            table.resizeColumnToContents(j)
+        self._selecting = False
+        self.kind_labels[title].setText(
+            f'{len(shown)} of {len(entries)}' if text else f'{len(entries)}')
+        if self._selected is not None:
+            for i, e in enumerate(shown):
+                if e['path'] == self._selected:
+                    self._selecting = True
+                    table.setCurrentCell(i, 0)
+                    self._selecting = False
+
+    def _on_kind_row(self, title, row):
+        """
+        Show the item selected in a kind table.
+
+        Parameters:
+        title (str): the kind.
+        row (int): the table row (-1: none).
+        """
+        shown = self._kind_rows.get(title, [])
+        if self._selecting or not (0 <= row < len(shown)):
+            return
+        self._select_item(shown[row]['path'])
+
+    def entry_of(self, path):
+        """
+        Return the inventory entry of an item.
+
+        Parameters:
+        path (str): the item's path (a run's first stream).
+
+        Returns:
+        entry (dict or None): the entry (``daq_layout.store_inventory``),
+            or None if the path is not an item.
+        """
+        for entries in self.items.values():
+            for e in entries:
+                if e['path'] == path:
+                    return e
+        return None
+
+    def _select_item(self, path, notes_row = True, attrs = True):
+        """
+        Show an item on the right: its summary, attributes, and its row
+        of the notes table (which enables Rename and Delete).
+
+        Parameters:
+        path (str): the item's path (any group or array of the store).
+        notes_row (bool): If True (default), select its notes row.
+        attrs (bool): If True (default), describe it in Attributes.
+        """
+        if self.root is None:
+            return
+        self._selected = path
+        self._selecting = True
+        try:
+            if attrs:
+                try:
+                    self.attrs.setPlainText(describe_item(self.root[path]))
+                except (KeyError, OSError, ValueError) as e:
+                    self.attrs.setPlainText(f'{path}\n\nCould not read '
+                                            f'it: {e!r}')
+            self.summary.setHtml(self._summary_html(path))
+            if notes_row:
+                row = next((i for i, e in enumerate(self._notes)
+                            if e['path'] == path), None)
+                if row is not None and row != self.notes_table.currentRow():
+                    self._selecting = False
+                    self.notes_table.setCurrentCell(row, 0)
+                    self._selecting = True
+                elif row is None:
+                    for b in (self.tree_btn, self.reveal_btn):
+                        b.setEnabled(bool(self.path))
+                    self.reveal_btn.setEnabled(
+                        bool(self.path) and not str(self.path).endswith('.zip'))
+        finally:
+            self._selecting = False
+
+    def select_item_path(self, path):
+        """
+        Select an item in its kind table (switching to that tab) and show
+        it on the right; a path that is no item is shown in the tree.
+
+        Parameters:
+        path (str): the item's path.
+
+        Returns:
+        found (bool): True if the path is an item or in the tree.
+        """
+        for title, entries in self.items.items():
+            for e in entries:
+                if e['path'] != path:
+                    continue
+                tab = [t for t, _ in dl.ITEM_KINDS].index(title)
+                self.kinds.setCurrentIndex(tab)
+                if title == 'Runs':
+                    row = next((i for i, r in enumerate(self._shown_runs)
+                                if (r.get('paths') or [None])[0] == path),
+                               None)
+                    table = self.runs_table
+                else:
+                    row = next((i for i, x in enumerate(
+                        self._kind_rows.get(title, [])) if x is e), None)
+                    table = self.kind_tables[title]
+                if row is None:
+                    self._select_item(path)
+                elif row == table.currentRow():
+                    self._select_item(path)
+                else:
+                    table.setCurrentCell(row, 0)
+                return True
+        if self.select_path(path):
+            self.kinds.setCurrentWidget(self.tree)
+            return True
+        return False
+
+    def _store_html(self):
+        """
+        Describe the store for the summary when nothing is selected.
+
+        Returns:
+        text (str): HTML.
+        """
+        parts = [f'<h3>{html.escape(store_label(self.root, self.path))}'
+                 '</h3><p>']
+        for title, _ in dl.ITEM_KINDS:
+            n = len(self.runs) if title == 'Runs' else \
+                len(self.items.get(title, []))
+            if n:
+                parts.append(f'{title}: {n}<br>')
+        notes = self.root.attrs.get('notes')
+        if notes:
+            parts.append('</p><p>' + html.escape(str(notes)).replace(
+                '\n', '<br>'))
+        return ''.join(parts) + '</p>'
+
+    def _summary_html(self, path):
+        """
+        Describe an item for the summary: what it is, when, its notes,
+        what it was made from and what depends on it, as links.
+
+        Parameters:
+        path (str): the item's path.
+
+        Returns:
+        text (str): HTML; links are ``item:<path>``.
+        """
+        e = self.entry_of(path)
+        link = lambda p: (f'<a href="item:{html.escape(p)}">'
+                          f'{html.escape(p)}</a>')
+        try:
+            item = self.root[path]
+        except KeyError:
+            return f'<p>{html.escape(path)} is not in the store.</p>'
+        if e is None:
+            kind = 'array' if isinstance(item, zarr.Array) else \
+                str(item.attrs.get('kind', 'group'))
+            return (f'<h3>{html.escape(path)}</h3><p>{html.escape(kind)}: '
+                    f'{html.escape(summarize(item))}</p>')
+        head = html.escape(e['label'])
+        if e['name'] and e['name'] not in e['label']:
+            head += f" ({html.escape(e['name'])})"
+        parts = [f'<h3>{head}</h3><p>{html.escape(e["kind_title"])}']
+        if e['created']:
+            parts.append(f", {html.escape(e['created'])}")
+        parts.append('<br>' + html.escape(summarize(item)) if not e['run']
+                     else '')
+        if e['run'] is not None and e['record']:
+            r = e['record']
+            parts.append(f"<br>stage {r.get('dec_stage')}, "
+                         f"{r.get('duration_s')} s, tone set "
+                         f"{r.get('tone_set', r.get('tone_sets'))}, "
+                         f"{r.get('n_chunks') or 0} chunks")
+            if r.get('point') is not None:
+                parts.append(f"<br>point {html.escape(str(r['point']))}")
+            if r.get('power_w') is not None:
+                parts.append(f"<br>power {r['power_w']:.4g} W")
+        if not e['in_report']:
+            parts.append('<br>left out of the report')
+        parts.append('</p>')
+        if e['notes']:
+            parts.append('<p>' + html.escape(e['notes']).replace(
+                '\n', '<br>') + '</p>')
+        if e['made']:
+            parts.append('<p>Made from: ' + ', '.join(
+                link(p) for p in e['made']) + '</p>')
+        paths = [path]
+        if e['run'] is not None and e['record']:
+            paths = [p for p in e['record'].get('paths') or [] if p in
+                     self.root] or [path]
+        try:
+            deps = dl.dependents(self.root, paths)
+        except Exception:
+            deps = []
+        if deps:
+            parts.append('<p>Depends on it (deleted with it): ' + ', '.join(
+                link(p) for p in deps) + '</p>')
+        return ''.join(parts)
+
+    def _on_anchor(self, url):
+        """
+        Select the item a summary link names.
+
+        Parameters:
+        url (QUrl): the link (``item:<path>``).
+        """
+        text = url.toString()
+        if text.startswith('item:'):
+            self.select_item_path(text[5:])
+
+    def _open_in_tree(self):
+        """
+        Show the selected item's group in the Store tab (the button, or a
+        double-click).
+        """
+        if self._selected and self.select_path(self._selected):
+            self.kinds.setCurrentWidget(self.tree)
+            self.tabs.setCurrentWidget(self.attrs)
+
+    def reveal_selected(self):
+        """
+        Open the selected item's directory in the file browser (the
+        button): a local .zarr store only.
+
+        Returns:
+        folder (str or None): the directory opened, or None.
+        """
+        if not self._selected or not self.path or \
+                str(self.path).endswith('.zip'):
+            return None
+        folder = os.path.join(os.path.normpath(self.path),
+                              *self._selected.split('/'))
+        if not os.path.isdir(folder):
+            self.info.setText(f'{folder} is not a directory')
+            return None
+        open_folder(folder)
+        return folder
+
+    def _context_menu(self, widget, pos):
+        """
+        Show the actions on the selected item (a right-click in a table
+        or the tree).
+
+        Parameters:
+        widget (QWidget): the table or tree.
+        pos (QPoint): where, in the widget.
+        """
+        if self._selected is None:
+            return
+        menu = QtWidgets.QMenu(self)
+        menu.addAction('Open in store tree', self._open_in_tree)
+        act = menu.addAction('Reveal folder', self.reveal_selected)
+        act.setEnabled(self.reveal_btn.isEnabled())
+        act = menu.addAction('Rename...', self._on_rename)
+        act.setEnabled(self.rename_btn.isEnabled())
+        act = menu.addAction('Delete...', lambda: self.delete_selected())
+        act.setEnabled(self.delete_btn.isEnabled())
+        menu.exec_(widget.mapToGlobal(pos))
 
     def closeEvent(self, event):
         """

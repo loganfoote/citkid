@@ -124,7 +124,7 @@ def test_calibration_window_recomputes_the_tone(tmp_path, qt_app):
     from .test_sweep import power_store
     from ..procedures.test_scripts import load_script
     path = power_store(tmp_path)
-    m = load_script('09_nep.py')
+    m = load_script('6d_nep.py')
     m.NAME, m.CN_N_COMP = 'bb', 1
     m.POINTS = {f'P{j}': 1e-15 * (j + 1) for j in range(4)}
     m.FREQ_HZ, m.FMAX_DIV, m.MODES_RATE_HZ = 30., 1., 100.

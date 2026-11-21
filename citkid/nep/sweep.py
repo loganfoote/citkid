@@ -1,16 +1,16 @@
 """
 Power sweeps: the NEP of every tone from a sweep of optical power
-(``procedures/09_nep.py``).
+(``procedures/6d_nep.py``).
 
 A sweep is a list of points: one timestream run per point, taken on a
-calibration sweep at an incident power. 04c_power_sweep.py names the
-points (attribute ``point`` on the run and its sweep); 09_nep.py maps
+calibration sweep at an incident power. 4c_power_sweep.py names the
+points (attribute ``point`` on the run and its sweep); 6d_nep.py maps
 the names to powers (``select_points``). Points may share a calibration
 sweep. The analysis:
 
-1. ``calibrate_points``: each point's timestream calibration (the 05
-   steps, one DataSet per sweep) and IQ fit, in one stream calibration.
-2. ``psd_points``: each timestream's spectra as 07 computes them, with
+1. ``calibrate_points``: each point's timestream calibration (the
+   steps of 5_calibrate_streams.py, one DataSet per sweep) and IQ fit, in one stream calibration.
+2. ``psd_points``: each timestream's spectra as 6c computes them, with
    peak removal and common-mode removal, saved as a PSD set; the glitch
    positions and the (decimated) common modes are kept for the review.
 3. ``PowerSweep``: per tone, x(P) from the IQ fits' fr relative to the
@@ -52,7 +52,7 @@ TONE_FIELDS = ('R0', 'P0', 'x0', 'R0_err', 'P0_err', 'x0_err', 'f1', 'eta',
 def list_points(root, tuning = None):
     """
     List the runs of a power sweep: those with a point name (attribute
-    ``point``, written by 04c_power_sweep.py) or a recorded power
+    ``point``, written by 4c_power_sweep.py) or a recorded power
     (``power_w``) that have streams.
 
     Parameters:
@@ -169,7 +169,8 @@ def describe_points(points):
 ################################################################################
 def calibrate_points(root, cal, points, f_avg = 1, verbose = True):
     """
-    Calibrate the points' timestreams (the 05 steps, one DataSet per
+    Calibrate the points' timestreams (the steps of
+    5_calibrate_streams.py, one DataSet per
     calibration sweep, in ``cal``) and fit each sweep's resonances
     (``fit_iq``), skipping what is saved already.
 
@@ -248,7 +249,7 @@ def psd_points(
     only = None, verbose = True
 ):
     """
-    Compute and save the spectra of the points' timestreams (07's
+    Compute and save the spectra of the points' timestreams (6c's
     ``analyze_timestream``, one group per point), keeping what the review
     needs: the glitch positions and the decimated common modes.
 

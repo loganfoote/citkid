@@ -9,7 +9,7 @@ come from ``photon_finder.TimestreamData`` (x from the raw streams in
 memory, never saved). For one timestream:
 
 1. The events come from a photon result (``events_from_photons``: the
-   HEEs ``06a_find_photons.py`` saved) or from triggers on the
+   HEEs ``6a_find_photons.py`` saved) or from triggers on the
    tones streamed together (``find_events_timestream``).
 2. ``analyze_timestream`` cuts every tone's pulses at the events, lines
    them up where each falls through the tail level, averages them and

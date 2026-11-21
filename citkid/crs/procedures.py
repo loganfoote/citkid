@@ -906,7 +906,7 @@ async def stream_tone_sets(
         (samples, from the elapsed time: ``CRS.stream``). Default None.
     only_written (bool): If True, stream exactly the tones ``written``
         says are on the board (one tone set, written from its
-        calibration, e.g. by the 04 window's Write tones), and never
+        calibration, e.g. by the 4 window's Write tones), and never
         write tones or calibrate here: a set whose tones are not on the
         board, or whose calibration is out of frame, is an error.
         Default False: each set is written chunk by chunk, calibrating
@@ -1112,7 +1112,7 @@ async def stream_batch(
 ):
     """
     Calibrate a tone set (or reuse a calibration) and take one or more
-    timestreams of it, without a window (``procedures/04b_stream_batch.py``;
+    timestreams of it, without a window (``procedures/4b_stream_batch.py``;
     loop over this to take sets with other settings). Each run writes
     the chunks its stage needs (``plan_stream_chunks``), or those in
     ``tone_chunks``, and streams each; tones already on the board are

@@ -933,7 +933,7 @@ async def test_chunked_streams_load_in_sweep_order(tmp_path):
 async def test_series_fits_on_stitched_tone_sets(tmp_path):
     """
     The pipeline's series loading and IQ fits work on a power sweep
-    stitched over two tone sets, in the same store (as in 03_tune.py).
+    stitched over two tone sets, in the same store (as in 3_tune.py).
     """
     from citkid.crs.procedures import stitched_power_sweep
     from citkid.pipeline.sweep_series import (

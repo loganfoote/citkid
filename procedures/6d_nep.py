@@ -1,13 +1,13 @@
 """
-09: the NEP of every tone from a sweep of optical power (04c_power_sweep.py):
+09: the NEP of every tone from a sweep of optical power (4c_power_sweep.py):
 calibrate each point's timestream and fit its resonances, compute the
 spectra with peak removal and common-mode removal, fit the responsivity
 and the photon-noise NEP, review in a window, and save nep/<NAME>.
-Replaces 05 and 07 for a sweep. No CRS needed.
+Replaces 5 and 6c for a sweep. No CRS needed.
 
 Usage:
-    python 09_nep.py --device deviceA
-    python 09_nep.py --device deviceA --no-gui
+    python 6d_nep.py --device deviceA
+    python 6d_nep.py --device deviceA --no-gui
 """
 import argparse
 import os
@@ -288,7 +288,7 @@ def main(args):
             print('Set POINTS: the point names with their incident '
                   'powers in W, e.g. POINTS = {' + ', '.join(
                       f'{n!r}: 1e-15' for n in names[:3]) + ', ...}'
-                  if names else 'No run has a point name (04c) or a '
+                  if names else 'No run has a point name (4c) or a '
                   'power: set POINTS with run names and powers.')
             return None
     points = sw.select_points(root, POINTS, tuning)

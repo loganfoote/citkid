@@ -5,8 +5,8 @@ Interactive view of a saved VNA sweep.
 versus frequency (linked x axes: zoom and pan one, the other follows; the
 R key fits both to the data again) for ``vna{k}`` of a device store
 (``citkid.daq_layout``), with the band edges marked and the sweep's
-settings in a header. Use it after ``01_vna_sweep.py`` (which can open it
-when the sweep finishes) and before ``02_find_resonances.py``, to check a
+settings in a header. Use it after ``1_vna_sweep.py`` (which can open it
+when the sweep finishes) and before ``2_find_resonances.py``, to check a
 sweep before finding its resonances. Nothing is saved.
 ``procedures/vna_view.py`` is the script.
 """

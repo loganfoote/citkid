@@ -9,10 +9,10 @@ and spans again, from PREDICT's guess of them (and of the powers).
 Needs crs_init.py first.
 
 Usage:
-    python 03_tune.py --device deviceA --modules 1
-    python 03_tune.py --device deviceA --modules 1 --redo power_fits
-    python 03_tune.py --device deviceA --modules 1 --tuning warm
-    python 03_tune.py --device deviceA --modules 1 --tuning warm2 \
+    python 3_tune.py --device deviceA --modules 1
+    python 3_tune.py --device deviceA --modules 1 --redo power_fits
+    python 3_tune.py --device deviceA --modules 1 --tuning warm
+    python 3_tune.py --device deviceA --modules 1 --tuning warm2 \
         --port-tune warm
 """
 import argparse
@@ -268,7 +268,7 @@ def plan(root, args, path):
         if not np.isfinite(strength).any():
             raise ValueError(
                 f"{name} has no dip depths for PAIRS = 'keep_stronger' "
-                '(it was saved before they were); rerun 02_find_resonances.py'
+                '(it was saved before they were); rerun 2_find_resonances.py'
                 " --redo resonators, or use PAIRS = 'drop_both'")
     keep, _ = select_isolated(res['fres_all'],
                               res['fres_all'] / res['Qr_all'],
@@ -392,7 +392,7 @@ def ask_make_tones(tune):
     box.setText(f'{int(unset.sum())} resonators are not set yet.')
     box.setInformativeText('Make the tones from the resonators set so '
                            'far (the rest are left out), or stop here '
-                           'and run 03_tune.py again later to continue '
+                           'and run 3_tune.py again later to continue '
                            'in fq_finder?')
     make = box.addButton('Make the tones',
                          QtWidgets.QMessageBox.ButtonRole.AcceptRole)
@@ -716,7 +716,7 @@ def tones(tune, args):
     """
     fq, name = tune['fq_sweep'], tune.basename
     keep = (fq['reject_reason'][:] == '') & np.isfinite(fq['fres_opt'][:])
-    # Tones marked bad globally in this tuning (the windows of 03, or the
+    # Tones marked bad globally in this tuning (the windows of 3, or the
     # store browser) and not cleared since are left out of the tuned set
     root = dl.store_root(tune)
     bad = dl.bad_tones(root, f'{name}/tones')
