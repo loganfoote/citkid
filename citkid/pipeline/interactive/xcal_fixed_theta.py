@@ -91,13 +91,8 @@ class XCalFixedThetaPanel(StepPanel):
 
     def setup_ui(self):
         """Build the offset controls, buttons, plots and band edges."""
-        root = QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(6, 4, 6, 6)
-        root.setSpacing(4)
-
-        # ---- control row ----
-        ctrl = QtWidgets.QHBoxLayout()
-        ctrl.setSpacing(6)
+        # ---- control column, left of the plots ----
+        root, ctrl = self._side_column()
         self._min_spin = self._offset_spin('xcal_theta_min_offset')
         self._max_spin = self._offset_spin('xcal_theta_max_offset')
         for label, spin, tip in (
@@ -107,38 +102,32 @@ class XCalFixedThetaPanel(StepPanel):
              'Offset (rad) down from the maximum of θf'),
         ):
             spin.setToolTip(tip)
-            ctrl.addWidget(QtWidgets.QLabel(label))
-            ctrl.addWidget(spin)
+            self._side_row(ctrl, label, spin)
 
         self._run_btn = QtWidgets.QPushButton("Run")
-        self._run_btn.setFixedWidth(50)
         self._run_btn.clicked.connect(self._on_run_clicked)
         ctrl.addWidget(self._run_btn)
 
         self._run_through_btn = QtWidgets.QPushButton("Run+")
-        self._run_through_btn.setFixedWidth(55)
         self._run_through_btn.setToolTip(
             "Run this panel and all following panels")
         self._run_through_btn.clicked.connect(lambda: self.run_from_here.emit())
         ctrl.addWidget(self._run_through_btn)
 
         self._save_btn = QtWidgets.QPushButton("Save")
-        self._save_btn.setFixedWidth(60)
         self._save_btn.clicked.connect(self._on_save_clicked)
         ctrl.addWidget(self._save_btn)
 
         self._bad_btn = QtWidgets.QPushButton("Bad Data")
-        self._bad_btn.setFixedWidth(75)
         self._bad_btn.setToolTip(
             "Mark this index as bad: fill all outputs with NaN")
         self._bad_btn.clicked.connect(self._on_bad_data_clicked)
         ctrl.addWidget(self._bad_btn)
 
         self._status_label = QtWidgets.QLabel("—")
-        self._status_label.setMinimumWidth(160)
+        self._status_label.setWordWrap(True)
         ctrl.addWidget(self._status_label)
         ctrl.addStretch()
-        root.addLayout(ctrl)
 
         # Offsets set this session, per row: {data_idx: (min_off, max_off)}
         self._param_cache: dict = {}
@@ -149,9 +138,8 @@ class XCalFixedThetaPanel(StepPanel):
         self._lines_updating = False
 
         # ---- plots ----
-        self._gw = pg.GraphicsLayoutWidget()
-        self._gw.setMinimumHeight(round(340 * self.plot_scale))
-        root.addWidget(self._gw)
+        self._gw = self._plot_widget(340)
+        root.addWidget(self._gw, stretch = 1)
 
         self._plot_amp = self._gw.addPlot(row=0, col=0, title="XCal Amplitude")
         self._plot_amp.setLabel('left', '|S21| (dB)')

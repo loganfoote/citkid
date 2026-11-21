@@ -32,9 +32,9 @@ def ask_reason(
     label (str): the prompt. Default 'Reason:'.
     scope (str or None): the default scope, 'global' or 'local', shown
         as a box. Default None: no box, and only the reason is returned.
-    forced (bool): If True, the box is checked (global) and cannot be
-        changed, e.g. where the tone's outputs become NaN. Default
-        False.
+    forced (bool): If True, the box shows ``scope`` and cannot be
+        changed, e.g. global where the tone's outputs become NaN, or
+        local for a step no later stage needs. Default False.
 
     Returns:
     if scope is None:
@@ -55,11 +55,14 @@ def ask_reason(
     global_box = None
     if scope is not None:
         global_box = QtWidgets.QCheckBox(GLOBAL_LABEL)
-        global_box.setChecked(forced or scope == 'global')
+        global_box.setChecked(scope == 'global')
         global_box.setEnabled(not forced)
-        if forced:
+        if forced and scope == 'global':
             global_box.setToolTip('The outputs become NaN here, so the '
                                   'later steps cannot use the tone')
+        elif forced:
+            global_box.setToolTip('No later step uses these outputs, so '
+                                  'the tone stays good elsewhere')
         lay.addWidget(global_box)
     buttons = QtWidgets.QDialogButtonBox(
         QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)

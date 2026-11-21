@@ -109,7 +109,8 @@ class AnalysisRunner:
         Run the analysis path on the rows it hasn't finished
         (``missing_rows``), e.g. after reviewing some rows interactively or
         when continuing an interrupted run. Leading global steps whose
-        outputs already exist are skipped, so finished rows are kept.
+        outputs already exist are skipped, so finished rows are kept;
+        their outputs are saved if they were only in memory.
 
         Parameters:
         verbose (bool): If True (default), show a progress bar.
@@ -128,6 +129,9 @@ class AnalysisRunner:
             if task.func_type != "global" or not all(
                     self._param_available(n, None) for n in task.return_names):
                 break
+            # Computed in memory by a window, perhaps: a later run of
+            # the path needs it in the store
+            self.DS.write_params(task.return_names)
             start += 1
         self.execute_path(data_idx=rows, step_start_idx=start,
                           verbose=verbose, **execute_kwargs)

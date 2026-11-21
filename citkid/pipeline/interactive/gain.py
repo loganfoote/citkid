@@ -41,15 +41,9 @@ class GainFitPanel(StepPanel):
         Build the span_mult control, buttons, status label, and the gain
         amplitude and phase plots.
         """
-        root =QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(6, 4, 6, 6)
-        root.setSpacing(4)
+        # ---- control column, left of the plots ----
+        root, ctrl = self._side_column()
 
-        # ---- control row ----
-        ctrl = QtWidgets.QHBoxLayout()
-        ctrl.setSpacing(8)
-
-        ctrl.addWidget(QtWidgets.QLabel("span_mult:"))
         self._span_spin = QtWidgets.QDoubleSpinBox()
         self._span_spin.setRange(0.1, 50.0)
         self._span_spin.setSingleStep(0.5)
@@ -58,11 +52,9 @@ class GainFitPanel(StepPanel):
             'fit_gain', 'span_mult', self.data_idx, fallback=2.0
         )
         self._span_spin.setValue(float(initial_span))
-        self._span_spin.setFixedWidth(80)
-        ctrl.addWidget(self._span_spin)
+        self._side_row(ctrl, 'span_mult:', self._span_spin)
 
         self._run_btn = QtWidgets.QPushButton("Run")
-        self._run_btn.setFixedWidth(50)
         self._run_btn.setToolTip(
             "Run this panel and the panels after it")
         self._run_btn.clicked.connect(
@@ -70,23 +62,20 @@ class GainFitPanel(StepPanel):
         ctrl.addWidget(self._run_btn)
 
         self._save_btn = QtWidgets.QPushButton("Save")
-        self._save_btn.setFixedWidth(60)
         self._save_btn.clicked.connect(self._on_save_clicked)
         ctrl.addWidget(self._save_btn)
 
         self._bad_btn = QtWidgets.QPushButton("Bad Data")
-        self._bad_btn.setFixedWidth(75)
         self._bad_btn.setToolTip(
             "Mark this index as bad: fill all outputs with NaN")
         self._bad_btn.clicked.connect(self._on_bad_data_clicked)
         ctrl.addWidget(self._bad_btn)
 
         self._status_label = QtWidgets.QLabel("—")
-        self._status_label.setMinimumWidth(120)
+        self._status_label.setWordWrap(True)
         ctrl.addWidget(self._status_label)
 
         ctrl.addStretch()
-        root.addLayout(ctrl)
 
         # Per-index cache of span_mult values set by the user this session.
         # Populated in run_steps(); used by on_data_idx_changing() so that
@@ -95,9 +84,8 @@ class GainFitPanel(StepPanel):
         self._span_mult_cache: dict = {}
 
         # ---- plots ----
-        self._gw = pg.GraphicsLayoutWidget()
-        self._gw.setMinimumHeight(round(320 * self.plot_scale))
-        root.addWidget(self._gw)
+        self._gw = self._plot_widget(320)
+        root.addWidget(self._gw, stretch = 1)
 
         self._plot_amp = self._gw.addPlot(row=0, col=0, title="Gain Amplitude")
         self._plot_amp.setLabel('left', '|S21| (dB)')

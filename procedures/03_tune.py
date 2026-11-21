@@ -340,6 +340,67 @@ def plan(root, args, path):
           + (f', {len(fcal)} calibration tones' if len(fcal) else ''))
     return tune
 
+def port_source(root, args):
+    """
+    Find the tuning whose powers are ported (``PORT_TUNE``, in this store
+    or ``PORT_STORE``).
+
+    Parameters:
+    root (zarr.Group): the store root.
+    args (argparse.Namespace): options.
+
+    Returns:
+    src_root (zarr.Group): the root of the store holding it.
+    store (str or None): that store's path; None for this store.
+    src (zarr.Group): the tuning.
+
+    Raises:
+    KeyError: if there is no such tuning, or it has no tones.
+    """
+    if args.port_store is None:
+        src_root, store = root, None
+    else:
+        store = os.path.expanduser(args.port_store)
+        src_root = dl.open_store(store)
+    src = dl.find_tuning(src_root, args.port_tune)
+    if src is None:
+        raise KeyError(f'no tuning {args.port_tune!r} to port'
+                       f"{'' if store is None else ' in ' + store}")
+    if 'tones' not in src:
+        raise KeyError(f'{src.basename} has no tones to port')
+    return src_root, store, src
+
+def ask_make_tones(tune):
+    """
+    Ask, in a box, what to do when the fq_finder window was closed
+    before every resonator was set: make the tones from those set so
+    far, or stop and continue later.
+
+    Parameters:
+    tune (zarr.Group): the tuning.
+
+    Returns:
+    make (bool): True to make the tones now.
+    """
+    from citkid.qt_compat import get_qapp
+    from pyqtgraph.Qt import QtWidgets
+    fq = tune['fq_sweep']
+    unset = ~np.isfinite(fq['fres_opt'][:]) & (fq['reject_reason'][:] == '')
+    get_qapp()
+    box = QtWidgets.QMessageBox()
+    box.setWindowTitle('fq_finder closed early')
+    box.setText(f'{int(unset.sum())} resonators are not set yet.')
+    box.setInformativeText('Make the tones from the resonators set so '
+                           'far (the rest are left out), or stop here '
+                           'and run 03_tune.py again later to continue '
+                           'in fq_finder?')
+    make = box.addButton('Make the tones',
+                         QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+    box.addButton('Stop', QtWidgets.QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(make)
+    box.exec() if hasattr(box, 'exec') else box.exec_()
+    return box.clickedButton() is make
+
 def plan_from_tuning(root, args, path):
     """
     Start a tuning from an earlier one's tones (``--port-tune``, in
@@ -365,17 +426,7 @@ def plan_from_tuning(root, args, path):
     ValueError: if ``PREDICT`` returns the wrong shapes or non-finite
         values.
     """
-    if args.port_store is None:
-        src_root, store = root, None
-    else:
-        store = os.path.expanduser(args.port_store)
-        src_root = dl.open_store(store)
-    src = dl.find_tuning(src_root, args.port_tune)
-    if src is None:
-        raise KeyError(f'no tuning {args.port_tune!r} to port'
-                       f"{'' if store is None else ' in ' + store}")
-    if 'tones' not in src:
-        raise KeyError(f'{src.basename} has no tones to port')
+    src_root, store, src = port_source(root, args)
     ported = dict(store = store, group = src.basename)
     if store is None:
         tune, k = dl.new_tuning(root, src.attrs['resonators'], attrs = dict(
@@ -724,11 +775,22 @@ def main(args):
         if tune is None:
             return None
     else:
+        # A tuning ported from PORT_TUNE is continued with the same
+        # settings; porting into any other tuning needs a new name
         if args.port_tune is not None:
-            raise ValueError(
-                f'tuning {dl.tuning_name(tune)!r} ({tune.basename}) '
-                'exists; porting powers makes a new tuning: give '
-                'TUNING (--tuning) a new name')
+            _, store, src = port_source(root, args)
+            ported = tune.attrs.get('ported_from') or {}
+            if not tune.attrs.get('ported_powers') or \
+                    ported.get('group') != src.basename or \
+                    ported.get('store') != store:
+                names = ', '.join(
+                    f'{dl.tuning_name(root[dl.set_name(k, "tune")])!r} '
+                    f'(tune{k})' for k in dl.list_indices(root, 'tune'))
+                raise ValueError(
+                    f'tuning {dl.tuning_name(tune)!r} ({tune.basename}) '
+                    f'exists and was not ported from {args.port_tune!r}; '
+                    'porting powers makes a new tuning: give TUNING '
+                    f'(--tuning) a new name. Tunings: {names}')
         print(f'{path}: continuing {tune.basename} '
               f'({dl.tuning_name(tune)!r})')
     redo = STEPS.index(args.redo) if args.redo else len(STEPS)
@@ -747,7 +809,13 @@ def main(args):
         elif step == 'fq_finder':
             fq_finder(tune)
             if not done(tune, 'fq_finder'):
-                print('fq_finder: not finished; run again to continue')
+                if ask_make_tones(tune):
+                    tones(tune, args)
+                    print('fq_finder: not finished; run again to '
+                          'continue it, then --redo tones')
+                else:
+                    print('fq_finder: not finished; run again to '
+                          'continue')
                 break
         else:
             tones(tune, args)

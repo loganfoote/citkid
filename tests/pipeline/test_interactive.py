@@ -237,6 +237,8 @@ def test_navigation_cancel_keeps_current_index_when_stale(qt_app, monkeypatch):
 
     assert win._nav_pos == 0
     assert win._idx_spin.value() == 0
+    # A typed row applies on Enter, not digit by digit
+    assert not win._idx_spin.keyboardTracking()
     with patch.object(
         QtWidgets.QMessageBox, 'question',
         return_value=QtWidgets.QMessageBox.Yes
@@ -317,7 +319,8 @@ def test_analysis_window_toolbar_hints_wrap_instead_of_widening_window(
 def test_analysis_window_height_fits_panels_up_to_screen(qt_app, monkeypatch):
     win = _make_window(qt_app, monkeypatch)
 
-    _assert_height_fits_content(qt_app, win, win._scroll, width=1200)
+    _assert_height_fits_content(qt_app, win, win._scroll, width=1200,
+                                full_height=True)
     with patch.object(
         QtWidgets.QMessageBox, 'question',
         return_value=QtWidgets.QMessageBox.Yes
@@ -325,9 +328,11 @@ def test_analysis_window_height_fits_panels_up_to_screen(qt_app, monkeypatch):
         win.close()
 
 
-def _assert_height_fits_content(qt_app, win, scroll, width):
+def _assert_height_fits_content(qt_app, win, scroll, width,
+                                full_height=False):
     """
-    Assert a window opens tall enough to avoid scrolling, up to the screen.
+    Assert a window opens tall enough to avoid scrolling, up to the screen
+    (or at the screen's height, when the panels share it).
 
     First checks the window as built (short mock panels: no scrollbar), then
     makes every panel taller than the screen and refits: the height is
@@ -338,13 +343,16 @@ def _assert_height_fits_content(qt_app, win, scroll, width):
     win (QMainWindow): Window with a ``_content_height`` method.
     scroll (QScrollArea): The window's panel scroll area.
     width (int): Preferred width passed when refitting.
+    full_height (bool): If True, the window opens at the screen's height
+        (its panels grow into it). Default False: at its content height.
     """
     from citkid.qt_compat import TITLE_BAR_MARGIN, available_screen_geometry
     max_height = available_screen_geometry().height() - TITLE_BAR_MARGIN
 
     win.show()
     qt_app.processEvents()
-    assert win.height() == min(win._content_height(), max_height)
+    assert win.height() == (max_height if full_height
+                            else min(win._content_height(), max_height))
     assert not scroll.verticalScrollBar().isVisible()
 
     for panel in win.panels:
@@ -520,6 +528,7 @@ def test_data_idxs_subset_navigation(qt_app, monkeypatch):
     assert win._res_label.text() == '2 / 3'
     assert (win._data_idx_spin.minimum(),
             win._data_idx_spin.maximum()) == (1, 4)
+    assert not win._data_idx_spin.keyboardTracking()
 
     win._advance_resonator(+1)
     assert (win._data_idx, win._nav_pos) == (4, 2)
@@ -2269,6 +2278,84 @@ def test_compact_combo_ignores_long_items(qt_app):
     assert combo.minimumSizeHint().width() < item_width / 2
 
 
+class _SidePanel(StepPanel):
+    """A panel with a control column left of its plots."""
+
+    def setup_ui(self):
+        root, ctrl = self._side_column()
+        self._span = QtWidgets.QDoubleSpinBox()
+        self._side_row(ctrl, 'span:', self._span)
+        self._run_btn = QtWidgets.QPushButton('Run')
+        ctrl.addWidget(self._run_btn)
+        self._status_label = QtWidgets.QLabel('ok')
+        ctrl.addWidget(self._status_label)
+        ctrl.addStretch()
+        self._gw = self._plot_widget(200)
+        root.addWidget(self._gw, stretch = 1)
+
+    def update_plots(self):
+        pass
+
+    def clear_plots(self):
+        pass
+
+    def _outputs_exist(self):
+        return True
+
+
+def test_side_column_panels_share_the_height(qt_app, monkeypatch):
+    """
+    A panel's controls sit in a fixed-width column left of its plots with
+    the section toggle on top; collapsing hides the plots and controls
+    but not the names; the panels divide the window's height, so a
+    collapsed panel gives its height to the others.
+    """
+    monkeypatch.setattr(icore, 'get_panel_class', lambda _names: _SidePanel)
+    monkeypatch.setattr(
+        icore.QtCore.QTimer, 'singleShot', lambda *_args, **_kwargs: None)
+    step1, step2 = _make_step('step1'), _make_step('step2')
+    ar = MagicMock()
+    ar.analysis_steps = [step1, step2]
+    ar._last_failures = {}
+    ar.DS = MagicMock()
+    ar.DS.nrows = 2
+    win = InteractiveAnalysisWindow(ar, panels=[('step1',), ('step2',)],
+                                    data_idxs=[0, 1], title='test')
+    win.show()
+    win.resize(900, 700)
+    qt_app.processEvents()
+    headers = win.findChildren(icore._SectionHeader)
+    assert len(headers) == 2
+    p1, p2 = win.panels
+    for header, panel in zip(headers, (p1, p2)):
+        assert panel.side.width() == icore.SIDE_WIDTH
+        assert header._btn.parent() is panel.side
+        assert header._names.text() == panel.step_names[0]
+        assert header._btn.text().startswith('▼  Panel')
+        # The plot widget takes the rest of the width and the height
+        assert panel._gw.width() > 2 * panel.side.width()
+        assert panel._gw.height() > panel.side.sizeHint().height()
+        assert (panel._gw.sizePolicy().verticalPolicy()
+                == QtWidgets.QSizePolicy.Policy.Ignored)
+    assert abs(p1.height() - p2.height()) <= 2
+    h1 = p1.height()
+    headers[0]._btn.click()
+    qt_app.processEvents()
+    assert not p1._gw.isVisible() and not p1._run_btn.isVisible()
+    assert not p1._span.isVisible() and headers[0]._names.isVisible()
+    assert headers[0]._btn.isVisible() and p1.isVisible()
+    assert headers[0]._btn.text().startswith('▶')
+    assert p2.height() > h1 and p1.height() < h1 / 2
+    headers[0]._btn.click()
+    qt_app.processEvents()
+    assert p1._gw.isVisible() and abs(p1.height() - p2.height()) <= 2
+    with patch.object(
+        QtWidgets.QMessageBox, 'question',
+        return_value=QtWidgets.QMessageBox.Yes
+    ):
+        win.close()
+
+
 def test_section_headers_clip_long_step_names(qt_app, monkeypatch):
     """Long step names must not set the panels' minimum width."""
     win = _make_window(qt_app, monkeypatch)
@@ -2903,6 +2990,28 @@ def test_bad_mark_reaches_later_panels(qt_app):
     win = SimpleNamespace(panels=panels, _series_idx=None)
     InteractiveAnalysisWindow._on_panel_marked_bad(win, panels[1])
     panels[0]._write_nan_outputs.assert_not_called()
+    # The mark takes the panel's scope: global by default, local for
+    # a panel no later stage needs (the IQ fit)
+    from citkid.pipeline.interactive.fit_iq import IQFitPanel
+    assert IQFitPanel.bad_scope == 'local' and StepPanel.bad_scope == \
+        'global'
+    records = []
+    local = _gain_panel(_gain_ds())
+    local.bad_scope = 'local'
+    for source, reason in ((panels[1], 'noisy'), (local, 'bad fit')):
+        w2 = SimpleNamespace(panels=[source], _series_idx=None,
+                             _record=lambda *a: records.append(a),
+                             _bad_reason=reason)
+        InteractiveAnalysisWindow._on_panel_marked_bad(w2, source)
+    assert records == [('bad', 'noisy', 'global'),
+                       ('bad', 'bad fit', 'local')]
+    # The reason dialog is asked with the panel's scope
+    asked = []
+    w2 = SimpleNamespace(
+        _ask_reason=lambda scope: asked.append(scope) or ('r', scope))
+    assert InteractiveAnalysisWindow._ask_bad_reason(w2, local)
+    assert InteractiveAnalysisWindow._ask_bad_reason(w2, panels[0])
+    assert asked == ['local', 'global'] and w2._bad_reason == 'r'
     panels[1]._write_nan_outputs.assert_not_called()
     panels[2]._write_nan_outputs.assert_called_once_with(redraw=False)
     panels[2].blank_plots.assert_called_once()
@@ -3489,6 +3598,11 @@ def test_outputs_exist_checks_the_last_steps_outputs(qt_app):
 def test_auto_initialize_runs_missing_global_prereqs_then_draws_or_runs(
     qt_app
 ):
+    """
+    A missing global prerequisite runs through the DataSet's own step
+    runner and is saved (no invalidation plan, so a calibration whose
+    global output is missing while its rows are saved keeps the rows).
+    """
     from types import SimpleNamespace
     pre = _make_step('make_x', 'global', return_names=['x'])
     unrelated = _make_step('other', 'global', return_names=['q'])
@@ -3496,38 +3610,40 @@ def test_auto_initialize_runs_missing_global_prereqs_then_draws_or_runs(
     ar = MagicMock()
     ar.analysis_steps = [_make_step('a')]
     ar.path = [{'task': pre}, {'task': unrelated}, {'task': per_row}]
-    ar.DS = SimpleNamespace(y=[1.0])
+    ar._resolve_step_scope.return_value = ('analysis', 1)
+    ar.DS = SimpleNamespace(y=[1.0], _execute_step=MagicMock())
     panel = _ParamPanel(ar, ('a',), data_idx=0)
     panel.refresh_plots = MagicMock()
     panel.run_steps = MagicMock(return_value=True)
 
     panel._auto_initialize()          # 'x' missing: make_x runs first
-    ar.execute_step.assert_called_once_with(pre, data_idx=None, save=False)
+    ar.DS._execute_step.assert_called_once_with(
+        pre, data_idx=None, save=True, pipeline_scope='analysis',
+        step_index=1)
+    ar.execute_step.assert_not_called()
     panel.refresh_plots.assert_called_once()   # 'y' exists: just draw
     panel.run_steps.assert_not_called()
 
-    ar.execute_step.reset_mock()
-    ar.DS = SimpleNamespace(x=None)    # prerequisite not done, no 'y'
-    panel._auto_initialize()
-    ar.execute_step.assert_called_once_with(pre, data_idx=None, save=False)
+    ar.DS = SimpleNamespace(x=None, _execute_step=MagicMock())
+    panel._auto_initialize()          # prerequisite not done, no 'y'
+    ar.DS._execute_step.assert_called_once()
     panel.run_steps.assert_called_once_with(save=False)
 
-    ar.execute_step.reset_mock()
-    ar.DS = SimpleNamespace(x=[0.0], y=[1.0])  # prerequisite done
-    panel._auto_initialize()
-    ar.execute_step.assert_not_called()
+    ar.DS = SimpleNamespace(x=[0.0], y=[1.0], _execute_step=MagicMock())
+    panel._auto_initialize()          # prerequisite done
+    ar.DS._execute_step.assert_not_called()
 
     # A failing prerequisite is reported, not raised
-    ar.DS = SimpleNamespace(y=[1.0])
-    ar.execute_step.side_effect = ValueError('no spans')
+    ar.DS = SimpleNamespace(
+        y=[1.0], _execute_step=MagicMock(side_effect=ValueError('no spans')))
     panel._auto_initialize()
     assert panel.refresh_plots.call_count == 3
 
     # A runner without a path skips the prerequisites
     del ar.path
-    ar.execute_step.reset_mock()
+    ar.DS = SimpleNamespace(y=[1.0], _execute_step=MagicMock())
     panel._auto_initialize()
-    ar.execute_step.assert_not_called()
+    ar.DS._execute_step.assert_not_called()
 
 
 def _prefetch_window(qt_app, monkeypatch):
@@ -3663,17 +3779,17 @@ def test_mark_tone_bad_asks_reason(qt_app, monkeypatch):
     for panel in win.panels:
         panel._write_nan_outputs = MagicMock(return_value=True)
         panel.blank_plots = MagicMock()
-    win._ask_reason = lambda: None
+    win._ask_reason = lambda scope = 'global': None
     win._mark_tone_bad()
     win.panels[0]._write_nan_outputs.assert_not_called()
     assert recorded == []
-    win._ask_reason = lambda: 'bad fit'
+    win._ask_reason = lambda scope = 'global': 'bad fit'
     win._mark_tone_bad()
     win.panels[0]._write_nan_outputs.assert_called_once()
     win.panels[1]._write_nan_outputs.assert_called_once_with(redraw=False)
     assert recorded == [('bad', 'bad fit')]
     # A panel's own Bad Data button asks too
-    win._ask_reason = lambda: 'high noise'
+    win._ask_reason = lambda scope = 'global': 'high noise'
     win.panels[1]._on_bad_data_clicked()
     assert recorded[-1] == ('bad', 'high noise')
     win._ask_note = lambda: 'note'

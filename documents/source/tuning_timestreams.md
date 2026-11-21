@@ -80,7 +80,7 @@ mark (Tone marks tab) and can clear one or change its scope.
 |---|---|---|---|
 | `03_tune.py`, IQ series window | Mark Tone Bad (Ctrl+M); Mark All Series Bad asks keep (note) or remove (bad) | global | Add Note (Ctrl+T) |
 | `03_tune.py`, fq_finder window | Rejecting a tone; un-rejecting clears it | global | N |
-| `05_calibrate_streams.py` window | Mark tone bad (M), or a panel's Bad Data | global (forced) | T |
+| `05_calibrate_streams.py` window | Mark tone bad (M), or a panel's Bad Data | global (forced); local (forced) for the IQ fit panel, whose fit no later stage uses | T |
 | `06a`, `06b` windows | B (again to clear) | local | T |
 | `07_psds.py` overview window | B (again to clear); marked tones and `BAD_TONES` are left out of the spectra | local | T |
 
@@ -101,7 +101,7 @@ sweeps are never retaken.
 | power_sweep | Target sweep at each power in `POWERS` | `power_sweep/set{i}` |
 | power_fits | IQ series window: IQ loop fits at every power, $a_\mathrm{nl}$ vs power per resonator; the power where $a_\mathrm{nl}$ reaches `ANL` is marked (Shift+click or drag to choose another); no fit: the median of the others; clipped to `ARES_LIMITS` | `power_fits`, `power_choice` |
 | fq_sweep | Target sweep at the chosen powers | `fq_sweep` |
-| fq_finder | Window: set each tone's frequency and span, or reject it (the tone's power is shown); resumes where it stopped | `fres_opt`, `qres_opt`, `reject_reason` |
+| fq_finder | Window: set each tone's frequency and span, or reject it (the tone's power is shown); resumes where it stopped. Closed early, a box asks whether to make the tones from the resonators set so far or to stop and continue later | `fres_opt`, `qres_opt`, `reject_reason` |
 | tones | The tuned tones, without rejected and bad-marked ones | `tones` |
 
 `citkid.daq_layout.port_tuning` copies `tones/`, `crs_config/` and the
@@ -110,7 +110,8 @@ resonator list to another store (a new cooldown) without the sweeps.
 To tune again at the powers of an earlier tuning, give `TUNING` a new
 name and set `PORT_TUNE` to the earlier tuning's name or index (and
 `PORT_STORE` to its store's path when it is in another store): the
-plan, power sweep and power fits are skipped,
+plan, power sweep and power fits are skipped (the same settings
+continue the ported tuning later),
 `tones_init` is the earlier tuning's tones at the frequencies, spans
 and powers `PREDICT` returns (`predict_tones` in the script, from the
 earlier `fres`, `qres` and `ares`; `None` keeps them), and only the fq
@@ -153,7 +154,8 @@ sweep, fq_finder and tones steps run.
 
 # 04a_stream.py: take timestreams
 
-A window on one tuning (the latest with tones, or `--tune name`):
+A window on one tuning (the latest with tones, or `--tuning name`; the
+Tuning box at the top switches to another):
 
 | Part | What it does |
 |---|---|
@@ -187,7 +189,7 @@ window is open. `--simulate` streams the store's simulated device.
 
 ## Command line
 
-`--modules`, `--tune name`, `--simulate`.
+`--modules`, `--tuning name`, `--simulate`.
 
 # 04b_stream_batch.py: timestreams without a window
 
@@ -215,7 +217,7 @@ the settings between calls.
 
 ## Command line
 
-`--modules`, `--tune name`, `--simulate`, `--notes`.
+`--modules`, `--tuning name`, `--simulate`, `--notes`.
 
 # store_browser.py: look around a store
 
@@ -250,15 +252,22 @@ opening the window.
 
 `CALIBRATE` lists the runs to calibrate: by name or `run = n`, with the
 zarr chunks to load (a few are enough) and optionally the tone sets.
-Empty, the script lists the runs. The chosen parts of every run of a
-tone set are joined into one DataSet (`set{s}`, one row per tone) and
-calibrated (gain fit, IQ circle fit, x calibration), first in the window
-and then in batch. The result is `ts_cal{c}`; the same `CALIBRATE`
-continues in it, another or `--new` starts a new one.
+Empty, the script lists the runs. The chosen parts of the runs taken
+on one calibration sweep are joined into one DataSet (`set{s}`, or
+`set{s}_cal{j}` when several sweeps of a tone set are chosen; one row
+per tone) and calibrated (gain fit, IQ circle fit, x calibration),
+first in the window and then in batch. A DataSet belongs to its
+sweep: the analyses apply it only to that sweep's timestreams. The
+result is `ts_cal{c}`, named `CALIBRATION`. The same `CALIBRATE`
+continues in the latest one; `CALIBRATION` continues in the one with
+that name, or starts a new one with it when none has it; another
+choice or `--new` starts a new one.
 
 In the window, Mark tone bad (M) or a panel's Bad Data asks a reason,
 sets the tone's outputs to NaN and records the mark; Add note (T) keeps
-the tone.
+the tone. Bad Data on the IQ fit panel (`FIT_IQ`) marks the fit bad
+only: the mark is local, so the timestream stays good for the later
+scripts, and the report's fit table shows the row as bad.
 
 ## Settings
 
@@ -267,13 +276,14 @@ the tone.
 | Setting | Meaning |
 |---|---|
 | `CALIBRATE` | Runs to calibrate, one `dict(...)` per run with the keys `name` (the latest run with it) or `run` (its index n in `ts{n}`); `chunks` (left out: all, `n`: the first n, `(first, stop)`); `tone_sets` (left out: all). Empty: list the runs |
+| `CALIBRATION` | Name of the calibration: continued when it exists (e.g. to add the IQ fits to it), made otherwise; an index (`2`, `'ts_cal2'`) continues that one. `None`: the latest made with `CALIBRATE`, else a new one named `ts_cal{c}` |
 | `F_AVG` | Fine sweep points averaged together |
 | `INTERACTIVE` | Review in the window before the batch |
 | `FIT_IQ` | Also fit each resonance (nonlinear IQ fit): an IQ fit panel in the window, the rest in batch; the fits go to the report |
 
 ## Command line
 
-`--new`, `--fit-iq`, `--no-gui`.
+`--cal name`, `--new`, `--fit-iq`, `--no-gui`.
 
 # 06a_find_photons.py: find photons
 
@@ -323,7 +333,7 @@ the buttons. Right, for the selected tone (or all tones together):
 | Revert | Ctrl+D puts the script's thresholds back on the tone |
 | Mark bad / note | B (reason; again to clear), T (note) |
 | Overview | O: histograms over all tones of photon height, lifetime and rate, with draggable review limits; click a bar or a listed tone to open it |
-| Tone list | Two boxes above it: show only the flagged tones (outside the overview limits), and include the tones marked bad |
+| Tone list | Two boxes above it: show only the flagged tones (outside the overview limits), and include the tones marked bad. A tone "not run" (`TONES_BEFORE_WINDOW`) runs when selected |
 | Rescale | R |
 
 ## Saved results, continuing and reusing
@@ -359,11 +369,13 @@ by `citkid.pipeline.photon_finder.migrate_results(root)`.
 
 | Setting | Meaning |
 |---|---|
-| `CALIBRATION` | `ts_cal` index (`None`: the latest) |
+| `CALIBRATION` | Calibration, by name or `ts_cal` index (`None`: the latest) |
 | `TIMESTREAMS` | Timestreams, by index as listed or run name; empty: list them |
 | `NAME` | Result name for a single timestream (`''`: the run's name) |
 | `REFERENCE`, `REUSE` | A saved result to reuse (its name), and `'settings'` or `'filter'` |
 | `INTERACTIVE` | Check the thresholds in the window |
+| `TONES_BEFORE_WINDOW` | Tones detected before the window opens (`None`: all). The others are listed "not run" and run when selected, when thresholds are applied to all tones, or with the window's thresholds when it closes |
+| `WINDOW_FIRST_ONLY` | Open the window on the first chosen timestream only; the others take its result as the reference (`REUSE`) |
 | `INIT_NSIGMA`, `INIT_HMAX` | First pass: peak threshold (noise sigma) and upper cut (times the median peak) |
 | `OF_ITERATIONS` | Optimal-filter iterations |
 | `HMIN`, `HMAX` | Height window of single photons, kHz/GHz |
@@ -377,7 +389,7 @@ by `citkid.pipeline.photon_finder.migrate_results(root)`.
 
 ## Command line
 
-`--cal c`, `--name`, `--continue`, `--overwrite`, `--reference name
+`--cal name`, `--name`, `--continue`, `--overwrite`, `--reference name
 --reuse filter`, `--refit-tau`, `--no-gui`.
 
 # 06b_hee.py: HEE lifetimes
@@ -409,7 +421,8 @@ R puts them back: the timestream's heights up to a little above the
 to its own peak. B marks bad, T adds a note, O opens the overview
 (median height, lifetime, pulse rate). Two boxes above the tone list
 show only the flagged tones (outside the overview limits) and
-include the tones marked bad.
+include the tones marked bad. A tone "not run"
+(`TONES_BEFORE_WINDOW`) runs when selected.
 
 ```text
 hee/<name>/          attrs: run, tone set, calibration, events,
@@ -429,7 +442,8 @@ hee/<name>/          attrs: run, tone set, calibration, events,
 
 | Setting | Meaning |
 |---|---|
-| `CALIBRATION`, `TIMESTREAMS`, `NAME`, `INTERACTIVE` | As in `06a_find_photons.py` |
+| `CALIBRATION`, `TIMESTREAMS`, `NAME`, `INTERACTIVE`, `TONES_BEFORE_WINDOW` | As in `06a_find_photons.py` |
+| `WINDOW_FIRST_ONLY` | Open the window on the first chosen timestream only; the others take its values (global and per tone) |
 | `EVENTS` | `'auto'`, `'photons'`, or `'triggers'` |
 | `PHOTONS` | Photon result to take the events from (`None`: this timestream's) |
 | `TRIG_NSIGMA`, `COINC_WIN`, `HEE_MIN_MULT` | Triggers: threshold (noise sigma), largest gap within an event (samples), fewest tones |
@@ -442,7 +456,7 @@ hee/<name>/          attrs: run, tone set, calibration, events,
 
 ## Command line
 
-`--cal c`, `--name`, `--events triggers`, `--photons name`,
+`--cal name`, `--name`, `--events triggers`, `--photons name`,
 `--continue`, `--overwrite`, `--no-gui`.
 
 # 07_psds.py: noise spectra

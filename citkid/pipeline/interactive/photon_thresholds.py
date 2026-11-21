@@ -42,7 +42,10 @@ thresholds either
 to the selected tone (the default: an override for that resonator) or to
 all tones (the global values, used by every tone without an override),
 and runs the detection again for the tones they change, through the
-``rerun`` callable (``pipeline.photon_finder.detect_timestream``). After
+``rerun`` callable (``pipeline.photon_finder.detect_timestream``). A tone
+without a result yet (not in ``results``) is listed as "not run" and
+is run, with the thresholds as they stand, when it is selected or when
+the thresholds are applied to all tones. After
 applying to all tones, the scope goes back to the selected tone. A and
 D (or the buttons) move to the previous and next tone; thresholds changed
 but not rerun are applied before moving on. "Revert tone to defaults"
@@ -205,7 +208,9 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
 
         Parameters:
         ts (dict): the timestream (``photon_finder.list_timestreams``).
-        results (dict): its ``detect_timestream`` results.
+        results (dict): its ``detect_timestream`` results; a row left
+            out is "not run" until it is selected or run with all
+            tones.
         thresholds (Thresholds): starting thresholds (changed in place).
         rerun (callable): function of (rows, thresholds) returning the new
             results of those rows (dict row: result), e.g. a wrapper of
@@ -262,7 +267,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         self._build_plots()
         central = QtWidgets.QWidget()
         lay = QtWidgets.QHBoxLayout(central)
-        lay.addWidget(self._panel)
+        lay.addWidget(self._scroll)
         lay.addWidget(self.plots_widget, stretch = 1)
         self.setCentralWidget(central)
         add_help(self, 'Photon thresholds', [
@@ -281,6 +286,9 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
                  'window'),
                 ('Include tones marked bad', 'List them too'),
                 ('Done', 'Save and close')]),
+            ('Tones', [
+                ('not run', 'Not detected yet: select the tone to run '
+                 'it, or apply the thresholds to all tones')]),
             ('Mouse', [('Scroll / drag', 'Zoom / pan a plot'),
                        ('Right-click', 'Plot menu (axes, log scale, export)')]),
         ])
@@ -361,8 +369,10 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         self.scope_tone = QtWidgets.QRadioButton('Apply to this tone')
         self.scope_all = QtWidgets.QRadioButton('Apply to all tones')
         self.scope_tone.setChecked(True)
-        lay.addWidget(self.scope_tone)
-        lay.addWidget(self.scope_all)
+        scope = QtWidgets.QHBoxLayout()
+        scope.addWidget(self.scope_tone)
+        scope.addWidget(self.scope_all)
+        lay.addLayout(scope)
         self.rerun_btn = QtWidgets.QPushButton('Rerun (Ctrl+R)')
         self.rerun_btn.clicked.connect(self.rerun)
         QtWidgets.QShortcut(QtGui.QKeySequence('Ctrl+R'), self, self.rerun)
@@ -387,16 +397,17 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         self.fit_scope_tone = QtWidgets.QRadioButton('Apply to this tone')
         self.fit_scope_all = QtWidgets.QRadioButton('Apply to all tones')
         self.fit_scope_tone.setChecked(True)
-        fit_lay.addWidget(self.fit_scope_tone)
-        fit_lay.addWidget(self.fit_scope_all)
+        fit_scope = QtWidgets.QHBoxLayout()
+        fit_scope.addWidget(self.fit_scope_tone)
+        fit_scope.addWidget(self.fit_scope_all)
+        fit_lay.addLayout(fit_scope)
         self.fit_btn = QtWidgets.QPushButton('Apply fit (Ctrl+F)')
         self.fit_btn.clicked.connect(self.apply_fit)
         QtWidgets.QShortcut(QtGui.QKeySequence('Ctrl+F'), self,
                             self.apply_fit)
         fit_lay.addWidget(self.fit_btn)
         lay.addWidget(fit_box)
-        self.reset_btn = QtWidgets.QPushButton(
-            'Revert tone to defaults (Ctrl+D)')
+        self.reset_btn = QtWidgets.QPushButton('Revert tone (Ctrl+D)')
         self.reset_btn.setToolTip("Put the thresholds the window opened "
                                   "with (the script's) back on this tone "
                                   'and rerun it')
@@ -421,9 +432,13 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         self.rescale_btn.clicked.connect(self.rescale)
         self.done_btn = QtWidgets.QPushButton('Done')
         self.done_btn.clicked.connect(self.close)
-        for b in (self.reset_btn, self.bad_btn, self.note_btn,
-                  self.overview_btn, self.rescale_btn, self.done_btn):
-            lay.addWidget(b)
+        # Two columns, so the panel fits a short screen
+        grid = QtWidgets.QGridLayout()
+        for k, b in enumerate((self.reset_btn, self.bad_btn, self.note_btn,
+                               self.overview_btn, self.rescale_btn,
+                               self.done_btn)):
+            grid.addWidget(b, k // 2, k % 2)
+        lay.addLayout(grid)
         self.status = QtWidgets.QLabel()
         self.status.setWordWrap(True)
         self.status.setToolTip('')
@@ -440,6 +455,15 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
         # Nothing in the panel moves after this: the tone list takes the
         # stretch, everything else keeps its height
         freeze_heights(lay, skip = (self.tone_list,))
+        # The panel scrolls on a short screen instead of squeezing its
+        # widgets together; the width is the panel's plus the scrollbar
+        self._scroll = QtWidgets.QScrollArea()
+        self._scroll.setWidget(self._panel)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setFixedWidth(self._panel.width() + int(
+            24 * self._ui_scale))
+        self._scroll.setMinimumHeight(300)
 
     def _build_plots(self):
         """
@@ -603,19 +627,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
             if not self._include_bad and i != selected and \
                     self.thresholds.is_bad(r_idx):
                 continue
-            res = self.results.get(row)
-            mark = 'x' if self.thresholds.is_bad(r_idx) else \
-                '*' if r_idx in self.thresholds.reviewed else ' '
-            if self.thresholds.is_bad(r_idx):
-                text = (f'{mark} res {r_idx}: bad'
-                        + (f" ({self.thresholds.bad[int(r_idx)]})"
-                           if self.thresholds.bad[int(r_idx)] else ''))
-            elif isinstance(res, dict):
-                text = (f"{mark} res {r_idx}: {len(res['events'])} pulses, "
-                        f"{res['rate']:.3g}/s")
-            else:
-                text = f'{mark} res {r_idx}: failed'
-            self.tone_list.addItem(text)
+            self.tone_list.addItem(self._list_text(i))
             self._list_rows.append(i)
         self.tone_list.blockSignals(False)
         n = len(self._list_rows)
@@ -627,6 +639,43 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
             self.tone_list.setCurrentRow(self._list_rows.index(selected))
         elif n:
             self.tone_list.setCurrentRow(0)
+
+    def _list_text(self, i):
+        """
+        Return a tone's line in the list.
+
+        Parameters:
+        i (int): index in ``rows``.
+
+        Returns:
+        text (str): the line.
+        """
+        r_idx = self.res_idxs[i]
+        res = self.results.get(self.rows[i])
+        mark = 'x' if self.thresholds.is_bad(r_idx) else \
+            '*' if r_idx in self.thresholds.reviewed else ' '
+        if self.thresholds.is_bad(r_idx):
+            return (f'{mark} res {r_idx}: bad'
+                    + (f" ({self.thresholds.bad[int(r_idx)]})"
+                       if self.thresholds.bad[int(r_idx)] else ''))
+        if isinstance(res, dict):
+            return (f"{mark} res {r_idx}: {len(res['events'])} pulses, "
+                    f"{res['rate']:.3g}/s")
+        if res is None:
+            return f'{mark} res {r_idx}: not run'
+        return f'{mark} res {r_idx}: failed'
+
+    def _show_text(self, i):
+        """
+        Put a tone's line in the list again (after it ran).
+
+        Parameters:
+        i (int): index in ``rows``.
+        """
+        if i in self._list_rows:
+            item = self.tone_list.item(self._list_rows.index(i))
+            if item is not None:
+                item.setText(self._list_text(i))
 
     def current(self):
         """
@@ -774,13 +823,18 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
 
     def select(self, i):
         """
-        Show tone i: its thresholds and plots.
+        Show tone i: its thresholds and plots, running it first if it
+        has not been run.
 
         Parameters:
         i (int): index in ``rows``.
         """
         if i < 0:
             return
+        if self.rows[i] not in self.results:
+            self._run_rows([self.rows[i]], self.thresholds)
+            self._show_text(i)
+            self._refresh_overview()
         th = self.thresholds.for_tone(self.res_idxs[i])
         self._set_values(th['hmin'], th['hmax'], th['init_hmax'])
         self.tau_skip_box.setValue(int(th['tau_skip']))

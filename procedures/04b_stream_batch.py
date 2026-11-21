@@ -7,7 +7,7 @@ several sets or settings in a row, loop over ``take`` (or
 
 Usage:
     python 04b_stream_batch.py --device deviceA --modules 1
-    python 04b_stream_batch.py --device deviceA --modules 1 --tune 0
+    python 04b_stream_batch.py --device deviceA --modules 1 --tuning 0
 """
 import argparse
 import asyncio
@@ -71,7 +71,7 @@ def parse_args(argv = None):
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device)')
     p.add_argument('--modules', type = int, nargs = '+', default = MODULES)
-    p.add_argument('--tune', default = None,
+    p.add_argument('--tuning', default = None,
                    help = 'tuning, by name or index (default: the '
                    'latest with tuned tones)')
     p.add_argument('--simulate', action = 'store_true',
@@ -185,7 +185,7 @@ def main(args):
     path = store_path(args)
     root = dl.open_store(path, mode = 'a')
     dl.check_store(root)
-    tune = find_tuning(root, args.tune)
+    tune = find_tuning(root, args.tuning)
     serial = SIM_SERIAL if args.simulate else args.serial
     owner = f'04b_stream_batch.py ({os.path.basename(path)}, {tune.basename})'
     with board_lock.exclusive(serial, owner = owner):

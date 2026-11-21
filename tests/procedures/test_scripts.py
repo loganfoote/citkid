@@ -509,6 +509,8 @@ def test_03_tune(tmp_path, monkeypatch, capsys, n_cal):
 
     monkeypatch.setattr(m, 'run_iq_series', fake_iq_series)
     monkeypatch.setattr(m, 'run_fqfinder', fake_fqfinder)
+    answers = []
+    monkeypatch.setattr(m, 'ask_make_tones', lambda t: answers.pop(0))
     argv = ['--store', str(path), '--simulate']
     assert m.main(m.parse_args(argv)) == 0
     assert calls == ['iq', 'fq']
@@ -588,6 +590,39 @@ def test_03_tune(tmp_path, monkeypatch, capsys, n_cal):
     assert len(dl.load_tones(t1['tones'])['fres']) == len(t0['fres']) - 1
     assert 'at its powers, frequencies, spans and powers predicted' in \
         capsys.readouterr().out
+    # Run again with the same settings: the ported tuning is continued;
+    # with another source it is refused
+    assert m.main(m.parse_args(argv + ['--tuning', 'ported',
+                                       '--port-tune', '0'])) == 1
+    assert 'continuing tune1' in capsys.readouterr().out
+    with pytest.raises(ValueError, match = 'not ported from'):
+        m.main(m.parse_args(argv + ['--tuning', 'ported',
+                                    '--port-tune', 'ported']))
+    # fq_finder closed early: stop, or make the tones from the set ones
+    def unfinished(f, z, fres, qres, res_idxs, zarr_grp, **kwargs):
+        """
+        Stand in for fq_finder, leaving the first resonator unset.
+
+        Parameters:
+        f, z, fres, qres, res_idxs, zarr_grp, **kwargs: see
+            ``fake_fqfinder``.
+        """
+        if 'fres_opt' not in zarr_grp:
+            fake_fqfinder(f, z, fres, qres, res_idxs, zarr_grp, **kwargs)
+        zarr_grp['fres_opt'][0] = np.nan
+
+    monkeypatch.setattr(m, 'run_fqfinder', unfinished)
+    answers[:] = [False]
+    assert m.main(m.parse_args(argv + ['--tuning', 'part',
+                                       '--port-tune', '0'])) == 2
+    out = capsys.readouterr().out
+    assert 'not finished' in out and 'tones' not in root['tune2']
+    answers[:] = [True]
+    monkeypatch.setattr(m, 'run_fqfinder', unfinished)
+    assert m.main(m.parse_args(argv + ['--tuning', 'part',
+                                       '--port-tune', '0'])) == 2
+    assert len(dl.load_tones(root['tune2/tones'])['fres']) == \
+        len(t0['fres']) - 2
     monkeypatch.setattr(m, 'PREDICT', lambda f, q, a: (f[:1], q, a))
     with pytest.raises(ValueError, match = 'same shape'):
         m.main(m.parse_args(argv + ['--tuning', 'p2', '--port-tune',
@@ -657,8 +692,8 @@ def test_04a_stream(tmp_path, monkeypatch):
     assert seen['sweep_kwargs']['npoints_fine'] == m.NPOINTS_FINE
     assert seen['fres_update'] is None
     with pytest.raises(KeyError, match = 'no tones'):
-        m.main(m.parse_args(['--store', str(path), '--simulate', '--tune',
-                             '1']))
+        m.main(m.parse_args(['--store', str(path), '--simulate',
+                             '--tuning', '1']))
     # Simulated photons and HEEs come from the store (simulate_store.py)
     assert seen['crs'].pulses is None
     root['simulation'].attrs['pulses'] = dict(rate = 5.)
@@ -798,19 +833,21 @@ def test_05_calibrate_streams(tmp_path, monkeypatch, capsys):
     sel = [dict(name = 'dark6', chunks = 1), dict(run = 1, tone_sets = [1])]
     monkeypatch.setattr(m, 'CALIBRATE', sel)
     ds = m.main(m.parse_args(argv))
-    # One DataSet per tone set: set 0 from the first entry, set 1 from
-    # both (its windows one after another)
-    assert sorted(ds) == ['set0', 'set1']
+    # One DataSet per calibration sweep: set 0 from the first entry,
+    # and set 1 of each entry on its own sweep (the second run
+    # calibrated set 1 anew), so never joined
+    names = sorted(n for n in ds if not n.endswith('_caltones'))
+    assert names[0] == 'set0' and len(names) == 3 and \
+        all(n.startswith('set1_cal') for n in names[1:])
     root = dl.open_store(tmp_path / 's.zarr')
     cal = root['ts_cal0']
     assert cal.attrs['kind'] == 'analysis' and cal.attrs['selection'] == sel
     tone_set = root['tune0/tones/tone_set'][:]
-    for s in (0, 1):
-        d = ds[f'set{s}']
+    for name in names:
+        d, s = ds[name], (0 if name == 'set0' else 1)
         assert len(d.res_idxs[:]) == int((tone_set == s).sum())
         assert np.isfinite(np.asarray(d.xt[0])).all()
-    assert len(np.asarray(ds['set1'].source_bounds)) == 2
-    assert len(np.asarray(ds['set0'].source_bounds)) == 1
+        assert len(np.asarray(d.source_bounds)) == 1
     # Same choice: same cal group; a new one otherwise
     m.main(m.parse_args(argv))
     assert dl.list_indices(dl.open_store(tmp_path / 's.zarr'),
@@ -819,13 +856,45 @@ def test_05_calibrate_streams(tmp_path, monkeypatch, capsys):
     m.main(m.parse_args(argv))
     assert dl.list_indices(dl.open_store(tmp_path / 's.zarr'),
                            'ts_cal') == [0, 1]
+    # CALIBRATION (--cal) continues a group that is not the latest,
+    # by index in any form, if it was made with the same choice
+    monkeypatch.setattr(m, 'CALIBRATE', sel)
+    for which in ('0', 'ts_cal0'):
+        m.main(m.parse_args(argv + ['--cal', which]))
+        assert "Continuing ts_cal0 ('ts_cal0')" in \
+            capsys.readouterr().out
+    assert dl.list_indices(dl.open_store(tmp_path / 's.zarr'),
+                           'ts_cal') == [0, 1]
+    with pytest.raises(ValueError, match = 'another choice'):
+        m.main(m.parse_args(argv + ['--cal', '1']))
+    with pytest.raises(ValueError, match = 'no ts_cal group'):
+        m.main(m.parse_args(argv + ['--cal', '7']))
+    with pytest.raises(ValueError, match = 'not an index'):
+        m.main(m.parse_args(argv + ['--cal', '0', '--new']))
+    # A name no calibration has starts a new one with it, which the
+    # name then continues; --new with the name starts another
+    m.main(m.parse_args(argv + ['--cal', 'bbt']))
+    assert "Calibrating into ts_cal2 ('bbt')" in capsys.readouterr().out
+    m.main(m.parse_args(argv + ['--cal', 'bbt']))
+    assert "Continuing ts_cal2 ('bbt')" in capsys.readouterr().out
+    m.main(m.parse_args(argv + ['--cal', 'bbt', '--new']))
+    assert "Calibrating into ts_cal3 ('bbt')" in capsys.readouterr().out
+    root = dl.open_store(tmp_path / 's.zarr')
+    assert dl.find_calibration(root, 'bbt').path == 'ts_cal3'
+    assert dl.calibration_name(root['ts_cal3']) == 'bbt'
+    assert dl.item_name(root['ts_cal3']) == 'bbt'
+    assert dl.calibration_name(root['ts_cal0']) == 'ts_cal0'
+    assert dl.find_calibration(root, 2).path == 'ts_cal2'
+    assert dl.find_calibration(root, 'nope') is None
+    monkeypatch.setattr(m, 'CALIBRATE', sel[:1])
     # The window is opened unless --no-gui
     opened = []
     monkeypatch.setattr(m, 'run_ts_analysis',
                         lambda AR, title = '': opened.append(title))
     m.main(m.parse_args(argv[:2]))
     # One window per tone set
-    assert len(opened) == 2 and all('ts_cal1' in t for t in opened)
+    # A new group: the latest (ts_cal3, 'bbt') has another choice
+    assert len(opened) == 2 and all('ts_cal4' in t for t in opened)
     # FIT_IQ: the window with the IQ fit panel, then every row fit in
     # batch; the DataSet records it
     iq_opened = []
@@ -836,7 +905,7 @@ def test_05_calibrate_streams(tmp_path, monkeypatch, capsys):
     assert len(iq_opened) == 2 and not opened[2:]
     root = dl.open_store(tmp_path / 's.zarr')
     c = dl.list_indices(root, 'ts_cal')[-1]
-    for name in ('set0', 'set1'):
+    for name in (n for n in ds if not n.endswith('_caltones')):
         d = ds[name]
         assert d.saved_row_mask('iq_popt').all()
         popt = np.asarray(d.iq_popt[:], float)
@@ -1385,10 +1454,10 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
     assert 'ts_photons1' in root and 'not moved' in capsys.readouterr().out
     # Tones whose x calibration failed are left out of the listing:
     # NaN poly_x, or a row that was never saved
-    arr = root['ts_cal0/set0/poly_x/data']
+    arr = root['ts_cal0/set0_cal0/poly_x/data']
     saved = arr[0]
     arr[0] = np.nan
-    mask = root['ts_cal0/set0/poly_x/row_exists']
+    mask = root['ts_cal0/set0_cal0/poly_x/row_exists']
     mask_saved = mask[1]
     mask[1] = False
     try:
@@ -1961,7 +2030,7 @@ def test_07_psds_uncalibrated(photon_store, monkeypatch, capsys):
     m = load_script('07_psds.py')
     monkeypatch.setattr(po, 'run_psd_overview', lambda *a, **k: ({}, {}))
     root = dl.open_store(path, mode = 'a')
-    arr = root['ts_cal0/set0/poly_x/data']
+    arr = root['ts_cal0/set0_cal0/poly_x/data']
     saved = arr[0]
     arr[0] = np.nan
     try:
@@ -2271,3 +2340,230 @@ def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
     # Rebuilt again on request, the attachment stays
     assert m.main(m.parse_args(argv + ['--no-res-pages'])) == [str(dev)]
     assert (dev / 'attachments' / 'tune0' / 'wiring.txt').exists()
+
+
+def test_06_tones_before_window(photon_store, monkeypatch, capsys):
+    """
+    With TONES_BEFORE_WINDOW only the first tones are detected before
+    the window; the window runs others on request, and those still not
+    run when it closes take its thresholds. With WINDOW_FIRST_ONLY the
+    window opens on the first timestream only and the others take its
+    result as the reference.
+    """
+    import citkid.pipeline.interactive.photon_thresholds as pt
+    path, _ = photon_store
+    m = load_script('06a_find_photons.py')
+    argv = ['--store', str(path), '--overwrite']
+    windows = []
+
+    def fake_window(ts, results, thresholds, rerun, **kwargs):
+        """
+        Stand in for the window: check only the first two tones ran,
+        widen hmax and run a third tone with it.
+
+        Parameters:
+        ts (dict): the timestream.
+        results (dict): its results.
+        thresholds (Thresholds): its thresholds.
+        rerun (callable): reruns tones.
+
+        Returns:
+        thresholds, results: as the window.
+        """
+        windows.append(ts['run'])
+        assert sorted(results) == sorted(int(r) for r in ts['rows'][:2])
+        assert len(ts['rows']) > 3
+        thresholds.hmax = 3.4
+        r = int(ts['rows'][2])
+        results = {**results, **rerun([r], thresholds)}
+        assert results[r]['hmax'] == 3.4
+        return thresholds, results
+
+    monkeypatch.setattr(pt, 'run_photon_thresholds', fake_window)
+    monkeypatch.setattr(m, 'TIMESTREAMS', ['dark0'])
+    monkeypatch.setattr(m, 'TONES_BEFORE_WINDOW', 2)
+    monkeypatch.setattr(m, 'WINDOW_FIRST_ONLY', True)
+    out = m.main(m.parse_args(argv))
+    assert windows == ['ts0'] and list(out) == ['dark0_set0', 'dark0_set1']
+    text = capsys.readouterr().out
+    assert 'tones not run in the window' in text
+    assert 'window opened on photons/dark0_set0 only' in text
+    root = dl.open_store(path)
+    g0, g1 = root['photons/dark0_set0'], root['photons/dark0_set1']
+    assert all(s == '' for s in g0['status'][:])
+    # The two tones run before the window keep the script's hmax
+    np.testing.assert_allclose(g0['hmax'][:2], 3.2)
+    np.testing.assert_allclose(g0['hmax'][2:], 3.4)
+    assert g0.attrs['reference'] is None and g0.attrs['mode'] == 'full'
+    assert g1.attrs['reference'] == 'photons/dark0_set0'
+    assert g1.attrs['reuse'] == 'settings'
+    assert all(s == '' for s in g1['status'][:])
+    np.testing.assert_allclose(g1['hmax'][:], 3.4)
+    # Without the window, every tone is detected before anything else
+    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    out = m.main(m.parse_args(argv + ['--no-gui']))
+    assert windows == ['ts0'] and 'not run' not in capsys.readouterr().out
+    assert all(isinstance(r, dict)
+               for r in out['dark0_set0']['results'].values())
+
+
+def test_06b_tones_before_window(photon_store, monkeypatch, capsys):
+    """
+    As ``test_06_tones_before_window`` for the HEE tails: the window
+    fits a tone not run from scratch, the rest are fitted when it closes,
+    and later timestreams take the first window's values.
+    """
+    import citkid.pipeline.interactive.hee_tails as ct
+    path, _ = photon_store
+    m = load_script('06b_hee.py')
+    argv = ['--store', str(path), '--overwrite']
+    windows = []
+
+    def fake_window(ts, results, thresholds, refit, **kwargs):
+        """
+        Stand in for the window: check only the first two tones ran,
+        narrow hmax and refit one tone that ran and one that did not.
+
+        Parameters:
+        ts (dict): the timestream.
+        results (dict): its results.
+        thresholds (TailThresholds): its thresholds.
+        refit (callable): refits tones.
+
+        Returns:
+        thresholds, results: as the window.
+        """
+        windows.append(ts['run'])
+        assert sorted(results) == sorted(int(r) for r in ts['rows'][:2])
+        thresholds.set_all(hmax = 60.)
+        r0, r2 = int(ts['rows'][0]), int(ts['rows'][2])
+        new = refit([r0, r2], thresholds)
+        assert new[r0]['hmax'] == 60. and new[r2]['hmax'] == 60.
+        return thresholds, {**results, **new}
+
+    monkeypatch.setattr(ct, 'run_hee_tails', fake_window)
+    monkeypatch.setattr(m, 'TIMESTREAMS', ['dark0'])
+    monkeypatch.setattr(m, 'TONES_BEFORE_WINDOW', 2)
+    monkeypatch.setattr(m, 'WINDOW_FIRST_ONLY', True)
+    out = m.main(m.parse_args(argv))
+    assert windows == ['ts0'] and list(out) == ['dark0_set0', 'dark0_set1']
+    text = capsys.readouterr().out
+    assert 'tones not run in the window' in text
+    assert 'Thresholds of the window on hee/dark0_set0, no window' in text
+    root = dl.open_store(path)
+    g0, g1 = root['hee/dark0_set0'], root['hee/dark0_set1']
+    assert g0.attrs['thresholds_from'] is None
+    assert g1.attrs['thresholds_from'] == 'hee/dark0_set0'
+    # The second tone ran before the window and was not refitted
+    np.testing.assert_allclose(g0['hmax'][1], 1000.)
+    np.testing.assert_allclose(np.delete(g0['hmax'][:], 1), 60.)
+    np.testing.assert_allclose(g1['hmax'][:], 60.)
+    for g in (g0, g1):
+        assert all(s == '' for s in g['status'][:])
+
+
+def test_05_window_saves_global_prerequisites(tmp_path, monkeypatch, capsys):
+    """
+    The window computes ``fr_spans`` (a global step with no panel) and it
+    is saved, so a later run continuing the calibration (e.g. to add the
+    IQ fits) can open the window on it; a calibration whose ``fr_spans``
+    is missing while its rows are saved is repaired, keeping the rows.
+    """
+    from unittest.mock import patch
+    from pyqtgraph.Qt import QtWidgets
+    from citkid.crs.procedures import stream_tone_sets
+    from citkid.pipeline.interactive.core import InteractiveAnalysisWindow
+    from citkid.pipeline.interactive.ts_analysis import ts_panels
+    from citkid.qt_compat import get_qapp
+    from ..crs.test_streaming import make_crs, make_tuning
+    crs = make_crs()
+
+    async def take():
+        """
+        Take a stage-6 run.
+        """
+        await crs.attach()
+        _, tune = make_tuning(tmp_path, crs)
+        await stream_tone_sets(crs, tune, 'dark6', 1., 6, npoints_fine = 100,
+                               npoints_gain = 20, verbose = False)
+
+    asyncio.run(take())
+    m = load_script('05_calibrate_streams.py')
+    argv = ['--store', str(tmp_path / 's.zarr')]
+    monkeypatch.setattr(m, 'CALIBRATE', [dict(name = 'dark6')])
+    app = get_qapp('t')
+    errors = []
+
+    def run_window(AR, title = ''):
+        """
+        Open the real window on the first row, then close it (as the
+        user would), recording panel errors.
+
+        Parameters:
+        AR (AnalysisRunner): the DataSet's runner.
+        title (str): window title.
+        """
+        win = InteractiveAnalysisWindow(AR, ts_panels(AR), title = title)
+        win.show()
+        for _ in range(30):
+            app.processEvents()
+        errors.extend((p.step_names, str(p._last_error))
+                      for p in win.panels if p._last_error is not None)
+        with patch.object(QtWidgets.QMessageBox, 'question',
+                          return_value = QtWidgets.QMessageBox.Yes):
+            win.close()
+        for _ in range(10):
+            app.processEvents()
+
+    monkeypatch.setattr(m, 'run_ts_analysis', run_window)
+    m.main(m.parse_args(argv))
+    assert errors == []
+    root = dl.open_store(tmp_path / 's.zarr')
+    grp = root['ts_cal0/set0']
+    assert 'fr_spans' in grp and 'data' in grp['fr_spans']
+    assert root['ts_cal0/set0/p_amp/row_exists'][:].all()
+    # Continue the calibration with the window: nothing is rerun or
+    # refused
+    m.main(m.parse_args(argv))
+    out = capsys.readouterr().out
+    assert errors == [] and 'auto-prerequisite' not in out
+    assert 'Continuing ts_cal0' in out
+    # A calibration from before this fix: fr_spans missing, rows saved
+    root = dl.open_store(tmp_path / 's.zarr', mode = 'a')
+    del root['ts_cal0/set0/fr_spans']
+    m.main(m.parse_args(argv))
+    assert errors == [] and 'auto-prerequisite' not in \
+        capsys.readouterr().out
+    root = dl.open_store(tmp_path / 's.zarr')
+    assert 'data' in root['ts_cal0/set0/fr_spans']
+    assert root['ts_cal0/set0/p_amp/row_exists'][:].all()
+
+
+def test_06_names_the_calibration_with_the_timestream(
+    photon_store, monkeypatch
+):
+    """
+    A run name not in the chosen calibration: the error says which
+    calibrations have it (to set CALIBRATION), or that none does.
+    """
+    from citkid.pipeline import photon_finder as pf
+    path, _ = photon_store
+    root = dl.open_store(path, mode = 'a')
+    # An empty calibration, the latest
+    dl.create_group(root, 'ts_cal8', 'analysis', attrs = dict(
+        selection = [], name = 'empty'))
+    try:
+        m = load_script('06a_find_photons.py')
+        monkeypatch.setattr(m, 'TIMESTREAMS', ['dark0'])
+        with pytest.raises(KeyError, match = r"no timestream 'dark0' in "
+                           r"ts_cal8 \('empty'\); it is in ts_cal0 "
+                           r"\('ts_cal0'\): set CALIBRATION"):
+            m.main(m.parse_args(['--store', str(path)]))
+        monkeypatch.setattr(m, 'TIMESTREAMS', ['nope'])
+        with pytest.raises(KeyError, match = r"no timestream 'nope' in "
+                           r"ts_cal8 .* \(see the list\)"):
+            m.main(m.parse_args(['--store', str(path)]))
+        assert pf.calibrations_with(root, 'dark0') == ["ts_cal0 ('ts_cal0')"]
+        assert pf.calibrations_with(root, 'nope') == []
+    finally:
+        del root['ts_cal8']

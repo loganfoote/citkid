@@ -54,8 +54,9 @@ PHOTONS_GROUP = 'photons'
 def list_timestreams(root, datasets):
     """
     List the timestreams a stream calibration can calibrate: every tone set
-    of every run with streams whose tone set (and resonator list) has a
-    DataSet in the calibration.
+    of every run with streams taken on a calibration sweep that has a
+    DataSet in the calibration (a DataSet applies only to the
+    timestreams of its own sweep).
 
     Parameters:
     root (zarr.Group): the store root.
@@ -71,8 +72,8 @@ def list_timestreams(root, datasets):
         ``calibrated_rows``), ``res_idxs`` (their resonator indices),
         ``n_uncalibrated`` (tones left out).
     """
-    by_set = {(int(info['tone_set']), info['resonators']): name
-              for name, info in datasets.items()}
+    by_sweep = {str(info['calibration']): name
+                for name, info in datasets.items()}
     out = []
     for run in dl.stream_runs(root):
         if not run.get('n_chunks'):
@@ -83,7 +84,7 @@ def list_timestreams(root, datasets):
             continue
         for src in sources:
             s = int(root[src['group']].attrs['tone_set'])
-            dname = by_set.get((s, run.get('resonators')))
+            dname = by_sweep.get(str(src['group']))
             if dname is None:
                 continue
             DS = datasets[dname]['DS']
@@ -344,7 +345,7 @@ def describe_timestreams(timestreams):
                         else '') + f", {t['dataset']}")
     return '\n'.join(lines)
 
-def select_timestreams(timestreams, choice):
+def select_timestreams(timestreams, choice, root = None, cal = None):
     """
     Pick timestreams by index or run name.
 
@@ -352,6 +353,11 @@ def select_timestreams(timestreams, choice):
     timestreams (list of dict): ``list_timestreams`` output.
     choice (list of int or str): timestream indices, or run names (every
         tone set of the latest run with that name).
+    root (zarr.Group or None): the store root: when a run name matches
+        nothing, the error says which calibrations have the run, to
+        set CALIBRATION to. Default None: no search.
+    cal (zarr.Group or None): the calibration ``timestreams`` came from,
+        named in the error. Default None.
 
     Returns:
     chosen (list of dict): the timestreams, in the order of ``choice``.
@@ -368,9 +374,46 @@ def select_timestreams(timestreams, choice):
         else:
             match = [t for t in timestreams if t['index'] == int(c)]
         if not match:
-            raise KeyError(f'no timestream {c!r} (see the list)')
+            where = f' in {cal.path} ({dl.calibration_name(cal)!r})' \
+                if cal is not None else ''
+            others = calibrations_with(root, c) if root is not None \
+                and isinstance(c, str) else []
+            if others:
+                raise KeyError(
+                    f'no timestream {c!r}{where}; it is in '
+                    f"{', '.join(others)}: set CALIBRATION to one of them")
+            raise KeyError(f'no timestream {c!r}{where} (see the list)')
         out += match
     return out
+
+def calibrations_with(root, name):
+    """
+    List the stream calibrations that have a timestream of a run.
+
+    Parameters:
+    root (zarr.Group): the store root.
+    name (str): the run name.
+
+    Returns:
+    where (list of str): "ts_cal{c} ('name')" of each calibration with
+        a timestream of that run, in index order.
+    """
+    from .stream_sources import open_calibration
+    out = []
+    for c in dl.list_indices(root, 'ts_cal'):
+        cal = root[dl.set_name(c, 'ts_cal')]
+        try:
+            found = any(t['name'] == name for t in
+                        list_timestreams(root, open_calibration(root, cal)))
+        except Exception:
+            continue
+        if found:
+            out.append(f'{cal.path} ({dl.calibration_name(cal)!r})')
+    return out
+
+# Most bytes of calibrated x (float64) and detection timestreams
+# (float32) computed in one block of tones before any is handed out
+BLOCK_BYTES = 2e9
 
 class TimestreamData:
     """
@@ -378,7 +421,9 @@ class TimestreamData:
     streams with the calibration (``apply_stream_calibration``), in memory
     only. They are kept while their total size is under ``max_bytes``;
     others are computed again when asked for, in blocks of tones that fit
-    the memory (reading only those tones' chunks of the raw stream).
+    the memory and ``BLOCK_BYTES`` (reading only those tones' chunks of
+    the raw stream), so the first tone of a long timestream is handed
+    out before the rest are calibrated.
 
     Attributes:
     dt (float): sample period, s.
@@ -417,8 +462,10 @@ class TimestreamData:
             timestream, or an error message if its x is not finite.
         """
         rows = [int(r) for r in rows]
-        # x (float64) and the detection timestreams (float32) of a block
-        block = max(1, int(self.max_bytes // max(self.nsamples * 12, 1)))
+        # x (float64) and the detection timestreams (float32) of a block,
+        # within the memory limit and BLOCK_BYTES
+        per_tone = max(self.nsamples * 12, 1)
+        block = max(1, int(min(self.max_bytes, BLOCK_BYTES) // per_tone))
         for i in range(0, len(rows), block):
             part = rows[i:i + block]
             need = [r for r in part if r not in self._kept]

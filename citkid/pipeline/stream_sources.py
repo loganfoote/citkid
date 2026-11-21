@@ -533,9 +533,11 @@ def apply_stream_calibration(
 
 def plan_stream_datasets(root, selection):
     """
-    Resolve a choice of streams and group them into DataSets: one per tone
-    set (and resonator list), with the chosen runs' windows of that set
-    one after another, in the order of ``selection``.
+    Resolve a choice of streams and group them into DataSets: one per
+    calibration sweep (``cal{j}``, one tone set), with the chosen runs'
+    windows taken on that sweep one after another, in the order of
+    ``selection``. A stream calibration is built from, and applies to,
+    the timestreams of its own sweep only.
 
     Parameters:
     root (zarr.Group): the store root.
@@ -544,8 +546,10 @@ def plan_stream_datasets(root, selection):
         ``CALIBRATE``).
 
     Returns:
-    groups (dict): DataSet name (e.g. 'set0'): dict(``sources``,
-        ``entries``, ``resonators``, ``tone_set``), in order of first use.
+    groups (dict): DataSet name: dict(``sources``, ``entries``,
+        ``resonators``, ``tone_set``, ``calibration`` (the sweep's
+        path)), in order of first use. The name is 'set{s}' when the
+        selection has one sweep of tone set s, else 'set{s}_cal{j}'.
         ``entries`` has one dict per source: ``entry`` (its index in
         ``selection``), ``run`` ('ts{n}'), ``name``, ``start``, ``stop``
         (samples), ``source`` (its calibration sweep's group).
@@ -553,25 +557,35 @@ def plan_stream_datasets(root, selection):
     Raises:
     ValueError: if an entry selects no tone sets.
     """
-    groups = {}
+    by_sweep = {}
     for i, entry in enumerate(selection):
         sources, run = dl.select_streams(root, **entry)
         if not sources:
             raise ValueError(f'entry {i} ({entry}) selects no tone sets')
         res = run.get('resonators')
         for src in sources:
-            s = int(root[src['group']].attrs['tone_set'])
-            name = f'set{s}'
-            if any(g['resonators'] != res for g in groups.values()) or \
-                    name in groups and groups[name]['resonators'] != res:
-                name = f'{name}_{res}'
-            g = groups.setdefault(name, dict(sources = [], entries = [],
-                                             resonators = res, tone_set = s))
+            sweep = str(src['group'])
+            s = int(root[sweep].attrs['tone_set'])
+            g = by_sweep.setdefault(sweep, dict(
+                sources = [], entries = [], resonators = res,
+                tone_set = s, calibration = sweep))
             g['sources'].append(src)
             g['entries'].append(dict(
                 entry = i, run = run['group'], name = run.get('name'),
                 start = run['start'], stop = run['stop'],
-                source = src['group']))
+                source = sweep))
+    # Names: set{s}, with the sweep when a set has several sweeps
+    # chosen, and the resonator list when it differs
+    groups = {}
+    for sweep, g in by_sweep.items():
+        s = g['tone_set']
+        name = f'set{s}'
+        if sum(o['tone_set'] == s for o in by_sweep.values()) > 1:
+            name += f"_{sweep.rsplit('/', 1)[-1]}"
+        if any(o['resonators'] != g['resonators']
+               for o in by_sweep.values()):
+            name += f"_{g['resonators']}"
+        groups[name] = g
     return groups
 
 def calibrated_timestream(
@@ -644,8 +658,9 @@ def open_calibration(root, cal):
 
     Returns:
     datasets (dict): DataSet name: dict(``DS`` (the DataSet), ``entries``,
-        ``resonators``, ``tone_set`` (``plan_stream_datasets``)).
-        Calibration-tone DataSets are not included.
+        ``resonators``, ``tone_set``, ``calibration`` (the sweep's
+        path; ``plan_stream_datasets``)). Calibration-tone DataSets are
+        not included.
 
     Raises:
     KeyError: if the group records no selection of streams, or has no
@@ -671,5 +686,6 @@ def open_calibration(root, cal):
             grp, g['sources'], f'{res}/fres_all', f'{res}/qres_all',
             f_avg = int(grp.attrs.get('f_avg', 1)))
         out[name] = dict(DS = DS, entries = g['entries'], resonators = res,
-                         tone_set = g['tone_set'])
+                         tone_set = g['tone_set'],
+                         calibration = g['calibration'])
     return out

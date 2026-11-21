@@ -211,7 +211,9 @@ class StreamWindow(QtWidgets.QMainWindow):
         ui_scale (float): font size multiplier. Default 1.0.
         """
         super().__init__()
-        self.setWindowTitle(f'{title}: {tune.basename}')
+        self._title = title
+        self.setWindowTitle(f'{title}: {dl.tuning_name(tune)} '
+                            f'({tune.basename})')
         if ui_scale and ui_scale != 1.0:
             self.setStyleSheet(widget_font_stylesheet(ui_scale))
         self.tune = tune
@@ -236,6 +238,7 @@ class StreamWindow(QtWidgets.QMainWindow):
         self._message.connect(self._set_status)
         self._progress.connect(self._on_progress)
         self._build_panel(preview_dec, preview_s)
+        self._fill_tune_box()
         self._build_plots()
         central = QtWidgets.QWidget()
         lay = QtWidgets.QHBoxLayout(central)
@@ -247,6 +250,9 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(central)
         add_help(self, 'Timestreams', [
             ('Steps', [
+                ('Tuning', 'The tuning the window works on (every '
+                 'tuning of the store with tones); changing it drops '
+                 'the capture and clears the board'),
                 ('Calibration', 'Calibrate the selected tone set (saved as '
                  'cal{j}); Use picks a saved calibration'),
                 ('Tones on the board', 'Write tones writes the chosen chunk of '
@@ -363,9 +369,18 @@ class StreamWindow(QtWidgets.QMainWindow):
         # tones on the left, preview, plots and run on the right
         left, right = QtWidgets.QVBoxLayout(), QtWidgets.QVBoxLayout()
         sets = sorted(set(self.tones['tone_set'].tolist()))
-        outer.addWidget(QtWidgets.QLabel(
-            f"{self.tune.basename}: {len(self.tones['fres'])} tones in "
-            f'{len(sets)} tone set(s)'))
+        # The tuning: every tuning of the store with tones
+        self.tune_box = QtWidgets.QComboBox()
+        self.tune_box.setToolTip('The tuning whose tone sets, '
+                                 'calibrations and runs the window '
+                                 'works on')
+        self.tune_box.currentIndexChanged.connect(self._on_tune_box)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel('Tuning'))
+        row.addWidget(self.tune_box, stretch = 1)
+        outer.addLayout(row)
+        self.header = QtWidgets.QLabel(self._header_text())
+        outer.addWidget(self.header)
 
         # Calibration
         box = QtWidgets.QGroupBox('Calibration (saved as cal{j})')
@@ -540,7 +555,8 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.status = QtWidgets.QLabel()
         self.status.setWordWrap(True)
         outer.addWidget(self.status)
-        self._inputs = (self.set_box, self.cal_box, self.cal_notes_edit,
+        self._inputs = (self.tune_box, self.set_box, self.cal_box,
+                        self.cal_notes_edit,
                         self.write_dec, self.chunk_box, self.preview_dec,
                         self.preview_s, self.preset_box,
                         self.name_edit, self.notes_edit, self.run_dec,
@@ -623,6 +639,87 @@ class StreamWindow(QtWidgets.QMainWindow):
         names (set of str): the names.
         """
         return {str(r.get('name')) for r in self.tuning_runs()}
+
+    def _header_text(self):
+        """
+        Describe the tuning for the header line.
+
+        Returns:
+        text (str): name, group, tones and tone sets.
+        """
+        sets = sorted(set(self.tones['tone_set'].tolist()))
+        return (f'{dl.tuning_name(self.tune)} ({self.tune.basename}): '
+                f"{len(self.tones['fres'])} tones in {len(sets)} tone set(s)")
+
+    def _fill_tune_box(self):
+        """
+        List the store's tunings with tones in the Tuning box and select
+        the window's.
+        """
+        root = dl.store_root(self.tune)
+        self.tune_box.blockSignals(True)
+        self.tune_box.clear()
+        for k in dl.list_indices(root, 'tune'):
+            t = root[dl.set_name(k, 'tune')]
+            if 'tones' in t:
+                self.tune_box.addItem(
+                    f'{dl.tuning_name(t)} ({t.basename})', t.basename)
+        self.tune_box.setCurrentIndex(
+            self.tune_box.findData(self.tune.basename))
+        self.tune_box.blockSignals(False)
+
+    def _on_tune_box(self):
+        """
+        Switch to the tuning chosen in the Tuning box.
+        """
+        name = self.tune_box.currentData()
+        if name and name != self.tune.basename:
+            self.set_tuning(dl.store_root(self.tune, mode = 'r+')[name])
+
+    def set_tuning(self, tune):
+        """
+        Work on another tuning of the store: its tone sets, calibrations
+        and runs replace the window's; the capture, the viewed run and
+        the chosen calibration are dropped, and tones written from the
+        tuning before are cleared from the board.
+
+        Parameters:
+        tune (zarr.Group): the tuning, writable, with ``tones``.
+
+        Raises:
+        ValueError: if its tones have no ``tone_module``.
+        """
+        tones = dl.load_tones(tune['tones'])
+        if 'tone_module' not in tones:
+            raise ValueError(f'{tune.basename}/tones has no tone_module; '
+                             'make the tuning with 03_tune.py')
+        if self.written and self.crs is not None and not self.worker.busy:
+            self.clear_tones()
+        self.tune, self.tones = tune, tones
+        self.setWindowTitle(f'{self._title}: {dl.tuning_name(tune)} '
+                            f'({tune.basename})')
+        self.header.setText(self._header_text())
+        self.cal, self.preview, self.view, self.runs = None, None, None, []
+        self.chosen = {}
+        self.set_box.blockSignals(True)
+        self.set_box.clear()
+        for s in sorted(set(tones['tone_set'].tolist())):
+            n = int(np.sum(tones['tone_set'] == s))
+            self.set_box.addItem(f'Tone set {s} ({n} tones)', s)
+        self.set_box.blockSignals(False)
+        self.runs_list.blockSignals(True)
+        self.runs_list.clear()
+        for r in self.tuning_runs():
+            self.runs_list.addItem(self._run_label(r))
+        self.runs_list.blockSignals(False)
+        if self.tune_box.currentData() != tune.basename:
+            self.tune_box.blockSignals(True)
+            self.tune_box.setCurrentIndex(
+                self.tune_box.findData(tune.basename))
+            self.tune_box.blockSignals(False)
+        self._on_set()
+        self._on_run_selected(-1)
+        self._set_status(f'Tuning {dl.tuning_name(tune)} ({tune.basename}).')
 
     def tuning_runs(self):
         """
@@ -1361,7 +1458,10 @@ class StreamWindow(QtWidgets.QMainWindow):
             return
         c = int(np.flatnonzero(cal['rows'] == r)[0])
         f, z = cal['f'][c], cal['z'][c]
-        self.iq_plot.plot(z.real, z.imag, pen = pg.mkPen(width = 1))
+        # The sweep as points, bigger than the timestream's
+        self.iq_plot.plot(z.real, z.imag, pen = None, symbol = 'o',
+                          symbolSize = 7, symbolPen = None,
+                          symbolBrush = pg.mkBrush(120, 180, 255, 200))
         p = self.view if self.view is not None else self.preview
         if p is None or r not in p['rows']:
             return

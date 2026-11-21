@@ -7,7 +7,7 @@ Takes the board for itself while open. Needs crs_init.py first.
 
 Usage:
     python 04a_stream.py --device deviceA --modules 1
-    python 04a_stream.py --device deviceA --modules 1 --tune 0
+    python 04a_stream.py --device deviceA --modules 1 --tuning 0
 """
 import argparse
 import os
@@ -67,7 +67,7 @@ def parse_args(argv = None):
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device)')
     p.add_argument('--modules', type = int, nargs = '+', default = MODULES)
-    p.add_argument('--tune', default = None,
+    p.add_argument('--tuning', default = None,
                    help = 'tuning, by name or index (default: the '
                    'latest with tuned tones)')
     p.add_argument('--simulate', action = 'store_true',
@@ -132,7 +132,7 @@ def main(args):
     path = store_path(args)
     root = dl.open_store(path, mode = 'a')
     dl.check_store(root)
-    tune = find_tuning(root, args.tune)
+    tune = find_tuning(root, args.tuning)
 
     async def connect():
         """

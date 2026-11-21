@@ -857,6 +857,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
         layout.addWidget(QtWidgets.QLabel('data_idx:'))
         self._data_idx_spin = QtWidgets.QSpinBox()
+        # A typed row applies on Enter or when the box loses focus
+        self._data_idx_spin.setKeyboardTracking(False)
         self._data_idx_spin.setMinimum(min(self._data_idxs))
         self._data_idx_spin.setMaximum(max(self._data_idxs))
         self._data_idx_spin.setValue(self._data_idx)

@@ -192,6 +192,8 @@ PLOT_HELP = ('Mouse', [
 # Shrink-to-fit limits: plots keep at least this fraction of their height,
 # and fonts at least this fraction of their size.
 MIN_PLOT_FACTOR = 0.35
+# Width of a panel's control column (left of its plots), logical pixels
+SIDE_WIDTH = 150
 MIN_FONT_FACTOR = 0.7
 
 
@@ -321,6 +323,13 @@ class StepPanel(QtWidgets.QWidget):
         InteractiveAnalysisWindow connects to this to clear and mark all
         downstream panels as needing a re-run.
 
+    Attributes:
+    bad_scope (str): the scope of the tone mark a window records when
+        this panel's Bad Data is pressed: 'global' (default; the tone
+        leaves every later stage, since its outputs are NaN from here
+        on) or 'local' (a panel whose outputs no later stage needs,
+        e.g. the IQ fit: the tone stays good elsewhere).
+
     Parameters:
     AR (AnalysisRunner): The analysis runner whose execute_step will be
         called.
@@ -338,6 +347,8 @@ class StepPanel(QtWidgets.QWidget):
     #: Emitted when the user marks this panel's row bad, so the window marks
     #: the later panels bad too.  Payload is *self*.
     marked_bad = QtCore.pyqtSignal(object)
+    #: Scope of the tone mark the window records for Bad Data
+    bad_scope = 'global'
     #: Emitted when the user clicks "Run +" to run this panel and all following.
     run_from_here = QtCore.pyqtSignal()
 
@@ -396,6 +407,67 @@ class StepPanel(QtWidgets.QWidget):
         layout.setContentsMargins(6, 4, 6, 4)
         self._status_label = QtWidgets.QLabel("Not run")
         layout.addWidget(self._status_label)
+
+    def _side_column(self):
+        """
+        Make the panel's layout: a column of controls, ``SIDE_WIDTH``
+        wide, left of the plots, which take the rest of the width and
+        all of the height. The section header puts its toggle button
+        at the top of the column.
+
+        Returns:
+        root (QHBoxLayout): the panel's layout; add the plot widget to
+            it with ``stretch = 1`` after the controls.
+        ctrl (QVBoxLayout): the column's layout; add the controls to
+            it (``_side_row`` for a labelled box) and end with a
+            stretch so they stay at the top.
+        """
+        root = QtWidgets.QHBoxLayout(self)
+        root.setContentsMargins(6, 4, 6, 6)
+        root.setSpacing(6)
+        self.side = QtWidgets.QWidget()
+        self.side.setFixedWidth(round(SIDE_WIDTH * self.ui_scale))
+        ctrl = QtWidgets.QVBoxLayout(self.side)
+        ctrl.setContentsMargins(0, 0, 0, 0)
+        ctrl.setSpacing(4)
+        root.addWidget(self.side)
+        return root, ctrl
+
+    def _plot_widget(self, min_height):
+        """
+        Make the panel's plot widget: at least ``min_height`` (times
+        ``plot_scale``) tall, and otherwise as tall as the window gives
+        the panel (its own size hint is ignored, so the panels share the
+        window's height instead of each asking for its preferred size).
+
+        Parameters:
+        min_height (int): minimum height in logical pixels, at
+            ``plot_scale`` 1.
+
+        Returns:
+        gw (pg.GraphicsLayoutWidget): the plot widget.
+        """
+        gw = pg.GraphicsLayoutWidget()
+        gw.setMinimumHeight(round(min_height * self.plot_scale))
+        gw.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                         QtWidgets.QSizePolicy.Policy.Ignored)
+        return gw
+
+    @staticmethod
+    def _side_row(ctrl, label, widget):
+        """
+        Put a label and a box on one line of the control column.
+
+        Parameters:
+        ctrl (QVBoxLayout): the column's layout (``_side_column``).
+        label (str): the label.
+        widget (QWidget): the box; it takes the rest of the line.
+        """
+        row = QtWidgets.QHBoxLayout()
+        row.setSpacing(4)
+        row.addWidget(QtWidgets.QLabel(label))
+        row.addWidget(widget, 1)
+        ctrl.addLayout(row)
 
     def get_params_for_step(self, step):
         """
@@ -998,11 +1070,17 @@ class StepPanel(QtWidgets.QWidget):
     def _ensure_global_prerequisites(self):
         """
         Silently run any global analysis steps in AR.path whose outputs are
-        needed by this panel's steps but are not yet available in AR.DS.
+        needed by this panel's steps but are not yet available in AR.DS,
+        and save them.
 
         For example, ``make_fr_spans`` must run before ``fit_gain`` because
         ``fr_spans`` is a required input.  This method is called once during
         ``_auto_initialize`` so the dependency is satisfied automatically.
+        The step runs through ``DS._execute_step``, without the runner's
+        invalidation plan: a global prerequisite follows from its inputs,
+        and when it is missing from the store while later outputs exist
+        (an earlier session kept it in memory only), the rerun must keep
+        them.
         """
         if not hasattr(self.AR, 'path'):
             return
@@ -1030,9 +1108,11 @@ class StepPanel(QtWidgets.QWidget):
                     already_done = False
                     break
             if not already_done:
+                scope, index = self.AR._resolve_step_scope(step)
                 try:
-                    run_responsive(self.AR.execute_step, step, data_idx=None,
-                                   save=False)
+                    run_responsive(ds._execute_step, step, data_idx=None,
+                                   save=True, pipeline_scope=scope,
+                                   step_index=index)
                 except Exception as exc:
                     print(
                         f"Warning: auto-prerequisite '{step.name}' failed: "
@@ -1178,12 +1258,35 @@ class DefaultStepPanel(StepPanel):
 # Collapsible section header
 ################################################################################
 
+def _layout_widgets(layout):
+    """
+    List the widgets of a layout, nested layouts included.
+
+    Parameters:
+    layout (QLayout): the layout.
+
+    Returns:
+    widgets (list of QWidget): the widgets, in layout order.
+    """
+    out = []
+    for i in range(layout.count()):
+        item = layout.itemAt(i)
+        if item.widget() is not None:
+            out.append(item.widget())
+        elif item.layout() is not None:
+            out.extend(_layout_widgets(item.layout()))
+    return out
+
+
 class _SectionHeader(QtWidgets.QWidget):
     """
     Wraps a ``StepPanel`` with a collapsible toggle button.
 
-    The button text shows the panel number and step names joined by ``'→'``.
-    Clicking the button hides or shows the wrapped panel.
+    A panel with a control column (``StepPanel._side_column``) gets the
+    button, and a label with the step names, at the top of the column;
+    clicking the button hides or shows the panel's plots and controls.
+    Otherwise the button is above the panel, with the step names joined
+    by ``'→'``, and hides or shows the panel.
 
     Parameters:
     panel (StepPanel): Panel to wrap.
@@ -1221,9 +1324,24 @@ class _SectionHeader(QtWidgets.QWidget):
             "}"
         )
         self._btn.clicked.connect(self._on_toggle)
-        layout.addWidget(self._btn)
-
         self._panel = panel
+        side = getattr(panel, 'side', None)
+        if side is None:
+            layout.addWidget(self._btn)
+            self._collapsible = [panel]
+        else:
+            # Everything in the column but the button and the names
+            # hides with the plots
+            self._collapsible = _layout_widgets(side.layout())
+            self._collapsible += [w for w in panel.children()
+                                  if isinstance(w, pg.GraphicsLayoutWidget)]
+            self._btn.setText(self._label_text('▼', panel))
+            self._names = QtWidgets.QLabel('\n'.join(panel.step_names))
+            self._names.setWordWrap(True)
+            self._names.setStyleSheet(
+                f'font-weight: bold; font-size: {header_px}px;')
+            side.layout().insertWidget(0, self._names)
+            side.layout().insertWidget(0, self._btn)
         layout.addWidget(panel)
 
     @staticmethod
@@ -1240,6 +1358,11 @@ class _SectionHeader(QtWidgets.QWidget):
         """
         idx = panel.panel_index
         num_str = f"{idx + 1}: " if idx is not None else ""
+        if getattr(panel, 'side', None) is not None:
+            # In the control column: the number and the key hint only
+            # (the names are on the label below)
+            return (f'{arrow}  Panel {idx + 1}    [{idx + 1}]'
+                    if idx is not None else f'{arrow}  Panel')
         names_str = "  →  ".join(panel.step_names)
         if idx is not None:
             n = idx + 1
@@ -1254,7 +1377,13 @@ class _SectionHeader(QtWidgets.QWidget):
         Parameters:
         checked (bool): True to show the panel.
         """
-        self._panel.setVisible(checked)
+        for w in self._collapsible:
+            w.setVisible(checked)
+        # A collapsed section gives its share of the height to the
+        # others
+        parent = self.parentWidget()
+        if parent is not None and parent.layout() is not None:
+            parent.layout().setStretchFactor(self, 1 if checked else 0)
         arrow = "▼" if checked else "▶"
         self._btn.setText(self._label_text(arrow, self._panel))
 
@@ -1354,7 +1483,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         scroll.setWidgetResizable(True)
         self._container = QtWidgets.QWidget()
         self._panel_layout = QtWidgets.QVBoxLayout(self._container)
-        self._panel_layout.setAlignment(_Qt.AlignTop)
+        # The panels share the height (their plots grow with the window)
         self._panel_layout.setSpacing(6)
         scroll.setWidget(self._container)
         outer.addWidget(scroll)
@@ -1372,7 +1501,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             panel.panel_index = i
             panel.downstream_rerun.connect(self._on_panel_rerun)
             panel.marked_bad.connect(self._on_panel_marked_bad)
-            panel.before_bad = self._ask_bad_reason
+            panel.before_bad = (lambda p=panel: self._ask_bad_reason(p))
             self._add_panel(panel)
         self._bad_reason = None
         self._update_marks_label()
@@ -1417,7 +1546,8 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
 
     def _fit_to_screen(self, width: int):
         """
-        Size the window to show every panel without scrolling, and center it.
+        Size the window to the screen's height (the panels share it) and
+        center it.
 
         The width is set first, since word-wrapped toolbar text makes the
         needed height depend on it. If the panels are taller than the screen,
@@ -1440,9 +1570,12 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
                  for w in panel.findChildren(pg.GraphicsLayoutWidget)]
         shrink_to_fit(self, self._content_height, plots, self._ui_scale,
                       geom.height() - TITLE_BAR_MARGIN, geom.width())
-        fit_window_to_screen(self, frac=0.9,
-                             size=(self.width(), self._content_height()),
-                             height_margin=TITLE_BAR_MARGIN)
+        # The full screen height, so the plots are as tall as they can
+        # be (the panels share the height); never shorter than needed
+        fit_window_to_screen(
+            self, frac=0.9,
+            size=(self.width(), max(self._content_height(), geom.height())),
+            height_margin=TITLE_BAR_MARGIN)
 
     def _scroll_width(self) -> int:
         """
@@ -1520,6 +1653,9 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         layout.addWidget(QtWidgets.QLabel("data_idx:"))
 
         self._idx_spin = QtWidgets.QSpinBox()
+        # A typed row applies on Enter or when the box loses focus, so
+        # typing '12' does not first run row 1
+        self._idx_spin.setKeyboardTracking(False)
         self._idx_spin.setMinimum(0)
         try:
             max_idx = max(int(self.AR.DS.nrows) - 1, 0)
@@ -1675,7 +1811,7 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
             sep.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
             self._panel_layout.addWidget(sep)
         header = _SectionHeader(panel)
-        self._panel_layout.addWidget(header)
+        self._panel_layout.addWidget(header, stretch = 1)
         self.panels.append(panel)
         panel.run_from_here.connect(
             lambda p=panel: self._run_through_panel(p.panel_index)
@@ -1786,8 +1922,10 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         self._bad_reason = None
         record = getattr(self, '_record', None)
         if reason is not None and record is not None:
-            # The outputs are NaN from here on, so the mark is global
-            record('bad', reason, 'global')
+            # The outputs are NaN from here on, so the mark is global,
+            # unless no later stage needs this panel's outputs
+            record('bad', reason, getattr(source_panel, 'bad_scope',
+                                          'global'))
         update = getattr(self, '_update_marks_label', None)
         if update is not None:
             update()
@@ -1795,32 +1933,40 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
     ############################################################################
     # The store's tone marks
     ############################################################################
-    def _ask_bad_reason(self):
+    def _ask_bad_reason(self, panel = None):
         """
         Ask why the tone is bad before a panel marks it (``before_bad``);
         the reason is recorded when the panel reports the mark.
 
+        Parameters:
+        panel (StepPanel or None): the panel, for the mark's scope
+            (``bad_scope``). Default None: global.
+
         Returns:
         go (bool): False if cancelled.
         """
-        reason, _ = _marks.reason_and_scope(self._ask_reason(), 'global')
+        scope = getattr(panel, 'bad_scope', 'global')
+        reason, _ = _marks.reason_and_scope(self._ask_reason(scope),
+                                            scope)
         if reason is None:
             return False
         self._bad_reason = reason
         return True
 
-    def _ask_reason(self):
+    def _ask_reason(self, scope = 'global'):
         """
-        Ask why the current tone is bad (``marks.ask_reason``); the mark
-        is global (the outputs become NaN), shown as a box that cannot
-        be changed.
+        Ask why the current tone is bad (``marks.ask_reason``); the scope
+        is shown as a box that cannot be changed: global where the
+        outputs become NaN, local for a panel no later stage needs.
+
+        Parameters:
+        scope (str): 'global' (default) or 'local'.
 
         Returns:
-        choice (tuple or None): (reason, 'global'), or None if
-            cancelled.
+        choice (tuple or None): (reason, scope), or None if cancelled.
         """
         return _marks.ask_reason(self, f'Mark res {self._res_idx()} bad',
-                                 scope = 'global', forced = True)
+                                 scope = scope, forced = True)
 
     def _mark_tone_bad(self):
         """

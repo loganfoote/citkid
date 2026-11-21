@@ -51,45 +51,34 @@ class XCalPanel(StepPanel):
         Build the offset and cutoff spinboxes, buttons, status label, and the
         amplitude (with draggable mask region), IQ loop, and x vs theta plots.
         """
-        root =QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(6, 4, 6, 6)
-        root.setSpacing(4)
-
-        # ---- control row ----
-        ctrl = QtWidgets.QHBoxLayout()
-        ctrl.setSpacing(6)
+        # ---- control column, left of the plots ----
+        root, ctrl = self._side_column()
 
         # xcal_idx0_offset (int)
-        ctrl.addWidget(QtWidgets.QLabel("idx0_off:"))
         self._idx0_spin = QtWidgets.QSpinBox()
         self._idx0_spin.setRange(-500, 500)
-        self._idx0_spin.setFixedWidth(60)
         self._idx0_spin.setValue(
             int(self._get_initial_user_param(
                 'get_xcal_mask', 'xcal_idx0_offset', self.data_idx, fallback=3
             ))
         )
-        ctrl.addWidget(self._idx0_spin)
+        self._side_row(ctrl, 'idx0_off:', self._idx0_spin)
 
         # xcal_idx1_offset (int)
-        ctrl.addWidget(QtWidgets.QLabel("idx1_off:"))
         self._idx1_spin = QtWidgets.QSpinBox()
         self._idx1_spin.setRange(-500, 500)
-        self._idx1_spin.setFixedWidth(60)
         self._idx1_spin.setValue(
             int(self._get_initial_user_param(
                 'get_xcal_mask', 'xcal_idx1_offset', self.data_idx, fallback=9
             ))
         )
-        ctrl.addWidget(self._idx1_spin)
+        self._side_row(ctrl, 'idx1_off:', self._idx1_spin)
 
         # xcal_std_cutoff (float)
-        ctrl.addWidget(QtWidgets.QLabel("std_cut:"))
         self._std_spin = QtWidgets.QDoubleSpinBox()
         self._std_spin.setRange(0.1, 1000.0)
         self._std_spin.setDecimals(1)
         self._std_spin.setSingleStep(1.0)
-        self._std_spin.setFixedWidth(70)
         self._std_spin.setValue(
             float(self._get_initial_user_param(
                 'get_xcal_mask', 'xcal_std_cutoff', self.data_idx, fallback=12.0
@@ -98,10 +87,9 @@ class XCalPanel(StepPanel):
         # The prefetch thread reads this copy, not the widget
         self._std_cutoff_value = float(self._std_spin.value())
         self._std_spin.valueChanged.connect(self._remember_std_cutoff)
-        ctrl.addWidget(self._std_spin)
+        self._side_row(ctrl, 'std_cut:', self._std_spin)
 
         self._run_btn = QtWidgets.QPushButton("Run")
-        self._run_btn.setFixedWidth(50)
         self._run_btn.setToolTip(
             "Run this panel and the panels after it")
         self._run_btn.clicked.connect(
@@ -109,32 +97,28 @@ class XCalPanel(StepPanel):
         ctrl.addWidget(self._run_btn)
 
         self._save_btn = QtWidgets.QPushButton("Save")
-        self._save_btn.setFixedWidth(60)
         self._save_btn.clicked.connect(self._on_save_clicked)
         ctrl.addWidget(self._save_btn)
 
         self._bad_btn = QtWidgets.QPushButton("Bad Data")
-        self._bad_btn.setFixedWidth(75)
         self._bad_btn.setToolTip(
             "Mark this index as bad: fill all outputs with NaN")
         self._bad_btn.clicked.connect(self._on_bad_data_clicked)
         ctrl.addWidget(self._bad_btn)
 
         self._status_label = QtWidgets.QLabel("\u2014")
-        self._status_label.setMinimumWidth(160)
+        self._status_label.setWordWrap(True)
         ctrl.addWidget(self._status_label)
 
         ctrl.addStretch()
-        root.addLayout(ctrl)
 
         # Per-index cache of user-param values set this session.
         self._param_cache: dict = {}  # {data_idx: (idx0, idx1, std)}
         self._plot_cache:  dict = {}  # populated by prefetch_plot_data
 
         # ---- plots ----
-        self._gw = pg.GraphicsLayoutWidget()
-        self._gw.setMinimumHeight(round(340 * self.plot_scale))
-        root.addWidget(self._gw)
+        self._gw = self._plot_widget(340)
+        root.addWidget(self._gw, stretch = 1)
 
         self._plot_amp = self._gw.addPlot(row=0, col=0, title="XCal Amplitude")
         self._plot_amp.setLabel('left', '|S21| (dB)')

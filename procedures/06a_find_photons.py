@@ -33,6 +33,8 @@ NAME = ''
 REFERENCE = None
 REUSE = 'settings'
 INTERACTIVE = True
+TONES_BEFORE_WINDOW = None
+WINDOW_FIRST_ONLY = False
 
 # Pulse finding
 INIT_NSIGMA = 6.
@@ -80,8 +82,8 @@ def parse_args(argv = None):
                    '(blank: <device>.zarr)')
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device)')
-    p.add_argument('--cal', type = int, default = CALIBRATION,
-                   help = 'ts_cal index (default: the latest)')
+    p.add_argument('--cal', default = CALIBRATION,
+                   help = 'calibration, by name or index (default: the latest)')
     p.add_argument('--name', default = NAME,
                    help = 'name of the result of a single timestream')
     p.add_argument('--reference', default = REFERENCE,
@@ -151,10 +153,14 @@ def detection_settings():
 
 def find_photons(
     ts, data, settings, thresholds, interactive, reference = None,
-    results = None, root = None, stage = ''
+    results = None, root = None, stage = '', first_tones = None
 ):
     """
-    Detect one timestream's photons, with the window if asked.
+    Detect one timestream's photons, with the window if asked. With
+    ``first_tones`` and the window, only the first tones are detected
+    before the window opens; the window runs the others when they are
+    selected or when thresholds are applied to all tones, and those
+    still not run when it closes are detected with its thresholds.
 
     Parameters:
     ts (dict): the timestream.
@@ -167,14 +173,23 @@ def find_photons(
     results (dict or None): results to start from (a previous result's,
         ``photon_finder.load_results``) instead of detecting first.
         Default None.
+    root (zarr.Group or None): the store root, for the window's tone
+        marks. Default None.
+    stage (str): the result's path, for the marks. Default ''.
+    first_tones (int or None): tones detected before the window opens
+        (``TONES_BEFORE_WINDOW``). Default None: all, as without the
+        window.
 
     Returns:
     results (dict): row: result or error message.
     thresholds (Thresholds): the thresholds used.
     """
     if results is None:
+        rows = None
+        if interactive and first_tones is not None:
+            rows = [int(r) for r in ts['rows'][:int(first_tones)]]
         results = pf.detect_timestream(ts, data, settings, thresholds,
-                                       reference = reference)
+                                       rows = rows, reference = reference)
     if interactive:
         from citkid.pipeline.interactive.photon_thresholds import \
             run_photon_thresholds
@@ -210,6 +225,13 @@ def find_photons(
             settings = settings,
             title = f"Photon thresholds: {ts['run']} ({ts['name']}), "
             f"tone set {ts['tone_set']}", root = root, stage = stage)
+    # The tones the window left not run take its thresholds
+    rows = [int(r) for r in ts['rows'] if int(r) not in results]
+    if rows:
+        print(f'Detecting the {len(rows)} tones not run in the window')
+        results.update(pf.detect_timestream(ts, data, settings, thresholds,
+                                            rows = rows,
+                                            reference = reference))
     return results, thresholds
 
 def report(ts, results, summary):
@@ -366,8 +388,13 @@ def main(args):
     if not cals:
         raise KeyError('the store has no ts_cal group: run '
                        '05_calibrate_streams.py first')
-    c = cals[-1] if args.cal is None else int(args.cal)
-    cal = root[dl.set_name(c, 'ts_cal')]
+    cal = dl.find_calibration(root, args.cal)
+    if cal is None:
+        names = ', '.join(
+            f'{dl.calibration_name(root[dl.set_name(c, "ts_cal")])!r} '
+            f'(ts_cal{c})' for c in cals)
+        raise KeyError(f'no calibration {args.cal!r}; the store has '
+                       f'{names}')
     datasets = open_calibration(root, cal)
     timestreams = pf.list_timestreams(root, datasets)
     print(f'{cal.path}:')
@@ -377,7 +404,8 @@ def main(args):
         print('Set TIMESTREAMS at the top of the script to choose '
               'timestreams.')
         return None
-    chosen = pf.select_timestreams(timestreams, TIMESTREAMS)
+    chosen = pf.select_timestreams(timestreams, TIMESTREAMS, root = root,
+                                   cal = cal)
     if args.refit_tau:
         return refit_taus(root, chosen, timestreams)
     if args.name and len(chosen) != 1:
@@ -428,10 +456,10 @@ def main(args):
                                        tau_fit_s = TAU_FIT_S)
             marked = pf.apply_tone_marks(root, ts, thresholds,
                                         f'photons/{name}')
-            results, thresholds = find_photons(ts, data, settings,
-                                               thresholds, interactive,
-                                               root = root,
-                                               stage = f'photons/{name}')
+            results, thresholds = find_photons(
+                ts, data, settings, thresholds, interactive, root = root,
+                stage = f'photons/{name}',
+                first_tones = TONES_BEFORE_WINDOW)
             mode = 'full'
         else:
             thresholds, filters = reference_for(ref_grp, settings)
@@ -470,6 +498,13 @@ def main(args):
         report(ts, results, summary)
         out[name] = dict(results = results, summary = summary,
                          thresholds = thresholds)
+        # With the window on the first timestream only, the others
+        # take its result as the reference (REUSE)
+        if WINDOW_FIRST_ONLY and interactive and ref_grp is None \
+                and not cont:
+            ref_grp = grp
+            print(f'The window opened on photons/{name} only: the '
+                  f'other timestreams take its {args.reuse}')
         del data
     print(f"Done: {', '.join(f'photons/{n}' for n in out)}")
     return out

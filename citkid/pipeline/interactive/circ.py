@@ -95,22 +95,15 @@ class CircleFitPanel(StepPanel):
         Build the buttons, status label, amplitude plot with mask region, and
         IQ loop plot with circle fit, ``idx_t`` marker, and timestream.
         """
-        root =QtWidgets.QVBoxLayout(self)
-        root.setContentsMargins(6, 4, 6, 6)
-        root.setSpacing(4)
+        # ---- control column, left of the plots ----
+        root, ctrl = self._side_column()
 
         self._plot_cache: dict = {}  # populated by prefetch_plot_data
-        # ---- control row ----
-        ctrl = QtWidgets.QHBoxLayout()
-        ctrl.setSpacing(8)
-
         self._reset_btn = QtWidgets.QPushButton("Reset Mask")
-        self._reset_btn.setFixedWidth(90)
         self._reset_btn.clicked.connect(self._reset_mask)
         ctrl.addWidget(self._reset_btn)
 
         self._run_btn = QtWidgets.QPushButton("Run")
-        self._run_btn.setFixedWidth(50)
         self._run_btn.setToolTip(
             "Run this panel and the panels after it")
         self._run_btn.clicked.connect(
@@ -118,28 +111,24 @@ class CircleFitPanel(StepPanel):
         ctrl.addWidget(self._run_btn)
 
         self._save_btn = QtWidgets.QPushButton("Save")
-        self._save_btn.setFixedWidth(60)
         self._save_btn.clicked.connect(self._on_save_clicked)
         ctrl.addWidget(self._save_btn)
 
         self._bad_btn = QtWidgets.QPushButton("Bad Data")
-        self._bad_btn.setFixedWidth(75)
         self._bad_btn.setToolTip(
             "Mark this index as bad: fill all outputs with NaN")
         self._bad_btn.clicked.connect(self._on_bad_data_clicked)
         ctrl.addWidget(self._bad_btn)
 
         self._status_label = QtWidgets.QLabel("\u2014")
-        self._status_label.setMinimumWidth(180)
+        self._status_label.setWordWrap(True)
         ctrl.addWidget(self._status_label)
 
         ctrl.addStretch()
-        root.addLayout(ctrl)
 
         # ---- plots ----
-        self._gw = pg.GraphicsLayoutWidget()
-        self._gw.setMinimumHeight(round(340 * self.plot_scale))
-        root.addWidget(self._gw)
+        self._gw = self._plot_widget(340)
+        root.addWidget(self._gw, stretch = 1)
 
         self._plot_amp = self._gw.addPlot(row=0, col=0,
                                           title="Circle Fit Amplitude",

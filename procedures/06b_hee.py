@@ -11,6 +11,7 @@ Usage:
     python 06b_hee.py --device deviceA --continue
 """
 import argparse
+import copy
 import os
 import numpy as np
 from citkid import daq_layout as dl
@@ -33,6 +34,8 @@ NAME = ''
 EVENTS = 'auto'
 PHOTONS = None
 INTERACTIVE = True
+TONES_BEFORE_WINDOW = None
+WINDOW_FIRST_ONLY = False
 
 # Triggers
 TRIG_NSIGMA = 6.
@@ -75,8 +78,8 @@ def parse_args(argv = None):
                    '(blank: <device>.zarr)')
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device)')
-    p.add_argument('--cal', type = int, default = CALIBRATION,
-                   help = 'ts_cal index (default: the latest)')
+    p.add_argument('--cal', default = CALIBRATION,
+                   help = 'calibration, by name or index (default: the latest)')
     p.add_argument('--name', default = NAME,
                    help = 'name of the result of a single timestream')
     p.add_argument('--events', choices = ('auto', 'photons', 'triggers'),
@@ -213,34 +216,59 @@ def pick_events(root, ts, data, name, settings, args):
 
 def review(
     ts, results, thresholds, interactive, root = None, stage = '',
-    data = None
+    data = None, events = None, settings = None
 ):
     """
-    Open the HEE tail window on a timestream's results, if asked.
+    Open the HEE tail window on a timestream's results, if asked. Tones
+    without a result (``TONES_BEFORE_WINDOW``) are fitted in the window
+    when selected or when values are applied to all tones; those still
+    not run when it closes are fitted with its thresholds.
 
     Parameters:
     ts (dict): the timestream.
-    results (dict): ``analyze_timestream`` output.
+    results (dict): ``analyze_timestream`` output, of all tones or of
+        the first ones.
     thresholds (TailThresholds): the thresholds (the window may change
         them).
     interactive (bool): If True, open the window.
     data (TimestreamData or None): the detection timestreams, for the
         window's timestream plot. Default None.
     root (zarr.Group or None): the store root, for the tone-marks
-        registry. Default None.
+        registry and the tones not run. Default None.
     stage (str): the result's path, recorded with the marks. Default ''.
+    events (dict or None): the events, for the tones not run. Default
+        None: every tone has a result.
+    settings (DetectionSettings or None): the tail settings, for the
+        tones not run. Default None.
 
     Returns:
     results (dict): the results with the chosen thresholds.
     thresholds (TailThresholds): the thresholds.
     """
+    def analyze(rows, th, progress):
+        """
+        Fit tones without a result from scratch.
+
+        Parameters:
+        rows (list of int): DataSet rows.
+        th (TailThresholds): thresholds.
+        progress (bool): If True, show a progress bar.
+
+        Returns:
+        results (dict): row: result.
+        """
+        return cf.analyze_timestream(root, ts, data, events, settings, th,
+                                     rows = rows, progress = progress)
+
     if not interactive:
         return results, thresholds
     from citkid.pipeline.interactive.hee_tails import run_hee_tails
+    known = dict(results)
 
     def refit(rows, th):
         """
-        Fit some tones' tails again.
+        Fit some tones' tails again, from scratch for the tones not run
+        yet.
 
         Parameters:
         rows (list of int): DataSet rows.
@@ -249,7 +277,14 @@ def review(
         Returns:
         results (dict): row: result.
         """
-        return cf.refit_timestream(ts, results, th, rows)
+        new = [int(r) for r in rows if int(r) not in known]
+        out = analyze(new, th, False) if new else {}
+        known.update(out)
+        old = [int(r) for r in rows if int(r) not in out]
+        if old:
+            out.update(cf.refit_timestream(ts, known, th, old))
+        known.update(out)
+        return out
 
     def tone_data(row):
         """
@@ -268,6 +303,10 @@ def review(
         data = None if data is None else tone_data,
         title = f"HEE tails: {ts['run']} ({ts['name']}), tone set "
         f"{ts['tone_set']}", root = root, stage = stage)
+    rows = [int(r) for r in ts['rows'] if int(r) not in results]
+    if rows:
+        print(f'Fitting the {len(rows)} tones not run in the window')
+        results.update(analyze(rows, thresholds, True))
     return results, thresholds
 
 def report(ts, results, events):
@@ -313,8 +352,13 @@ def main(args):
     if not cals:
         raise KeyError('the store has no ts_cal group: run '
                        '05_calibrate_streams.py first')
-    c = cals[-1] if args.cal is None else int(args.cal)
-    cal = root[dl.set_name(c, 'ts_cal')]
+    cal = dl.find_calibration(root, args.cal)
+    if cal is None:
+        names = ', '.join(
+            f'{dl.calibration_name(root[dl.set_name(c, "ts_cal")])!r} '
+            f'(ts_cal{c})' for c in cals)
+        raise KeyError(f'no calibration {args.cal!r}; the store has '
+                       f'{names}')
     datasets = open_calibration(root, cal)
     timestreams = pf.list_timestreams(root, datasets)
     print(f'{cal.path}:')
@@ -324,7 +368,8 @@ def main(args):
         print('Set TIMESTREAMS at the top of the script to choose '
               'timestreams.')
         return None
-    chosen = pf.select_timestreams(timestreams, TIMESTREAMS)
+    chosen = pf.select_timestreams(timestreams, TIMESTREAMS, root = root,
+                                   cal = cal)
     if args.name and len(chosen) != 1:
         raise ValueError('NAME names the result of a single timestream; '
                          f'{len(chosen)} are chosen')
@@ -332,6 +377,7 @@ def main(args):
     results_grp = cf.results_group(root)
     interactive = INTERACTIVE and not args.no_gui
     out = {}
+    first = None     # (name, thresholds) of the first window
     for ts in chosen:
         name = args.name.strip() if args.name else \
             pf.result_name(ts, timestreams)
@@ -341,10 +387,21 @@ def main(args):
             max_bytes = MEMORY_GB * 1e9)
         thresholds = cf.TailThresholds(hmin = HMIN, hmax = HMAX,
                                        level = LEVEL, fit_s = FIT_S)
+        window = interactive
+        taken_from = None
+        if first is not None and WINDOW_FIRST_ONLY:
+            # The window's values (global and per tone), without its
+            # marks, and no window
+            taken_from, th0 = first
+            thresholds = cf.TailThresholds(
+                hmin = th0.hmin, hmax = th0.hmax, level = th0.level,
+                fit_s = th0.fit_s, overrides = copy.deepcopy(th0.overrides))
+            window = False
+            print(f'Thresholds of the window on {taken_from}, no window')
         continued = None
         if name in results_grp:
             choice = existing_choice(name, results_grp[name], args,
-                                     interactive)
+                                     window)
             if choice is None:
                 print(f'Skipped hee/{name}')
                 del data
@@ -361,11 +418,18 @@ def main(args):
         if marked:
             print(f"{len(marked)} tones marked bad in the store's tone "
                   f'marks are left out: res {marked}')
+        rows = None
+        if window and TONES_BEFORE_WINDOW is not None and \
+                continued is None:
+            rows = [int(r) for r in ts['rows'][:int(TONES_BEFORE_WINDOW)]]
         results = cf.analyze_timestream(root, ts, data, events, settings,
-                                        thresholds)
-        results, thresholds = review(ts, results, thresholds, interactive,
+                                        thresholds, rows = rows)
+        results, thresholds = review(ts, results, thresholds, window,
                                      root = root, stage = f'hee/{name}',
-                                     data = data)
+                                     data = data, events = events,
+                                     settings = settings)
+        if window and first is None and continued is None:
+            first = (f'hee/{name}', thresholds)
         if name in results_grp:
             print(f'Replacing hee/{name}')
         grp = dl.create_group(results_grp, name, 'analysis',
@@ -373,7 +437,8 @@ def main(args):
         cf.save_timestream(grp, ts, results, events, thresholds, settings,
                            mode)
         grp.attrs.update(dl.to_jsonable(dict(
-            calibration = cal.path, continued_from = continued)))
+            calibration = cal.path, continued_from = continued,
+            thresholds_from = taken_from)))
         save_notes(grp, args.notes)
         report(ts, results, events)
         out[name] = dict(results = results, events = events,

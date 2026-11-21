@@ -457,6 +457,9 @@ def test_stream_window(qapp, tmp_path):
         sweep_kwargs = dict(npoints_fine = 60, npoints_gain = 10))
     wait_for(lambda: win.crs is not None)
     assert win.name_edit.text() == 'dark_dec6'
+    assert win.tune_box.count() == 1 and \
+        win.tune_box.currentData() == 'tune0' and \
+        'tune0' in win.windowTitle()
     # Nothing runs before the selected set has a usable calibration
     assert not win.run_btn.isEnabled() and not win.capture_btn.isEnabled()
     assert not win.write_btn.isEnabled()

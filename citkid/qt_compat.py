@@ -263,6 +263,63 @@ def set_theme(light = False):
     _LIGHT = bool(light)
     _pg.setConfigOptions(background = 'w' if _LIGHT else 'k',
                          foreground = 'k' if _LIGHT else 'w')
+    _install_light_colors(_LIGHT)
+
+# pyqtgraph's own mkColor, kept while the light theme replaces it
+_MKCOLOR = _pg.functions.mkColor
+
+def light_color(color):
+    """
+    Return a plot colour as drawn with the light theme: a colour too
+    pale to see on white is darkened and saturated (a pale blue
+    becomes a full blue, yellow an olive, light grey a dark grey);
+    white, black, and colours already dark are unchanged, and the
+    alpha is kept.
+
+    Parameters:
+    color (QColor): the colour.
+
+    Returns:
+    color (QColor): the colour to draw.
+    """
+    lum = (0.2126 * color.red() + 0.7152 * color.green()
+           + 0.0722 * color.blue()) / 255.
+    if lum < 0.55 or lum > 0.97:
+        return color
+    h, s, v, a = color.getHsvF()
+    if s < 0.15:
+        s, v = 0., min(v, 0.45)
+    else:
+        s, v = max(s, 0.85), min(v, 0.72)
+    return _QtGui.QColor.fromHsvF(max(h, 0.), s, v, a)
+
+def _mk_color_light(*args, **kwargs):
+    """
+    Make a colour as pyqtgraph does, then ``light_color`` it: stands in
+    for ``pyqtgraph.functions.mkColor`` (which ``mkPen`` and
+    ``mkBrush`` use) with the light theme, so every pen and brush of
+    every plot is readable on white without each call site changing.
+
+    Parameters:
+    *args, **kwargs: as ``pyqtgraph.mkColor``.
+
+    Returns:
+    color (QColor): the colour.
+    """
+    return light_color(_MKCOLOR(*args, **kwargs))
+
+def _install_light_colors(on):
+    """
+    Put ``_mk_color_light`` in place of pyqtgraph's ``mkColor`` (in
+    ``pyqtgraph`` and ``pyqtgraph.functions``), or pyqtgraph's own
+    back.
+
+    Parameters:
+    on (bool): True for the light theme's colours.
+    """
+    f = _mk_color_light if on else _MKCOLOR
+    _pg.functions.mkColor = f
+    _pg.mkColor = f
 
 def is_light():
     """

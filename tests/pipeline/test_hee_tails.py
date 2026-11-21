@@ -24,7 +24,7 @@ def qapp():
     return get_qapp()
 
 
-def make_window(rays, fail_row = None, data = False):
+def make_window(rays, fail_row = None, data = False, not_run = ()):
     """
     Make the window on the three tones, recording the refits.
 
@@ -33,6 +33,7 @@ def make_window(rays, fail_row = None, data = False):
     fail_row (int or None): a row without a result. Default None.
     data (bool): If True, give the window the timestreams. Default
         False.
+    not_run (tuple of int): rows left without a result. Default none.
 
     Returns:
     win (HeeTailWindow): the window.
@@ -43,20 +44,35 @@ def make_window(rays, fail_row = None, data = False):
     ts = dict(rows = np.array([0, 1, 2]), res_idxs = np.array([10, 11, 12]),
               dt = DT, start = 0, stop = len(ds[0]))
     th = cf.TailThresholds(level = 3., fit_s = 1e-3)
+    def analyze(r, th):
+        """
+        Fit one tone from scratch.
+
+        Parameters:
+        r (int): row.
+        th (TailThresholds): thresholds.
+
+        Returns:
+        res (dict): the result.
+        """
+        res = cf.analyze_tone(ds[r], times, DT, SETTINGS,
+                              th.for_tone(10 + r))
+        res['res_idx'] = 10 + r
+        res['sign'] = -1
+        return res
+
     results = {}
     for r in range(3):
         if r == fail_row:
             results[r] = 'not finite'
-            continue
-        results[r] = cf.analyze_tone(ds[r], times, DT, SETTINGS,
-                                     th.for_tone(10 + r))
-        results[r]['res_idx'] = 10 + r
-        results[r]['sign'] = -1
+        elif r not in not_run:
+            results[r] = analyze(r, th)
     calls = []
 
     def refit(rows, th):
         """
-        Refit some rows (recorded).
+        Refit some rows (recorded), from scratch for rows without a
+        result.
 
         Parameters:
         rows (list of int): rows.
@@ -66,7 +82,10 @@ def make_window(rays, fail_row = None, data = False):
         results (dict): row: result.
         """
         calls.append(list(rows))
-        return cf.refit_timestream(ts, win.results, th, rows)
+        out = {r: analyze(r, th) for r in rows if r not in win.results}
+        out.update(cf.refit_timestream(ts, win.results, th,
+                                       [r for r in rows if r not in out]))
+        return out
 
     win = HeeTailWindow(ts, results, th, refit,
                            data = (lambda row: ds[row]) if data else None)
@@ -244,3 +263,23 @@ def test_window_tone_marks(qapp, rays):
     win.toggle_bad()
     assert dl.bad_tones(root, 'hee/x') == {}
     win.close()
+
+
+def test_tones_not_run(qapp, rays):
+    """
+    A tone without a result is listed "not run"; selecting it fits it
+    with the values as they stand, and applying to all tones fits the
+    tones not run too.
+    """
+    win, calls = make_window(rays, not_run = (2,))
+    assert win.tone_list.count() == 3
+    assert win.tone_list.item(2).text() == '  res 12: not run'
+    assert 2 not in win.results and calls == []
+    win.tone_list.setCurrentRow(2)
+    assert calls == [[2]] and isinstance(win.results[2], dict)
+    assert 'pulses' in win.tone_list.item(2).text()
+    win2, calls2 = make_window(rays, not_run = (2,))
+    win2.scope_all.setChecked(True)
+    win2.rerun()
+    assert calls2 == [[0, 1, 2]] and isinstance(win2.results[2], dict)
+    assert win2._scroll.widget() is win2._panel

@@ -815,6 +815,48 @@ def find_tuning(root, which = None):
     return root[set_name(int(which), 'tune')] if int(which) in ks \
         else None
 
+def calibration_name(cal):
+    """
+    Return a stream calibration's name: attribute ``name`` if set, else
+    the group name ('ts_cal2').
+
+    Parameters:
+    cal (zarr.Group): the ts_cal group.
+
+    Returns:
+    name (str): the name.
+    """
+    return str(cal.attrs.get('name') or cal.basename)
+
+def find_calibration(root, which = None):
+    """
+    Find a stream calibration (ts_cal group) by index or name.
+
+    Parameters:
+    root (zarr.Group): store root.
+    which (int, str or None): an index, its group name ('ts_cal2'), a
+        string of digits ('2'), or its name (``calibration_name``, the
+        latest if several share it). None (default): the latest.
+
+    Returns:
+    cal (zarr.Group or None): the calibration; None if there is none.
+    """
+    ks = list_indices(root, 'ts_cal')
+    if which is None:
+        return root[set_name(ks[-1], 'ts_cal')] if ks else None
+    if isinstance(which, str):
+        key = which.strip()
+        m = re.fullmatch(r'(?:ts_cal)?(\d+)', key)
+        if m is None:
+            for k in reversed(ks):
+                c = root[set_name(k, 'ts_cal')]
+                if calibration_name(c) == key:
+                    return c
+            return None
+        which = int(m.group(1))
+    return root[set_name(int(which), 'ts_cal')] if int(which) in ks \
+        else None
+
 ################################################################################
 ################################### Tones ######################################
 ################################################################################
@@ -1247,8 +1289,8 @@ def set_in_report(root, path, flag, run = None):
 def item_name(grp):
     """
     Return a group's name, for the items that have one: a tuning
-    (``tuning_name``), a PSD group or a photon or HEE result (its group
-    name).
+    (``tuning_name``), a stream calibration (``calibration_name``), a
+    PSD group or a photon or HEE result (its group name).
 
     Parameters:
     grp (zarr.Group): the group.
@@ -1259,6 +1301,8 @@ def item_name(grp):
     path = grp.path
     if re.fullmatch(r'tune\d+', path):
         return tuning_name(grp)
+    if re.fullmatch(r'ts_cal\d+', path):
+        return calibration_name(grp)
     if re.fullmatch(r'ts_psd\d+', path):
         return str(grp.attrs.get('name') or '')
     if re.fullmatch(r'(photons|hee)/[^/]+', path):
@@ -1267,8 +1311,9 @@ def item_name(grp):
 
 def rename_item(root, path, name, run = None):
     """
-    Rename an item: a timestream run (its record and streams), a tuning
-    or a PSD group (attribute ``name``), or a photon or HEE result (its
+    Rename an item: a timestream run (its record and streams), a tuning,
+    a stream calibration or a PSD group (attribute ``name``), or a
+    photon or HEE result (its
     group is renamed on disk and every reference to it in the store's
     attributes follows).
 
@@ -1306,6 +1351,12 @@ def rename_item(root, path, name, run = None):
         other = find_tuning(root, name)
         if other is not None and other.path != path:
             raise ValueError(f'a tuning named {name!r} exists')
+        grp.attrs['name'] = name
+        return path
+    if re.fullmatch(r'ts_cal\d+', path):
+        other = find_calibration(root, name)
+        if other is not None and other.path != path:
+            raise ValueError(f'a calibration named {name!r} exists')
         grp.attrs['name'] = name
         return path
     if re.fullmatch(r'ts_psd\d+', path):

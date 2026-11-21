@@ -108,12 +108,15 @@ class HeeTailWindow(QtWidgets.QMainWindow):
 
         Parameters:
         ts (dict): the timestream (``photon_finder.list_timestreams``).
-        results (dict): its ``hee_finder.analyze_timestream`` results.
+        results (dict): its ``hee_finder.analyze_timestream`` results; a
+            row left out is "not run" until it is selected or run with
+            all tones.
         thresholds (TailThresholds): starting thresholds (changed in
             place).
         refit (callable): function of (rows, thresholds) returning the
             new results of those rows (dict row: result), e.g. a wrapper
-            of ``hee_finder.refit_timestream``.
+            of ``hee_finder.refit_timestream``; a row without a result
+            yet ("not run") is fitted from scratch.
         data (callable or None): function of a row returning its
             detection timestream (np.array), or an error message (str),
             for the timestream plot. Default None: no timestream plot.
@@ -153,7 +156,7 @@ class HeeTailWindow(QtWidgets.QMainWindow):
         self._build_plots()
         central = QtWidgets.QWidget()
         lay = QtWidgets.QHBoxLayout(central)
-        lay.addWidget(self._panel)
+        lay.addWidget(self._scroll)
         lay.addWidget(self.plots, stretch = 1)
         self.setCentralWidget(central)
         add_help(self, 'High-energy event tails', [
@@ -170,6 +173,9 @@ class HeeTailWindow(QtWidgets.QMainWindow):
                  'window'),
                 ('Include tones marked bad', 'List them too'),
                 ('Done', 'Save and close')]),
+            ('Tones', [
+                ('not run', 'Not fitted yet: select the tone to run '
+                 'it, or apply the values to all tones')]),
             ('Mouse', [('Scroll / drag', 'Zoom / pan a plot'),
                        ('Right-click', 'Plot menu (axes, log scale, export)')]),
         ])
@@ -237,8 +243,10 @@ class HeeTailWindow(QtWidgets.QMainWindow):
         self.scope_tone = QtWidgets.QRadioButton('Apply to this tone')
         self.scope_all = QtWidgets.QRadioButton('Apply to all tones')
         self.scope_tone.setChecked(True)
-        lay.addWidget(self.scope_tone)
-        lay.addWidget(self.scope_all)
+        scope = QtWidgets.QHBoxLayout()
+        scope.addWidget(self.scope_tone)
+        scope.addWidget(self.scope_all)
+        lay.addLayout(scope)
         self.apply_btn = QtWidgets.QPushButton('Apply (Ctrl+R)')
         self.apply_btn.clicked.connect(self.rerun)
         QtWidgets.QShortcut(QtGui.QKeySequence('Ctrl+R'), self, self.rerun)
@@ -253,15 +261,28 @@ class HeeTailWindow(QtWidgets.QMainWindow):
         self.rescale_btn.clicked.connect(self.rescale)
         self.done_btn = QtWidgets.QPushButton('Done')
         self.done_btn.clicked.connect(self.close)
-        for b in (self.bad_btn, self.note_btn, self.overview_btn,
-                  self.rescale_btn, self.done_btn):
-            lay.addWidget(b)
+        # Two columns, so the panel fits a short screen
+        grid = QtWidgets.QGridLayout()
+        for k, b in enumerate((self.bad_btn, self.note_btn,
+                               self.overview_btn, self.rescale_btn,
+                               self.done_btn)):
+            grid.addWidget(b, k // 2, k % 2)
+        lay.addLayout(grid)
         self.status = QtWidgets.QLabel()
         self.status.setWordWrap(True)
         self.status.setFixedHeight(int(80 * self._ui_scale))
         self.status.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         lay.addWidget(self.status)
         freeze_heights(lay, skip = (self.tone_list,))
+        # The panel scrolls on a short screen instead of squeezing its
+        # widgets together; the width is the panel's plus the scrollbar
+        self._scroll = QtWidgets.QScrollArea()
+        self._scroll.setWidget(self._panel)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setFixedWidth(self._panel.width() + int(
+            24 * self._ui_scale))
+        self._scroll.setMinimumHeight(300)
 
     def _build_plots(self):
         """
@@ -349,6 +370,8 @@ class HeeTailWindow(QtWidgets.QMainWindow):
                 else 'no fit'
             return (f"{mark} res {r_idx}: {res['n_used']} of "
                     f"{len(res['h'])} pulses, {tau}")
+        if res is None:
+            return f'{mark} res {r_idx}: not run'
         return f'{mark} res {r_idx}: failed'
 
     def _fill_list(self):
@@ -489,13 +512,23 @@ class HeeTailWindow(QtWidgets.QMainWindow):
 
     def select(self, i):
         """
-        Show tone i: its values, plots and summary.
+        Show tone i: its values, plots and summary, running it first
+        if it has not been run.
 
         Parameters:
         i (int): index in ``rows``.
         """
         if i < 0:
             return
+        if self.rows[i] not in self.results:
+            self.status.setText(f'Running res {self.res_idxs[i]}...')
+            self.results.update(self._refit([self.rows[i]],
+                                            self.thresholds))
+            if i in self._list_rows:
+                item = self.tone_list.item(self._list_rows.index(i))
+                if item is not None:
+                    item.setText(self._list_text(i))
+            self._refresh_overview()
         th = self.thresholds.for_tone(self.res_idxs[i])
         self._set_values(th)
         res = self.results.get(self.rows[i])

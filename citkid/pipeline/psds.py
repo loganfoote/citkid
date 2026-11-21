@@ -49,8 +49,8 @@ def list_timestreams(root):
     """
     List the timestreams of every stream calibration in the store: every
     tone set of every run with streams, with each ``ts_cal{c}`` that has a
-    DataSet for its tone set (``photon_finder.list_timestreams`` per
-    calibration).
+    DataSet for its calibration sweep (``photon_finder.list_timestreams``
+    per calibration).
 
     Parameters:
     root (zarr.Group): the store root.

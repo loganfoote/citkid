@@ -54,7 +54,7 @@ def tones():
     return out
 
 
-def make_window(tones, fail_row = None, data = None):
+def make_window(tones, fail_row = None, data = None, not_run = ()):
     """
     Make the window on two tones, recording the reruns.
 
@@ -62,6 +62,7 @@ def make_window(tones, fail_row = None, data = None):
     tones (dict): row: detection timestream.
     fail_row (int or None): a row whose detection fails. Default None.
     data (callable or None): the window's ``data``. Default None.
+    not_run (tuple of int): rows left without a result. Default none.
 
     Returns:
     win (PhotonThresholdWindow): the window.
@@ -99,7 +100,7 @@ def make_window(tones, fail_row = None, data = None):
         return out
 
     th = Thresholds()
-    results = rerun([5, 7], th)
+    results = rerun([r for r in (5, 7) if r not in not_run], th)
     calls.clear()
     return PhotonThresholdWindow(ts, results, th, rerun, data = data), calls
 
@@ -725,3 +726,37 @@ def test_keys_work_from_the_list(qapp, tones):
     _press(win.tone_list, QtCore.Qt.Key_B)
     assert win.thresholds.is_bad(10)
     win.close()
+
+
+def test_tones_not_run(qapp, tones):
+    """
+    A tone without a result is listed "not run"; selecting it runs it
+    with the thresholds as they stand, and applying to all tones runs
+    the tones not run too.
+    """
+    win, calls = make_window(tones, not_run = (7,))
+    assert win.tone_list.count() == 2
+    assert win.tone_list.item(1).text() == '  res 11: not run'
+    assert 7 not in win.results and calls == []
+    win.tone_list.setCurrentRow(1)
+    assert calls == [[7]] and isinstance(win.results[7], dict)
+    assert 'pulses' in win.tone_list.item(1).text()
+    assert len(win.h_curve.getData()[0]) > 0
+    win2, calls2 = make_window(tones, not_run = (7,))
+    win2.scope_all.setChecked(True)
+    win2.rerun()
+    assert calls2 == [[5], [7]] and isinstance(win2.results[7], dict)
+
+
+def test_panel_scrolls(qapp, tones):
+    """
+    The left panel sits in a scroll area as wide as the panel, so a
+    short screen scrolls it instead of squeezing the buttons together.
+    """
+    win, _ = make_window(tones)
+    win.show()
+    qapp.processEvents()
+    assert win._scroll.widget() is win._panel
+    assert win._scroll.width() > win._panel.width()
+    assert win._panel.minimumSizeHint().height() > 300
+    assert win._scroll.minimumHeight() == 300

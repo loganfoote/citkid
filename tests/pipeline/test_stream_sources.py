@@ -322,3 +322,40 @@ def test_rounded_tone_frequencies_warn(streamed):
         warnings.simplefilter('always')
         steps['load_global_res_data'].func()
     assert not [w for w in record if 'written up to' in str(w.message)]
+
+
+def test_datasets_per_calibration_sweep(streamed):
+    """
+    A selection groups streams by calibration sweep, never across
+    sweeps, and a calibration's DataSet applies only to its sweep's
+    timestreams.
+    """
+    from citkid.pipeline import photon_finder as pf
+    from citkid.pipeline.stream_sources import (
+        open_calibration, plan_stream_datasets)
+    root, tune = streamed
+    # slow: set0 on cal0, set1 on cal1; fast: set0 on cal2, set1 on cal3;
+    # slow2: set1 on cal3
+    groups = plan_stream_datasets(root, [dict(name = 'slow', chunks = 1),
+                                         dict(name = 'fast', chunks = 1)])
+    assert list(groups) == ['set0_cal0', 'set1_cal1', 'set0_cal2',
+                            'set1_cal3']
+    assert [g['calibration'] for g in groups.values()] == [
+        'tune0/cal0', 'tune0/cal1', 'tune0/cal2', 'tune0/cal3']
+    assert all(len(g['sources']) == 1 for g in groups.values())
+    groups = plan_stream_datasets(root, [dict(name = 'fast', chunks = 1),
+                                         dict(name = 'slow2', chunks = 1)])
+    assert list(groups) == ['set0', 'set1']
+    assert groups['set1']['calibration'] == 'tune0/cal3' and \
+        [e['name'] for e in groups['set1']['entries']] == ['fast', 'slow2']
+    # A calibration of the slow run's sweeps lists only that run
+    cal = dl.create_group(root, 'ts_cal9', 'analysis', attrs = dict(
+        selection = [dict(name = 'slow', chunks = 1)]))
+    for name in ('set0', 'set1'):
+        cal.create_group(name)
+    ds = open_calibration(root, cal)
+    assert ds['set0']['calibration'] == 'tune0/cal0'
+    assert [(t['name'], t['tone_set'], t['dataset'])
+            for t in pf.list_timestreams(root, ds)] == [
+        ('slow', 0, 'set0'), ('slow', 1, 'set1')]
+    del root['ts_cal9']

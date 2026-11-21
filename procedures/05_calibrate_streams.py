@@ -8,6 +8,7 @@ Usage:
     python 05_calibrate_streams.py --device deviceA --no-gui
 """
 import argparse
+import re
 import os
 from citkid import daq_layout as dl
 from citkid.pipeline.analysis import AnalysisRunner
@@ -28,6 +29,7 @@ CALIBRATE = [
     dict(name = 'dark_dec0', chunks = (0, 2), tone_sets = [0]),
     dict(run = 3)
 ]
+CALIBRATION = None
 F_AVG = 1
 INTERACTIVE = True
 FIT_IQ = False
@@ -57,6 +59,10 @@ def parse_args(argv = None):
                    '(blank: <device>.zarr)')
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device)')
+    p.add_argument('--cal', default = CALIBRATION,
+                   help = 'calibration to continue, by name or index, or '
+                   'the name of a new one (default: the latest made '
+                   'with CALIBRATE, else a new one)')
     p.add_argument('--new', action = 'store_true',
                    help = 'start a new ts_cal group')
     p.add_argument('--fit-iq', action = 'store_true', default = FIT_IQ,
@@ -95,31 +101,63 @@ def store_path(args):
     return dl.store_path(args.data_dir, args.cooldown, args.device,
                          args.suffix)
 
-def cal_group(root, selection, new, notes = None):
+def cal_group(root, selection, new, notes = None, which = None):
     """
-    Return the ts_cal group for a choice of streams: the latest one made with
-    the same choice, or a new one.
+    Return the ts_cal group for a choice of streams: the one named, the
+    latest one made with the same choice, or a new one.
 
     Parameters:
     root (zarr.Group): the store root.
     selection (list of dict): ``CALIBRATE``.
-    new (bool): If True, always start a new one.
+    new (bool): If True, start a new one (named ``which``, if given).
     notes (str or None): notes saved with a new group. Default None.
+    which (int, str or None): the calibration to continue, by name or
+        index (2, '2' or 'ts_cal2'; ``daq_layout.find_calibration``),
+        which must have been made with ``selection``; a name no
+        calibration has starts a new one with it. Default None: the
+        latest made with ``selection``, else a new one without a name.
 
     Returns:
     cal (zarr.Group): the group.
+
+    Raises:
+    ValueError: if ``which`` is an index with ``new`` or of no group,
+        or names a group made with another choice of streams.
     """
     selection = to_jsonable(list(selection))
     idxs = dl.list_indices(root, 'ts_cal')
-    if idxs and not new:
+    name = None
+    if which is not None:
+        is_index = re.fullmatch(r'(?:ts_cal)?\d+', str(which).strip())
+        cal = None if new and not is_index else \
+            dl.find_calibration(root, which)
+        if cal is not None:
+            if new:
+                raise ValueError('give --new with a name, not an index')
+            if cal.attrs.get('selection') != selection:
+                raise ValueError(
+                    f'{cal.path} ({dl.calibration_name(cal)!r}) was made '
+                    'with another choice of streams: CALIBRATE = '
+                    f"{cal.attrs.get('selection')}")
+            print(f'Continuing {cal.path} ({dl.calibration_name(cal)!r})')
+            return cal
+        if is_index:
+            raise ValueError(f'no ts_cal group {which!r}; the store has '
+                             f"{', '.join(f'ts_cal{i}' for i in idxs)}")
+        name = str(which).strip()
+    elif idxs and not new:
         last = root[dl.set_name(idxs[-1], 'ts_cal')]
         if last.attrs.get('selection') == selection:
-            print(f'Continuing {last.path}')
+            print(f'Continuing {last.path} '
+                  f'({dl.calibration_name(last)!r})')
             return last
+    attrs = dict(selection = selection)
+    if name is not None:
+        attrs['name'] = name
     cal, _ = dl.new_indexed_group(root, 'ts_cal', 'analysis',
-                                  attrs = dict(selection = selection))
+                                  attrs = attrs)
     save_notes(cal, notes)
-    print(f'Calibrating into {cal.path}')
+    print(f'Calibrating into {cal.path} ({dl.calibration_name(cal)!r})')
     return cal
 
 def fit_resonances(AR, grp):
@@ -161,7 +199,8 @@ def main(args):
         print('Set CALIBRATE at the top of the script to choose streams.')
         return None
     groups = plan_stream_datasets(root, CALIBRATE)
-    cal = cal_group(root, CALIBRATE, args.new, args.notes)
+    cal = cal_group(root, CALIBRATE, args.new, args.notes,
+                    which = args.cal)
     datasets = {}
     for name, g in groups.items():
         res = g['resonators']

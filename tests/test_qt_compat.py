@@ -640,3 +640,38 @@ def test_plain_axis_item_tick_strings():
     ax.setLogMode(False)
     assert ax.tickStrings([1., 2.5], 1., 0.) == ['1', '2.5']
     assert ax.tickStrings([], 1., 1.) == []
+
+
+def test_light_theme_darkens_pale_plot_colors():
+    """
+    With the light theme every pen and brush made through pyqtgraph is
+    readable on white: pale colours are darkened and saturated, white,
+    black and dark colours are kept, and the dark theme restores
+    pyqtgraph's own colours.
+    """
+    import pyqtgraph as pg
+    from pyqtgraph.Qt import QtGui
+    from citkid import qt_compat
+
+    def rgb(c):
+        return (c.red(), c.green(), c.blue(), c.alpha())
+
+    try:
+        qt_compat.set_theme(True)
+        pale = pg.mkPen((100, 180, 255)).color()
+        assert pale.valueF() <= 0.72 and pale.saturationF() >= 0.85
+        assert pale.hue() == QtGui.QColor(100, 180, 255).hue()
+        yellow = pg.mkPen('y', width = 2).color()
+        assert yellow.valueF() <= 0.72 and yellow.blue() == 0
+        grey = pg.mkBrush((150, 150, 150, 120)).color()
+        assert grey.red() == grey.green() == grey.blue() <= 115
+        assert grey.alpha() == 120
+        assert rgb(pg.mkBrush('w').color()) == (255, 255, 255, 255)
+        assert rgb(pg.mkPen('k').color()) == (0, 0, 0, 255)
+        assert rgb(pg.mkPen((255, 80, 80)).color()) == (255, 80, 80, 255)
+        assert rgb(pg.mkColor((0, 0, 255, 50))) == (0, 0, 255, 50)
+        assert pg.functions.mkColor is qt_compat._mk_color_light
+    finally:
+        qt_compat.set_theme(False)
+    assert pg.functions.mkColor is qt_compat._MKCOLOR
+    assert rgb(pg.mkPen((100, 180, 255)).color()) == (100, 180, 255, 255)
