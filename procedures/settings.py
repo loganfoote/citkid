@@ -1,7 +1,7 @@
 """
-Settings shared by every script: the board, the device store and the
-memory limit. Copy it into the run's scripts folder with the scripts
-and set it once.
+Settings shared by every script: the board, the device store, the
+readout chain and the memory limit. Copy it into the run's scripts
+folder with the scripts and set it once.
 """
 
 ################################################################################
@@ -14,6 +14,8 @@ DATA_DIR = '~/data'
 COOLDOWN = 'cooldown'
 DEVICE = 'device'
 SUFFIX = ''
+SETUP = dict(fridge_ch = '', dac_attenuation = '', dac_filters = '',
+             adc_filters = '', warm_amps = '')
 MEMORY_GB = 12.
 LIGHT_MODE = False
 

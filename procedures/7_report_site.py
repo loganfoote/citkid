@@ -1,7 +1,8 @@
 """
 7: build one device's pages of the report site in REPORT_DIR, with the
-report figures and tables, and the top page listing every device built
-so far. The store is STORE, --store, or chosen in a dialog. A dialog
+report figures and tables. The store is STORE, --store, or chosen in a
+dialog. The site's top page is index.php, which the web server fills
+from the device folders present (--index-only writes it). A dialog
 asks who did the work (saved in the store, shown on the pages), then
 the store browser opens on its Notes tab (edit notes, attach files to
 the report; close it to build). A store that has not changed since its
@@ -68,14 +69,15 @@ def parse_args(argv = None):
                    help = 'only write --by into the store and its '
                    'existing report, without rebuilding the pages')
     p.add_argument('--index-only', action = 'store_true',
-                   help = 'only rebuild the top page (e.g. after copying '
-                   'a device folder in)')
+                   help = 'only write the top page (index.php) and '
+                   'refresh the row each device folder carries')
     return p.parse_args(argv)
 
 def existing_report(store, args):
     """
     Decide what to do when the store's report exists: replace it (its
-    attachments too), rebuild it keeping the attachments and notes.md,
+    attachments too; the comments added on the served site stay),
+    rebuild it keeping the attachments and notes.md,
     or stop. ``--overwrite`` and ``--update`` decide; otherwise a popup
     asks, or without the window the run stops.
 
@@ -152,7 +154,7 @@ def main(args):
     """
     set_theme(LIGHT_MODE)
     if args.index_only:
-        print(f'Site: {site.build_index(args.out)}')
+        print(f'Site: {site.build_index(args.out, refresh = True)}')
         return []
     store = args.store
     if store is None:
@@ -180,8 +182,8 @@ def main(args):
         print('Cancelled: the report is left as it is.')
         return None
     if choice == 'overwrite':
-        import shutil
-        shutil.rmtree(site.device_dir(args.out, dl.open_store(
+        # Everything the build made goes; the site's own comments stay
+        site.clear_device_dir(site.device_dir(args.out, dl.open_store(
             os.path.expanduser(store))))
     if choice in ('overwrite', 'update'):
         # The user asked for the report again: rebuild it even if the

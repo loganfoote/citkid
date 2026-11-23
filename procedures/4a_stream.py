@@ -22,7 +22,7 @@ from citkid.qt_compat import set_theme
 ################################### Settings ###################################
 ################################################################################
 from settings import (SERIAL_NUMBER, INTERFACE, MODULES, DATA_DIR, COOLDOWN,
-                      DEVICE, SUFFIX, LIGHT_MODE)
+                      DEVICE, SUFFIX, LIGHT_MODE, SETUP)
 
 # Calibration sweep
 NPOINTS_FINE = 1000
@@ -164,7 +164,7 @@ def main(args):
                 npoints_fine = NPOINTS_FINE, npoints_gain = NPOINTS_GAIN,
                 nsamps = NSAMPS,
                 gain_span_factor = GAIN_SPAN_FACTOR),
-            fres_update = FRES_UPDATE)
+            fres_update = FRES_UPDATE, setup = SETUP)
 
 if __name__ == '__main__':
     main(parse_args())

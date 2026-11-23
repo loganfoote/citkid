@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 import zarr
 from citkid import daq_layout as dl
+from citkid.pipeline import site
 from ..crs.fake_crs import FakeVnaCRS
 
 SCRIPTS = os.path.join(os.path.dirname(__file__), '..', '..', 'procedures')
@@ -317,6 +318,7 @@ async def test_01_vna_sweep(monkeypatch, tmp_path):
     assert root.attrs['device'] == 'devA' and root.attrs['setup'] == \
         m.SETUP
     grp = root['vna0']
+    assert grp.attrs['setup'] == m.SETUP and 'warm_amps' in m.SETUP
     assert grp.attrs['nsamps'] == 7 and grp.attrs['amplitude'] == \
         m.AMPLITUDE
     assert grp.attrs['step'] == pytest.approx(2e-5)
@@ -760,6 +762,8 @@ def test_04b_stream_batch(tmp_path, monkeypatch, capsys):
     root = dl.open_store(path)
     runs = dl.stream_runs(root)
     assert [r['name'] for r in runs] == ['a', 'b'] and runs[1]['notes'] == 'n'
+    assert runs[0]['setup'] == m.SETUP and root['tune0'].attrs['setup'] \
+        == m.SETUP
     cal = root['tune0/cal0']
     assert cal.attrs['notes'] == 'cold'
     up = cal.attrs['fres_update']
@@ -2243,12 +2247,13 @@ def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
     assert dl.open_store(path).attrs['work_by'] == 'LF DAQ'
     m.main(m.parse_args(argv + ['--by', 'LF + BE DAQ, LF analysis',
                                 '--fill']))
-    # The top page only with INDEX (off in the template)
+    # The top page (index.php) only with INDEX (off in the template)
+    assert not (out / 'index.php').exists()
     assert not (out / 'index.html').exists()
     assert (dev / 'index.html').exists()
     monkeypatch.setattr(m, 'INDEX', True)
     assert m.main(m.parse_args(argv)) == [str(dev)]
-    assert (out / 'index.html').exists()
+    assert (out / 'index.php').exists()
     manifest = json.loads((dev / 'manifest.json').read_text('utf-8'))
     assert manifest['device'] == device and manifest['res_pages'] is True
     assert len(manifest['runs']) >= 2 and manifest['tunings']
@@ -2257,9 +2262,34 @@ def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
     assert ov['n_tones'] and ov['fres_mhz'][0] <= ov['fres_mhz'][1]
     assert ov['photon_tau_us'] and ov['photon_tau_us'][2] >= 1
     assert ov['sxx_cn_10hz'] and ov['sxx_cn_10hz'][0] > 0
-    top = (out / 'index.html').read_text('utf-8')
-    assert 'photon_tau_us' in top and ' to ' in top
-    assert 'work_by' in top and 'LF + BE DAQ, LF analysis' in top
+    top = (out / 'index.php').read_text('utf-8')
+    assert top.startswith('<?php') and 'manifest.json' in top
+    assert (out / 'comments.php').read_text('utf-8').startswith('<?php')
+    assert 'Comments (0)' in (dev / 'index.html').read_text('utf-8')
+    for c in site.INDEX_COLUMNS:
+        assert f'<th>{c}</th>' in top
+    assert '<th>created</th>' not in top and 'LF + BE' not in top
+    # The row the page lists is saved in the manifest
+    row = manifest['index_row']
+    assert list(row) == site.INDEX_COLUMNS
+    assert row['Photon lifetime [us]'].endswith(' res)')
+    assert row['Work by'] == 'LF + BE DAQ, LF analysis'
+    assert row['Report generated'] == manifest['built']
+    assert row['Tones (with timestreams / total)'].startswith(
+        str(ov['n_tones']))
+    sched = manifest['overview']['schedule']
+    assert sched['n'] >= 1 and sched['fmin_mhz'] <= sched['fmax_mhz']
+    assert 'MHz' in site.schedule_text(sched)
+    assert row['Frequency schedule'] == site.schedule_text(sched)
+    # A manifest without a row (an older report) gets one from
+    # --index-only; the rows list every device folder
+    del manifest['index_row']
+    (dev / 'manifest.json').write_text(json.dumps(manifest), 'utf-8')
+    assert m.main(m.parse_args(['--out', str(out), '--index-only'])) == []
+    again = json.loads((dev / 'manifest.json').read_text('utf-8'))
+    assert again['index_row'] == row
+    rows = site.index_rows(str(out))
+    assert [r['_link'] for r in rows] == [f'{cooldown}/{device}/index.html']
     # The template's helper: the calibration applied to one run
     from citkid.pipeline.stream_sources import calibrated_timestream
     name = manifest['runs'][0]['name']
@@ -2286,18 +2316,18 @@ def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
     assert 'res/res' in page and 'Tone marks' in page
     text = pages[0].read_text('utf-8')
     assert 'Tuning' in text and 'Device page' in text
-    top = (out / 'index.html').read_text('utf-8')
-    assert f'{cooldown}/{device}/index.html' in top
-    assert '<th>die</th>' in top and '<th>suffix</th>' in top
+    top = (out / 'index.php').read_text('utf-8')
+    assert '<th>Die</th>' in top and '<th>Suffix</th>' in top
     assert 'input class="colfilter"' in top and str(path) not in top
+    assert 'href="../../"' in page
     assert '<details' in page and 'input class="rowfilter"' in page
     # The section markers are CSS escapes, not Python octal escapes
     assert 'content: "\\25B8 "' in page and chr(0x15) not in page
     assert str(path) not in page
-    # --index-only rebuilds the top page alone
-    (out / 'index.html').unlink()
+    # --index-only writes the top page alone
+    (out / 'index.php').unlink()
     assert m.main(m.parse_args(['--out', str(out), '--index-only'])) == []
-    assert (out / 'index.html').exists()
+    assert (out / 'index.php').exists()
     # An unchanged store is up to date for build_device, but --update
     # (the user asked for the report again) rebuilds it anyway
     assert m.site.build_device(str(path), str(out),
@@ -2361,16 +2391,26 @@ def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
     assert m.main(m.parse_args(['--store', str(path), '--out', str(out)])) \
         is None
     assert (dev / 'attachments' / 'keep.txt').exists()
+    # Comments added on the served site survive the overwrite and are
+    # rendered on the page
+    (dev / 'comments.json').write_text(json.dumps([dict(
+        who = 'LF', when = '2026-11-23 10:00:00', text = 'keep me')]),
+        'utf-8')
     answers.append('overwrite')
     assert m.main(m.parse_args(['--store', str(path), '--out', str(out),
                                 '--no-res-pages'])) == [str(dev)]
     assert not (dev / 'attachments').exists()
     assert (dev / 'index.html').exists()
+    assert (dev / 'comments.json').exists()
+    page = (dev / 'index.html').read_text('utf-8')
+    assert 'Comments (1)' in page and 'keep me' in page
+    assert 'action="../../comments.php"' in page
+    manifest = json.loads((dev / 'manifest.json').read_text('utf-8'))
+    assert manifest['index_row']['Comments'].startswith('1; latest')
     # With the window, the store browser opens on its Notes tab first,
     # with the site folder for attachments; the store shown last is
     # built. An attached file is linked from the page and makes the
     # device out of date
-    from citkid.pipeline import site
     opened = []
 
     def fake_browser(path_, title = '', ui_scale = 1., site_dir = None,

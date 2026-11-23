@@ -42,6 +42,9 @@ NOTES_FILE = 'notes.md'
 MANIFEST = 'manifest.json'
 ATTACHMENTS = 'attachments'
 ATTACHMENTS_INDEX = 'attachments.json'
+COMMENTS_FILE = 'comments.json'
+COMMENTS_PHP = 'comments.php'
+KEEP_ON_OVERWRITE = (COMMENTS_FILE,)
 
 ################################################################################
 ################################# Attachments ##################################
@@ -60,6 +63,149 @@ def device_dir(out_root, root):
     return os.path.join(os.path.expanduser(out_root),
                         str(root.attrs.get('cooldown', 'cooldown')),
                         str(root.attrs.get('device', 'device')))
+
+def load_comments(out_dir):
+    """
+    Read the comments added on the served site to a device's report
+    (``comments.json`` in its folder, written by ``comments.php``;
+    the build never writes it).
+
+    Parameters:
+    out_dir (str): the device's folder in the site.
+
+    Returns:
+    comments (list of dict): ``who``, ``when``, ``text``, oldest
+        first ([] without the file or when it is not a list).
+    """
+    path = os.path.join(out_dir, COMMENTS_FILE)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, encoding = 'utf-8') as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    return [dict(who = str(c.get('who') or ''), when = str(c.get('when')
+                                                         or ''),
+                 text = str(c.get('text') or ''))
+            for c in data if isinstance(c, dict)] \
+        if isinstance(data, list) else []
+
+def comments_summary(comments, width = 80):
+    """
+    Write the comments of a device as one cell of the top page.
+
+    Parameters:
+    comments (list of dict): ``load_comments`` output.
+    width (int): characters of the latest comment shown. Default 80.
+
+    Returns:
+    text (str): '', or 'n; latest <when> <who>: <text>'.
+    """
+    if not comments:
+        return ''
+    last = comments[-1]
+    text = ' '.join(last['text'].split())
+    if len(text) > width:
+        text = text[:width - 3].rstrip() + '...'
+    who = f" {last['who']}" if last['who'] else ''
+    return f"{len(comments)}; latest {last['when']}{who}: {text}"
+
+def comments_html(comments):
+    """
+    Render the comments of a device page.
+
+    Parameters:
+    comments (list of dict): ``load_comments`` output.
+
+    Returns:
+    html (str): one block per comment, or a line saying there are
+        none.
+    """
+    if not comments:
+        return '<p class="small">No comments yet.</p>'
+    return ''.join(
+        f'<div class="comment"><span class="small">{_esc(c["when"])}'
+        + (f' {_esc(c["who"])}' if c['who'] else '') + '</span><br>'
+        + _esc(c['text']).replace('\n', '<br>') + '</div>'
+        for c in comments)
+
+COMMENTS_SCRIPT = '''
+(function () {
+  if (!location.protocol.startsWith('http')) { return; }
+  document.getElementById('comment-form').hidden = false;
+  var esc = function (s) { var d = document.createElement('div');
+    d.textContent = s; return d.innerHTML; };
+  fetch('comments.json', {cache: 'no-store'})
+    .then(function (r) { return r.ok ? r.json() : []; })
+    .then(function (list) {
+      if (!Array.isArray(list)) { return; }
+      document.getElementById('comments-count').textContent =
+        'Comments (' + list.length + ')';
+      document.getElementById('comments-list').innerHTML = list.length
+        ? list.map(function (c) {
+            return '<div class="comment"><span class="small">'
+              + esc(c.when || '') + (c.who ? ' ' + esc(c.who) : '')
+              + '</span><br>' + esc(c.text || '').replace(/\\n/g, '<br>')
+              + '</div>'; }).join('')
+        : '<p class="small">No comments yet.</p>';
+    }).catch(function () {});
+})();
+'''
+
+def comments_section(out_dir, cooldown, device):
+    """
+    Render the Comments section of a device page: the comments as of
+    the build, and, when the page is served (the NAS), the live list
+    from ``comments.json`` and a form posting to ``comments.php``.
+
+    Parameters:
+    out_dir (str): the device's folder in the site.
+    cooldown (str), device (str): its folders (the form's fields).
+
+    Returns:
+    html (str): the section.
+    """
+    comments = load_comments(out_dir)
+    form = (
+        '<form id="comment-form" method="post" '
+        f'action="../../{COMMENTS_PHP}" hidden>'
+        f'<input type="hidden" name="cooldown" value="{_esc(cooldown)}">'
+        f'<input type="hidden" name="device" value="{_esc(device)}">'
+        '<input name="who" maxlength="100" placeholder="your name"> '
+        '<textarea name="text" required maxlength="5000" rows="3" '
+        'placeholder="comment"></textarea> '
+        '<button type="submit">Add comment</button></form>')
+    return (
+        '<details open id="comments"><summary><h2 id="comments-count">'
+        f'Comments ({len(comments)})</h2></summary>'
+        f'<div id="comments-list">{comments_html(comments)}</div>{form}'
+        '<p class="small">Comments are added on the served site and '
+        f'kept in {COMMENTS_FILE} next to this page, which rebuilding '
+        'the report leaves alone.</p>'
+        f'<script>{COMMENTS_SCRIPT}</script></details>')
+
+def clear_device_dir(out_dir, keep = KEEP_ON_OVERWRITE):
+    """
+    Empty a device's folder for an overwrite, keeping the files the
+    build does not own (the comments).
+
+    Parameters:
+    out_dir (str): the device's folder in the site.
+    keep (sequence of str): file names kept. Default
+        ``KEEP_ON_OVERWRITE``.
+    """
+    import shutil
+    if not os.path.isdir(out_dir):
+        return
+    for name in os.listdir(out_dir):
+        if name in keep:
+            continue
+        path = os.path.join(out_dir, name)
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path)
+        else:
+            os.remove(path)
 
 def load_attachments(out_dir):
     """
@@ -229,15 +375,21 @@ def store_suffix(root):
 
     Returns:
     name (str): the file name without '.zarr' ('' if unknown).
-    suffix (str): what follows the device name ('' if none).
+    suffix (str): what follows the device name; when the file name
+        does not start with the device (a device attribute typed
+        differently), what follows its last '_' ('' if none).
     """
     path = str(getattr(root.store, 'root', '') or '')
     name = os.path.basename(os.path.normpath(path)) if path else ''
     if name.endswith('.zarr'):
         name = name[:-5]
     device = str(root.attrs.get('device', ''))
-    suffix = name[len(device) + 1:] if device and \
-        name.startswith(device + '_') else ''
+    if device and name.startswith(device + '_'):
+        suffix = name[len(device) + 1:]
+    elif '_' in name and not (device and name == device):
+        suffix = name.rsplit('_', 1)[1]
+    else:
+        suffix = ''
     return name, suffix
 
 def store_newest(root):
@@ -294,6 +446,7 @@ def inventory(root):
         sweeps.append(dict(
             k = k, path = g.path, created = _attr(g, 'created', ''),
             notes = _attr(g, 'notes', ''), amplitude = _attr(g, 'amplitude'),
+            setup = _attr(g, 'setup'),
             fmin = _attr(g, 'fmin'), fmax = _attr(g, 'fmax'),
             n_points = int(g['f'].shape[0]) if 'f' in g else None,
             fit = fit is not None,
@@ -316,6 +469,7 @@ def inventory(root):
             k = k, path = t.path, created = _attr(t, 'created', ''),
             in_report = dl.in_report(t), name = dl.tuning_name(t),
             notes = notes, resonators = _attr(t, 'resonators'),
+            setup = _attr(t, 'setup'),
             n_tones = int(len(tones['res_idxs'])) if tones else None,
             n_tone_sets = int(len(np.unique(tones['tone_set'])))
             if tones else None,
@@ -340,7 +494,7 @@ def inventory(root):
         rec = {key: run.get(key) for key in
                ('run', 'group', 'name', 'notes', 'dec_stage', 'duration_s',
                 'tone_set', 'calibration', 'tuning', 'complete', 'created',
-                'paths', 'nsamples')}
+                'paths', 'nsamples', 'setup')}
         settings = {}
         if run.get('paths'):
             s = root[run['paths'][0]]
@@ -1024,6 +1178,10 @@ pre { background: #f6f6f6; padding: 8px; font-size: 0.85em;
 .wrap { overflow-x: auto; }
 .nav a { margin-right: 16px; }
 .small { font-size: 0.85em; color: #555; }
+.comment { border-left: 3px solid #cfd8e3; padding: 4px 10px;
+  margin: 6px 0; }
+#comment-form input, #comment-form textarea { display: block;
+  width: 60%; margin: 4px 0; }
 '''
 
 JS = '''
@@ -1192,7 +1350,8 @@ def page_html(title, body, depth, subtitle = ''):
     Parameters:
     title (str): page title.
     body (str): HTML body.
-    depth (int): folders below the site root (for the links).
+    depth (int): folders below the site root (for the link to the
+        site's folder, whose ``index.php`` a web server serves).
     subtitle (str): line under the title. Default ''.
 
     Returns:
@@ -1202,7 +1361,7 @@ def page_html(title, body, depth, subtitle = ''):
     return (f'<!DOCTYPE html><html><head><meta charset="utf-8">'
             f'<title>{_esc(title)}</title><style>{CSS}</style>'
             f'<script>{JS}</script></head><body>'
-            f'<div class="nav"><a href="{up}index.html">All devices</a></div>'
+            f'<div class="nav"><a href="{up or "./"}">All devices</a></div>'
             f'<h1>{_esc(title)}</h1>'
             + (f'<p class="small">{_esc(subtitle)}</p>' if subtitle else '')
             + body + '</body></html>')
@@ -1322,6 +1481,29 @@ def _rel(path, start):
     """
     return os.path.relpath(path, start).replace(os.sep, '/')
 
+def setup_note(setup, base):
+    """
+    Say how an item's setup (readout chain) differs from the store's,
+    for the What was taken table.
+
+    Parameters:
+    setup (dict or None): the item's ``setup`` attribute.
+    base (dict or None): the store's.
+
+    Returns:
+    text (str): '; setup: key value, ...' over the keys that differ
+        (empty or None values count as unset), or ''.
+    """
+    if not setup:
+        return ''
+    base = base or {}
+    clean = lambda v: '' if v is None else str(v)
+    diff = {k: v for k, v in dict(setup).items()
+            if clean(v) != clean(base.get(k)) and clean(v)}
+    diff.update({k: '(unset)' for k in base
+                 if clean(base[k]) and not clean(dict(setup).get(k))})
+    return f'; setup: {dl.setup_text(diff)}' if diff else ''
+
 def _taken_table(inv, attachments = None):
     """
     Tabulate what a store holds, one row per item.
@@ -1336,6 +1518,7 @@ def _taken_table(inv, attachments = None):
         ``name``, ``notes``, ``details``, ``attached`` (HTML links).
     """
     rows = []
+    base = (inv.get('attrs') or {}).get('setup')
     for s in inv['sweeps']:
         rows.append(dict(kind = 'VNA sweep', path = s['path'],
                          created = s['created'], name = '',
@@ -1343,14 +1526,16 @@ def _taken_table(inv, attachments = None):
                          details = f"{s.get('n_resonators') or 0} resonators"
                          + (', fit' if s['fit'] else ', not fit')
                          + (f", {s['amplitude']} dBm"
-                            if s.get('amplitude') is not None else '')))
+                            if s.get('amplitude') is not None else '')
+                         + setup_note(s.get('setup'), base)))
     for t in inv['tunings']:
         rows.append(dict(kind = 'Tuning', path = t['path'],
                          created = t['created'], name = '', notes = t['notes'],
                          details = f"{t.get('n_tones') or 0} tones in "
                          f"{t.get('n_tone_sets') or 0} tone sets; powers "
                          f"{t['powers'][0] if t['powers'] else ''} to "
-                         f"{t['powers'][-1] if t['powers'] else ''} dBm"))
+                         f"{t['powers'][-1] if t['powers'] else ''} dBm"
+                         + setup_note(t.get('setup'), base)))
         for c in t['cal_sweeps']:
             rows.append(dict(kind = 'Calibration sweep', path = c['path'],
                              created = c['created'],
@@ -1371,7 +1556,8 @@ def _taken_table(inv, attachments = None):
                if s.get('sample_freq') else '')
             + ''.join(f', full scale {float(v):.1f} dBm' for v in fs.values())
             + ''.join(f', ADC attenuation {float(v):g} dB'
-                      for v in att.values())))
+                      for v in att.values())
+            + setup_note(r.get('setup'), base)))
     for c in inv['calibrations']:
         rows.append(dict(kind = 'Stream calibration', path = c['path'],
                          created = c['created'], name = '', notes = c['notes'],
@@ -1515,12 +1701,92 @@ def _range_text(r, fmt = '{:.3g}', unit = ''):
     unit (str): unit appended. Default ''.
 
     Returns:
-    text (str): 'lo to hi unit (n)', or ''.
+    text (str): 'lo to hi unit (n res)', or ''.
     """
     if not r:
         return ''
     text = f'{fmt.format(r[0])} to {fmt.format(r[1])}{unit}'
-    return text + (f' ({r[2]})' if len(r) > 2 else '')
+    return text + (f' ({r[2]} res)' if len(r) > 2 else '')
+
+def frequency_schedule(root, inv):
+    """
+    Describe the frequency schedule of the latest tuning: the range of
+    the resonances found (``fres_all`` of the resonator list it used),
+    the outliers among them (``report.outliers``), and the CRS
+    modules, analog bank and NCO frequencies it ran with.
+
+    Parameters:
+    root (zarr.Group): the store root.
+    inv (dict): ``inventory`` output.
+
+    Returns:
+    schedule (dict or None): ``fmin_mhz``, ``fmax_mhz`` (the range
+        without the outliers), ``n`` (resonances), ``outliers_mhz``
+        (list), ``modules`` (list of int), ``bank`` ('low', 'high'
+        or None), ``ncos_mhz`` (list, per tone set); None when no
+        tuning has a resonator list.
+    """
+    tuned = [t for t in inv.get('tunings', []) if t.get('resonators')]
+    if not tuned:
+        return None
+    t = tuned[-1]
+    res = root.get(str(t['resonators']))
+    if res is None or 'fres_all' not in res:
+        return None
+    f = np.asarray(res['fres_all'][:], dtype = float) / 1e6
+    f = f[np.isfinite(f)]
+    out = dict(fmin_mhz = None, fmax_mhz = None, n = int(len(f)),
+               outliers_mhz = [], modules = [], bank = None, ncos_mhz = [])
+    if len(f):
+        odd = treport.outliers(f) if len(f) > 3 else np.zeros(len(f), bool)
+        keep = f[~odd] if (~odd).any() else f
+        out.update(fmin_mhz = float(keep.min()), fmax_mhz = float(keep.max()),
+                   outliers_mhz = sorted(float(v) for v in f[odd]))
+    cfg = root.get(f"{t['path']}/crs_config")
+    config = dict(cfg.attrs.get('config') or {}) if cfg is not None else {}
+    if config:
+        out['modules'] = [int(m) for m in config.get('modules') or []]
+        if config.get('analog_bank_high') is not None:
+            out['bank'] = 'high' if config['analog_bank_high'] else 'low'
+        ncos = []
+        for ts_ in config.get('tone_sets') or []:
+            ncos.extend(float(v) / 1e6 for v in dict(ts_).values())
+        if not ncos and config.get('ncos'):
+            ncos = [float(v) / 1e6 for v in dict(config['ncos']).values()]
+        out['ncos_mhz'] = ncos
+    return out
+
+def schedule_text(schedule):
+    """
+    Write a frequency schedule as one line for the site's top page.
+
+    Parameters:
+    schedule (dict or None): ``frequency_schedule`` output.
+
+    Returns:
+    text (str): e.g. '314.0 to 2421.2 MHz (938 res); outliers 2900.1
+        MHz; module 4, low bank, NCO 666.8, 817.7 MHz', or ''.
+    """
+    if not schedule or schedule.get('fmin_mhz') is None:
+        return ''
+    parts = [f"{schedule['fmin_mhz']:.1f} to {schedule['fmax_mhz']:.1f} "
+             f"MHz ({schedule['n']} res)"]
+    if schedule.get('outliers_mhz'):
+        parts.append('outliers ' + ', '.join(
+            f'{v:.1f}' for v in schedule['outliers_mhz']) + ' MHz')
+    crs = []
+    if schedule.get('modules'):
+        m = schedule['modules']
+        crs.append(('module ' if len(m) == 1 else 'modules ')
+                   + ', '.join(str(v) for v in m))
+    if schedule.get('bank'):
+        crs.append(f"{schedule['bank']} bank")
+    if schedule.get('ncos_mhz'):
+        crs.append('NCO ' + ', '.join(f'{v:.1f}' for v in
+                                      schedule['ncos_mhz']) + ' MHz')
+    if crs:
+        parts.append(', '.join(crs))
+    return '; '.join(parts)
 
 def build_device(root, out_root, force = False, dpi = FIG_DPI,
                  res_pages = True, progress = None):
@@ -1604,6 +1870,7 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
         tune_figs[tune.basename] = (path, csv)
     summary = resonator_summary(data)
     overview = store_overview(inv, summary)
+    overview['schedule'] = frequency_schedule(root, inv)
     summary_csv = os.path.join(data_dir, f'{device}_resonators.csv')
     summary.to_csv(summary_csv, index = False)
     # Resonator pages
@@ -1640,14 +1907,13 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
     attrs = inv['attrs']
     if attrs.get(dl.WORK_BY):
         body.insert(0, work_by_html(attrs[dl.WORK_BY]))
-    setup = {k: v for k, v in (attrs.get('setup') or {}).items()
-             if v is not None}
+    setup = dl.setup_text(attrs.get('setup'))
     body.append('<p class="small">store '
                 f"<code>{_esc(inv['store_name'] or device)}.zarr</code>; "
                 f"created {_esc(attrs.get('created'))}; CRS "
                 f"{_esc(attrs.get('crs_serial_number'))}, firmware "
                 f"{_esc(attrs.get('firmware_version'))}"
-                + (f"; setup {_esc(json.dumps(setup))}" if setup else '')
+                + (f'; setup {_esc(setup)}' if setup else '')
                 + f"; page built {_esc(dl._now())}</p>")
     if attrs.get('notes'):
         body.append(f'<div class="notes">{_esc(attrs["notes"])}</div>')
@@ -1798,27 +2064,92 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
                              table_html(marks, links = links,
                                         table_id = 'marks'),
                              open_ = False, filter_table = 'marks'))
+    body.append(comments_section(out_dir, inv['cooldown'],
+                                 os.path.basename(out_dir)))
     with open(os.path.join(out_dir, 'index.html'), 'w',
               encoding = 'utf-8') as fh:
         fh.write(page_html(f"{device} ({inv['cooldown']})", ''.join(body),
                            2))
+    manifest = dict(inv, built = dl._now(), res_pages = res_pages,
+                    attachments = attachments, overview = overview,
+                    store = str(getattr(root.store, 'root', root.store)))
+    manifest['index_row'] = index_row(manifest, inv['cooldown'],
+                                      os.path.basename(out_dir),
+                                      load_comments(out_dir))
     with open(manifest_path, 'w', encoding = 'utf-8') as fh:
-        json.dump(dict(inv, built = dl._now(), res_pages = res_pages,
-                       attachments = attachments, overview = overview,
-                       store = str(getattr(root.store, 'root',
-                                           root.store))),
-                  fh, indent = 1, default = str)
+        json.dump(manifest, fh, indent = 1, default = str)
     return out_dir
 
-def build_index(out_root):
+INDEX_COLUMNS = [
+    'Cooldown', 'Device', 'Die', 'Suffix', 'Work by', 'Notes', 'Comments',
+    'Tones (with timestreams / total)', 'Frequency schedule',
+    'Photon lifetime [us]', 'HEE lifetime [us]', 'Sxx at 10 Hz [1/Hz]',
+    'Report generated']
+INDEX_INTRO = (
+    'Type under a heading to filter; click a heading to sort. The devices '
+    'listed are the device folders present in this site. Tones: tuned '
+    'tones of the latest tuning (the ones with timestreams) / resonances '
+    'found (yield). Frequency schedule: the range of the resonances '
+    'found, outliers apart, and the CRS modules, analog bank and NCO '
+    'frequencies of the tuning. Photon and HEE lifetimes and Sxx (after '
+    'common-mode removal, at 10 Hz): the 1st to 99th percentile over the '
+    'tones of the latest result (count). Comments: added on the device '
+    'pages here.')
+INDEX_PHP = 'index.php'
+
+def index_row(manifest, cooldown, folder, comments = ()):
     """
-    Write the site's top page from the device manifests under it.
+    Make a device's row of the site's top page from its manifest: the
+    text of every ``INDEX_COLUMNS`` column (the Comments one as of
+    now; ``index.php`` reads the live comments itself).
+
+    Parameters:
+    manifest (dict): the device's ``manifest.json`` contents.
+    cooldown (str): its cooldown folder.
+    folder (str): its device folder.
+    comments (list of dict): ``load_comments`` output. Default none.
+
+    Returns:
+    row (dict): column name: text ('' where unknown).
+    """
+    wafer, die = device_parts(manifest.get('device', folder))
+    ov = manifest.get('overview') or {}
+    attrs = manifest.get('attrs') or {}
+    tones = '' if ov.get('n_tones') is None else (
+        f"{ov['n_tones']}" + (
+            f" / {ov['n_resonators']} ({ov['yield_pct']:.0f}%)"
+            if ov.get('yield_pct') is not None else ''))
+    schedule = schedule_text(ov.get('schedule')) or _range_text(
+        ov.get('fres_mhz'), '{:.1f}', ' MHz')
+    return {
+        'Cooldown': cooldown, 'Device': wafer, 'Die': die,
+        'Suffix': manifest.get('suffix', ''),
+        'Work by': attrs.get(dl.WORK_BY) or '',
+        'Notes': ov.get('notes') or attrs.get('notes') or '',
+        'Comments': comments_summary(list(comments)),
+        'Tones (with timestreams / total)': tones,
+        'Frequency schedule': schedule,
+        'Photon lifetime [us]': _range_text(ov.get('photon_tau_us'),
+                                            '{:.0f}'),
+        'HEE lifetime [us]': _range_text(ov.get('hee_tau_us'), '{:.0f}'),
+        'Sxx at 10 Hz [1/Hz]': _range_text(ov.get('sxx_cn_10hz'), '{:.2g}'),
+        'Report generated': manifest.get('built', '')}
+
+def index_rows(out_root, refresh = False):
+    """
+    Read every device manifest under the site and return the top page's
+    rows, saving a row into each manifest that has none (or into all of
+    them with ``refresh``), so ``index.php`` can list the devices
+    without computing anything.
 
     Parameters:
     out_root (str): the site's root folder.
+    refresh (bool): If True, compute every row again from its manifest
+        and save it. Default False: only manifests without a row.
 
     Returns:
-    path (str): the page written.
+    rows (list of dict): ``index_row`` of each device, with ``_link``
+        (its page, relative to the site root), in folder order.
     """
     out_root = os.path.expanduser(out_root)
     rows = []
@@ -1831,45 +2162,178 @@ def build_index(out_root):
             if not os.path.exists(m):
                 continue
             with open(m, encoding = 'utf-8') as fh:
-                inv = json.load(fh)
-            wafer, die = device_parts(inv.get('device', device))
-            link = f'{cooldown}/{device}/index.html'
-            ov = inv.get('overview') or {}
-            tones = '' if ov.get('n_tones') is None else (
-                f"{ov['n_tones']}" + (
-                    f" of {ov['n_resonators']} ({ov['yield_pct']:.0f}%)"
-                    if ov.get('yield_pct') is not None else ''))
-            rows.append(dict(
-                cooldown = cooldown,
-                device = f'<a href="{_esc(link)}">{_esc(wafer)}</a>',
-                die = die, suffix = inv.get('suffix', ''),
-                work_by = inv.get('attrs', {}).get(dl.WORK_BY) or '',
-                created = inv.get('attrs', {}).get('created', ''),
-                notes = ov.get('notes') or
-                inv.get('attrs', {}).get('notes') or '',
-                tones = tones,
-                fres_mhz = _range_text(ov.get('fres_mhz'), '{:.1f}'),
-                photon_tau_us = _range_text(ov.get('photon_tau_us'),
-                                            '{:.0f}'),
-                hee_tau_us = _range_text(ov.get('hee_tau_us'), '{:.0f}'),
-                sxx_10hz = _range_text(ov.get('sxx_cn_10hz'), '{:.2g}'),
-                built = inv.get('built', '')))
-    table = pd.DataFrame(rows, columns = [
-        'cooldown', 'device', 'die', 'suffix', 'work_by', 'created',
-        'notes', 'tones', 'fres_mhz', 'photon_tau_us', 'hee_tau_us',
-        'sxx_10hz', 'built'])
-    body = ('<p class="small">Type under a heading to filter; click a '
-            'heading to sort. A device folder copied in from another '
-            'site is listed after the next build. work_by: who did the '
-            'work; tones: tuned tones of '
-            'the latest tuning, of the resonances found (yield); '
-            'fres_mhz: their range; photon_tau_us, hee_tau_us, sxx_10hz: '
-            'the 1st to 99th percentile over the tones (count), the '
-            'latest result of each tone, Sxx after common-mode removal '
-            'at 10 Hz in 1/Hz.</p>'
-            + table_html(table, raw = ('device',), filters = True))
-    path = os.path.join(out_root, 'index.html')
+                manifest = json.load(fh)
+            if refresh or not isinstance(manifest.get('index_row'), dict):
+                manifest['index_row'] = index_row(
+                    manifest, cooldown, device,
+                    load_comments(os.path.join(cdir, device)))
+                with open(m, 'w', encoding = 'utf-8') as fh:
+                    json.dump(manifest, fh, indent = 1, default = str)
+            rows.append(dict(manifest['index_row'],
+                             _link = f'{cooldown}/{device}/index.html'))
+    return rows
+
+PHP_TEMPLATE = r"""<?php
+// Top page of the report site, written by citkid (7_report_site.py):
+// lists the device folders present here from the row each one's
+// manifest.json carries. Nothing is computed; upload a device folder and
+// it is listed on the next visit.
+header('Content-Type: text/html; charset=utf-8');
+$columns = json_decode('@@COLUMNS@@', true);
+$rows = array();
+foreach (glob(__DIR__ . '/*/*/manifest.json') as $path) {
+    $m = json_decode(file_get_contents($path), true);
+    if (!is_array($m)) {
+        continue;
+    }
+    $device = basename(dirname($path));
+    $cooldown = basename(dirname(dirname($path)));
+    $row = (isset($m['index_row']) && is_array($m['index_row']))
+        ? $m['index_row']
+        : array('Cooldown' => $cooldown, 'Device' => $device);
+    $row['_link'] = rawurlencode($cooldown) . '/' . rawurlencode($device)
+        . '/index.html';
+    $row['Comments'] = comments_summary(dirname($path) . '/comments.json');
+    $rows[] = $row;
+}
+usort($rows, function ($a, $b) {
+    return strcmp($a['Cooldown'] . ' ' . $a['Device'],
+                  $b['Cooldown'] . ' ' . $b['Device']);
+});
+function cell($v)
+{
+    return htmlspecialchars($v === null ? '' : (string) $v, ENT_QUOTES,
+                            'UTF-8');
+}
+function comments_summary($path)
+{
+    // 'n; latest <when> <who>: <text>' from a device's comments.json
+    if (!is_file($path)) {
+        return '';
+    }
+    $list = json_decode(file_get_contents($path), true);
+    if (!is_array($list) || count($list) === 0) {
+        return '';
+    }
+    $last = $list[count($list) - 1];
+    $text = preg_replace('/\s+/', ' ', trim((string) ($last['text'] ?? '')));
+    if (strlen($text) > 80) {
+        $text = rtrim(substr($text, 0, 77)) . '...';
+    }
+    $who = trim((string) ($last['who'] ?? ''));
+    return count($list) . '; latest ' . ($last['when'] ?? '')
+        . ($who !== '' ? ' ' . $who : '') . ': ' . $text;
+}
+?>
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Devices</title>
+<style>@@CSS@@</style><script>@@JS@@</script></head><body>
+<div class="nav"><a href="./">All devices</a></div>
+<h1>Devices</h1>
+<p class="small"><?php echo count($rows); ?> devices; listed
+<?php echo date('Y-m-d H:i:s'); ?></p>
+<p class="small">@@INTRO@@</p>
+<div class="wrap"><table><thead><tr>@@HEAD@@</tr></thead><tbody>
+<?php foreach ($rows as $row) { ?>
+<tr><?php foreach ($columns as $c) {
+    $v = isset($row[$c]) ? $row[$c] : '';
+    if ($c === 'Device') {
+        echo '<td><a href="' . cell($row['_link']) . '">' . cell($v)
+            . '</a></td>';
+    } else {
+        echo '<td>' . cell($v) . '</td>';
+    }
+} ?></tr>
+<?php } ?>
+</tbody></table></div>
+</body></html>
+"""
+
+COMMENTS_PHP_SOURCE = r"""<?php
+// Adds a comment to a device's comments.json (the report site's own
+// file, which citkid's report build leaves alone). Written by citkid
+// (7_report_site.py) next to index.php; the device pages post to it.
+header('Content-Type: text/plain; charset=utf-8');
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    echo 'POST only';
+    exit;
+}
+$cooldown = basename(trim((string) ($_POST['cooldown'] ?? '')));
+$device = basename(trim((string) ($_POST['device'] ?? '')));
+$who = trim((string) ($_POST['who'] ?? ''));
+$text = trim(str_replace("\r\n", "\n", (string) ($_POST['text'] ?? '')));
+$dir = __DIR__ . '/' . $cooldown . '/' . $device;
+if ($cooldown === '' || $device === '' || $cooldown[0] === '.'
+        || $device[0] === '.' || !is_file($dir . '/manifest.json')) {
+    http_response_code(404);
+    echo 'no such device';
+    exit;
+}
+if ($text === '' || strlen($text) > 5000 || strlen($who) > 100) {
+    http_response_code(400);
+    echo 'a comment needs text (up to 5000 characters) and a name of up '
+        . 'to 100';
+    exit;
+}
+$path = $dir . '/comments.json';
+$fh = fopen($path, 'c+');
+if ($fh === false) {
+    http_response_code(500);
+    echo 'cannot write ' . $path . ': give the web server write '
+        . 'permission on the reports folder';
+    exit;
+}
+flock($fh, LOCK_EX);
+$list = json_decode(stream_get_contents($fh), true);
+if (!is_array($list)) {
+    $list = array();
+}
+$list[] = array('who' => $who, 'when' => date('Y-m-d H:i:s'),
+                'text' => $text);
+ftruncate($fh, 0);
+rewind($fh);
+fwrite($fh, json_encode($list, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+fflush($fh);
+flock($fh, LOCK_UN);
+fclose($fh);
+header('Location: ' . rawurlencode($cooldown) . '/' . rawurlencode($device)
+    . '/index.html#comments', true, 303);
+"""
+
+def build_index(out_root, refresh = False):
+    """
+    Write the site's top page, ``index.php``: a page the web server
+    fills from the device folders present when it is opened, from the
+    row saved in each device's manifest (``index_rows``) and the live
+    comments. Also ``comments.php``, which the device pages' comment
+    forms post to. Served by a web server with PHP (the NAS); not
+    pages to open from the drive, where the device pages are opened by
+    themselves.
+
+    Parameters:
+    out_root (str): the site's root folder.
+    refresh (bool): If True, compute every device's row again from its
+        manifest and save it. Default False: only the missing rows.
+
+    Returns:
+    path (str): the page written.
+    """
+    out_root = os.path.expanduser(out_root)
+    index_rows(out_root, refresh = refresh)
+    head = ''.join(f'<th>{_esc(c)}</th>' for c in INDEX_COLUMNS)
+    head += '</tr><tr class="filters">' + ''.join(
+        f'<th class="nosort"><input class="colfilter" data-col="{i}" '
+        f'placeholder="filter"></th>' for i in range(len(INDEX_COLUMNS)))
+    columns = json.dumps(INDEX_COLUMNS).replace('\\', '\\\\') \
+        .replace("'", "\\'")
+    page = (PHP_TEMPLATE.replace('@@COLUMNS@@', columns)
+            .replace('@@CSS@@', CSS).replace('@@JS@@', JS)
+            .replace('@@INTRO@@', _esc(INDEX_INTRO))
+            .replace('@@HEAD@@', head))
+    path = os.path.join(out_root, INDEX_PHP)
     with open(path, 'w', encoding = 'utf-8') as fh:
-        fh.write(page_html('Devices', body, 0,
-                           f'{len(table)} devices; page built {dl._now()}'))
+        fh.write(page)
+    with open(os.path.join(out_root, COMMENTS_PHP), 'w',
+              encoding = 'utf-8') as fh:
+        fh.write(COMMENTS_PHP_SOURCE)
     return path

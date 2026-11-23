@@ -1031,6 +1031,26 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
             return
         self._notes_dirty[self._notes_row] = self.notes_edit.toPlainText()
 
+    def _update_notes_shown(self, entry):
+        """
+        Carry an item's new notes into the kind tables' and the runs
+        table's records, so the left panel shows them without
+        rereading the store.
+
+        Parameters:
+        entry (dict): the Notes tab's entry just saved.
+        """
+        for entries in self.items.values():
+            for e in entries:
+                if e.get('path') == entry['path'] and \
+                        e.get('run') == entry['run']:
+                    e['notes'] = entry['notes']
+        if entry['run'] is not None:
+            tuning, n = entry['run']
+            for r in self.runs:
+                if r.get('tuning') == tuning and int(r.get('run', -1)) == n:
+                    r['notes'] = entry['notes']
+
     def flush_notes(self, refresh = True):
         """
         Save the edited notes to the store (the Notes tab saves by itself:
@@ -1056,10 +1076,14 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
             e['notes'] = text.strip()
             self.notes_table.item(row, self._col0 + 2).setText(
                 first_line(e['notes'], 120))
+            self._update_notes_shown(e)
             saved.append(e['label'])
         self._notes_dirty = {}
         if refresh:
             self.refresh()
+        elif saved:
+            self._fill_kinds()
+            self._fill_runs()
         return saved
 
     ############################################################################

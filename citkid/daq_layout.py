@@ -76,6 +76,26 @@ def _now():
     """
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
+SETUP_KEYS = ('fridge_ch', 'dac_attenuation', 'dac_filters', 'adc_filters',
+              'warm_amps')
+
+def setup_text(setup):
+    """
+    Write a setup description (the readout chain) as one line.
+
+    Parameters:
+    setup (dict or None): ``SETUP_KEYS`` (and any other key) to text;
+        empty and None values are left out.
+
+    Returns:
+    text (str): 'fridge_ch 3, dac_attenuation 20 dB, ...' ('' if
+        nothing is set).
+    """
+    if not setup:
+        return ''
+    return ', '.join(f'{k} {v}' for k, v in dict(setup).items()
+                     if v not in (None, ''))
+
 def create_store(path, device, cooldown, setup = None):
     """
     Create a device store, or open an existing one for the same device.
@@ -84,7 +104,9 @@ def create_store(path, device, cooldown, setup = None):
     path (str or os.PathLike): path of the ``.zarr`` directory.
     device (str): device name.
     cooldown (str): cooldown name.
-    setup (dict or None): free-form setup description (fridge channel,
+    setup (dict or None): setup description (the readout chain:
+        ``SETUP_KEYS``, strings; the scripts' ``SETUP``), also saved
+        with every VNA sweep, tuning and timestream run (fridge channel,
         attenuators, filters, ...). Saved only when the store is created.
         Default None (empty).
 

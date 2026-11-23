@@ -22,7 +22,7 @@ from citkid.crs.sim import SIM_SERIAL, simulated_crs
 ################################### Settings ###################################
 ################################################################################
 from settings import (SERIAL_NUMBER, INTERFACE, MODULES, DATA_DIR, COOLDOWN,
-                      DEVICE, SUFFIX)
+                      DEVICE, SUFFIX, SETUP)
 
 # Calibration
 TONE_SET = 0
@@ -165,9 +165,9 @@ async def take(crs, tune, notes = ''):
     result = await stream_batch(
         crs, tune, TONE_SET, RUNS, calibration = CALIBRATION,
         fres_update = FRES_UPDATE, tone_chunks = TONE_CHUNKS,
-        notes = notes, status = print, npoints_fine = NPOINTS_FINE,
-        npoints_gain = NPOINTS_GAIN, nsamps = NSAMPS,
-        gain_span_factor = GAIN_SPAN_FACTOR)
+        notes = notes, status = print, setup = SETUP,
+        npoints_fine = NPOINTS_FINE, npoints_gain = NPOINTS_GAIN,
+        nsamps = NSAMPS, gain_span_factor = GAIN_SPAN_FACTOR)
     for r, paths in zip(RUNS, result['runs']):
         print(f"{r['name']}: {paths}")
     return result

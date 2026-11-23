@@ -267,7 +267,7 @@ class StreamWindow(QtWidgets.QMainWindow):
     def __init__(
         self, connect, tune, preview_dec = 6, preview_s = 5., presets = (),
         sweep_kwargs = None, title = 'Timestreams', ui_scale = 1.0,
-        fres_update = None
+        fres_update = None, setup = None
     ):
         """
         Build the window and start connecting.
@@ -290,6 +290,8 @@ class StreamWindow(QtWidgets.QMainWindow):
             (``procedures.apply_fres_update``: ``method``, ``max_shift``,
             ``npoints_update``).
             Default None: no.
+        setup (dict or None): the readout chain (the scripts' ``SETUP``),
+            saved in each run's record. Default None.
         title (str): window title. Default 'Timestreams'.
         ui_scale (float): font size multiplier. Default 1.0.
         """
@@ -306,6 +308,7 @@ class StreamWindow(QtWidgets.QMainWindow):
                              'make the tuning with 3_tune.py')
         self.sweep_kwargs = dict(sweep_kwargs or {})
         self.fres_update = dict(fres_update) if fres_update else None
+        self.setup = dict(setup) if setup else None
         self.presets = [dict(p) for p in presets]
         self.cals = dl.calibrations(tune)
         self.crs, self.cal, self.preview, self.runs = None, None, None, []
@@ -1418,7 +1421,7 @@ class StreamWindow(QtWidgets.QMainWindow):
             set_idxs = [s], calibrations = {s: cal}, written = self.written,
             keep_tones = True, status = self._message.emit, verbose = False,
             progress = self._progress.emit, only_written = True,
-            cancelled = self._cancel.is_set)
+            cancelled = self._cancel.is_set, setup = self.setup)
         self._submit(coro, self._on_run,
                      f'Running {name} on tone set {s} with {cal}...',
                      progress = True, cancellable = True)
@@ -1592,7 +1595,7 @@ class StreamWindow(QtWidgets.QMainWindow):
 def run_stream_gui(
     connect, tune, preview_dec = 6, preview_s = 5., presets = (),
     sweep_kwargs = None, title = 'Timestreams', ui_scale = 1.0,
-    fres_update = None
+    fres_update = None, setup = None
 ):
     """
     Open the timestream window on a tuning and wait until it is closed.
@@ -1604,8 +1607,7 @@ def run_stream_gui(
         loop, which every sweep and stream then uses.
     tune (zarr.Group): the tuning, writable.
     preview_dec, preview_s, presets, sweep_kwargs, title, ui_scale,
-        fres_update: see
-        ``StreamWindow``.
+        fres_update, setup: see ``StreamWindow``.
 
     Returns:
     runs (list of list of str): stream paths of each run of the session.
@@ -1614,7 +1616,8 @@ def run_stream_gui(
     win = StreamWindow(connect, tune, preview_dec = preview_dec,
                        preview_s = preview_s, presets = presets,
                        sweep_kwargs = sweep_kwargs, title = title,
-                       ui_scale = ui_scale, fres_update = fres_update)
+                       ui_scale = ui_scale, fres_update = fres_update,
+                       setup = setup)
     delete_on_close(win)
     fit_window_to_screen(win)
     win.show()

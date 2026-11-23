@@ -23,7 +23,7 @@ from citkid.crs.sim import SIM_SERIAL, simulated_crs
 ################################### Settings ###################################
 ################################################################################
 from settings import (SERIAL_NUMBER, INTERFACE, MODULES, DATA_DIR, COOLDOWN,
-                      DEVICE, SUFFIX)
+                      DEVICE, SUFFIX, SETUP)
 
 # Tuning
 TONE_SET = 0
@@ -271,7 +271,7 @@ async def take(crs, tune, args):
             crs, tune, TONE_SET, point_runs(point, taken),
             calibration = calibration_of(point, results),
             fres_update = FRES_UPDATE,
-            tone_chunks = TONE_CHUNKS, status = print,
+            tone_chunks = TONE_CHUNKS, status = print, setup = SETUP,
             notes = point['name'] + (f'; {notes}' if notes else ''),
             npoints_fine = NPOINTS_FINE, npoints_gain = NPOINTS_GAIN,
             nsamps = NSAMPS, gain_span_factor = GAIN_SPAN_FACTOR)

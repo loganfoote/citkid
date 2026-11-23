@@ -18,10 +18,8 @@ from citkid.vna.view import run_vna_view
 ################################### Settings ###################################
 ################################################################################
 from settings import (SERIAL_NUMBER, INTERFACE, MODULES, DATA_DIR, COOLDOWN,
-                      DEVICE, SUFFIX)
+                      DEVICE, SUFFIX, SETUP)
 
-SETUP = dict(fridge_ch = None, dac_attenuation = None, dac_filters = None,
-             adc_filters = None)
 NYQUIST = '1'
 AMPLITUDE = -55.
 QR_MEDIAN = 2e4
@@ -119,6 +117,7 @@ async def main(args):
         crs, root, fmin, fmax, args.amplitude, args.nsamps,
         step = vna_step(args.qr_median, args.pts_per_lw),
         npoints_per_ch = args.npoints)
+    root[f'vna{k}'].attrs['setup'] = dl.to_jsonable(dict(SETUP))
     save_notes(root[f'vna{k}'], args.notes)
     print(f'Saved {len(f)} points as vna{k} in {path}')
     print(dl.tree(root, max_depth = 2))

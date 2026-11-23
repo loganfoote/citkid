@@ -1,5 +1,5 @@
 """
-03: tune a device: plan the tones, sweep the power, choose each tone's
+3: tune a device: plan the tones, sweep the power, choose each tone's
 power and frequency in two windows, and save the tuned tones (tune{k}).
 TUNING names the tuning: an existing name (or index) continues it,
 a new name starts a new tuning. Steps already done are skipped; --redo
@@ -35,7 +35,7 @@ from citkid.qt_compat import set_theme
 ################################### Settings ###################################
 ################################################################################
 from settings import (SERIAL_NUMBER, INTERFACE, MODULES, DATA_DIR, COOLDOWN,
-                      DEVICE, SUFFIX, LIGHT_MODE)
+                      DEVICE, SUFFIX, SETUP, LIGHT_MODE)
 
 # Tuning
 TUNING = None
@@ -313,6 +313,7 @@ def plan(root, args, path):
     tone_set, tone_module = tplan['tone_set'], tplan['tone_module']
     fcal, scal, mcal = cal_tones(res, tplan, max_tones)
     tune, k = dl.new_tuning(root, name, name = args.tuning)
+    tune.attrs['setup'] = dl.to_jsonable(dict(SETUP))
     save_notes(tune, args.notes)
     dl.write_tune_config(tune, dl.tuning_config(crs, tplan))
     init = dl.create_group(tune, 'tones_init', 'decision', attrs = dict(
@@ -440,6 +441,7 @@ def plan_from_tuning(root, args, path):
         tune.attrs['ported_powers'] = True
         tune.attrs['name'] = tune.basename if args.tuning is None \
             else str(args.tuning)
+    tune.attrs['setup'] = dl.to_jsonable(dict(SETUP))
     save_notes(tune, args.notes)
     t = dl.load_tones(src['tones'])
     fres, qres, ares = t['fres'], t['qres'], t['ares']

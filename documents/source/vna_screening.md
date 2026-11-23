@@ -61,7 +61,7 @@ takes one sweep and saves it with `--csv`.
 # 1_vna_sweep.py: full VNA sweep
 
 Takes a full sweep of one device and saves it as the next `vna{k}`
-(creating the store with `SETUP` if needed).
+(creating the store if needed).
 
 - Geometric spacing, df/f = 1 / (`QR_MEDIAN` × `PTS_PER_LW`); 25 points
   per linewidth at Qr = 2e4 suits the finders and the fitter.
@@ -75,7 +75,6 @@ Takes a full sweep of one device and saves it as the next `vna{k}`
 
 | Setting | Meaning |
 |---|---|
-| `SETUP` | Description saved with a new store (fridge channel, attenuators, filters) |
 | `NYQUIST` | `'1'` (100-2500 MHz), `'2'` (2500-5000 MHz), `'both'` |
 | `AMPLITUDE` | Tone power, dBm |
 | `QR_MEDIAN`, `PTS_PER_LW` | Expected median Qr and points per linewidth there |

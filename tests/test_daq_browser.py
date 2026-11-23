@@ -167,6 +167,10 @@ def test_window(qapp, store):
     assert dl.open_store(store)['tune0'].attrs['notes'] == \
         'retuned after warm-up'
     assert win.notes_table.item(3, 2).text() == 'retuned after warm-up'
+    # The left panel's tables show the new notes too
+    tunings = win.kind_tables['Tunings']
+    assert 'retuned after warm-up' in [
+        tunings.item(i, 4).text() for i in range(tunings.rowCount())]
     win.notes_edit.setPlainText('cooled on Monday')
     win.tabs.setCurrentIndex(0)
     assert dl.open_store(store).attrs['notes'] == 'cooled on Monday'

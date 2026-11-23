@@ -848,7 +848,7 @@ async def stream_tone_sets(
     calibrations = None, written = None, keep_tones = False, status = None,
     verbose = True, progress = None, only_written = False,
     cancelled = None, fres_update = None, tone_chunks = None,
-    **target_sweep_kwargs
+    setup = None, **target_sweep_kwargs
 ):
     """
     Take a named timestream of a tuning's tones, one tone set after
@@ -922,6 +922,8 @@ async def stream_tone_sets(
         ``dec_stage`` (``plan_stream_chunks``) to write and stream, of
         each set; kept in the run's record. Default None: all. Not
         used with ``only_written``.
+    setup (dict or None): the readout chain (the scripts' ``SETUP``),
+        saved in the run's record. Default None.
     **target_sweep_kwargs: settings of a calibration sweep taken here
         (``target_sweep``).
 
@@ -957,6 +959,8 @@ async def stream_tone_sets(
                   tuning = tune.basename, tones = tune['tones'].path,
                   resonators = tune.attrs.get('resonators'), paths = [],
                   complete = False)
+    if setup:
+        record['setup'] = dl.to_jsonable(dict(setup))
     if len(sets) == 1:
         record['tone_set'] = sets[0]
     else:
@@ -1108,7 +1112,7 @@ async def _stream_sets(
 async def stream_batch(
     crs, tune, tone_set, runs, calibration = None, fres_update = None,
     tone_chunks = None, keep_tones = False, notes = '', status = None,
-    progress = None, cancelled = None, **target_sweep_kwargs
+    progress = None, cancelled = None, setup = None, **target_sweep_kwargs
 ):
     """
     Calibrate a tone set (or reuse a calibration) and take one or more
@@ -1133,6 +1137,8 @@ async def stream_batch(
         (``apply_fres_update``). Default None.
     tone_chunks (list of int or None): which of the chunks planned for
         each run's stage to write and stream. Default None: all.
+    setup (dict or None): the readout chain, saved with each run.
+        Default None.
     keep_tones (bool): If True, leave the tones on the board afterwards.
         Default False: clear them.
     notes (str): notes saved with a calibration taken here. Default ''.
@@ -1172,7 +1178,7 @@ async def stream_batch(
             notes = r.get('notes', ''), set_idxs = [s],
             calibrations = {s: cal.path}, written = written,
             keep_tones = True, status = status, verbose = False,
-            progress = progress, cancelled = cancelled,
+            progress = progress, cancelled = cancelled, setup = setup,
             tone_chunks = tone_chunks))
     if not keep_tones:
         await crs.clear_tones()

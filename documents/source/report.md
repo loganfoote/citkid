@@ -41,18 +41,31 @@ every item names by path.
 
 | Page | Contents |
 |---|---|
-| `index.html` | Every cooldown and device (wafer, die, store suffix, who did the work, counts); type under a heading to filter, click one to sort. No file paths, so the site can move |
+| `index.php` | The top page, filled by the web server from the device folders present: wafer, die, store suffix, who did the work, the store's notes, tones with timestreams / resonances found, the frequency schedule (range of the resonances found, outliers apart, CRS modules, analog bank and NCO frequencies), the photon and HEE lifetimes and Sxx at 10 Hz (1st to 99th percentile, count), and when the report was generated; type under a heading to filter, click one to sort. Each device's row is saved in its `manifest.json` when its report is built, so nothing is computed on the server |
 | `<cooldown>/<device>/index.html` | What was taken (sweeps, tunings, calibration sweeps, runs with their settings, calibrations, results), with notes and store paths; the VNA, tuning (chosen powers), stream calibration (the IQ fits, with `FIT_IQ`), photon, HEE and noise figures (every version in a dropdown, latest first, with its notes); a sortable table of the resonators; the tone marks |
 | `<cooldown>/<device>/res/res<r>.html` | One per resonator: its IQ loop at the chosen power, calibration sweep, mean photon and HEE pulses, and spectra; its numbers from every step and result |
 | `<cooldown>/<device>/figures/`, `data/` | The figures (PNG) and tables (CSV) |
 | `<cooldown>/<device>/notes.md` | Written by hand; shown at the top of the device page and never overwritten |
 | `<cooldown>/<device>/attachments/` | Files attached in the store browser, by item, linked from the page |
+| `<cooldown>/<device>/comments.json` | Comments added on the served site (a form at the end of the device page, name and text); the top page shows their count and the latest one. Never written by the build, kept on overwrite |
 
 Each section of the device page folds (click its heading); the
 resonator and tone-mark tables start folded, with a filter box. A
-device folder is self-contained: copy it into another site's
-`<cooldown>` folder and run `7_report_site.py --index-only` there to
-list it.
+device folder is self-contained: copy it into the served site's
+`<cooldown>` folder and the top page lists it on the next visit.
+
+## Serving the site
+
+The site is served from the NAS (QNAP Web Server, PHP on), from the
+`Web/reports` folder, at `http://<nas>/reports/`.
+
+| Step | What to do |
+|---|---|
+| Top page | Run `7_report_site.py --index-only` once and copy `index.php` and `comments.php` into `Web/reports`; do not copy an `index.html` there |
+| Comments | The web server must be able to write in `Web/reports` (over SSH: `chmod -R a+rwX /share/Web/reports`); without it the form answers "cannot write" |
+| Devices | Build locally (`REPORT_DIR`) and copy the `<cooldown>/<device>` folder into `Web/reports/<cooldown>/`, or mount the NAS and set `REPORT_DIR` to `//<nas>/Web/reports` to build there |
+| Password | `.htaccess` in `Web/reports` with `AuthType Basic`, `AuthName`, `AuthUserFile /share/Web/reports/.htpasswd`, `Require valid-user`; `.htpasswd` holds one line `reports:<hash>` (`openssl passwd -apr1`) |
+| Locally | Open a device's `<cooldown>/<device>/index.html` from the drive; the top page needs the server |
 
 Notes come from the store: the `notes` of the store itself, the VNA
 sweep, tuning, runs and results, set when they are taken or later in
@@ -71,7 +84,7 @@ without text it lists the notes).
 | `WORK_BY` | Who did the work, e.g. `'LF DAQ + analysis'`; `None`: the dialog, offering the store's saved value (`--by` gives it for one run) |
 | `RES_PAGES` | One page per resonator (about 100 kB each) |
 | `INTERACTIVE` | Open the store browser on its Notes tab first |
-| `INDEX` | Also rebuild the top page (`index.html`) after the device; `--index-only` rebuilds it alone |
+| `INDEX` | Also write the top page (`index.php`) after the device; `--index-only` writes it alone and refreshes every device's saved row |
 
 ## Command line
 
