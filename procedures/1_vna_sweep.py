@@ -25,7 +25,7 @@ AMPLITUDE = -55.
 QR_MEDIAN = 2e4
 PTS_PER_LW = 25.
 NSAMPS = 100
-VIEW = False
+VIEW = True
 
 NOTES = """
 """
