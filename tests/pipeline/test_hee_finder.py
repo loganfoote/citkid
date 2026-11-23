@@ -22,7 +22,7 @@ def test_thresholds_round_trip():
     th.limits['tau'] = [1e-4, 2e-4]
     th.mark_reviewed(5)
     assert th.for_tone(5) == dict(hmin = 2., hmax = 1000., level = 3.,
-                                  fit_s = 0.5e-3)
+                                  fit_s = 0.5e-3, fit_start_s = None)
     assert th.for_tone(6)['fit_s'] == 1e-3
     assert th.has_own(5) and not th.has_own(6)
     assert th.has_own(5, ('hmin',)) and not th.has_own(5, ('level',))
@@ -71,13 +71,18 @@ def test_analyze_and_refit(rays):
     assert res2['in_window'].tolist() == inside.tolist()
     assert res2['used'].sum() == inside.sum() == res2['n_used']
     assert np.all(res2['start'][~inside] == -1)
-    np.testing.assert_array_equal(res2['start'][inside],
-                                  res['start'][inside])
+    # The overlap alignment is against the mean of the pulses kept, so a
+    # start may move by a sample
+    assert np.abs(res2['start'][inside] - res['start'][inside]).max() <= 1
     assert abs(res2['tau'] - TAU) < 0.1 * TAU
     assert res2['hmin'] == 8. and res['hmin'] == 0.
     # A level above every peak: the tails start at the peaks
     res3 = cf.refit_tone(res, dict(th.for_tone(0), level = 100.))
-    assert np.all(res3['start'] == res3['p'])
+    # (then moved later, by at most the overlap alignment's reach: three
+    # rounds of a tenth of the fit range)
+    n_range = int(round(1e-3 / DT))
+    moved = res3['start'] - res3['p']
+    assert moved.min() >= 0 and moved.max() <= 3 * max(2, n_range // 10)
     # A level below the noise: nothing is averaged
     res4 = cf.refit_tone(res, dict(th.for_tone(0), level = -1.))
     assert res4['n_used'] == 0 and np.isnan(res4['tau']) and \
@@ -136,3 +141,32 @@ def test_save(rays, tmp_path):
     assert cf.describe_results(zarr.open_group(tmp_path / 'e.zarr',
                                                mode = 'a')) \
         .endswith('none')
+
+
+def test_fit_start_per_tone(rays):
+    """
+    The fit of the mean tail begins after the latest peak within the
+    search window by default, at a tone's own ``fit_start_s`` when set
+    (saved per tone, and in the thresholds round trip), and the mean is
+    averaged over the fit range only.
+    """
+    import numpy as np
+    from citkid.pipeline import hee_finder as cf
+    ds, times, _ = rays
+    th = cf.TailThresholds(level = 3., fit_s = 1e-3)
+    res = cf.analyze_tone(ds[0], times, DT, SETTINGS, th.for_tone(10))
+    assert res['fit_start_s'] is None and res['fit_start'] >= res['anchor']
+    assert np.isnan(res['avg'][:res['anchor']]).all()
+    n_range = int(round(1e-3 / DT))
+    assert np.isnan(res['avg'][res['anchor'] + n_range:]).all()
+    assert np.isfinite(res['tau'])
+    own = cf.refit_tone(res, dict(th.for_tone(10), fit_start_s = 2e-4))
+    assert own['fit_start'] == res['anchor'] + int(round(2e-4 / DT))
+    assert own['fit_start_s'] == 2e-4 and own['n_fit'] <= res['n_fit']
+    th.overrides[10] = dict(fit_start_s = 2e-4)
+    th.set_all(fit_start_s = 1e-4)
+    assert th.for_tone(10)['fit_start_s'] == 1e-4 and 10 not in th.overrides
+    again = cf.TailThresholds.from_dict(th.to_dict())
+    assert again.fit_start_s == 1e-4
+    th.set_all(fit_start_s = None)
+    assert cf.TailThresholds.from_dict(th.to_dict()).fit_start_s is None

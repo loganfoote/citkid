@@ -16,7 +16,6 @@ import os
 import numpy as np
 from citkid import daq_layout as dl
 from citkid.pipeline import photon_finder as pf
-from citkid.pipeline.stream_sources import open_calibration
 from citkid.signal.photons import DetectionSettings
 from citkid.qt_compat import set_theme
 
@@ -83,7 +82,8 @@ def parse_args(argv = None):
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device)')
     p.add_argument('--cal', default = CALIBRATION,
-                   help = 'calibration, by name or index (default: the latest)')
+                   help = 'calibration to use when a sweep has several, by '
+                   "name or index (default: each timestream's own)")
     p.add_argument('--name', default = NAME,
                    help = 'name of the result of a single timestream')
     p.add_argument('--reference', default = REFERENCE,
@@ -384,28 +384,18 @@ def main(args):
     set_theme(LIGHT_MODE)
     root = dl.open_store(store_path(args), mode = 'a')
     dl.check_store(root)
-    cals = dl.list_indices(root, 'ts_cal')
-    if not cals:
-        raise KeyError('the store has no ts_cal group: run '
+    timestreams, datasets = pf.list_all_timestreams(root)
+    if not timestreams:
+        raise KeyError('the store has no calibrated timestreams: run '
                        '5_calibrate_streams.py first')
-    cal = dl.find_calibration(root, args.cal)
-    if cal is None:
-        names = ', '.join(
-            f'{dl.calibration_name(root[dl.set_name(c, "ts_cal")])!r} '
-            f'(ts_cal{c})' for c in cals)
-        raise KeyError(f'no calibration {args.cal!r}; the store has '
-                       f'{names}')
-    datasets = open_calibration(root, cal)
-    timestreams = pf.list_timestreams(root, datasets)
-    print(f'{cal.path}:')
     print(pf.describe_timestreams(timestreams))
     if not TIMESTREAMS:
         print(pf.describe_results(root))
         print('Set TIMESTREAMS at the top of the script to choose '
               'timestreams.')
         return None
-    chosen = pf.select_timestreams(timestreams, TIMESTREAMS, root = root,
-                                   cal = cal)
+    chosen = pf.resolve_timestreams(timestreams, TIMESTREAMS,
+                                    calibration = args.cal, root = root)
     if args.refit_tau:
         return refit_taus(root, chosen, timestreams)
     if args.name and len(chosen) != 1:
@@ -421,7 +411,7 @@ def main(args):
     for ts in chosen:
         name = args.name.strip() if args.name else \
             pf.result_name(ts, timestreams)
-        DS = datasets[ts['dataset']]['DS']
+        DS = datasets[ts['cal']][ts['dataset']]['DS']
         data = pf.TimestreamData(root, ts, DS, settings,
                                  max_bytes = MEMORY_GB * 1e9)
         continued = None
@@ -490,7 +480,7 @@ def main(args):
         pf.save_timestream(grp, ts, results, summary, thresholds, settings,
                            mode, COINC_WIN, HEE_MIN_MULT)
         grp.attrs.update(dl.to_jsonable(dict(
-            calibration = cal.path,
+            calibration = ts['cal'],
             reference = None if ref_grp is None else ref_grp.path,
             reuse = None if ref_grp is None else args.reuse,
             continued_from = None if continued is None else mode[15:])))

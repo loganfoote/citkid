@@ -62,6 +62,7 @@ without text it lists the notes).
 
 | Setting | Meaning |
 |---|---|
+| `REPORT_DIR` | The report site folder; the device's pages go in `<REPORT_DIR>/<cooldown>/<device>` (`--out` gives another folder for one run) |
 | `STORE` | The store; `None`: a dialog |
 | `RES_PAGES` | One page per resonator (about 100 kB each) |
 | `INTERACTIVE` | Open the store browser on its Notes tab first |

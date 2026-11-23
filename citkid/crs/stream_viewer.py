@@ -366,6 +366,7 @@ class TimestreamViewer(QtWidgets.QMainWindow):
             return run
         try:
             sources, _ = dl.select_streams(self.root, run = run['run'],
+                                           tuning = self.tune.basename,
                                            tone_sets = [int(s)])
         except (KeyError, ValueError):
             return None

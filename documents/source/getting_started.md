@@ -58,7 +58,6 @@ lists them.
 | `MODULES` | Modules connected to the device |
 | `DATA_DIR`, `COOLDOWN`, `DEVICE` | The device store: `<DATA_DIR>/<COOLDOWN>/<DEVICE>.zarr` (`--store` gives a path instead) |
 | `SUFFIX` | Names the store `<DEVICE>_<SUFFIX>.zarr` (`''`: no suffix) |
-| `REPORT_DIR` | The report site folder |
 | `MEMORY_GB` | Timestreams kept in memory by the analysis scripts, GB |
 | `LIGHT_MODE` | `True`: white plots with black text in every window, for screens where the dark plots lack contrast |
 

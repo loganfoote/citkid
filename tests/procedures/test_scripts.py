@@ -1157,8 +1157,8 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
     monkeypatch.setattr(m, 'TIMESTREAMS', [])
     assert m.main(m.parse_args(argv)) is None
     out = capsys.readouterr().out
-    assert "0: ts0, 'dark0', set 0" in out and \
-        "3: ts1, 'dark0b', set 1" in out and 'Previous results' in out
+    assert "0: tune0 ts0, 'dark0', set 0" in out and \
+        "3: tune0 ts1, 'dark0b', set 1" in out and 'Previous results' in out
     windows = []
 
     def fake_window(ts, results, thresholds, rerun, data = None,
@@ -1464,9 +1464,9 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
         monkeypatch.setattr(m, 'TIMESTREAMS', [])
         m.main(m.parse_args(argv))
         out = capsys.readouterr().out
-        assert "0: ts0, 'dark0', set 0, 1.5 s, 4 tones (2 uncalibrated " \
+        assert "0: tune0 ts0, 'dark0', set 0, 1.5 s, 4 tones (2 uncalibrated " \
             "left out)" in out
-        assert "1: ts0, 'dark0', set 1, 1.5 s, 6 tones, set1" in out
+        assert "1: tune0 ts0, 'dark0', set 1, 1.5 s, 6 tones, set1" in out
     finally:
         arr[0] = saved
         mask[1] = mask_saved
@@ -1570,7 +1570,7 @@ def test_06b_hee(photon_store, monkeypatch, capsys):
     monkeypatch.setattr(m, 'TIMESTREAMS', [])
     assert m.main(m.parse_args(argv)) is None
     out = capsys.readouterr().out
-    assert "1: ts0, 'dark0', set 1" in out and 'Previous results' in out
+    assert "1: tune0 ts0, 'dark0', set 1" in out and 'Previous results' in out
     windows = []
 
     def fake_window(ts, results, thresholds, refit, data = None,
@@ -1788,7 +1788,7 @@ def test_07_psds(photon_store, monkeypatch, capsys):
     monkeypatch.setattr(m, 'TIMESTREAMS', [])
     assert m.main(m.parse_args(argv)) is None
     out = capsys.readouterr().out
-    assert "0: ts0, 'dark0', set 0" in out and 'ts_cal0/set1' in out
+    assert "0: tune0 ts0, 'dark0', set 0" in out and 'ts_cal0/set1' in out
     assert 'Previous results' in out
     # Run 0's tone set 0 and both tone sets of run 1
     monkeypatch.setattr(m, 'TIMESTREAMS', [0, 'dark0b'])
@@ -1952,15 +1952,23 @@ def test_07_psds(photon_store, monkeypatch, capsys):
         is None
     assert 'ts_psd1 exists: skipped' in capsys.readouterr().out
     assert dl.list_indices(dl.open_store(path), 'ts_psd') == list(range(6))
-    # --load: computed again in place with the saved review, no window
+    # --load: in place with the saved review, no window; nothing that
+    # changes the spectra changed, so they are kept, not computed
     calls = []
     monkeypatch.setattr(po, 'run_psd_overview',
                         lambda *a, **k: calls.append(k) or ({}, {}))
     created = dl.open_store(path)['ts_psd1'].attrs['created']
     monkeypatch.setattr(m, 'CN_N_COMP', 2)
+    computed = []
+    real_analyze = psds.analyze_timestream
+    monkeypatch.setattr(psds, 'analyze_timestream',
+                        lambda *a, **k: computed.append(a[1]['name'])
+                        or real_analyze(*a, **k))
     res = m.main(m.parse_args(argv + ['--name', 'marks', '--load']))
     assert calls == [] and sorted(res) == ['timestream0']
-    assert 'Computing ts_psd1 again' in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert 'Computing ts_psd1 again' in out and 'unchanged, spectra kept' \
+        in out and computed == []
     root = dl.open_store(path)
     assert dl.list_indices(root, 'ts_psd') == list(range(6))
     g1 = root['ts_psd1']
@@ -2004,6 +2012,26 @@ def test_07_psds(photon_store, monkeypatch, capsys):
     assert psds.matching_group(root, None, [0]).path == 'ts_psd5'
     assert psds.matching_group(root, None, [1]) is None
     assert psds.matching_group(root, 'none', [0]) is None
+    # A new bad mark changes the spectra: computed again on --load (the
+    # latest 'marks' set, ts_psd6, is the one loaded)
+    computed.clear()
+    m.main(m.parse_args(argv + ['--name', 'marks', '--load']))
+    assert computed == []
+    assert 'unchanged, spectra kept' in capsys.readouterr().out
+    dl.add_tone_mark(dl.open_store(path, mode = 'a'),
+                     int(t0['res_idxs'][:][2]), 'bad', 'drift',
+                     'ts_psd6/timestream0')
+    m.main(m.parse_args(argv + ['--name', 'marks', '--load']))
+    assert computed == ['dark0']
+    t0 = dl.open_store(path)['ts_psd6/timestream0']
+    assert str(t0['status'][:][2]).startswith('marked bad: drift')
+    assert t0.attrs['settings']['cn_n_comp'] == 2      # this set's own
+    # --overwrite always computes
+    computed.clear()
+    m.main(m.parse_args(argv + ['--name', 'marks', '--overwrite',
+                                '--no-gui']))
+    assert computed == ['dark0']
+    computed.clear()
     # A run that fails leaves no empty set behind; a failed --load keeps
     # the saved spectra
     monkeypatch.setattr(m, 'MEMORY_GB', 1e-9)
@@ -2013,6 +2041,10 @@ def test_07_psds(photon_store, monkeypatch, capsys):
     root = dl.open_store(path)
     assert dl.list_indices(root, 'ts_psd') == list(range(7))
     assert 'ts_psd7 removed' in capsys.readouterr().out
+    # (a mark changed, so the spectra are computed again, and fail)
+    dl.add_tone_mark(dl.open_store(path, mode = 'a'),
+                     int(t0['res_idxs'][:][3]), 'bad', 'drift',
+                     'ts_psd6/timestream0')
     with pytest.raises(MemoryError):
         m.main(m.parse_args(argv + ['--name', 'marks', '--load']))
     root = dl.open_store(path)
@@ -2543,8 +2575,9 @@ def test_06_names_the_calibration_with_the_timestream(
     photon_store, monkeypatch
 ):
     """
-    A run name not in the chosen calibration: the error says which
-    calibrations have it (to set CALIBRATION), or that none does.
+    A timestream takes the calibration of its own sweep; a calibration
+    asked for that is not on the sweep is refused, naming the ones that
+    are, and a sweep with several calibrations needs CALIBRATION.
     """
     from citkid.pipeline import photon_finder as pf
     path, _ = photon_store
@@ -2555,14 +2588,30 @@ def test_06_names_the_calibration_with_the_timestream(
     try:
         m = load_script('6a_find_photons.py')
         monkeypatch.setattr(m, 'TIMESTREAMS', ['dark0'])
-        with pytest.raises(KeyError, match = r"no timestream 'dark0' in "
-                           r"ts_cal8 \('empty'\); it is in ts_cal0 "
-                           r"\('ts_cal0'\): set CALIBRATION"):
-            m.main(m.parse_args(['--store', str(path)]))
+        # The latest calibration is empty: dark0 still finds its own
+        monkeypatch.setattr(m, 'INTERACTIVE', False)
+        out = m.main(m.parse_args(['--store', str(path), '--overwrite']))
+        assert all(v['thresholds'] is not None for v in out.values())
+        with pytest.raises(KeyError, match = r"run 'dark0' tone set 0 is "
+                           r"not on ts_cal8 \('empty'\); it is on "
+                           r"ts_cal0 \('ts_cal0'\)"):
+            m.main(m.parse_args(['--store', str(path), '--cal', '8']))
         monkeypatch.setattr(m, 'TIMESTREAMS', ['nope'])
-        with pytest.raises(KeyError, match = r"no timestream 'nope' in "
-                           r"ts_cal8 .* \(see the list\)"):
+        with pytest.raises(KeyError, match = r"no run 'nope' with "
+                           'calibrated streams'):
             m.main(m.parse_args(['--store', str(path)]))
+        # A second calibration on the same sweep: CALIBRATION decides
+        from citkid.zarr_util import copy_group
+        copy_group(root['ts_cal0'],
+                   dl.create_group(root, 'ts_cal9', 'analysis'))
+        root['ts_cal9'].attrs['name'] = 'again'
+        monkeypatch.setattr(m, 'TIMESTREAMS', ['dark0'])
+        with pytest.raises(KeyError, match = 'several calibrations'):
+            m.main(m.parse_args(['--store', str(path)]))
+        out = m.main(m.parse_args(['--store', str(path), '--cal', 'again',
+                                   '--overwrite']))
+        assert out
+        del root['ts_cal9']
         assert pf.calibrations_with(root, 'dark0') == ["ts_cal0 ('ts_cal0')"]
         assert pf.calibrations_with(root, 'nope') == []
     finally:

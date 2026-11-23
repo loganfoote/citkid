@@ -283,3 +283,29 @@ def test_tones_not_run(qapp, rays):
     win2.rerun()
     assert calls2 == [[0, 1, 2]] and isinstance(win2.results[2], dict)
     assert win2._scroll.widget() is win2._panel
+
+
+def test_fit_start_line(qapp, rays):
+    """
+    Dragging the yellow line gives the tone its own fit start and
+    refits it; Auto fit start drops it; Fit start to all gives every
+    tone the value.
+    """
+    win, calls = make_window(rays, data = True)
+    res = win.results[0]
+    assert win.fit_start_label.text().endswith('(auto)')
+    assert win.fit_start_line.value() == pytest.approx(
+        (res['fit_start'] - res['anchor']) * DT * 1e3)
+    win.fit_start_line.setValue(0.3)
+    win.fit_start_line.sigPositionChangeFinished.emit(win.fit_start_line)
+    assert calls[-1] == [0]
+    assert win.thresholds.overrides[10]['fit_start_s'] == pytest.approx(3e-4)
+    assert win.results[0]['fit_start'] == res['anchor'] + round(3e-4 / DT)
+    assert win.fit_start_label.text().endswith('(set)')
+    win.fit_start_to_all()
+    assert win.thresholds.fit_start_s == pytest.approx(3e-4)
+    assert 10 not in win.thresholds.overrides and calls[-1] == [0, 1, 2]
+    win.set_fit_start(None)
+    assert win.thresholds.overrides[10] == dict(fit_start_s = None)
+    assert win.results[0]['fit_start_s'] is None
+    assert win.fit_start_label.text().endswith('(auto)')

@@ -32,7 +32,9 @@ and saves reduced results in a group of the store.
 
 # 6a_find_photons.py: find photons
 
-Choose a stream calibration (`CALIBRATION`, the latest by default) and
+Each timestream is calibrated with the stream calibration of its own
+sweep (there is normally one; `CALIBRATION` chooses when a sweep has
+several, and a calibration of another sweep is refused). Choose
 the timestreams (`TIMESTREAMS`, by index as listed or run name; empty
 lists them). A timestream is one tone set of one run. Tones whose
 calibration failed are left out. Each result is `photons/<name>` (the
@@ -114,7 +116,7 @@ by `citkid.pipeline.photon_finder.migrate_results(root)`.
 
 | Setting | Meaning |
 |---|---|
-| `CALIBRATION` | Calibration, by name or `ts_cal` index (`None`: the latest) |
+| `CALIBRATION` | Calibration to use when a sweep has several, by name or `ts_cal` index (`None`: each timestream's own) |
 | `TIMESTREAMS` | Timestreams, by index as listed or run name; empty: list them |
 | `NAME` | Result name for a single timestream (`''`: the run's name) |
 | `REFERENCE`, `REUSE` | A saved result to reuse (its name), and `'settings'` or `'filter'` |
@@ -149,7 +151,8 @@ naming and existing-result popup as `6a_find_photons.py`; results are
 | Events | `EVENTS = 'photons'`: the HEEs `6a` saved (or those of `PHOTONS`); `'triggers'`: peaks above `TRIG_NSIGMA` on each tone, clustered within `COINC_WIN` samples, kept when `HEE_MIN_MULT` tones see them; `'auto'`: photons if saved, else triggers |
 | Pulses | A snippet `PRE_S` before to `POST_S` after each event, baseline subtracted; the peak within `SEARCH_S` |
 | Threshold | Only pulses with peaks in [`HMIN`, `HMAX`] are averaged |
-| Alignment | The pulses differ in height and near the peak but decay alike, so each is shifted to where it falls through `LEVEL` (10 kHz/GHz) and they are averaged from there |
+| Alignment | The pulses differ in height and near the peak but decay alike: each is first placed where it falls through `LEVEL` (10 kHz/GHz), then moved by the few samples that best overlap the mean tail over the fit range, and they are averaged over that range only |
+| Fit start | The fit begins after the latest peak of the mean within the peak search window (`SEARCH_S`), where averaging peaks and dips leaves bumps; `FIT_START_S`, or the yellow line in the window, sets it by hand |
 | Tail fit | An exponential over `FIT_S` from the alignment point of the mean |
 | Result | Per tone, the mean's lifetime and the pulses averaged |
 
@@ -195,6 +198,7 @@ hee/<name>/          attrs: run, tone set, calibration, events,
 | `HMIN`, `HMAX` | Peak height window of the pulses fitted, kHz/GHz |
 | `LEVEL` | A tail begins where the pulse falls below this, kHz/GHz |
 | `FIT_S` | Length of the exponential fit of the mean tail, from its alignment point, s |
+| `FIT_START_S` | Where the fit of the mean tail begins, s after the alignment point (`None`: after the latest peak within `SEARCH_S`) |
 | `PRE_S`, `POST_S` | Snippet before and after an event, s |
 | `SEARCH_S` | Each tone's pulse peak is looked for within this time after the event, s |
 | `HIGHPASS_HZ` | Cutoff of the highpass applied to x before the fits, to remove drifts, Hz |
@@ -215,6 +219,11 @@ same `TIMESTREAMS`), a popup offers a new set (default; the window opens
 with the saved limits), computing it again with its saved settings, bad
 marks and limits without the window, or overwriting it (asks again);
 with `--no-gui`, `--new`, `--load` or `--overwrite` decide.
+A timestream whose spectra were saved with the same settings, on the
+same calibration and with the same tones marked bad is not computed
+again: the saved spectra are kept (or copied into the new set), and
+the window opens on them. `--overwrite` always computes, e.g. after
+calibrating again.
 
 | Step | What it does |
 |---|---|
@@ -275,6 +284,7 @@ or name.
 
 | Setting | Meaning |
 |---|---|
+| `CALIBRATION` | Calibration to use when a sweep has several (`None`: each timestream's own) |
 | `TIMESTREAMS` | Index as listed, run name, or `dict(name = ..., or run = n, tone_sets = [...], cal = c)`; empty: list them |
 | `NAME` | Name of this set of spectra |
 | `INTERACTIVE` | Review each timestream in the overview window |

@@ -1,5 +1,5 @@
 """
-08: build one device's pages of the report site in REPORT_DIR, with the
+7: build one device's pages of the report site in REPORT_DIR, with the
 report figures and tables, and the top page listing every device built
 so far. The store is STORE, --store, or chosen in a dialog. The store
 browser opens first on its Notes tab (edit notes, attach files to the
@@ -19,8 +19,9 @@ from citkid.qt_compat import set_theme
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-from settings import REPORT_DIR, LIGHT_MODE
+from settings import LIGHT_MODE
 
+REPORT_DIR = '~/reports'
 STORE = None
 RES_PAGES = True
 INTERACTIVE = True

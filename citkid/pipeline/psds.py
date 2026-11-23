@@ -48,37 +48,18 @@ PULSE_OPTIONS = ('hee', 'all')
 ################################################################################
 def list_timestreams(root):
     """
-    List the timestreams of every stream calibration in the store: every
-    tone set of every run with streams, with each ``ts_cal{c}`` that has a
-    DataSet for its calibration sweep (``photon_finder.list_timestreams``
-    per calibration).
+    List the timestreams of every stream calibration in the store
+    (``photon_finder.list_all_timestreams``).
 
     Parameters:
     root (zarr.Group): the store root.
 
     Returns:
-    timestreams (list of dict): ``photon_finder.list_timestreams`` entries
-        (``run``, ``run_index``, ``name``, ``tone_set``, ``dataset``,
-        ``source``, ``start``, ``stop``, ``dt``, ``rows``, ``res_idxs``),
-        with ``index`` over all calibrations, ``cal`` (the calibration's
-        path, e.g. 'ts_cal0') and ``cal_index`` (c), in calibration then
-        run order.
-    datasets (dict): calibration path: ``stream_sources.open_calibration``
-        output. Calibrations made by an earlier version (no DataSet per
-        tone set) are left out.
+    timestreams (list of dict): the entries, with ``cal`` and
+        ``cal_index``.
+    datasets (dict): calibration path: its DataSets.
     """
-    timestreams, datasets = [], {}
-    for c in dl.list_indices(root, 'ts_cal'):
-        cal = root[dl.set_name(c, 'ts_cal')]
-        try:
-            ds = open_calibration(root, cal)
-        except KeyError:
-            continue
-        datasets[cal.path] = ds
-        for ts in pf.list_timestreams(root, ds):
-            timestreams.append(dict(ts, index = len(timestreams),
-                                    cal = cal.path, cal_index = c))
-    return timestreams, datasets
+    return pf.list_all_timestreams(root)
 
 def describe_timestreams(timestreams):
     """
@@ -95,62 +76,36 @@ def describe_timestreams(timestreams):
     for t in timestreams:
         n = t['stop'] - t['start']
         lines.append(
-            f"  {t['index']}: {t['run']}, {t['name']!r}, set "
+            f"  {t['index']}: {t.get('tuning')} {t['run']}, {t['name']!r}, set "
             f"{t['tone_set']}, {n * t['dt']:.4g} s at {1 / t['dt']:.4g} Hz, "
             f"{len(t['rows'])} tones, {t['cal']}/{t['dataset']}")
     if len(lines) == 1:
         lines.append('  none (run 5_calibrate_streams.py first)')
     return '\n'.join(lines)
 
-def select_timestreams(timestreams, choice):
+def select_timestreams(timestreams, choice, calibration = None,
+                       root = None):
     """
-    Pick timestreams by index, run name, or a description.
+    Pick timestreams by index, run name, or a description, each with the
+    calibration of its own sweep (``photon_finder.resolve_timestreams``).
 
     Parameters:
     timestreams (list of dict): ``list_timestreams`` output.
-    choice (list): each entry an index (int), a run name (str: every tone
-        set of the latest run with that name, each with the latest
-        calibration that covers it), or a dict with ``name`` or ``run``
-        (the run index n), and optionally ``tone_sets`` (a list; default
-        all) and ``cal`` (a ts_cal index; default the latest that covers
-        each tone set).
+    choice (list): indices, run names, or dicts with ``name`` or ``run``
+        and optionally ``tone_sets`` and ``cal``.
+    calibration (int, str or None): the calibration for every entry
+        without ``cal``. Default None: each sweep's only one.
+    root (zarr.Group or None): the store root, to name calibrations in
+        errors. Default None.
 
     Returns:
     chosen (list of dict): the timestreams, in the order of ``choice``.
 
     Raises:
-    KeyError: if a choice matches no timestream.
+    KeyError: if a choice matches no timestream, or a sweep has several
+        calibrations and none was asked for.
     """
-    out = []
-    for c in choice:
-        if isinstance(c, (int, np.integer)):
-            match = [t for t in timestreams if t['index'] == int(c)]
-        else:
-            spec = dict(name = c) if isinstance(c, str) else dict(c)
-            if spec.get('run') is not None:
-                match = [t for t in timestreams
-                         if t['run_index'] == int(spec['run'])]
-            else:
-                named = [t for t in timestreams
-                         if t['name'] == spec.get('name')]
-                match = [t for t in named
-                         if named and t['run_index'] == named[-1]['run_index']]
-            if spec.get('tone_sets') is not None:
-                keep = [int(s) for s in spec['tone_sets']]
-                match = [t for t in match if t['tone_set'] in keep]
-            if spec.get('cal') is not None:
-                match = [t for t in match
-                         if t['cal_index'] == int(spec['cal'])]
-            else:
-                latest = {}
-                for t in match:
-                    latest[t['tone_set']] = t
-                match = [t for t in match
-                         if t is latest[t['tone_set']]]
-        if not match:
-            raise KeyError(f'no timestream {c!r} (see the list)')
-        out += match
-    return out
+    return pf.resolve_timestreams(timestreams, choice, calibration, root)
 
 ################################################################################
 ################################ Reduced grid ##################################
@@ -803,6 +758,7 @@ def save_timestream(grp, ts, result, settings, bad = None, limits = None):
     bad = {} if bad is None else {int(k): str(v) for k, v in bad.items()}
     grp.attrs.update(to_jsonable(dict(
         dataset = ts['dataset'], run = ts['run'], name = ts['name'],
+        tuning = ts.get('tuning'),
         tone_set = ts['tone_set'], calibration = ts['cal'],
         source = ts['source']['group'],
         writes = list(ts['source']['writes']), start = ts['start'],
@@ -813,6 +769,7 @@ def save_timestream(grp, ts, result, settings, bad = None, limits = None):
         cn_lowpass_hz = result['lowpass_hz'],
         cn_highpass_hz = result['highpass_hz'],
         cn_filter_order = settings.get('cn_filter_order', 2),
+        settings = spectra_settings(settings),
         limits = {} if limits is None else dict(limits))))
     dl.write_array(grp, 'f_binned', result['f_binned'])
     dl.write_array(grp, 'bad', np.array(
@@ -840,6 +797,73 @@ def save_timestream(grp, ts, result, settings, bad = None, limits = None):
         dl.write_array(g, 'rows', np.asarray(w['rows'], dtype = np.int64))
         for key in ('f_binned', 'sxx_binned', 'sigma_iter'):
             dl.write_array(g, key, w[key])
+
+# Settings that change the spectra (the rest, e.g. memory_gb, do not)
+SPECTRA_SETTINGS = (
+    'nbins', 'fmin_mult', 'fmax_div', 'cn_remove', 'cn_n_comp', 'cn_n_iter',
+    'cn_lowpass_hz', 'cn_highpass_hz', 'cn_filter_order', 'deglitch',
+    'glitch_pre_s', 'glitch_post_s', 'glitch_sign', 'glitch_nstd',
+    'glitch_baseline_s', 'glitch_distance_s', 'glitch_rounds',
+    'glitch_pulses', 'coinc_win', 'hee_min_mult', 'photons')
+
+def spectra_settings(settings):
+    """
+    Keep the settings that change the spectra (``SPECTRA_SETTINGS``),
+    as saved.
+
+    Parameters:
+    settings (dict): ``analyze_timestream`` settings.
+
+    Returns:
+    kept (dict): those settings, JSON-like.
+    """
+    return dl.to_jsonable({k: settings.get(k) for k in SPECTRA_SETTINGS})
+
+def same_spectra(grp, ts, settings, exclude):
+    """
+    Say whether a saved timestream's spectra would come out the same
+    again: the same timestream on the same calibration (run, tuning,
+    tone set, calibration, DataSet, streams, window, sample period),
+    the same settings (``SPECTRA_SETTINGS``) and the same tones left
+    out. A calibration computed again in between is not seen: use
+    ``--overwrite`` after calibrating again.
+
+    Parameters:
+    grp (zarr.Group): a saved ``ts_psd{p}/timestream{j}``.
+    ts (dict): the timestream (``list_timestreams``, with ``cal``).
+    settings (dict): the settings of the run.
+    exclude (dict or set): the resonator indices left out.
+
+    Returns:
+    same (bool): True if nothing that changes the spectra changed.
+    """
+    a = grp.attrs
+    if a.get('settings') is None:
+        return False
+    same_ts = (
+        a.get('run') == ts['run'] and a.get('tuning') == ts.get('tuning')
+        and int(a.get('tone_set', -1)) == int(ts['tone_set'])
+        and a.get('calibration') == ts.get('cal')
+        and a.get('dataset') == ts['dataset']
+        and a.get('source') == ts['source']['group']
+        and list(a.get('writes') or []) == list(ts['source']['writes'])
+        and int(a.get('start', -1)) == int(ts['start'])
+        and int(a.get('stop', -1)) == int(ts['stop'])
+        and float(a.get('dt', 0)) == float(ts['dt']))
+    if not same_ts:
+        return False
+    if json.loads(json.dumps(a['settings'])) != \
+            json.loads(json.dumps(spectra_settings(settings))):
+        return False
+    # The tones left out: marked in the window (``bad``) or in the store's
+    # tone marks (their status says so)
+    saved_bad = {int(r) for r, b in zip(grp['res_idxs'][:], grp['bad'][:])
+                 if b}
+    saved_bad |= {int(r) for r, st in zip(grp['res_idxs'][:],
+                                           grp['status'][:])
+                  if str(st).startswith('marked bad')}
+    listed = {int(r) for r in ts['res_idxs']}
+    return saved_bad == ({int(r) for r in exclude} & listed)
 
 def load_timestream(grp):
     """

@@ -108,6 +108,10 @@ class TailThresholds:
     level (float): a pulse's tail begins where it falls through this,
         kHz/GHz. Default 10.
     fit_s (float): length of each tail fit, s. Default 2 ms.
+    fit_start_s (float or None): where the fit of the mean tail begins,
+        s after the alignment point. Default None: after the latest
+        peak of the mean within the peak search window
+        (``signal.hee.fit_start``).
     overrides (dict): res_idx: dict with any of 'hmin', 'hmax', 'level',
         'fit_s'.
     bad (dict): res_idx: reason, for the tones marked bad in the window.
@@ -120,12 +124,13 @@ class TailThresholds:
     hmax: float = 1000.
     level: float = 10.
     fit_s: float = 2e-3
+    fit_start_s: object = None
     overrides: dict = dataclasses.field(default_factory = dict)
     bad: dict = dataclasses.field(default_factory = dict)
     limits: dict = dataclasses.field(default_factory = dict)
     reviewed: set = dataclasses.field(default_factory = set)
 
-    KEYS = ('hmin', 'hmax', 'level', 'fit_s')
+    KEYS = ('hmin', 'hmax', 'level', 'fit_s', 'fit_start_s')
 
     def mark_reviewed(self, res_idx):
         """
@@ -190,7 +195,7 @@ class TailThresholds:
         values: any of 'hmin', 'hmax', 'level', 'fit_s'.
         """
         for key, v in values.items():
-            setattr(self, key, float(v))
+            setattr(self, key, None if v is None else float(v))
             for r in list(self.overrides):
                 self.overrides[r].pop(key, None)
                 if not self.overrides[r]:
@@ -207,7 +212,7 @@ class TailThresholds:
         values (dict): 'hmin', 'hmax', 'level', 'fit_s'.
         """
         out = dict(hmin = self.hmin, hmax = self.hmax, level = self.level,
-                   fit_s = self.fit_s)
+                   fit_s = self.fit_s, fit_start_s = self.fit_start_s)
         out.update(self.overrides.get(int(res_idx), {}))
         return out
 
@@ -221,7 +226,7 @@ class TailThresholds:
             'reviewed' (sorted list).
         """
         return dict(hmin = self.hmin, hmax = self.hmax, level = self.level,
-                    fit_s = self.fit_s,
+                    fit_s = self.fit_s, fit_start_s = self.fit_start_s,
                     overrides = {str(k): dict(v)
                                  for k, v in self.overrides.items()},
                     bad = {str(k): str(v) for k, v in self.bad.items()},
@@ -242,6 +247,8 @@ class TailThresholds:
         return cls(
             hmin = float(values['hmin']), hmax = float(values['hmax']),
             level = float(values['level']), fit_s = float(values['fit_s']),
+            fit_start_s = (None if values.get('fit_start_s') is None
+                           else float(values['fit_start_s'])),
             overrides = {int(k): dict(v)
                          for k, v in values.get('overrides', {}).items()},
             bad = {int(k): str(v) for k, v in values.get('bad', {}).items()},
@@ -413,7 +420,7 @@ def analyze_tone(d, t0, dt, settings, th):
     res = dict(pulses = pulses.astype(np.float32),
                t0 = np.asarray(t0, dtype = np.int64)[kept], pre = pre,
                post = post, h = h * PPM, p = p, dt = dt,
-               sign = int(settings.pulse_sign))
+               sign = int(settings.pulse_sign), search = int(search))
     return refit_tone(res, th)
 
 def refit_tone(res, th):
@@ -427,17 +434,22 @@ def refit_tone(res, th):
 
     Returns:
     res (dict): a copy with 'hmin', 'hmax', 'level', 'fit_s' (kHz/GHz,
-        s), 'in_window' (pulses in the height window), 'start' (tail
-        start per pulse, -1 if never below the level), 'used' (in the
+        s), 'fit_start_s' (None: automatic), 'in_window' (pulses in
+        the height window), 'start' (tail start per pulse after the
+        overlap alignment, -1 if never below the level), 'used' (in the
         window with a tail start), 'n_used', 'anchor' (the sample the
         tail starts are lined up at: ``pre``), 'aligned' ((n_used, L),
-        x, NaN-padded), 'avg' (their mean, x), 'count' (pulses per
-        sample of the mean), 'tau' (decay time of the mean's tail, s;
-        NaN if the fit failed), 'popt', 'n_fit'.
+        x, NaN-padded, every sample), 'avg' (their mean over the fit
+        range only, x; NaN elsewhere), 'count' (pulses per sample of
+        the mean), 'fit_start' (the sample the fit begins at), 'tau'
+        (decay time of the mean's tail, s; NaN if the fit failed),
+        'popt' (t = 0 at ``fit_start``), 'n_fit'.
     """
     res = dict(res)
+    fs = th.get('fit_start_s')
     res.update(hmin = float(th['hmin']), hmax = float(th['hmax']),
-               level = float(th['level']), fit_s = float(th['fit_s']))
+               level = float(th['level']), fit_s = float(th['fit_s']),
+               fit_start_s = None if fs is None else float(fs))
     pulses = np.asarray(res['pulses'], dtype = float)
     h, p = res['h'], res['p']
     inside = (h >= res['hmin']) & (h <= res['hmax'])
@@ -447,11 +459,21 @@ def refit_tone(res, th):
                      dtype = np.int64)
     used = inside & (start >= 0)
     anchor = int(res['pre'])
+    dt = float(res['dt'])
+    n_range = max(4, int(round(res['fit_s'] / dt)))
+    # The tails lined up by their whole shape over the fit range, then
+    # averaged over that range only
+    start[used] = cr.refine_alignment(pulses[used], start[used], n_range)
     aligned = cr.align_tails(pulses[used], start[used], anchor)
-    avg, count = cr.mean_aligned(aligned)
+    avg, count = cr.mean_segment(aligned, anchor, n_range)
+    search = int(res.get('search', max(1, int(round(0.3e-3 / dt)))))
+    if fs is None:
+        first = cr.fit_start(avg, anchor, search) if used.any() else anchor
+    else:
+        first = anchor + max(0, int(round(float(fs) / dt)))
     if used.any():
-        tau, popt, n_fit = cr.fit_mean_tail(avg, anchor, res['dt'],
-                                            res['fit_s'])
+        tau, popt, n_fit = cr.fit_mean_tail(avg, anchor, dt, res['fit_s'],
+                                            start = first)
     else:
         avg = np.full(pulses.shape[1], np.nan)
         count = np.zeros(pulses.shape[1], dtype = int)
@@ -459,7 +481,8 @@ def refit_tone(res, th):
     res.update(in_window = inside, start = start, used = used,
                n_used = int(used.sum()), anchor = anchor,
                aligned = aligned.astype(np.float32), avg = avg,
-               count = count, tau = tau, popt = popt, n_fit = n_fit)
+               count = count, fit_start = int(first), tau = tau,
+               popt = popt, n_fit = n_fit)
     return res
 
 def analyze_timestream(
@@ -565,6 +588,7 @@ def save_timestream(grp, ts, results, events, thresholds, settings, mode):
     duration = float(ts['stop'] - ts['start']) * float(ts['dt'])
     grp.attrs.update(dl.to_jsonable(dict(
         dataset = ts['dataset'], run = ts['run'], name = ts['name'],
+        tuning = ts.get('tuning'),
         tone_set = ts['tone_set'], source = ts['source']['group'],
         writes = list(ts['source']['writes']), start = ts['start'],
         stop = ts['stop'], dt = ts['dt'], events = mode,
@@ -598,6 +622,8 @@ def save_timestream(grp, ts, results, events, thresholds, settings, mode):
          for r, g in zip(rows, ok)]))
     for key in ('hmin', 'hmax', 'level', 'fit_s', 'tau'):
         dl.write_array(grp, key, per_tone(key))
+    dl.write_array(grp, 'fit_start_s', per_tone(
+        lambda res: (res['fit_start'] - res['anchor']) * res['dt']))
     dl.write_array(grp, 'n_fit', per_tone('n_fit', 0))
     dl.write_array(grp, 'n_pulses', per_tone(lambda res: len(res['h']), 0))
     dl.write_array(grp, 'n_used', per_tone('n_used', 0))

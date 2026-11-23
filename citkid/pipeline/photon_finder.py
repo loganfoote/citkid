@@ -64,7 +64,8 @@ def list_timestreams(root, datasets):
 
     Returns:
     timestreams (list of dict): in run order: ``index``, ``run``
-        ('ts{n}'), ``run_index`` (n), ``name``, ``tone_set``, ``dataset``
+        ('ts{n}'; n counts per tuning), ``run_index`` (n), ``tuning``
+        (e.g. 'tune0'), ``name``, ``tone_set``, ``dataset``
         (DataSet name), ``source`` (the run's tone set, whole, as
         ``daq_layout.select_streams`` makes it), ``start``, ``stop``
         (samples), ``dt``, ``rows`` (the DataSet's calibrated rows,
@@ -79,7 +80,9 @@ def list_timestreams(root, datasets):
         if not run.get('n_chunks'):
             continue
         try:
-            sources, _ = dl.select_streams(root, run = run['run'])
+            # The run of this tuning: ts{n} counts per tuning
+            sources, _ = dl.select_streams(root, run = run['run'],
+                                           tuning = run.get('tuning'))
         except (KeyError, ValueError):
             continue
         for src in sources:
@@ -94,7 +97,8 @@ def list_timestreams(root, datasets):
                 src.get('stream', dl.STREAM_NAME)]
             out.append(dict(
                 index = len(out), run = run['group'], run_index = run['run'],
-                name = run.get('name'), tone_set = s, dataset = dname,
+                tuning = run.get('tuning'), name = run.get('name'),
+                tone_set = s, dataset = dname,
                 source = src, start = int(src['start']),
                 stop = int(src['stop']),
                 dt = float(np.asarray(stream['dt'][...])),
@@ -146,7 +150,8 @@ def result_name(ts, timestreams):
     Returns:
     name (str): the name.
     """
-    same_run = [t for t in timestreams if t['run'] == ts['run']]
+    same_run = [t for t in timestreams if t['run'] == ts['run']
+                and t.get('tuning') == ts.get('tuning')]
     name = str(ts['name'] or ts['run'])
     return name if len(same_run) <= 1 else f"{name}_set{ts['tone_set']}"
 
@@ -333,16 +338,17 @@ def describe_timestreams(timestreams):
     Returns:
     text (str): the description.
     """
-    lines = ['Timestreams (index: run, name, tone set, duration, tones, '
-             'DataSet):']
+    lines = ['Timestreams (index: tuning run, name, tone set, duration, '
+             'tones, DataSet, calibration):']
     for t in timestreams:
         n = t['stop'] - t['start']
         left_out = t.get('n_uncalibrated', 0)
         lines.append(
-            f"  {t['index']}: {t['run']}, {t['name']!r}, set "
-            f"{t['tone_set']}, {n * t['dt']:.3g} s, {len(t['rows'])} "
+            f"  {t['index']}: {t.get('tuning')} {t['run']}, {t['name']!r}, "
+            f"set {t['tone_set']}, {n * t['dt']:.3g} s, {len(t['rows'])} "
             f"tones" + (f' ({left_out} uncalibrated left out)' if left_out
-                        else '') + f", {t['dataset']}")
+                        else '') + f", {t['dataset']}"
+            + (f", {t['cal']}" if 'cal' in t else ''))
     return '\n'.join(lines)
 
 def select_timestreams(timestreams, choice, root = None, cal = None):
@@ -384,6 +390,149 @@ def select_timestreams(timestreams, choice, root = None, cal = None):
                     f"{', '.join(others)}: set CALIBRATION to one of them")
             raise KeyError(f'no timestream {c!r}{where} (see the list)')
         out += match
+    return out
+
+def list_all_timestreams(root):
+    """
+    List the timestreams of every stream calibration in the store: every
+    tone set of every run with streams, once per calibration that has a
+    DataSet on its calibration sweep (a calibration applies to every
+    timestream taken on its sweep, and to no other).
+
+    Parameters:
+    root (zarr.Group): the store root.
+
+    Returns:
+    timestreams (list of dict): ``list_timestreams`` entries with
+        ``index`` over all calibrations, ``cal`` (the calibration's
+        path, e.g. 'ts_cal0') and ``cal_index`` (c), in calibration then
+        run order.
+    datasets (dict): calibration path: ``stream_sources.open_calibration``
+        output. Calibrations made by an earlier version (no DataSet per
+        tone set) are left out.
+    """
+    from .stream_sources import open_calibration
+    timestreams, datasets = [], {}
+    for c in dl.list_indices(root, 'ts_cal'):
+        cal = root[dl.set_name(c, 'ts_cal')]
+        try:
+            ds = open_calibration(root, cal)
+        except KeyError:
+            continue
+        datasets[cal.path] = ds
+        for ts in list_timestreams(root, ds):
+            timestreams.append(dict(ts, index = len(timestreams),
+                                    cal = cal.path, cal_index = c))
+    return timestreams, datasets
+
+def resolve_timestreams(timestreams, choice, calibration = None,
+                        root = None):
+    """
+    Pick timestreams from the listing over every calibration
+    (``list_all_timestreams``), each with the calibration of its own
+    sweep: the one calibration on that sweep, or the one asked for when
+    the sweep has several.
+
+    Parameters:
+    timestreams (list of dict): ``list_all_timestreams`` output.
+    choice (list): each entry an index (int, as listed), a run name
+        (str: every tone set of the latest run with that name), or a
+        dict with ``name`` or ``run`` (the run index n, of the latest
+        tuning with it unless ``tuning`` is given) and optionally
+        ``tone_sets`` (default all) and ``cal`` (a calibration, as
+        ``calibration``).
+    calibration (int, str or None): the calibration to use for every
+        entry without ``cal``: an index, 'ts_cal2', or a name
+        (``daq_layout.find_calibration``, with ``root``), else a path.
+        Default None: each timestream's sweep must have one.
+    root (zarr.Group or None): the store root, to name calibrations.
+        Default None.
+
+    Returns:
+    chosen (list of dict): the timestreams, in the order of ``choice``.
+
+    Raises:
+    KeyError: if an entry matches no run, the run is not on the
+        calibration asked for, or its sweep has several calibrations
+        and none was asked for.
+    """
+    def cal_path(which):
+        """
+        Return a calibration's path from an index, name or path.
+        """
+        if which is None:
+            return None
+        if root is not None:
+            found = dl.find_calibration(root, which)
+            if found is not None:
+                return found.path
+        text = str(which).strip()
+        return text if text.startswith('ts_cal') else f'ts_cal{text}'
+
+    def label(path):
+        """
+        Describe a calibration, with its name if it has one.
+        """
+        if root is not None and path in root:
+            return f'{path} ({dl.calibration_name(root[path])!r})'
+        return path
+
+    default = cal_path(calibration)
+    out = []
+    for c in choice:
+        if isinstance(c, (int, np.integer)):
+            match = [t for t in timestreams if t['index'] == int(c)]
+            if not match:
+                raise KeyError(f'no timestream {c!r} (see the list)')
+            out += match
+            continue
+        spec = dict(name = c) if isinstance(c, str) else dict(c)
+        if spec.get('run') is not None:
+            match = [t for t in timestreams
+                     if t['run_index'] == int(spec['run'])]
+            if spec.get('tuning') is not None:
+                match = [t for t in match
+                         if t.get('tuning') == spec['tuning']]
+            elif match:
+                last = match[-1].get('tuning')
+                match = [t for t in match if t.get('tuning') == last]
+            what = f"ts{spec['run']}"
+        else:
+            named = [t for t in timestreams if t['name'] == spec.get('name')]
+            match = [t for t in named if named and
+                     t['run_index'] == named[-1]['run_index'] and
+                     t.get('tuning') == named[-1].get('tuning')]
+            what = repr(spec.get('name'))
+        if not match:
+            raise KeyError(f'no run {what} with calibrated streams (see '
+                           'the list; 5_calibrate_streams.py calibrates '
+                           'a run)')
+        if spec.get('tone_sets') is not None:
+            keep = [int(s) for s in spec['tone_sets']]
+            match = [t for t in match if t['tone_set'] in keep]
+            if not match:
+                raise KeyError(f'run {what} has no calibrated streams of '
+                               f'tone sets {keep}')
+        wanted = cal_path(spec['cal']) if spec.get('cal') is not None \
+            else default
+        by_set = {}
+        for t in match:
+            by_set.setdefault(t['tone_set'], []).append(t)
+        for s, cands in sorted(by_set.items()):
+            have = sorted({t['cal'] for t in cands}, key = dl._natural)
+            if wanted is not None:
+                cands = [t for t in cands if t['cal'] == wanted]
+                if not cands:
+                    raise KeyError(
+                        f'run {what} tone set {s} is not on '
+                        f'{label(wanted)}; it is on '
+                        f"{', '.join(label(p) for p in have)}")
+            elif len(have) > 1:
+                raise KeyError(
+                    f'run {what} tone set {s} has several calibrations, '
+                    f"{', '.join(label(p) for p in have)}: set "
+                    'CALIBRATION (or cal in the entry)')
+            out.append(cands[-1])
     return out
 
 def calibrations_with(root, name):
@@ -940,6 +1089,7 @@ def save_timestream(
     nf = 0 if ref is None else int(ref['nfft'])
     grp.attrs.update(dl.to_jsonable(dict(
         dataset = ts['dataset'], run = ts['run'], name = ts['name'],
+        tuning = ts.get('tuning'),
         tone_set = ts['tone_set'], source = ts['source']['group'],
         writes = list(ts['source']['writes']), start = ts['start'],
         stop = ts['stop'], dt = ts['dt'], mode = mode,

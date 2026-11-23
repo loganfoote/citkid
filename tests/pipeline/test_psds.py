@@ -188,16 +188,27 @@ def test_select_timestreams():
     lst = [ts(0, 0, 'dark', 0, 0), ts(1, 0, 'dark', 1, 0),
            ts(2, 1, 'dark', 0, 0), ts(3, 1, 'dark', 1, 0),
            ts(4, 1, 'dark', 0, 1), ts(5, 2, 'light', 0, 1)]
-    pick = lambda c: [t['index'] for t in psds.select_timestreams(lst, c)]
+    pick = lambda c, **k: [t['index'] for t in
+                           psds.select_timestreams(lst, c, **k)]
     assert pick([3, 0]) == [3, 0]
-    # A name: the latest run, every tone set, the latest calibration
-    assert pick(['dark']) == [3, 4]
+    # A name: the latest run, every tone set, each on its sweep's one
+    # calibration; a set with several needs the calibration said
     assert pick(['light']) == [5]
+    with pytest.raises(KeyError, match = 'several calibrations'):
+        pick(['dark'])
+    assert pick(['dark'], calibration = 0) == [2, 3]
+    with pytest.raises(KeyError, match = 'tone set 1 is not on ts_cal1'):
+        pick(['dark'], calibration = 'ts_cal1')
+    assert pick([dict(name = 'dark', tone_sets = [0])],
+                calibration = 'ts_cal1') == [4]
+    assert pick([dict(name = 'dark', tone_sets = [1])]) == [3]
     # Dicts: tone sets, calibration, run index
-    assert pick([dict(name = 'dark', tone_sets = [0])]) == [4]
+    assert pick([dict(name = 'dark', tone_sets = [0], cal = 1)]) == [4]
     assert pick([dict(name = 'dark', cal = 0)]) == [2, 3]
     assert pick([dict(run = 0)]) == [0, 1]
     assert pick([dict(run = 1, tone_sets = [1], cal = 0)]) == [3]
+    with pytest.raises(KeyError, match = 'is not on ts_cal1'):
+        pick([dict(name = 'dark', tone_sets = [1], cal = 1)])
     for bad in (['nope'], [9], [dict(run = 1, cal = 2)],
                 [dict(name = 'light', tone_sets = [1])]):
         with pytest.raises(KeyError):

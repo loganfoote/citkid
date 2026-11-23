@@ -9,7 +9,8 @@ the names to powers (``select_points``). Points may share a calibration
 sweep. The analysis:
 
 1. ``calibrate_points``: each point's timestream calibration (the
-   steps of 5_calibrate_streams.py, one DataSet per sweep) and IQ fit, in one stream calibration.
+   steps of 5_calibrate_streams.py, one DataSet per sweep) and IQ fit, in
+   one stream calibration.
 2. ``psd_points``: each timestream's spectra as 6c computes them, with
    peak removal and common-mode removal, saved as a PSD set; the glitch
    positions and the (decimated) common modes are kept for the review.
@@ -237,6 +238,7 @@ def point_timestreams(root, points, datasets):
     out = []
     for p in points:
         match = [t for t in found if t['run'] == f"ts{p['run']}"
+                 and t.get('tuning') == p['tuning']
                  and int(t['tone_set']) == p['tone_set']]
         if not match:
             raise KeyError(f"run ts{p['run']} ({p['name']!r}) tone set "

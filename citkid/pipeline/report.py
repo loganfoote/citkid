@@ -59,7 +59,9 @@ def tone_frequencies(root, grp):
             listed = pf.list_timestreams(root, open_calibration(root, cal))
             for ts in listed:
                 if ts['run'] == a.get('run') and \
-                        ts['tone_set'] == a.get('tone_set'):
+                        ts['tone_set'] == a.get('tone_set') and \
+                        (a.get('tuning') is None or
+                         ts.get('tuning') == a.get('tuning')):
                     sweep = root[ts['source']['group']]
                     break
     if sweep is None:

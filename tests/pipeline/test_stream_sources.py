@@ -274,7 +274,7 @@ def test_open_calibration_needs_current_datasets(streamed):
         selection = [dict(name = 'slow2', chunks = 1)]))
     cal.create_group('stage6_n1192')
     with pytest.raises(KeyError, match = "no DataSet 'set1' for tone set 1 "
-                       r"\(it has \['stage6_n1192'\]\).*05_calibrate"):
+                       r"\(it has \['stage6_n1192'\]\).*5_calibrate"):
         open_calibration(root, 'ts_cal7')
     assert sorted(cal.group_keys()) == ['stage6_n1192']
     with pytest.raises(KeyError, match = 'no selection'):

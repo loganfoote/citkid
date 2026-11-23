@@ -23,6 +23,7 @@ Heights and levels are in units of the timestream (x); the callers
 convert from kHz/GHz (``photons.PPM``).
 """
 import numpy as np
+from scipy.signal import find_peaks
 from .photons import coincidence_clusters, fit_tau, triggers
 
 def find_events(
@@ -235,24 +236,153 @@ def mean_aligned(aligned, min_count = 1):
     avg[count < int(min_count)] = np.nan
     return avg, count
 
-def fit_mean_tail(avg, anchor, dt, fit_s):
+def refine_alignment(pulses, start, n_fit, max_shift = None, n_iter = 3):
     """
-    Fit the tail of an aligned mean pulse: an exponential (``fit_tau``)
-    over ``fit_s`` seconds from the alignment point, over the samples
-    the mean has (it ends where the padding begins).
+    Line the tails up by their whole shape: each pulse's tail start is
+    moved by the few samples that best overlap the mean tail over the
+    fit range, and the mean is taken again, a few times over. The
+    level crossing (``tail_start``) is only the starting guess, so one
+    noisy sample no longer places a pulse.
 
     Parameters:
-    avg (np.array): ``mean_aligned`` output.
+    pulses (np.array): ``cut_pulses`` output, (n, L).
+    start (np.array, int): each pulse's tail start (``tail_start``).
+    n_fit (int): samples of the fit range (``fit_s`` / dt).
+    max_shift (int or None): largest move, samples. Default None: a
+        tenth of ``n_fit``, at least 2.
+    n_iter (int): rounds (each ends early when nothing moves).
+        Default 3.
+
+    Returns:
+    start (np.array, int): the refined tail starts.
+    """
+    pulses = np.asarray(pulses, dtype = float)
+    start = np.asarray(start, dtype = np.int64).copy()
+    n = len(pulses)
+    n_fit = max(int(n_fit), 4)
+    if n < 2:
+        return start
+    if max_shift is None:
+        max_shift = max(2, n_fit // 10)
+    shifts = np.arange(-int(max_shift), int(max_shift) + 1)
+    least = max(4, n_fit // 2)
+
+    def segment(k, a):
+        """
+        Return pulse k's samples from a, over the fit range.
+        """
+        if a < 0:
+            return pulses[k, :0]
+        return pulses[k, a:a + n_fit]
+
+    for _ in range(int(n_iter)):
+        segs = np.full((n, n_fit), np.nan)
+        for k in range(n):
+            seg = segment(k, int(start[k]))
+            segs[k, :len(seg)] = seg
+        with np.errstate(invalid = 'ignore'):
+            template = np.nanmean(segs, axis = 0)
+        new = start.copy()
+        for k in range(n):
+            best, best_cost = int(start[k]), np.inf
+            for s in shifts:
+                a = int(start[k]) + int(s)
+                seg = segment(k, a)
+                m = len(seg)
+                if m < least:
+                    continue
+                diff = seg - template[:m]
+                ok = np.isfinite(diff)
+                if ok.sum() < least:
+                    continue
+                cost = float(np.mean(diff[ok] ** 2))
+                if cost < best_cost - 1e-30 or (
+                        cost <= best_cost and abs(s) < abs(best - start[k])):
+                    best, best_cost = a, cost
+            new[k] = best
+        if np.array_equal(new, start):
+            break
+        start = new
+    return start
+
+def mean_segment(aligned, anchor, n_fit, min_count = 1):
+    """
+    Average aligned pulses over the fit range only: from the alignment
+    point for ``n_fit`` samples. The mean is NaN elsewhere (the pulses
+    themselves keep every sample, for the plots).
+
+    Parameters:
+    aligned (np.array): ``align_tails`` output.
+    anchor (int): the alignment point.
+    n_fit (int): samples of the fit range.
+    min_count (int): fewest pulses a sample needs. Default 1.
+
+    Returns:
+    avg (np.array): the mean over the range, NaN outside it.
+    count (np.array, int): pulses averaged at each sample (0 outside).
+    """
+    avg, count = mean_aligned(aligned, min_count)
+    if not len(avg):
+        return avg, count
+    keep = np.zeros(len(avg), dtype = bool)
+    keep[max(int(anchor), 0):max(int(anchor), 0) + max(int(n_fit), 1)] = True
+    avg = np.where(keep, avg, np.nan)
+    count = np.where(keep, count, 0)
+    return avg, count
+
+def fit_start(avg, anchor, window, nsigma = 5.):
+    """
+    Choose where the tail fit begins: after the latest peak of the mean
+    within ``window`` samples of the alignment point (the bumps and dips
+    that averaging peaks and shoulders leaves at the start), or at the
+    alignment point when there is none. A peak counts when it stands
+    out of the mean's noise (its prominence, ``scipy.signal.find_peaks``,
+    is over ``nsigma`` times the noise, estimated from the sample-to-
+    sample differences of the mean).
+
+    Parameters:
+    avg (np.array): ``mean_segment`` output.
+    anchor (int): the alignment point.
+    window (int): samples after the alignment point looked at.
+    nsigma (float): how far above the noise a peak must stand. Default 5.
+
+    Returns:
+    start (int): the sample the fit begins at.
+    """
+    anchor = max(int(anchor), 0)
+    y = np.asarray(avg, dtype = float)[anchor:anchor + max(int(window), 0)
+                                       + 1]
+    bad = np.flatnonzero(~np.isfinite(y))
+    if len(bad):
+        y = y[:bad[0]]
+    if len(y) < 3:
+        return anchor
+    d = np.diff(y)
+    noise = 1.4826 * np.median(np.abs(d - np.median(d))) / np.sqrt(2)
+    peaks, _ = find_peaks(y, prominence = nsigma * max(noise, 1e-300))
+    return anchor + int(peaks[-1]) if len(peaks) else anchor
+
+def fit_mean_tail(avg, anchor, dt, fit_s, start = None):
+    """
+    Fit the tail of an aligned mean pulse: an exponential (``fit_tau``)
+    over ``fit_s`` seconds from ``start``, over the samples the mean
+    has (it ends where the padding, or the fit range, begins).
+
+    Parameters:
+    avg (np.array): ``mean_aligned`` or ``mean_segment`` output.
     anchor (int): the alignment point.
     dt (float): sample period, s.
     fit_s (float): length of the fit, s.
+    start (int or None): the sample the fit begins at (``fit_start``).
+        Default None: the alignment point.
 
     Returns:
     tau (float): decay time, s (NaN if the fit fails).
-    popt (np.array): (A, tau, B), t = 0 at the alignment point.
+    popt (np.array): (A, tau, B), t = 0 at ``start``.
     n_fit (int): samples fitted (0 if the fit fails).
     """
-    y = np.asarray(avg, dtype = float)[int(anchor):]
+    first = int(anchor) if start is None else int(start)
+    y = np.asarray(avg, dtype = float)[first:]
     bad = np.flatnonzero(~np.isfinite(y))
     if len(bad):
         y = y[:bad[0]]

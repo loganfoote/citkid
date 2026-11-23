@@ -163,6 +163,10 @@ class HeeTailWindow(QtWidgets.QMainWindow):
             ('Keyboard', [
                 ('A / D', 'Previous / next tone'),
                 ('Ctrl+R', 'Apply the settings typed and refit'),
+                ('Yellow line', 'Drag it to choose where the fit of the '
+                 'mean tail begins (this tone); Auto fit start puts the '
+                 'automatic choice back, Fit start to all gives it to '
+                 'every tone'),
                 ('B', 'Mark the tone bad (or clear the mark), with a reason'),
                 ('T', 'Add a note on the tone'),
                 ('O', 'Open the tone overview'),
@@ -247,6 +251,24 @@ class HeeTailWindow(QtWidgets.QMainWindow):
         scope.addWidget(self.scope_tone)
         scope.addWidget(self.scope_all)
         lay.addLayout(scope)
+        self.fit_start_label = QtWidgets.QLabel('fit from: auto')
+        self.fit_start_label.setToolTip(
+            'Where the fit of the mean tail begins, after the alignment '
+            'point: drag the yellow line on the mean pulse; automatic is '
+            'after the latest peak of the mean within the peak search '
+            'window')
+        lay.addWidget(self.fit_start_label)
+        row = QtWidgets.QHBoxLayout()
+        self.auto_start_btn = QtWidgets.QPushButton('Auto fit start')
+        self.auto_start_btn.setToolTip('Drop this tone\'s own fit start')
+        self.auto_start_btn.clicked.connect(lambda: self.set_fit_start(None))
+        self.start_all_btn = QtWidgets.QPushButton('Fit start to all')
+        self.start_all_btn.setToolTip("Give every tone this tone's fit "
+                                      'start')
+        self.start_all_btn.clicked.connect(self.fit_start_to_all)
+        row.addWidget(self.auto_start_btn)
+        row.addWidget(self.start_all_btn)
+        lay.addLayout(row)
         self.apply_btn = QtWidgets.QPushButton('Apply (Ctrl+R)')
         self.apply_btn.clicked.connect(self.rerun)
         QtWidgets.QShortcut(QtGui.QKeySequence('Ctrl+R'), self, self.rerun)
@@ -324,6 +346,15 @@ class HeeTailWindow(QtWidgets.QMainWindow):
             0, angle = 90, pen = pg.mkPen((180, 180, 180),
                                           style = Qt.DashLine))
         self.pulse_plot.addItem(self.anchor_line, ignoreBounds = True)
+        # Where the fit of the mean begins: dragged, it is this tone's
+        # own; Auto fit start puts the automatic choice back
+        self.fit_start_line = pg.InfiniteLine(
+            0, angle = 90, movable = True,
+            pen = pg.mkPen('y', width = 2), label = 'fit from',
+            labelOpts = dict(position = 0.85))
+        self.fit_start_line.sigPositionChangeFinished.connect(
+            self._on_fit_start_line)
+        self.pulse_plot.addItem(self.fit_start_line, ignoreBounds = True)
 
         def line(plot, color):
             """
@@ -722,17 +753,73 @@ class HeeTailWindow(QtWidgets.QMainWindow):
             self.pulses_curve.setData([], [])
         avg = np.asarray(res['avg'], dtype = float) * PPM
         self.avg_curve.setData(tt, avg if np.isfinite(avg).any() else [])
+        t_off = (int(res.get('fit_start', res['anchor'])) - res['anchor']) \
+            * self.dt
+        self._updating = True
+        self.fit_start_line.setValue(t_off * 1e3)
+        self._updating = False
+        own = res.get('fit_start_s')
+        self.fit_start_label.setText(
+            f'fit from: {t_off * 1e3:.3g} ms '
+            + ('(auto)' if own is None else '(set)'))
         if np.isfinite(res['tau']) and res['n_fit'] > 0:
             A, tau, B = res['popt']
             tf = np.arange(res['n_fit']) * self.dt
-            self.fit_curve.setData(tf * 1e3, (A * np.exp(-tf / tau) + B)
-                                   * PPM)
+            self.fit_curve.setData((tf + t_off) * 1e3,
+                                   (A * np.exp(-tf / tau) + B) * PPM)
             self.pulse_plot.setTitle(f'tau = {tau * 1e6:.3g} us '
                                      f"({res['n_used']} pulses averaged)")
         else:
             self.fit_curve.setData([], [])
             self.pulse_plot.setTitle('decay fit failed' if res['n_used']
                                      else 'no pulses to average')
+
+    def _on_fit_start_line(self):
+        """
+        Give the selected tone the fit start the line was dragged to.
+        """
+        if self._updating:
+            return
+        self.set_fit_start(max(0., float(self.fit_start_line.value())) * 1e-3)
+
+    def set_fit_start(self, fit_start_s):
+        """
+        Set the selected tone's own fit start and refit it.
+
+        Parameters:
+        fit_start_s (float or None): seconds after the alignment point;
+            None drops the tone's own value (automatic again).
+        """
+        i = self.current()
+        r = self.res_idxs[i]
+        th = self.thresholds
+        own = th.overrides.setdefault(r, {})
+        if fit_start_s is None:
+            own.pop('fit_start_s', None)
+            if th.fit_start_s is not None:
+                own['fit_start_s'] = None
+        else:
+            own['fit_start_s'] = float(fit_start_s)
+        if not own:
+            del th.overrides[r]
+        th.mark_reviewed(r)
+        self.results.update(self._refit([self.rows[i]], th))
+        self._fill_list()
+        self.select(i)
+        self._refresh_overview()
+
+    def fit_start_to_all(self):
+        """
+        Give every tone the selected tone's fit start (automatic, or
+        its value) and refit them all.
+        """
+        i = self.current()
+        value = self.thresholds.for_tone(self.res_idxs[i]).get('fit_start_s')
+        self.thresholds.set_all(fit_start_s = value)
+        self.results.update(self._refit(list(self.rows), self.thresholds))
+        self._fill_list()
+        self.select(i)
+        self._refresh_overview()
 
     ############################################################################
     def apply(self, i = None):

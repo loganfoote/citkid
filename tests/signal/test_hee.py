@@ -138,3 +138,48 @@ def test_align_and_mean_fit(rays):
     short = np.full(170, np.nan)
     short[PRE:PRE + 2] = 1.
     assert np.isnan(cr.fit_mean_tail(short, PRE, DT, 1e-3)[0])
+
+
+def test_overlap_alignment_segment_mean_and_fit_start():
+    """
+    Pulses with the same tail but noisy level crossings are lined up by
+    their whole tails, the mean covers the fit range only, the fit
+    begins after the latest peak the averaging leaves, and a given
+    start is used as it is.
+    """
+    from citkid.signal.hee import (
+        align_tails, fit_mean_tail, fit_start, mean_segment,
+        refine_alignment)
+    rng = np.random.default_rng(3)
+    dt, L, tau = 1e-5, 400, 1e-3
+    t = np.arange(L) * dt
+    n = 12
+    pulses = np.zeros((n, L))
+    true_start = 60 + rng.integers(-6, 7, n)
+    for k in range(n):
+        s = true_start[k]
+        pulses[k, s:] = 2. * np.exp(-(t[s:] - t[s]) / tau)
+        pulses[k, s - 5:s] = np.linspace(0., 2., 5)      # the rise
+        pulses[k] += rng.normal(0, 0.02, L)
+    # Level crossings a few samples off, as noise makes them
+    noisy = true_start + rng.integers(-3, 4, n)
+    n_fit = int(round(tau / dt))
+    refined = refine_alignment(pulses, noisy, n_fit)
+    offsets = refined - true_start
+    assert np.abs(offsets - np.median(offsets)).max() <= 1
+    anchor = 100
+    aligned = align_tails(pulses, refined, anchor)
+    avg, count = mean_segment(aligned, anchor, n_fit)
+    assert np.isnan(avg[:anchor]).all() and np.isnan(avg[anchor + n_fit:]).all()
+    assert np.isfinite(avg[anchor:anchor + n_fit]).all()
+    assert count[anchor] == n and count[anchor - 1] == 0
+    # A bump after the alignment point: the fit begins after it
+    bumped = avg.copy()
+    bumped[anchor + 3:anchor + 6] += [0.5, 1., 0.5]
+    assert fit_start(bumped, anchor, 20) == anchor + 4
+    assert fit_start(avg, anchor, 20) == anchor
+    tau_fit, popt, n = fit_mean_tail(avg, anchor, dt, tau,
+                                     start = anchor + 4)
+    assert abs(tau_fit - tau) / tau < 0.1 and n <= n_fit - 4
+    assert fit_mean_tail(avg, anchor, dt, tau)[0] == pytest.approx(
+        fit_mean_tail(avg, anchor, dt, tau, start = anchor)[0])

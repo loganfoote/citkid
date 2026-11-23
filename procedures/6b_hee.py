@@ -17,7 +17,6 @@ import numpy as np
 from citkid import daq_layout as dl
 from citkid.pipeline import hee_finder as cf
 from citkid.pipeline import photon_finder as pf
-from citkid.pipeline.stream_sources import open_calibration
 from citkid.signal.photons import DetectionSettings
 from citkid.qt_compat import set_theme
 
@@ -47,6 +46,7 @@ HMIN = 0.
 HMAX = 1000.
 LEVEL = 10.
 FIT_S = 2.e-3
+FIT_START_S = None
 PRE_S = 0.5e-3
 POST_S = 5.e-3
 SEARCH_S = 0.3e-3
@@ -79,7 +79,8 @@ def parse_args(argv = None):
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device)')
     p.add_argument('--cal', default = CALIBRATION,
-                   help = 'calibration, by name or index (default: the latest)')
+                   help = 'calibration to use when a sweep has several, by '
+                   "name or index (default: each timestream's own)")
     p.add_argument('--name', default = NAME,
                    help = 'name of the result of a single timestream')
     p.add_argument('--events', choices = ('auto', 'photons', 'triggers'),
@@ -348,28 +349,18 @@ def main(args):
     set_theme(LIGHT_MODE)
     root = dl.open_store(store_path(args), mode = 'a')
     dl.check_store(root)
-    cals = dl.list_indices(root, 'ts_cal')
-    if not cals:
-        raise KeyError('the store has no ts_cal group: run '
+    timestreams, datasets = pf.list_all_timestreams(root)
+    if not timestreams:
+        raise KeyError('the store has no calibrated timestreams: run '
                        '5_calibrate_streams.py first')
-    cal = dl.find_calibration(root, args.cal)
-    if cal is None:
-        names = ', '.join(
-            f'{dl.calibration_name(root[dl.set_name(c, "ts_cal")])!r} '
-            f'(ts_cal{c})' for c in cals)
-        raise KeyError(f'no calibration {args.cal!r}; the store has '
-                       f'{names}')
-    datasets = open_calibration(root, cal)
-    timestreams = pf.list_timestreams(root, datasets)
-    print(f'{cal.path}:')
     print(pf.describe_timestreams(timestreams))
     if not TIMESTREAMS:
         print(cf.describe_results(root))
         print('Set TIMESTREAMS at the top of the script to choose '
               'timestreams.')
         return None
-    chosen = pf.select_timestreams(timestreams, TIMESTREAMS, root = root,
-                                   cal = cal)
+    chosen = pf.resolve_timestreams(timestreams, TIMESTREAMS,
+                                    calibration = args.cal, root = root)
     if args.name and len(chosen) != 1:
         raise ValueError('NAME names the result of a single timestream; '
                          f'{len(chosen)} are chosen')
@@ -381,12 +372,13 @@ def main(args):
     for ts in chosen:
         name = args.name.strip() if args.name else \
             pf.result_name(ts, timestreams)
-        DS = datasets[ts['dataset']]['DS']
+        DS = datasets[ts['cal']][ts['dataset']]['DS']
         data = pf.TimestreamData(
             root, ts, DS, DetectionSettings(highpass_hz = HIGHPASS_HZ),
             max_bytes = MEMORY_GB * 1e9)
         thresholds = cf.TailThresholds(hmin = HMIN, hmax = HMAX,
-                                       level = LEVEL, fit_s = FIT_S)
+                                       level = LEVEL, fit_s = FIT_S,
+                                       fit_start_s = FIT_START_S)
         window = interactive
         taken_from = None
         if first is not None and WINDOW_FIRST_ONLY:
@@ -395,7 +387,8 @@ def main(args):
             taken_from, th0 = first
             thresholds = cf.TailThresholds(
                 hmin = th0.hmin, hmax = th0.hmax, level = th0.level,
-                fit_s = th0.fit_s, overrides = copy.deepcopy(th0.overrides))
+                fit_s = th0.fit_s, fit_start_s = th0.fit_start_s,
+                overrides = copy.deepcopy(th0.overrides))
             window = False
             print(f'Thresholds of the window on {taken_from}, no window')
         continued = None
@@ -437,7 +430,7 @@ def main(args):
         cf.save_timestream(grp, ts, results, events, thresholds, settings,
                            mode)
         grp.attrs.update(dl.to_jsonable(dict(
-            calibration = cal.path, continued_from = continued,
+            calibration = ts['cal'], continued_from = continued,
             thresholds_from = taken_from)))
         save_notes(grp, args.notes)
         report(ts, results, events)
