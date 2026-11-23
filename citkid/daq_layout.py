@@ -77,7 +77,7 @@ def _now():
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 SETUP_KEYS = ('fridge_ch', 'dac_attenuation', 'dac_filters', 'adc_filters',
-              'warm_amps')
+              'warm_amps', 'temperature')
 
 def setup_text(setup):
     """

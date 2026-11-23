@@ -28,6 +28,7 @@ REPORT_DIR = '~/reports'
 STORE = None
 WORK_BY = None
 RES_PAGES = True
+SXX_RUN = None
 INTERACTIVE = True
 INDEX = False
 
@@ -53,6 +54,9 @@ def parse_args(argv = None):
                    'existing report is rebuilt anyway)')
     p.add_argument('--no-res-pages', action = 'store_true',
                    help = 'skip the resonator pages')
+    p.add_argument('--sxx-run', default = SXX_RUN,
+                   help = 'the timestream run the Sxx values come from '
+                   '(default: SXX_RUN, or the latest spectra)')
     p.add_argument('--no-gui', action = 'store_true',
                    help = 'skip the store browser')
     p.add_argument('--overwrite', action = 'store_true',
@@ -200,7 +204,7 @@ def main(args):
     out = site.build_device(os.path.expanduser(store), args.out,
                             force = args.force,
                             res_pages = RES_PAGES and not args.no_res_pages,
-                            progress = print)
+                            progress = print, sxx_run = args.sxx_run)
     if INDEX:
         print(f'Site: {site.build_index(args.out)}')
     return [out] if out is not None else []

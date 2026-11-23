@@ -74,8 +74,9 @@ def load_comments(out_dir):
     out_dir (str): the device's folder in the site.
 
     Returns:
-    comments (list of dict): ``who``, ``when``, ``text``, oldest
-        first ([] without the file or when it is not a list).
+    comments (list of dict): ``id``, ``who``, ``when``, ``text``,
+        ``edited`` (when it was last edited, or ''), oldest first ([]
+        without the file or when it is not a list).
     """
     path = os.path.join(out_dir, COMMENTS_FILE)
     if not os.path.exists(path):
@@ -85,9 +86,10 @@ def load_comments(out_dir):
             data = json.load(fh)
     except (OSError, ValueError):
         return []
-    return [dict(who = str(c.get('who') or ''), when = str(c.get('when')
-                                                         or ''),
-                 text = str(c.get('text') or ''))
+    return [dict(id = str(c.get('id') or ''), who = str(c.get('who') or ''),
+                 when = str(c.get('when') or ''),
+                 text = str(c.get('text') or ''),
+                 edited = str(c.get('edited') or ''))
             for c in data if isinstance(c, dict)] \
         if isinstance(data, list) else []
 
@@ -126,30 +128,65 @@ def comments_html(comments):
         return '<p class="small">No comments yet.</p>'
     return ''.join(
         f'<div class="comment"><span class="small">{_esc(c["when"])}'
-        + (f' {_esc(c["who"])}' if c['who'] else '') + '</span><br>'
-        + _esc(c['text']).replace('\n', '<br>') + '</div>'
+        + (f' {_esc(c["who"])}' if c['who'] else '')
+        + (f' (edited {_esc(c["edited"])})' if c.get('edited') else '')
+        + '</span><br>' + _esc(c['text']).replace('\n', '<br>') + '</div>'
         for c in comments)
 
 COMMENTS_SCRIPT = '''
 (function () {
   if (!location.protocol.startsWith('http')) { return; }
-  document.getElementById('comment-form').hidden = false;
+  var form = document.getElementById('comment-form');
+  form.hidden = false;
   var esc = function (s) { var d = document.createElement('div');
     d.textContent = s; return d.innerHTML; };
+  var field = function (name) { return form.elements[name]; };
+  var byId = {};
+  var reset = function () {
+    field('action').value = 'add'; field('id').value = '';
+    field('text').value = ''; form.querySelector('button').textContent =
+      'Add comment'; document.getElementById('comment-cancel').hidden = true;
+  };
+  document.getElementById('comment-cancel').onclick = function (e) {
+    e.preventDefault(); reset(); };
+  var render = function (list) {
+    byId = {};
+    document.getElementById('comments-count').textContent =
+      'Comments (' + list.length + ')';
+    document.getElementById('comments-list').innerHTML = list.length
+      ? list.map(function (c, i) {
+          var id = c.id || String(i); byId[id] = c;
+          return '<div class="comment"><span class="small">'
+            + esc(c.when || '') + (c.who ? ' ' + esc(c.who) : '')
+            + (c.edited ? ' (edited ' + esc(c.edited) + ')' : '')
+            + ' &middot; <a href="#comments" data-edit="' + esc(id)
+            + '">edit</a> &middot; <a href="#comments" data-delete="'
+            + esc(id) + '">delete</a></span><br>'
+            + esc(c.text || '').replace(/\\n/g, '<br>') + '</div>'; }).join('')
+      : '<p class="small">No comments yet.</p>';
+  };
+  document.getElementById('comments-list').onclick = function (e) {
+    var t = e.target;
+    if (t.dataset && t.dataset.edit !== undefined) {
+      e.preventDefault();
+      var c = byId[t.dataset.edit] || {};
+      field('action').value = 'edit'; field('id').value = t.dataset.edit;
+      field('who').value = c.who || ''; field('text').value = c.text || '';
+      form.querySelector('button').textContent = 'Save edit';
+      document.getElementById('comment-cancel').hidden = false;
+      field('text').focus();
+    } else if (t.dataset && t.dataset.delete !== undefined) {
+      e.preventDefault();
+      if (!confirm('Delete this comment?')) { return; }
+      field('action').value = 'delete'; field('id').value = t.dataset.delete;
+      field('text').required = false;
+      form.submit();
+    }
+  };
   fetch('comments.json', {cache: 'no-store'})
     .then(function (r) { return r.ok ? r.json() : []; })
-    .then(function (list) {
-      if (!Array.isArray(list)) { return; }
-      document.getElementById('comments-count').textContent =
-        'Comments (' + list.length + ')';
-      document.getElementById('comments-list').innerHTML = list.length
-        ? list.map(function (c) {
-            return '<div class="comment"><span class="small">'
-              + esc(c.when || '') + (c.who ? ' ' + esc(c.who) : '')
-              + '</span><br>' + esc(c.text || '').replace(/\\n/g, '<br>')
-              + '</div>'; }).join('')
-        : '<p class="small">No comments yet.</p>';
-    }).catch(function () {});
+    .then(function (list) { if (Array.isArray(list)) { render(list); } })
+    .catch(function () {});
 })();
 '''
 
@@ -157,7 +194,8 @@ def comments_section(out_dir, cooldown, device):
     """
     Render the Comments section of a device page: the comments as of
     the build, and, when the page is served (the NAS), the live list
-    from ``comments.json`` and a form posting to ``comments.php``.
+    from ``comments.json`` with edit and delete links, and a form
+    posting to ``comments.php`` (add, or save an edit).
 
     Parameters:
     out_dir (str): the device's folder in the site.
@@ -172,10 +210,14 @@ def comments_section(out_dir, cooldown, device):
         f'action="../../{COMMENTS_PHP}" hidden>'
         f'<input type="hidden" name="cooldown" value="{_esc(cooldown)}">'
         f'<input type="hidden" name="device" value="{_esc(device)}">'
+        '<input type="hidden" name="action" value="add">'
+        '<input type="hidden" name="id" value="">'
         '<input name="who" maxlength="100" placeholder="your name"> '
         '<textarea name="text" required maxlength="5000" rows="3" '
         'placeholder="comment"></textarea> '
-        '<button type="submit">Add comment</button></form>')
+        '<button type="submit">Add comment</button> '
+        '<a href="#comments" id="comment-cancel" hidden>cancel</a>'
+        '</form>')
     return (
         '<details open id="comments"><summary><h2 id="comments-count">'
         f'Comments ({len(comments)})</h2></summary>'
@@ -1084,13 +1126,18 @@ def resonator_figure(data, r):
     fig.tight_layout()
     return fig
 
-def resonator_summary(data):
+def resonator_summary(data, sxx_run = None):
     """
     Tabulate every resonator for the device page: the latest value of
     each quantity.
 
     Parameters:
     data (DeviceData): the store's results.
+    sxx_run (str or None): the name of a timestream run whose spectra
+        give ``sxx_cn_10hz`` and ``sfactor_10hz`` where it has them
+        (the latest set's); the other runs' only fill in the tones it
+        lacks. Default None: the latest spectra of each tone, whatever
+        the run.
 
     Returns:
     table (pd.DataFrame): per resonator: ``res_idx``, ``fres_mhz``,
@@ -1125,23 +1172,27 @@ def resonator_summary(data):
                 if kind == 'photons':
                     rows[r]['photon_height'] = t['height']
                     rows[r]['photon_rate'] = t['rate']
-    for g in data.psd_groups:
+    # Every saved timestream's spectra, in store order, the later ones
+    # overwriting; those of ``sxx_run`` moved last so they win
+    spectra = [(g, g[name]) for g in data.psd_groups
+               if len(g['f_reduced'][:])
+               for name in sorted(n for n in g.group_keys()
+                                  if n.startswith('timestream'))]
+    if sxx_run is not None:
+        spectra.sort(key = lambda gt: str(gt[1].attrs.get('name'))
+                     == str(sxx_run))
+    for g, t in spectra:
         f_reduced = np.asarray(g['f_reduced'][:], float)
-        if not len(f_reduced):
-            continue
         j = int(np.argmin(np.abs(f_reduced - 10.)))
-        for name in sorted(n for n in g.group_keys()
-                           if n.startswith('timestream')):
-            t = g[name]
-            res = np.asarray(t['res_idxs'][:], int)
-            key = 'sxx_reduced_cn' if 'sxx_reduced_cn' in t else 'sxx_reduced'
-            sxx = np.asarray(t[key][:], float)[:, j]
-            sf = np.asarray(t['sfactor_reduced'][:], float)[:, j] \
-                if 'sfactor_reduced' in t else np.full(len(res), np.nan)
-            for i, r in enumerate(res):
-                if int(r) in rows:
-                    rows[int(r)][f'sxx_cn_{f_reduced[j]:g}hz'] = sxx[i]
-                    rows[int(r)][f'sfactor_{f_reduced[j]:g}hz'] = sf[i]
+        res = np.asarray(t['res_idxs'][:], int)
+        key = 'sxx_reduced_cn' if 'sxx_reduced_cn' in t else 'sxx_reduced'
+        sxx = np.asarray(t[key][:], float)[:, j]
+        sf = np.asarray(t['sfactor_reduced'][:], float)[:, j] \
+            if 'sfactor_reduced' in t else np.full(len(res), np.nan)
+        for i, r in enumerate(res):
+            if int(r) in rows:
+                rows[int(r)][f'sxx_cn_{f_reduced[j]:g}hz'] = sxx[i]
+                rows[int(r)][f'sfactor_{f_reduced[j]:g}hz'] = sf[i]
     for r, rec in rows.items():
         marks = data.marks.get(r) or data.marks.get(str(r)) or []
         rec['marks'] = '; '.join(f"{e.get('kind')}: {e.get('text', '')}"
@@ -1180,8 +1231,8 @@ pre { background: #f6f6f6; padding: 8px; font-size: 0.85em;
 .small { font-size: 0.85em; color: #555; }
 .comment { border-left: 3px solid #cfd8e3; padding: 4px 10px;
   margin: 6px 0; }
-#comment-form input, #comment-form textarea { display: block;
-  width: 60%; margin: 4px 0; }
+#comment-form input:not([type=hidden]), #comment-form textarea {
+  display: block; width: 60%; margin: 4px 0; }
 '''
 
 JS = '''
@@ -1758,38 +1809,31 @@ def frequency_schedule(root, inv):
 
 def schedule_text(schedule):
     """
-    Write a frequency schedule as one line for the site's top page.
+    Write a frequency schedule as one short cell for the site's top
+    page: the range of the resonances found to 1 MHz, outliers apart,
+    and how many outliers lie below and above it. The CRS setup the
+    schedule holds (modules, bank, NCOs) is not written.
 
     Parameters:
     schedule (dict or None): ``frequency_schedule`` output.
 
     Returns:
-    text (str): e.g. '314.0 to 2421.2 MHz (938 res); outliers 2900.1
-        MHz; module 4, low bank, NCO 666.8, 817.7 MHz', or ''.
+    text (str): e.g. '314 to 2056 MHz, 4 above', or ''.
     """
     if not schedule or schedule.get('fmin_mhz') is None:
         return ''
-    parts = [f"{schedule['fmin_mhz']:.1f} to {schedule['fmax_mhz']:.1f} "
-             f"MHz ({schedule['n']} res)"]
-    if schedule.get('outliers_mhz'):
-        parts.append('outliers ' + ', '.join(
-            f'{v:.1f}' for v in schedule['outliers_mhz']) + ' MHz')
-    crs = []
-    if schedule.get('modules'):
-        m = schedule['modules']
-        crs.append(('module ' if len(m) == 1 else 'modules ')
-                   + ', '.join(str(v) for v in m))
-    if schedule.get('bank'):
-        crs.append(f"{schedule['bank']} bank")
-    if schedule.get('ncos_mhz'):
-        crs.append('NCO ' + ', '.join(f'{v:.1f}' for v in
-                                      schedule['ncos_mhz']) + ' MHz')
-    if crs:
-        parts.append(', '.join(crs))
-    return '; '.join(parts)
+    text = f"{schedule['fmin_mhz']:.0f} to {schedule['fmax_mhz']:.0f} MHz"
+    odd = [float(v) for v in schedule.get('outliers_mhz') or []]
+    below = sum(v < schedule['fmin_mhz'] for v in odd)
+    above = sum(v > schedule['fmax_mhz'] for v in odd)
+    if below:
+        text += f', {below} below'
+    if above:
+        text += f', {above} above'
+    return text
 
 def build_device(root, out_root, force = False, dpi = FIG_DPI,
-                 res_pages = True, progress = None):
+                 res_pages = True, progress = None, sxx_run = None):
     """
     Build (or refresh) one device's pages.
 
@@ -1802,6 +1846,9 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
     res_pages (bool): If True (default), one page per resonator.
     progress (callable or None): called with progress text. Default
         None.
+    sxx_run (str or None): the timestream run the resonator table's
+        Sxx and s-factor come from where it has them
+        (``resonator_summary``). Default None: the latest spectra.
 
     Returns:
     out_dir (str or None): the device's folder, or None if it was up to
@@ -1868,9 +1915,10 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
         csv = os.path.join(data_dir, f'{device}_{tune.basename}_tuning.csv')
         table.to_csv(csv, index = False)
         tune_figs[tune.basename] = (path, csv)
-    summary = resonator_summary(data)
+    summary = resonator_summary(data, sxx_run = sxx_run)
     overview = store_overview(inv, summary)
     overview['schedule'] = frequency_schedule(root, inv)
+    overview['sxx_run'] = None if sxx_run is None else str(sxx_run)
     summary_csv = os.path.join(data_dir, f'{device}_resonators.csv')
     summary.to_csv(summary_csv, index = False)
     # Resonator pages
@@ -1921,6 +1969,9 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
         body.append('<p class="small">attached: ' + ' | '.join(
             f'<a href="{_esc(p)}">{_esc(n)}</a>'
             for n, p in attachment_links(attachments, '')) + '</p>')
+    # The comments first: the page's own conversation, above the data
+    body.append(comments_section(out_dir, inv['cooldown'],
+                                 os.path.basename(out_dir)))
     body.append(section_html('What was taken', table_html(
         _taken_table(inv, attachments), raw = ('attached',))))
     items = []
@@ -2055,7 +2106,11 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
     body.append(section_html(
         f'Resonators ({len(summary)})',
         f'<p class="small"><a href="{_rel(summary_csv, out_dir)}">CSV</a>; '
-        'click a column to sort; type to filter</p>'
+        'click a column to sort; type to filter'
+        + (f'; Sxx and s-factor from run {_esc(str(sxx_run))} where it '
+           'has them, else the latest spectra' if sxx_run is not None
+           else '; Sxx and s-factor from the latest spectra of each tone')
+        + '</p>'
         + table_html(summary, links = links, table_id = 'resonators'),
         open_ = False, filter_table = 'resonators'))
     marks = pd.DataFrame(inv['marks'], columns = [
@@ -2064,8 +2119,6 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
                              table_html(marks, links = links,
                                         table_id = 'marks'),
                              open_ = False, filter_table = 'marks'))
-    body.append(comments_section(out_dir, inv['cooldown'],
-                                 os.path.basename(out_dir)))
     with open(os.path.join(out_dir, 'index.html'), 'w',
               encoding = 'utf-8') as fh:
         fh.write(page_html(f"{device} ({inv['cooldown']})", ''.join(body),
@@ -2082,16 +2135,16 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
 
 INDEX_COLUMNS = [
     'Cooldown', 'Device', 'Die', 'Suffix', 'Work by', 'Notes', 'Comments',
-    'Tones (with timestreams / total)', 'Frequency schedule',
+    'Resonators', 'Frequency schedule',
     'Photon lifetime [us]', 'HEE lifetime [us]', 'Sxx at 10 Hz [1/Hz]',
     'Report generated']
 INDEX_INTRO = (
     'Type under a heading to filter; click a heading to sort. The devices '
-    'listed are the device folders present in this site. Tones: tuned '
-    'tones of the latest tuning (the ones with timestreams) / resonances '
-    'found (yield). Frequency schedule: the range of the resonances '
-    'found, outliers apart, and the CRS modules, analog bank and NCO '
-    'frequencies of the tuning. Photon and HEE lifetimes and Sxx (after '
+    'listed are the device folders present in this site. Resonators: '
+    'found in the VNA sweep the latest tuning used (the other columns '
+    'count the tones each measurement has). Frequency schedule: the '
+    'range of the resonances found, with the outliers below and above '
+    'it counted. Photon and HEE lifetimes and Sxx (after '
     'common-mode removal, at 10 Hz): the 1st to 99th percentile over the '
     'tones of the latest result (count). Comments: added on the device '
     'pages here.')
@@ -2115,10 +2168,9 @@ def index_row(manifest, cooldown, folder, comments = ()):
     wafer, die = device_parts(manifest.get('device', folder))
     ov = manifest.get('overview') or {}
     attrs = manifest.get('attrs') or {}
-    tones = '' if ov.get('n_tones') is None else (
-        f"{ov['n_tones']}" + (
-            f" / {ov['n_resonators']} ({ov['yield_pct']:.0f}%)"
-            if ov.get('yield_pct') is not None else ''))
+    sched = ov.get('schedule') or {}
+    n_res = sched.get('n') or ov.get('n_resonators')
+    resonators = '' if n_res is None else str(int(n_res))
     schedule = schedule_text(ov.get('schedule')) or _range_text(
         ov.get('fres_mhz'), '{:.1f}', ' MHz')
     return {
@@ -2127,7 +2179,7 @@ def index_row(manifest, cooldown, folder, comments = ()):
         'Work by': attrs.get(dl.WORK_BY) or '',
         'Notes': ov.get('notes') or attrs.get('notes') or '',
         'Comments': comments_summary(list(comments)),
-        'Tones (with timestreams / total)': tones,
+        'Resonators': resonators,
         'Frequency schedule': schedule,
         'Photon lifetime [us]': _range_text(ov.get('photon_tau_us'),
                                             '{:.0f}'),
@@ -2249,9 +2301,11 @@ function comments_summary($path)
 """
 
 COMMENTS_PHP_SOURCE = r"""<?php
-// Adds a comment to a device's comments.json (the report site's own
-// file, which citkid's report build leaves alone). Written by citkid
-// (7_report_site.py) next to index.php; the device pages post to it.
+// Adds, edits or deletes a comment in a device's comments.json (the
+// report site's own file, which citkid's report build leaves alone).
+// Written by citkid (7_report_site.py) next to index.php; the device
+// pages post to it: action = add (default), edit or delete, with the
+// comment's id for the last two.
 header('Content-Type: text/plain; charset=utf-8');
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
@@ -2262,6 +2316,8 @@ $cooldown = basename(trim((string) ($_POST['cooldown'] ?? '')));
 $device = basename(trim((string) ($_POST['device'] ?? '')));
 $who = trim((string) ($_POST['who'] ?? ''));
 $text = trim(str_replace("\r\n", "\n", (string) ($_POST['text'] ?? '')));
+$action = trim((string) ($_POST['action'] ?? 'add'));
+$id = trim((string) ($_POST['id'] ?? ''));
 $dir = __DIR__ . '/' . $cooldown . '/' . $device;
 if ($cooldown === '' || $device === '' || $cooldown[0] === '.'
         || $device[0] === '.' || !is_file($dir . '/manifest.json')) {
@@ -2269,10 +2325,21 @@ if ($cooldown === '' || $device === '' || $cooldown[0] === '.'
     echo 'no such device';
     exit;
 }
-if ($text === '' || strlen($text) > 5000 || strlen($who) > 100) {
+if (!in_array($action, array('add', 'edit', 'delete'), true)) {
+    http_response_code(400);
+    echo 'action must be add, edit or delete';
+    exit;
+}
+if ($action !== 'delete'
+        && ($text === '' || strlen($text) > 5000 || strlen($who) > 100)) {
     http_response_code(400);
     echo 'a comment needs text (up to 5000 characters) and a name of up '
         . 'to 100';
+    exit;
+}
+if ($action !== 'add' && $id === '') {
+    http_response_code(400);
+    echo 'the comment to ' . $action . ' needs its id';
     exit;
 }
 $path = $dir . '/comments.json';
@@ -2288,8 +2355,34 @@ $list = json_decode(stream_get_contents($fh), true);
 if (!is_array($list)) {
     $list = array();
 }
-$list[] = array('who' => $who, 'when' => date('Y-m-d H:i:s'),
-                'text' => $text);
+if ($action === 'add') {
+    $list[] = array('id' => uniqid('c'), 'who' => $who,
+                    'when' => date('Y-m-d H:i:s'), 'text' => $text);
+} else {
+    // The comment by its id; comments saved without one by their position
+    $at = -1;
+    foreach ($list as $i => $c) {
+        $cid = isset($c['id']) ? (string) $c['id'] : (string) $i;
+        if ($cid === $id) {
+            $at = $i;
+            break;
+        }
+    }
+    if ($at < 0) {
+        flock($fh, LOCK_UN);
+        fclose($fh);
+        http_response_code(404);
+        echo 'no comment ' . $id . ' (was it deleted?)';
+        exit;
+    }
+    if ($action === 'edit') {
+        $list[$at]['who'] = $who;
+        $list[$at]['text'] = $text;
+        $list[$at]['edited'] = date('Y-m-d H:i:s');
+    } else {
+        array_splice($list, $at, 1);
+    }
+}
 ftruncate($fh, 0);
 rewind($fh);
 fwrite($fh, json_encode($list, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));

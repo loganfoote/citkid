@@ -15,7 +15,7 @@ COOLDOWN = 'cooldown'
 DEVICE = 'device'
 SUFFIX = ''
 SETUP = dict(fridge_ch = '', dac_attenuation = '', dac_filters = '',
-             adc_filters = '', warm_amps = '')
+             adc_filters = '', warm_amps = '', temperature = '')
 MEMORY_GB = 12.
 LIGHT_MODE = False
 

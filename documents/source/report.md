@@ -41,13 +41,13 @@ every item names by path.
 
 | Page | Contents |
 |---|---|
-| `index.php` | The top page, filled by the web server from the device folders present: wafer, die, store suffix, who did the work, the store's notes, tones with timestreams / resonances found, the frequency schedule (range of the resonances found, outliers apart, CRS modules, analog bank and NCO frequencies), the photon and HEE lifetimes and Sxx at 10 Hz (1st to 99th percentile, count), and when the report was generated; type under a heading to filter, click one to sort. Each device's row is saved in its `manifest.json` when its report is built, so nothing is computed on the server |
+| `index.php` | The top page, filled by the web server from the device folders present: wafer, die, store suffix, who did the work, the store's notes, the resonators found, the frequency schedule (range of the resonances found to 1 MHz, with the outliers below and above counted), the photon and HEE lifetimes and Sxx at 10 Hz (1st to 99th percentile, count), and when the report was generated; type under a heading to filter, click one to sort. Each device's row is saved in its `manifest.json` when its report is built, so nothing is computed on the server |
 | `<cooldown>/<device>/index.html` | What was taken (sweeps, tunings, calibration sweeps, runs with their settings, calibrations, results), with notes and store paths; the VNA, tuning (chosen powers), stream calibration (the IQ fits, with `FIT_IQ`), photon, HEE and noise figures (every version in a dropdown, latest first, with its notes); a sortable table of the resonators; the tone marks |
 | `<cooldown>/<device>/res/res<r>.html` | One per resonator: its IQ loop at the chosen power, calibration sweep, mean photon and HEE pulses, and spectra; its numbers from every step and result |
 | `<cooldown>/<device>/figures/`, `data/` | The figures (PNG) and tables (CSV) |
 | `<cooldown>/<device>/notes.md` | Written by hand; shown at the top of the device page and never overwritten |
 | `<cooldown>/<device>/attachments/` | Files attached in the store browser, by item, linked from the page |
-| `<cooldown>/<device>/comments.json` | Comments added on the served site (a form at the end of the device page, name and text); the top page shows their count and the latest one. Never written by the build, kept on overwrite |
+| `<cooldown>/<device>/comments.json` | Comments added on the served site (a form at the top of the device page, name and text; each comment has edit and delete links); the top page shows their count and the latest one. Never written by the build, kept on overwrite |
 
 Each section of the device page folds (click its heading); the
 resonator and tone-mark tables start folded, with a filter box. A
@@ -83,12 +83,13 @@ without text it lists the notes).
 | `STORE` | The store; `None`: a dialog |
 | `WORK_BY` | Who did the work, e.g. `'LF DAQ + analysis'`; `None`: the dialog, offering the store's saved value (`--by` gives it for one run) |
 | `RES_PAGES` | One page per resonator (about 100 kB each) |
+| `SXX_RUN` | The timestream run whose spectra give the Sxx and s-factor values of the resonator table and the top page, e.g. `'dark'`; `None`: the latest spectra of each tone, whatever the run (on a power sweep that is the last point) |
 | `INTERACTIVE` | Open the store browser on its Notes tab first |
 | `INDEX` | Also write the top page (`index.php`) after the device; `--index-only` writes it alone and refreshes every device's saved row |
 
 ## Command line
 
 `--store path`, `--update`, `--overwrite`, `--no-res-pages`,
-`--no-gui`, `--index-only`. `--by "text" --fill` writes who did
+`--no-gui`, `--index-only`, `--sxx-run name`. `--by "text" --fill` writes who did
 the work into the store and its existing report without
 rebuilding the pages (then `--index-only` refreshes the top page).

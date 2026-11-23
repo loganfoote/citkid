@@ -17,6 +17,7 @@ from a zarr group, fits, prints a description of the sweep
 (``vna.sweep_info.describe_full_sweep``), and saves everything in the
 group's ``full_sweep_fit`` subgroup.
 """
+import multiprocessing
 import os
 import time
 import warnings
@@ -559,9 +560,12 @@ def fit_from_guesses(
     max_pts_lw (float or None): steps 1-2 average windows sampled more
         densely than this many points per linewidth. Default 10.
     max_pts_lw_final (float or None): the same for step 3. Default 20.
-    n_workers (int or None): processes for steps 1 and 3. None (default):
-        up to 4 (more is slower on a typical sweep: starting processes
-        costs more than it saves) for 50 or more guesses, else 1.
+    n_workers (int or None): processes for steps 1 and 3, started fresh
+        (spawned, on every platform: forking a process that has run a
+        Qt window, as after the manual finder, crashes). None
+        (default): up to 4 (more is slower on a typical sweep: starting
+        processes costs more than it saves) for 50 or more guesses,
+        else 1.
     progress (bool): If True, show progress bars.
 
     Returns:
@@ -716,7 +720,10 @@ def fit_from_guesses(
         q_win[:] = np.where(np.isfinite(Qr), np.maximum(Qr, q_min), q_ref)
 
     pool = (ProcessPoolExecutor(n_workers, initializer = _worker_init,
-                                initargs = (f, z)) if n_workers > 1 else None)
+                                initargs = (f, z),
+                                mp_context = multiprocessing.get_context(
+                                    'spawn'))
+            if n_workers > 1 else None)
     try:
         # 1. Qr initialization (restricted around Qr0 where given)
         hint = np.full(n, np.nan) if Qr0 is None else \

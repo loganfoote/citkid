@@ -19,7 +19,7 @@ from citkid.qt_compat import set_theme
 from settings import SERIAL_NUMBER, INTERFACE, MODULES, LIGHT_MODE
 
 NYQUIST = '1'
-AMPLITUDE = -50.
+AMPLITUDE = -55.
 QR_MEDIAN = 2e4
 PTS_PER_LW = 5.
 NSAMPS = 10

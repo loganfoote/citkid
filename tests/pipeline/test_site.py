@@ -26,15 +26,16 @@ def test_store_suffix(tmp_path):
     (dict(fmin_mhz = None), ''),
     (dict(fmin_mhz = 314.02, fmax_mhz = 2421.2, n = 938, outliers_mhz = [],
           modules = [4], bank = 'low', ncos_mhz = [666.77, 817.73]),
-     '314.0 to 2421.2 MHz (938 res); module 4, low bank, '
-     'NCO 666.8, 817.7 MHz'),
-    (dict(fmin_mhz = 500., fmax_mhz = 900., n = 12, outliers_mhz = [2900.1],
+     '314 to 2421 MHz'),
+    (dict(fmin_mhz = 500., fmax_mhz = 900.4, n = 12,
+          outliers_mhz = [120., 2900.1, 3000.],
           modules = [1, 2], bank = None, ncos_mhz = []),
-     '500.0 to 900.0 MHz (12 res); outliers 2900.1 MHz; modules 1, 2'),
+     '500 to 900 MHz, 1 below, 2 above'),
 ])
 def test_schedule_text(schedule, text):
     """
-    The schedule line names the range, the outliers and the CRS setup.
+    The schedule cell names the range and counts the outliers on
+    each side.
     """
     assert site.schedule_text(schedule) == text
 
@@ -58,7 +59,7 @@ def test_frequency_schedule(tmp_path):
     assert sched['fmax_mhz'] == pytest.approx(1200.)
     assert sched['modules'] == [3] and sched['bank'] == 'high'
     assert sched['ncos_mhz'] == [1100.]
-    assert 'outliers 3500.0 MHz' in site.schedule_text(sched)
+    assert site.schedule_text(sched) == '1000 to 1200 MHz, 1 above'
     assert site.frequency_schedule(
         dl.create_store(tmp_path / 'b.zarr', 'b', 'cd'), {}) is None
 
@@ -81,11 +82,22 @@ def test_comments(tmp_path):
              text = 'x' * 100 + ' <b>')]), 'utf-8')
     comments = site.load_comments(str(dev))
     assert [c['who'] for c in comments] == ['LF', '']
+    assert comments[0]['id'] == '' and comments[0]['edited'] == ''
     text = site.comments_summary(comments)
     assert text.startswith('2; latest 2026-11-23 11:00:00: xxx')
     assert text.endswith('...') and len(text) < 120
     html = site.comments_html(comments)
     assert 'looks<br>fine' in html and '&lt;b&gt;' in html
+    edited = site.comments_html([dict(id = 'c1', who = 'LF',
+                                      when = '2026-11-23 10:00:00',
+                                      text = 'x', edited = '2026-11-23 '
+                                      '12:00:00')])
+    assert '(edited 2026-11-23 12:00:00)' in edited
+    for word in ('add', 'edit', 'delete', 'uniqid', 'array_splice',
+                 'LOCK_EX'):
+        assert word in site.COMMENTS_PHP_SOURCE
+    for word in ('data-edit', 'data-delete', 'Save edit', 'confirm('):
+        assert word in site.COMMENTS_SCRIPT
     (dev / 'index.html').write_text('x')
     (dev / 'figures').mkdir()
     (dev / 'figures' / 'a.png').write_bytes(b'0')

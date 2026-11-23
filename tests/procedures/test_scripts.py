@@ -318,7 +318,8 @@ async def test_01_vna_sweep(monkeypatch, tmp_path):
     assert root.attrs['device'] == 'devA' and root.attrs['setup'] == \
         m.SETUP
     grp = root['vna0']
-    assert grp.attrs['setup'] == m.SETUP and 'warm_amps' in m.SETUP
+    assert grp.attrs['setup'] == m.SETUP
+    assert 'warm_amps' in m.SETUP and 'temperature' in m.SETUP
     assert grp.attrs['nsamps'] == 7 and grp.attrs['amplitude'] == \
         m.AMPLITUDE
     assert grp.attrs['step'] == pytest.approx(2e-5)
@@ -2262,6 +2263,17 @@ def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
     assert ov['n_tones'] and ov['fres_mhz'][0] <= ov['fres_mhz'][1]
     assert ov['photon_tau_us'] and ov['photon_tau_us'][2] >= 1
     assert ov['sxx_cn_10hz'] and ov['sxx_cn_10hz'][0] > 0
+    assert ov['sxx_run'] is None
+    assert 'from the latest spectra' in (dev / 'index.html').read_text(
+        'utf-8')
+    # The Sxx values from a named run (the one the spectra are of)
+    run_name = manifest['runs'][0]['name']
+    assert m.main(m.parse_args(argv + ['--sxx-run', run_name])) == [str(dev)]
+    named = json.loads((dev / 'manifest.json').read_text('utf-8'))
+    assert named['overview']['sxx_run'] == run_name
+    assert named['overview']['sxx_cn_10hz'] == ov['sxx_cn_10hz']
+    assert f'from run {run_name} where it has them' in \
+        (dev / 'index.html').read_text('utf-8')
     top = (out / 'index.php').read_text('utf-8')
     assert top.startswith('<?php') and 'manifest.json' in top
     assert (out / 'comments.php').read_text('utf-8').startswith('<?php')
@@ -2275,8 +2287,7 @@ def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
     assert row['Photon lifetime [us]'].endswith(' res)')
     assert row['Work by'] == 'LF + BE DAQ, LF analysis'
     assert row['Report generated'] == manifest['built']
-    assert row['Tones (with timestreams / total)'].startswith(
-        str(ov['n_tones']))
+    assert row['Resonators'] == str(ov['schedule']['n'])
     sched = manifest['overview']['schedule']
     assert sched['n'] >= 1 and sched['fmin_mhz'] <= sched['fmax_mhz']
     assert 'MHz' in site.schedule_text(sched)

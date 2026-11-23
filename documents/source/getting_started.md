@@ -58,7 +58,7 @@ lists them.
 | `MODULES` | Modules connected to the device |
 | `DATA_DIR`, `COOLDOWN`, `DEVICE` | The device store: `<DATA_DIR>/<COOLDOWN>/<DEVICE>.zarr` (`--store` gives a path instead) |
 | `SUFFIX` | Names the store `<DEVICE>_<SUFFIX>.zarr` (`''`: no suffix) |
-| `SETUP` | The readout chain, as text: `fridge_ch`, `dac_attenuation`, `dac_filters`, `adc_filters`, `warm_amps`. Saved with the store and with every VNA sweep, tuning and timestream run, so change it when the chain changes; the report marks the items whose chain differs from the store's |
+| `SETUP` | The readout chain and the stage temperature, as text: `fridge_ch`, `dac_attenuation`, `dac_filters`, `adc_filters`, `warm_amps`, `temperature` (e.g. `'125 mK'`). Saved with the store and with every VNA sweep, tuning and timestream run, so change it when the chain changes; the report marks the items whose chain differs from the store's |
 | `MEMORY_GB` | Timestreams kept in memory by the analysis scripts, GB |
 | `LIGHT_MODE` | `True`: white plots with black text in every window, for screens where the dark plots lack contrast |
 
