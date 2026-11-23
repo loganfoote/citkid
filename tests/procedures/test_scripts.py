@@ -519,6 +519,7 @@ def test_03_tune(tmp_path, monkeypatch, capsys, n_cal):
     root = dl.open_store(path)
     tune = root['tune0']
     assert tune.attrs['resonators'] == 'resonators0'
+    assert tune.attrs['setup'] == m.SETUP
     assert tune['power_sweep'].attrs['complete'] is True
     assert sorted(dl.list_indices(tune['power_sweep'], 'set')) == [0, 1, 2]
     pc = tune['power_choice']
@@ -762,8 +763,7 @@ def test_04b_stream_batch(tmp_path, monkeypatch, capsys):
     root = dl.open_store(path)
     runs = dl.stream_runs(root)
     assert [r['name'] for r in runs] == ['a', 'b'] and runs[1]['notes'] == 'n'
-    assert runs[0]['setup'] == m.SETUP and root['tune0'].attrs['setup'] \
-        == m.SETUP
+    assert runs[0]['setup'] == m.SETUP and 'warm_amps' in runs[0]['setup']
     cal = root['tune0/cal0']
     assert cal.attrs['notes'] == 'cold'
     up = cal.attrs['fres_update']

@@ -477,12 +477,58 @@ def app_icon():
             return icon
     return _QtGui.QIcon(draw_icon())
 
+APP_ID = 'citkid'
+DESKTOP_ENTRY = APP_ID + '.desktop'
+
+def install_desktop_entry(home = None):
+    """
+    Write the desktop entry that lets a Linux desktop (GNOME on
+    Ubuntu, for one) show the citkid icon for its windows:
+    ``~/.local/share/applications/citkid.desktop``, hidden from the
+    application menu, naming the icon file and the window class.
+    The desktop matches windows to it by their application id
+    (Wayland) or window class (X11), both set by ``set_app_icon``.
+    Nothing is written when the entry is already up to date.
+
+    Parameters:
+    home (str or None): the home folder. Default None: the user's.
+
+    Returns:
+    path (str): the entry's path.
+    written (bool): True if it was written or changed.
+    """
+    home = _os.path.expanduser('~') if home is None else str(home)
+    icon = ICON_PATH
+    if not _os.path.exists(icon):
+        # No icon file shipped: save the built-in drawing
+        icon = _os.path.join(home, '.local', 'share', 'icons', 'hicolor',
+                             '256x256', 'apps', APP_ID + '.png')
+        _os.makedirs(_os.path.dirname(icon), exist_ok = True)
+        draw_icon(256).save(icon, 'PNG')
+    text = ('[Desktop Entry]\nType=Application\nName=citkid\n'
+            'Comment=citkid windows\nExec=python3\nTerminal=false\n'
+            f'NoDisplay=true\nIcon={icon}\nStartupWMClass={APP_ID}\n')
+    apps = _os.path.join(home, '.local', 'share', 'applications')
+    path = _os.path.join(apps, DESKTOP_ENTRY)
+    if _os.path.exists(path):
+        with open(path, encoding = 'utf-8') as fh:
+            if fh.read() == text:
+                return path, False
+    _os.makedirs(apps, exist_ok = True)
+    with open(path, 'w', encoding = 'utf-8') as fh:
+        fh.write(text)
+    return path, True
+
 def set_app_icon(app):
     """
     Give every window of an application the citkid icon
     (``app_icon``). On Windows the process is also given its own
     application id, so the taskbar shows the icon instead of
-    Python's.
+    Python's. On Linux the application is named ``citkid`` (its
+    window class on X11 and application id on Wayland) and the
+    desktop entry that carries the icon is written
+    (``install_desktop_entry``), since the desktop shows the entry's
+    icon, not the window's.
 
     Parameters:
     app (QApplication): the application.
@@ -491,8 +537,16 @@ def set_app_icon(app):
         try:
             import ctypes
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                'citkid')
+                APP_ID)
         except Exception:
+            pass
+    elif _sys.platform.startswith('linux'):
+        app.setApplicationName(APP_ID)
+        if hasattr(app, 'setDesktopFileName'):
+            app.setDesktopFileName(APP_ID)
+        try:
+            install_desktop_entry()
+        except OSError:
             pass
     app.setWindowIcon(app_icon())
 

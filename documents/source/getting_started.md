@@ -64,7 +64,9 @@ lists them.
 
 Every script also has `NOTES`, text saved with the data (`--notes`).
 Every window has the citkid icon; replace `citkid/icon.png` to change
-it.
+it. On Ubuntu the first window writes
+`~/.local/share/applications/citkid.desktop`, which the dock reads
+the icon from; log out and in once if it keeps showing Python's.
 
 The store holds everything measured and analyzed. Raw data is never
 overwritten: a repeated measurement gets the next index (`vna0`, `vna1`,

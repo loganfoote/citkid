@@ -699,3 +699,31 @@ def test_light_theme_darkens_pale_plot_colors():
         qt_compat.set_theme(False)
     assert pg.functions.mkColor is qt_compat._MKCOLOR
     assert rgb(pg.mkPen((100, 180, 255)).color()) == (100, 180, 255, 255)
+
+
+def test_install_desktop_entry(qapp, tmp_path):
+    """
+    The Linux desktop entry names the icon and the window class, is
+    written once, and falls back to a saved drawing without icon.png.
+    """
+    from citkid import qt_compat
+    path, written = qt_compat.install_desktop_entry(home = tmp_path)
+    assert written and path.endswith('citkid.desktop')
+    text = open(path, encoding = 'utf-8').read()
+    assert text.startswith('[Desktop Entry]')
+    assert f'Icon={qt_compat.ICON_PATH}' in text
+    assert 'StartupWMClass=citkid' in text and 'NoDisplay=true' in text
+    assert qt_compat.install_desktop_entry(home = tmp_path) == (path, False)
+    with patch.object(qt_compat, 'ICON_PATH', str(tmp_path / 'none.png')):
+        path2, written = qt_compat.install_desktop_entry(home = tmp_path)
+    assert written and path2 == path
+    saved = (tmp_path / '.local' / 'share' / 'icons' / 'hicolor' / '256x256'
+             / 'apps' / 'citkid.png')
+    assert saved.exists() and f'Icon={saved}' in open(path).read()
+    # Linux: the application is named for the entry's window class
+    with patch.object(qt_compat._sys, 'platform', 'linux'), \
+            patch.object(qt_compat, 'install_desktop_entry',
+                         return_value = ('x', False)) as inst:
+        qt_compat.set_app_icon(qapp)
+    assert inst.called and qapp.applicationName() == 'citkid'
+    assert qapp.desktopFileName() == 'citkid'
