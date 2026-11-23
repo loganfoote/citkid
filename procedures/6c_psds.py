@@ -367,6 +367,7 @@ def analyze_one(
         print(f'{len(left_out)} tones left out (marked bad): res '
               f'{left_out}')
     bad, limits = saved.get(name, ({}, {}))
+    raw = {}
     prev = existing[name] if existing is not None and choice != 'overwrite' \
         and name in existing else None
     if choice == 'load':
@@ -382,10 +383,12 @@ def analyze_one(
             raw['sxx_reduced_cn'] = None
             print(f'{prev.path}: raw spectra kept for the review')
         else:
+            # The timestreams stay in memory for the common-mode
+            # removal after the review
             raw = psds.analyze_timestream(
                 root, ts, DS, f_reduced, dict(settings, cn_remove = False),
                 filters = filters, photon_settings = ph_settings,
-                progress = print, exclude = exclude)
+                progress = print, exclude = exclude, keep_x = True)
         bad, limits = review(ts, raw, f_reduced, root,
                              f'{out_grp.path}/{name}', limits)
         exclude = {**exclude, **{int(r): v for r, v in bad.items()}}
@@ -408,7 +411,7 @@ def analyze_one(
     result = psds.analyze_timestream(
         root, ts, DS, f_reduced, settings, filters = filters,
         photon_settings = ph_settings, progress = print,
-        exclude = exclude)
+        exclude = exclude, reuse = raw if raw.get('x') else None)
     psds.save_timestream(
         dl.create_group(out_grp, name, 'analysis', overwrite = True),
         ts, result, settings, bad = bad, limits = limits)

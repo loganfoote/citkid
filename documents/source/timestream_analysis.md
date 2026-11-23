@@ -230,7 +230,7 @@ calibrating again.
 | Deglitch (optional) | Pulses are cut out of each timestream before the spectra, by peak finding or with a photon result's filters (see Deglitching below) |
 | Spectra | $S_{xx}$ per tone: reduced values (the mean within 20% of 0.1, 0.3, 1, 3, 10, ... Hz, from `FMIN_MULT` / duration to Nyquist / 2 / `FMAX_DIV`) and `NBINS` logarithmic bins; also the spectra of the loop components, parallel to the loop ($r\theta$, dissipation) and perpendicular to it ($A$, amplitude), and their ratio in dB at the reduced frequencies, the s-factor. The droop of the CRS decimation filters is undone (the rfmux transfer function), and the spectra end at 0.8 of the Nyquist frequency |
 | Common modes | Per tone write, `CN_N_COMP` modes by `citkid.xcal.corr.calc_cm` (`CN_N_ITER` iterations; highpass `CN_HIGHPASS_HZ` while finding the weights, lowpass `CN_LOWPASS_HZ` on the modes while iterating; the removed modes are unfiltered), then the spectra again on the cleaned tones, and the modes' spectra |
-| Review | The overview window on the raw spectra, before the common modes (skip it with `INTERACTIVE = False` or `--no-gui`); tones marked bad there stay out of the common-mode fit |
+| Review | The overview window on the raw spectra, before the common modes (skip it with `INTERACTIVE = False` or `--no-gui`); tones marked bad there stay out of the common-mode fit. The timestreams stay in memory, so after the window only the common modes are computed |
 
 ## Deglitching
 

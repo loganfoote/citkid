@@ -507,9 +507,14 @@ def deglitch_photons(
 ################################################################################
 ################################## Analysis ####################################
 ################################################################################
+RAW_KEYS = ('write_idx', 'status', 'n_glitches', 'glitch_frac',
+            'sxx_reduced', 'sfactor_reduced')
+RAW_BINNED = ('sxx_binned', 'spar_binned', 'sper_binned')
+
 def analyze_timestream(
     root, ts, DS, f_reduced, settings, filters = None,
-    photon_settings = None, progress = None, exclude = None
+    photon_settings = None, progress = None, exclude = None,
+    keep_x = False, reuse = None
 ):
     """
     Compute one timestream's spectra, one tone write at a time: optional
@@ -545,6 +550,18 @@ def analyze_timestream(
         their timestreams are set to NaN before anything is computed, so
         they neither get spectra nor enter the common-mode fit, and their
         ``status`` says why. Default None.
+    keep_x (bool): If True, the result also holds ``x``: write index
+        to the write's calibrated, deglitched timestreams ((ntones,
+        nsamples), the excluded tones NaN), in memory only, for a
+        later call with ``reuse`` (the common-mode removal after a
+        review of the raw spectra). Default False.
+    reuse (dict or None): a result of this function with ``x`` (the
+        same timestream and settings, ``cn_remove`` aside): the
+        timestreams are not loaded, calibrated or deglitched again
+        and the raw spectra are taken from it; only the tones newly
+        in ``exclude`` are blanked, then the common-mode removal
+        runs. Its ``x`` is consumed (each write's array is removed
+        from it as it is used). Default None.
 
     Returns:
     result (dict): ``f_binned``, ``valid_reduced`` (mask of
@@ -565,7 +582,8 @@ def analyze_timestream(
 
     Raises:
     MemoryError: if a write's timestreams would exceed ``memory_gb``.
-    ValueError: if ``deglitch`` is 'photons' without ``filters``.
+    ValueError: if ``deglitch`` is 'photons' without ``filters``, or
+        ``reuse`` has no timestreams for a write (no ``keep_x``).
     """
     s = settings
     dt, T = float(ts['dt']), int(ts['stop'] - ts['start'])
@@ -601,6 +619,8 @@ def analyze_timestream(
         out.update(sxx_reduced_cn = np.full((n, nf), np.nan),
                    sxx_binned_cn = None,
                    cn_weights = np.full((n, k_max), np.nan))
+    if keep_x:
+        out['x'] = {}
     bins = dict(nbins = int(s['nbins']), fmin = fmin)
     # The per-tone arrays follow ts['rows'] (the calibrated tones), not
     # the DataSet's row numbers
@@ -619,7 +639,21 @@ def analyze_timestream(
                 'or analyze a shorter run')
         if progress is not None:
             progress(f"{ts['run']} ({ts['name']}), tone set "
-                     f"{ts['tone_set']}, {name}: {len(rows)} tones")
+                     f"{ts['tone_set']}, {name}: {len(rows)} tones"
+                     + (' (timestreams kept from the review)'
+                        if reuse is not None else ''))
+        if reuse is not None:
+            x = _reuse_write(out, reuse, w, idx, ts, exclude, n)
+            if not s['cn_remove']:
+                if keep_x:
+                    out['x'][w] = x
+                else:
+                    del x
+                continue
+            _remove_write_modes(out, x, w, name, rows, idx, dt, s,
+                                f_reduced, valid, bins, lowpass_hz,
+                                order, highpass)
+            continue
         cal = apply_stream_calibration(DS, root, ts['source'], rows = rows,
                                        outputs = ('xt', 'thetat', 'At'))
         x = cal['xt']
@@ -668,32 +702,101 @@ def analyze_timestream(
         _fill(out, 'sxx_binned', idx, fb, sb, n)
         out['sxx_reduced'][idx] = sr
         if not s['cn_remove']:
-            del x
+            if keep_x:
+                out['x'][w] = x
+            else:
+                del x
             continue
-        cm = remove_common_modes(x, dt, s['cn_n_comp'], s['cn_n_iter'],
-                                 (lowpass_hz, order), highpass)
-        del x
-        fb, sb, sr = psd_summary(cm['y'], dt, f_reduced, valid, **bins)
-        _fill(out, 'sxx_binned_cn', idx, fb, sb, n)
-        out['sxx_reduced_cn'][idx] = sr
-        out['cn_weights'][idx, :cm['n_comp']] = cm['a']
-        if cm['n_comp']:
-            fbA, sA, _ = psd_summary(cm['A'], dt, np.zeros(0), **bins)
-        else:
-            fbA, sA = np.zeros(0), np.zeros((0, 0))
-        write = dict(
-            index = w, name = name, rows = rows, n_comp = cm['n_comp'],
-            f_binned = fbA, sxx_binned = sA, sigma_iter = cm['sigma_iter'])
-        if s.get('modes_rate_hz') and cm['n_comp']:
-            # The modes at a low sample rate, to take out of a tone
-            # computed again later without finding them again
-            A, dt_dec = decimate(cm['A'], dt, float(s['modes_rate_hz']))
-            write.update(modes_dec = A.astype(np.float32), dt_dec = dt_dec)
-        out['writes'].append(write)
+        _remove_write_modes(out, x, w, name, rows, idx, dt, s, f_reduced,
+                            valid, bins, lowpass_hz, order, highpass)
     for key in ('sxx_binned', 'sxx_binned_cn', 'spar_binned', 'sper_binned'):
         if key in out and out[key] is None:
             out[key] = np.zeros((n, 0))
     return out
+
+def _reuse_write(out, reuse, w, idx, ts, exclude, n):
+    """
+    Take one write's timestreams and raw spectra from an earlier
+    result (``analyze_timestream`` with ``keep_x``), blanking the
+    tones newly excluded.
+
+    Parameters:
+    out (dict): the result being made.
+    reuse (dict): the earlier result; its ``x[w]`` is removed.
+    w (int): the write's index.
+    idx (np.array): the write's tones' positions in ``ts['rows']``.
+    ts (dict): the timestream.
+    exclude (dict or None): res_idx: reason, tones left out.
+    n (int): tones in the timestream.
+
+    Returns:
+    x (np.array): the write's timestreams, (len(idx), nsamples).
+
+    Raises:
+    ValueError: if ``reuse`` holds no timestreams for the write.
+    """
+    kept = reuse.get('x') or {}
+    if w not in kept:
+        raise ValueError(f'the earlier result keeps no timestreams for '
+                         f'write {w}: compute it with keep_x')
+    x = kept.pop(w)
+    for key in RAW_KEYS:
+        out[key][idx] = reuse[key][idx]
+    for key in RAW_BINNED:
+        _fill(out, key, idx, reuse['f_binned'], reuse[key][idx], n)
+    for i in idx:
+        out['glitch_idxs'][i] = reuse['glitch_idxs'][i]
+    if exclude:
+        for k, i in enumerate(idx):
+            reason = exclude.get(int(ts['res_idxs'][i]))
+            if reason is not None and \
+                    not str(out['status'][i]).startswith('marked bad'):
+                x[k] = np.nan
+                out['status'][i] = f'marked bad: {reason}'
+                for key in ('sxx_reduced', 'sfactor_reduced') + RAW_BINNED:
+                    out[key][i] = np.nan
+    return x
+
+def _remove_write_modes(
+    out, x, w, name, rows, idx, dt, s, f_reduced, valid, bins, lowpass_hz,
+    order, highpass
+):
+    """
+    Remove one write's common modes and record the spectra after them
+    (``x`` is used up).
+
+    Parameters:
+    out (dict): the result being made.
+    x (np.array): the write's timestreams.
+    w (int), name (str), rows (np.array): the write.
+    idx (np.array): the write's tones' positions in ``ts['rows']``.
+    dt (float): sample period, s.
+    s (dict): the settings.
+    f_reduced, valid, bins: see ``psd_summary``.
+    lowpass_hz (float), order (int), highpass (tuple or None): the
+        filters of ``remove_common_modes``.
+    """
+    n = len(out['status'])
+    cm = remove_common_modes(x, dt, s['cn_n_comp'], s['cn_n_iter'],
+                             (lowpass_hz, order), highpass)
+    del x
+    fb, sb, sr = psd_summary(cm['y'], dt, f_reduced, valid, **bins)
+    _fill(out, 'sxx_binned_cn', idx, fb, sb, n)
+    out['sxx_reduced_cn'][idx] = sr
+    out['cn_weights'][idx, :cm['n_comp']] = cm['a']
+    if cm['n_comp']:
+        fbA, sA, _ = psd_summary(cm['A'], dt, np.zeros(0), **bins)
+    else:
+        fbA, sA = np.zeros(0), np.zeros((0, 0))
+    write = dict(
+        index = w, name = name, rows = rows, n_comp = cm['n_comp'],
+        f_binned = fbA, sxx_binned = sA, sigma_iter = cm['sigma_iter'])
+    if s.get('modes_rate_hz') and cm['n_comp']:
+        # The modes at a low sample rate, to take out of a tone
+        # computed again later without finding them again
+        A, dt_dec = decimate(cm['A'], dt, float(s['modes_rate_hz']))
+        write.update(modes_dec = A.astype(np.float32), dt_dec = dt_dec)
+    out['writes'].append(write)
 
 def _fill(out, key, rows, f_binned, binned, n):
     """

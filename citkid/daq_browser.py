@@ -1639,6 +1639,26 @@ def choose_store(start = None):
         os.path.expanduser(start or '~'), QtWidgets.QFileDialog.ShowDirsOnly)
     return path or None
 
+def ask_work_by(current = ''):
+    """
+    Ask who did the work, for the report (a line at the top of the
+    device page and a column of the site's top page).
+
+    Parameters:
+    current (str): the value the store holds, offered as the default.
+        Default ''.
+
+    Returns:
+    text (str or None): the text typed (blank removes the value), or
+        None on Cancel.
+    """
+    get_qapp()
+    text, ok = QtWidgets.QInputDialog.getText(
+        None, 'Who did the work',
+        'Who did the work, for the report (initials: DAQ, analysis),\n'
+        "e.g. 'LF + BE DAQ, LF analysis':", text = current or '')
+    return text.strip() if ok else None
+
 def ask_existing_report(out_dir):
     """
     Ask what to do with a report that exists: replace it, rebuild it

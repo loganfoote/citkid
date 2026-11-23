@@ -1207,6 +1207,60 @@ def page_html(title, body, depth, subtitle = ''):
             + (f'<p class="small">{_esc(subtitle)}</p>' if subtitle else '')
             + body + '</body></html>')
 
+def work_by_html(text):
+    """
+    Return the line naming who did the work, for the top of a device
+    page.
+
+    Parameters:
+    text (str): who did the work.
+
+    Returns:
+    html (str): the paragraph.
+    """
+    return f'<p class="small work-by">Work by: {_esc(text)}</p>'
+
+def fill_work_by(out_dir, text):
+    """
+    Write who did the work into a device's existing report (its
+    manifest and the top of its page) without rebuilding it. The
+    site's top page is rebuilt by ``build_index``.
+
+    Parameters:
+    out_dir (str): the device's folder in the site (``device_dir``).
+    text (str): who did the work; blank removes the line.
+
+    Returns:
+    out_dir (str): the folder changed.
+
+    Raises:
+    FileNotFoundError: if the folder holds no report.
+    """
+    manifest_path = os.path.join(out_dir, MANIFEST)
+    page_path = os.path.join(out_dir, 'index.html')
+    if not os.path.exists(manifest_path):
+        raise FileNotFoundError(f'{out_dir} holds no report')
+    text = (text or '').strip()
+    with open(manifest_path, encoding = 'utf-8') as fh:
+        inv = json.load(fh)
+    attrs = inv.setdefault('attrs', {})
+    if text:
+        attrs[dl.WORK_BY] = text
+    else:
+        attrs.pop(dl.WORK_BY, None)
+    with open(manifest_path, 'w', encoding = 'utf-8') as fh:
+        json.dump(inv, fh, indent = 1, default = str)
+    if os.path.exists(page_path):
+        with open(page_path, encoding = 'utf-8') as fh:
+            page = fh.read()
+        page = re.sub(r'<p class="small work-by">.*?</p>', '', page,
+                      count = 1, flags = re.S)
+        if text:
+            page = page.replace('</h1>', '</h1>' + work_by_html(text), 1)
+        with open(page_path, 'w', encoding = 'utf-8') as fh:
+            fh.write(page)
+    return out_dir
+
 def versions_html(key, items, attachments = None):
     """
     Render a set of versions of one section: a dropdown (latest first)
@@ -1584,6 +1638,8 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
         with open(notes_path, encoding = 'utf-8') as fh:
             body.append(f'<div class="notes">{_esc(fh.read())}</div>')
     attrs = inv['attrs']
+    if attrs.get(dl.WORK_BY):
+        body.insert(0, work_by_html(attrs[dl.WORK_BY]))
     setup = {k: v for k, v in (attrs.get('setup') or {}).items()
              if v is not None}
     body.append('<p class="small">store '
@@ -1787,6 +1843,7 @@ def build_index(out_root):
                 cooldown = cooldown,
                 device = f'<a href="{_esc(link)}">{_esc(wafer)}</a>',
                 die = die, suffix = inv.get('suffix', ''),
+                work_by = inv.get('attrs', {}).get(dl.WORK_BY) or '',
                 created = inv.get('attrs', {}).get('created', ''),
                 notes = ov.get('notes') or
                 inv.get('attrs', {}).get('notes') or '',
@@ -1798,12 +1855,13 @@ def build_index(out_root):
                 sxx_10hz = _range_text(ov.get('sxx_cn_10hz'), '{:.2g}'),
                 built = inv.get('built', '')))
     table = pd.DataFrame(rows, columns = [
-        'cooldown', 'device', 'die', 'suffix', 'created', 'notes',
-        'tones', 'fres_mhz', 'photon_tau_us', 'hee_tau_us', 'sxx_10hz',
-        'built'])
+        'cooldown', 'device', 'die', 'suffix', 'work_by', 'created',
+        'notes', 'tones', 'fres_mhz', 'photon_tau_us', 'hee_tau_us',
+        'sxx_10hz', 'built'])
     body = ('<p class="small">Type under a heading to filter; click a '
             'heading to sort. A device folder copied in from another '
-            'site is listed after the next build. tones: tuned tones of '
+            'site is listed after the next build. work_by: who did the '
+            'work; tones: tuned tones of '
             'the latest tuning, of the resonances found (yield); '
             'fres_mhz: their range; photon_tau_us, hee_tau_us, sxx_10hz: '
             'the 1st to 99th percentile over the tones (count), the '

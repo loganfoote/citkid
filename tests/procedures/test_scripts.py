@@ -2211,9 +2211,38 @@ def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
     out = tmp_path / 'reports'
     argv = ['--store', str(path), '--out', str(out), '--no-gui',
             '--update']
-    built = m.main(m.parse_args(argv))
+    # Who did the work is needed: --by, or the value saved in the store
+    assert m.main(m.parse_args(argv)) is None
+    assert 'Who did the work' in capsys.readouterr().out
+    built = m.main(m.parse_args(argv + ['--by', 'LF DAQ + analysis']))
     dev = out / cooldown / device
     assert built == [str(dev)]
+    assert dl.open_store(path).attrs['work_by'] == 'LF DAQ + analysis'
+    page = (dev / 'index.html').read_text('utf-8')
+    assert '</h1><p class="small work-by">Work by: LF DAQ + analysis' \
+        in page
+    # Saved in the store, so a later run needs no --by; --fill changes
+    # it in the store and the pages without a rebuild
+    assert m.main(m.parse_args(argv)) == [str(dev)]
+    built_at = json.loads((dev / 'manifest.json').read_text('utf-8'))[
+        'built']
+    assert m.main(m.parse_args(argv + ['--by', 'LF + BE DAQ, LF analysis',
+                                       '--fill'])) == [str(dev)]
+    filled = json.loads((dev / 'manifest.json').read_text('utf-8'))
+    assert filled['built'] == built_at
+    assert filled['attrs']['work_by'] == 'LF + BE DAQ, LF analysis'
+    page = (dev / 'index.html').read_text('utf-8')
+    assert page.count('work-by') == 1 and 'LF + BE DAQ' in page
+    assert dl.open_store(path).attrs['work_by'] == 'LF + BE DAQ, LF analysis'
+    # --fill where no report exists yet: saved in the store only
+    capsys.readouterr()
+    assert m.main(m.parse_args(['--store', str(path), '--out',
+                                str(tmp_path / 'other'), '--no-gui',
+                                '--by', 'LF DAQ', '--fill'])) == []
+    assert 'no report yet' in capsys.readouterr().out
+    assert dl.open_store(path).attrs['work_by'] == 'LF DAQ'
+    m.main(m.parse_args(argv + ['--by', 'LF + BE DAQ, LF analysis',
+                                '--fill']))
     # The top page only with INDEX (off in the template)
     assert not (out / 'index.html').exists()
     assert (dev / 'index.html').exists()
@@ -2230,6 +2259,7 @@ def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
     assert ov['sxx_cn_10hz'] and ov['sxx_cn_10hz'][0] > 0
     top = (out / 'index.html').read_text('utf-8')
     assert 'photon_tau_us' in top and ' to ' in top
+    assert 'work_by' in top and 'LF + BE DAQ, LF analysis' in top
     # The template's helper: the calibration applied to one run
     from citkid.pipeline.stream_sources import calibrated_timestream
     name = manifest['runs'][0]['name']
@@ -2323,6 +2353,10 @@ def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
                         lambda out_dir: answers.pop(0))
     monkeypatch.setattr(db, 'run_store_browser',
                         lambda path_, **k: path_)
+    # The dialog offers the store's value; Cancel stops the build
+    asked = []
+    monkeypatch.setattr(db, 'ask_work_by',
+                        lambda current: asked.append(current) or current)
     answers.append(None)
     assert m.main(m.parse_args(['--store', str(path), '--out', str(out)])) \
         is None
@@ -2701,3 +2735,69 @@ def test_04c_power_sweep(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(m, 'POINTS', [dict(name = 'X', cal = 'Y')])
     with pytest.raises(KeyError, match = 'not an earlier point'):
         m.main(m.parse_args(argv))
+
+
+def test_06c_reuses_timestreams(photon_store, monkeypatch, capsys):
+    """
+    After the review the common modes are removed from the timestreams
+    kept in memory: the spectra match a computation from scratch, a
+    tone marked bad in the window is blanked, and the script's second
+    pass passes the first one's result on.
+    """
+    import citkid.pipeline.interactive.psd_overview as po
+    from citkid.pipeline import psds
+    path, _ = photon_store
+    root = dl.open_store(path)
+    m = load_script('6c_psds.py')
+    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    args = m.parse_args(['--store', str(path), '--name', 'reuse',
+                         '--no-gui'])
+    settings = m.analysis_settings(args)
+    timestreams, datasets = psds.list_timestreams(root)
+    ts = psds.select_timestreams(timestreams, [0], root = root)[0]
+    DS = datasets[ts['cal']][ts['dataset']]['DS']
+    f_reduced = psds.union_freqs([ts], settings['fmin_mult'],
+                                 settings['fmax_div'])
+    raw = psds.analyze_timestream(root, ts, DS, f_reduced,
+                                  dict(settings, cn_remove = False),
+                                  keep_x = True)
+    assert list(raw['x']) and all(v.shape[1] == ts['stop'] - ts['start']
+                                  for v in raw['x'].values())
+    full = psds.analyze_timestream(root, ts, DS, f_reduced, settings)
+    kept = {w: v.copy() for w, v in raw['x'].items()}
+    again = psds.analyze_timestream(root, ts, DS, f_reduced, settings,
+                                    reuse = raw)
+    assert raw['x'] == {}
+    for key in ('sxx_reduced', 'sxx_reduced_cn', 'cn_weights',
+                'sfactor_reduced', 'sxx_binned_cn', 'n_glitches'):
+        np.testing.assert_allclose(again[key], full[key], rtol = 1e-6,
+                                   equal_nan = True)
+    assert again['status'].tolist() == full['status'].tolist()
+    # A tone newly marked bad: blanked, its spectra NaN, out of the fit
+    r0 = int(ts['res_idxs'][0])
+    raw2 = dict(raw, x = kept)
+    marked = psds.analyze_timestream(root, ts, DS, f_reduced, settings,
+                                     exclude = {r0: 'noisy'}, reuse = raw2)
+    assert marked['status'][0] == 'marked bad: noisy'
+    assert np.isnan(marked['sxx_reduced'][0]).all()
+    assert np.isnan(marked['sxx_reduced_cn'][0]).all()
+    assert np.isfinite(marked['sxx_reduced_cn'][1][full['valid_reduced']]).any()
+    with pytest.raises(ValueError, match = 'keep_x'):
+        psds.analyze_timestream(root, ts, DS, f_reduced, settings,
+                                reuse = dict(raw, x = {}))
+    # The script: the first pass keeps the timestreams, the second
+    # reuses them (the window marks a tone bad)
+    calls = []
+    real_analyze = psds.analyze_timestream
+    monkeypatch.setattr(psds, 'analyze_timestream',
+                        lambda *a, **k: calls.append(dict(k))
+                        or real_analyze(*a, **k))
+    monkeypatch.setattr(po, 'run_psd_overview',
+                        lambda *a, **k: ({r0: 'noisy'}, {}))
+    m.main(m.parse_args(['--store', str(path), '--name', 'reuse']))
+    assert len(calls) == 2 and calls[0]['keep_x'] is True
+    assert calls[1]['reuse'] is not None and calls[1]['reuse'].get('x') == {}
+    assert 'timestreams kept from the review' in capsys.readouterr().out
+    grp = psds.matching_group(dl.open_store(path), 'reuse', [0])
+    t = grp['timestream0']
+    assert t['status'][:][0] == 'marked bad: noisy' and t['bad'][:][0]

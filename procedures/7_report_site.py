@@ -1,14 +1,16 @@
 """
 7: build one device's pages of the report site in REPORT_DIR, with the
 report figures and tables, and the top page listing every device built
-so far. The store is STORE, --store, or chosen in a dialog. The store
-browser opens first on its Notes tab (edit notes, attach files to the
-report; close it to build). A store that has not changed since its last
-build is left alone.
+so far. The store is STORE, --store, or chosen in a dialog. A dialog
+asks who did the work (saved in the store, shown on the pages), then
+the store browser opens on its Notes tab (edit notes, attach files to
+the report; close it to build). A store that has not changed since its
+last build is left alone.
 
 Usage:
     python 7_report_site.py
     python 7_report_site.py --store Z:/cd/deviceA_screen.zarr --no-gui
+    python 7_report_site.py --store <store> --by "LF DAQ + analysis" --fill
 """
 import argparse
 import os
@@ -23,6 +25,7 @@ from settings import LIGHT_MODE
 
 REPORT_DIR = '~/reports'
 STORE = None
+WORK_BY = None
 RES_PAGES = True
 INTERACTIVE = True
 INDEX = False
@@ -57,6 +60,13 @@ def parse_args(argv = None):
     p.add_argument('--update', action = 'store_true',
                    help = 'rebuild an existing report keeping its '
                    'attachments and notes.md, without asking')
+    p.add_argument('--by', default = WORK_BY,
+                   help = "who did the work, e.g. 'LF DAQ + analysis' "
+                   '(default: WORK_BY, the value saved in the store, '
+                   'or a dialog)')
+    p.add_argument('--fill', action = 'store_true',
+                   help = 'only write --by into the store and its '
+                   'existing report, without rebuilding the pages')
     p.add_argument('--index-only', action = 'store_true',
                    help = 'only rebuild the top page (e.g. after copying '
                    'a device folder in)')
@@ -92,6 +102,42 @@ def existing_report(store, args):
           'attachments, or --overwrite to replace it')
     return None
 
+def work_by(store, args):
+    """
+    Settle who did the work: ``--by`` (or ``WORK_BY``), else the value
+    the store holds, offered in a dialog with the window; without the
+    window the store's value is used as it is. The value is saved in
+    the store when it changed.
+
+    Parameters:
+    store (str): the store.
+    args (argparse.Namespace): options from ``parse_args``.
+
+    Returns:
+    text (str or None): who did the work; None to stop (Cancel, or
+        without the window when the store has no value and ``--by``
+        was not given).
+    """
+    root = dl.open_store(os.path.expanduser(store), mode = 'a')
+    saved = str(root.attrs.get(dl.WORK_BY) or '')
+    text = args.by
+    if text is None:
+        if INTERACTIVE and not args.no_gui:
+            from citkid.daq_browser import ask_work_by
+            text = ask_work_by(saved)
+            if text is None:
+                return None
+        elif saved:
+            text = saved
+        else:
+            print('Who did the work? Run with --by, e.g. '
+                  '--by "LF DAQ + analysis"')
+            return None
+    text = text.strip()
+    if text != saved:
+        dl.set_work_by(root, text)
+    return text
+
 def main(args):
     """
     Build the store's pages, and the top page if ``INDEX``.
@@ -115,6 +161,20 @@ def main(args):
         if store is None:
             print('No store chosen.')
             return None
+    if work_by(store, args) is None:
+        print('Cancelled: nothing built.')
+        return None
+    if args.fill:
+        root = dl.open_store(os.path.expanduser(store))
+        out_dir = site.device_dir(args.out, root)
+        try:
+            out = site.fill_work_by(out_dir, root.attrs.get(dl.WORK_BY, ''))
+        except FileNotFoundError:
+            print(f'{out_dir} holds no report yet: saved in the store only')
+            return []
+        if INDEX:
+            print(f'Site: {site.build_index(args.out)}')
+        return [out]
     choice = existing_report(store, args)
     if choice is None:
         print('Cancelled: the report is left as it is.')

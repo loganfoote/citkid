@@ -1155,6 +1155,28 @@ MARK_LEVELS = {'tune': 1, 'ts_cal': 2, 'photons': 3, 'hee': 3,
 BAD_REASONS = ('double resonance', 'no resonance', 'weird pulse shape',
                'low or no pulses', 'high noise', 'bad fit', 'other')
 
+WORK_BY = 'work_by'
+
+def set_work_by(root, text):
+    """
+    Record who did the work (the store's ``work_by`` attribute, shown
+    at the top of the device's report page and in the site's top
+    page), e.g. 'LF DAQ + analysis'.
+
+    Parameters:
+    root (zarr.Group): the store root (writable).
+    text (str): who did the work; blank removes it.
+
+    Returns:
+    text (str): the value written ('' when removed).
+    """
+    text = (text or '').strip()
+    if text:
+        root.attrs[WORK_BY] = text
+    elif WORK_BY in root.attrs:
+        del root.attrs[WORK_BY]
+    return text
+
 def set_notes(root, path, text):
     """
     Set the notes of the store or of one group (attribute ``notes``),

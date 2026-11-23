@@ -22,7 +22,11 @@ device built so far with the store's notes and its reduced numbers:
 tuned tones of the resonances found (yield), their frequency range,
 and the 1st to 99th percentile of the photon and HEE lifetimes and
 of Sxx at 10 Hz. Each run builds one store (`STORE`, `--store`, or
-a dialog). The store browser opens first on its Notes tab: edit the
+a dialog). A dialog first asks who did the work (initials for the
+DAQ and the analysis, e.g. `LF + BE DAQ, LF analysis`); it is
+saved in the store, offered again next time, shown at the top of
+the device page and in the top page's `work_by` column. The store
+browser then opens on its Notes tab: edit the
 notes of any item, uncheck its **Report** box to leave it out of the
 report (the page then shows one line saying what it is, with its
 notes; the choice is kept in the store), or **Attach file...** to
@@ -37,7 +41,7 @@ every item names by path.
 
 | Page | Contents |
 |---|---|
-| `index.html` | Every cooldown and device (wafer, die, store suffix, counts); type under a heading to filter, click one to sort. No file paths, so the site can move |
+| `index.html` | Every cooldown and device (wafer, die, store suffix, who did the work, counts); type under a heading to filter, click one to sort. No file paths, so the site can move |
 | `<cooldown>/<device>/index.html` | What was taken (sweeps, tunings, calibration sweeps, runs with their settings, calibrations, results), with notes and store paths; the VNA, tuning (chosen powers), stream calibration (the IQ fits, with `FIT_IQ`), photon, HEE and noise figures (every version in a dropdown, latest first, with its notes); a sortable table of the resonators; the tone marks |
 | `<cooldown>/<device>/res/res<r>.html` | One per resonator: its IQ loop at the chosen power, calibration sweep, mean photon and HEE pulses, and spectra; its numbers from every step and result |
 | `<cooldown>/<device>/figures/`, `data/` | The figures (PNG) and tables (CSV) |
@@ -64,6 +68,7 @@ without text it lists the notes).
 |---|---|
 | `REPORT_DIR` | The report site folder; the device's pages go in `<REPORT_DIR>/<cooldown>/<device>` (`--out` gives another folder for one run) |
 | `STORE` | The store; `None`: a dialog |
+| `WORK_BY` | Who did the work, e.g. `'LF DAQ + analysis'`; `None`: the dialog, offering the store's saved value (`--by` gives it for one run) |
 | `RES_PAGES` | One page per resonator (about 100 kB each) |
 | `INTERACTIVE` | Open the store browser on its Notes tab first |
 | `INDEX` | Also rebuild the top page (`index.html`) after the device; `--index-only` rebuilds it alone |
@@ -71,4 +76,6 @@ without text it lists the notes).
 ## Command line
 
 `--store path`, `--update`, `--overwrite`, `--no-res-pages`,
-`--no-gui`, `--index-only`.
+`--no-gui`, `--index-only`. `--by "text" --fill` writes who did
+the work into the store and its existing report without
+rebuilding the pages (then `--index-only` refreshes the top page).
