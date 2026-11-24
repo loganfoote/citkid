@@ -442,7 +442,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
     # fraction of its current value (×step magnitude).
     _QRES_FRAC = 0.04
     _REJECT_REASONS = ["tone off resonance", "double resonance",
-                       "bifurcated", "other"]
+                       "shallow resonance", "bifurcated", "other"]
 
     def __init__(
         self, f: np.ndarray, z: np.ndarray, fres, qres, res_idxs, zarr_grp,
@@ -697,7 +697,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         self._reject_label.setMinimumWidth(_text_width("✓ Not rejected  xx"))
         reject_row.addWidget(self._reject_label)
 
-        self._note_btn = QtWidgets.QPushButton("Add note (N)")
+        self._note_btn = QtWidgets.QPushButton("Add note (T)")
         self._note_btn.setToolTip(
             "Record a note on this resonator in the store's tone marks; "
             "the tone is kept")
@@ -989,6 +989,16 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         self._plot_amp.autoRange()
         self._plot_iq.autoRange()
 
+    def _toggle_reject(self):
+        """
+        Reject the current resonator with the combo's reason (the M key),
+        or restore it when it is rejected already.
+        """
+        if self._ri in self._reject_reasons:
+            self._reason_combo.setCurrentText("not rejected")
+        else:
+            self._reject_current()
+
     def _reject_current(self):
         """
         Reject the current resonator using the current combo selection.
@@ -1081,7 +1091,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
     def _add_note(self):
         """
         Record a note on the current resonator in the store's tone marks
-        (the Add note button, N). The tone is kept.
+        (the Add note button, T or N). The tone is kept.
         """
         note = self._ask_note()
         if note:
@@ -1215,8 +1225,10 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             "<li><b>R:</b> Auto-scale both plots</li>"
             "<li><b>Z:</b> Reset fres/qres to initial values for this "
             "resonator</li>"
-            "<li><b>N:</b> Add a note on this resonator to the store's tone "
-            "marks (the tone is kept)</li>"
+            "<li><b>M:</b> Reject this resonator with the chosen reason, "
+            "or restore it when it is rejected</li>"
+            "<li><b>T (or N):</b> Add a note on this resonator to the "
+            "store's tone marks (the tone is kept)</li>"
             "<li><b>H:</b> Toggle this help panel</li>"
             "</ul>"
             "<p><b>Rejection</b></p>"
@@ -1531,8 +1543,11 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             if key == _Qt.Key_R:
                 self._autoscale_plots()
                 return True
-            if key == _Qt.Key_N:
+            if key in (_Qt.Key_T, _Qt.Key_N):
                 self._add_note()
+                return True
+            if key == _Qt.Key_M:
+                self._toggle_reject()
                 return True
         return super().eventFilter(obj, event)
 
@@ -1577,6 +1592,47 @@ def _report_save_error(future):
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+def accept_fres_update(
+    f, z, fres, qres, res_idxs, zarr_grp, fres_update_method = 'none',
+    rmv_gain_simple = False, npoints_update = None
+):
+    """
+    Save the fq_finder step without the window: every tone keeps its
+    span and takes the frequency the automatic update gives
+    (``res.fres.update_fres`` with ``fres_update_method``, as the window
+    applies before it opens); nothing is rejected. The arrays the window
+    writes are written (``fres_opt``, ``qres_opt``, ``reject_reason``
+    and the saved index), replacing any from an earlier run.
+
+    Parameters:
+    f, z, fres, qres, res_idxs, zarr_grp, fres_update_method,
+        rmv_gain_simple, npoints_update: see ``run_fqfinder``.
+
+    Returns:
+    fres (np.array): the frequencies saved, Hz.
+    """
+    f = np.asarray(f, dtype = np.float64)
+    z = np.asarray(z, dtype = np.complex128)
+    order = np.argsort(f, axis = 1)
+    f = np.take_along_axis(f, order, axis = 1)
+    z = np.take_along_axis(z, order, axis = 1)
+    if rmv_gain_simple:
+        z = normalize_edges(z)
+    fres = np.asarray(fres, dtype = np.float64)
+    qres = np.asarray(qres, dtype = np.float64)
+    res_idxs = np.asarray(res_idxs)
+    fres = _update_fres(f, z, fres, qres, res_idxs,
+                        method = fres_update_method,
+                        npoints_update = npoints_update)
+    _clear_zarr_outputs(zarr_grp)
+    _ensure_zarr_arrays(zarr_grp, len(fres))
+    zarr_grp['fres_opt'][:] = fres
+    zarr_grp['qres_opt'][:] = qres
+    zarr_grp['reject_reason'][:] = np.array([''] * len(fres),
+                                            dtype = object)
+    zarr_grp[_DATA_IDX_KEY][0] = max(len(fres) - 1, 0)
+    return fres
 
 def run_fqfinder(
     f, z, fres, qres, res_idxs, zarr_grp, title = "FQ Finder", ui_scale = 1.0,

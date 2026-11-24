@@ -1,9 +1,9 @@
 """
 3: tune a device: plan the tones, sweep the power, choose each tone's
 power and frequency in two windows, and save the tuned tones (tune{k}).
-TUNING names the tuning: an existing name (or index) continues it,
+TUNING_NAME names the tuning: an existing name (or index) continues it,
 a new name starts a new tuning. Steps already done are skipped; --redo
-repeats an analysis step. With PORT_TUNE (or --port-tune), a new
+repeats an analysis step. With PORT_TUNING_NAME (or --port-tune), a new
 tuning keeps that tuning's powers and only optimizes the frequencies
 and spans again, from PREDICT's guess of them (and of the powers).
 Needs crs_init.py first.
@@ -28,7 +28,7 @@ from citkid.crs.sim import simulated_crs
 from citkid.pipeline.interactive import run_iq_series
 from citkid.pipeline.sweep_series import a_vs_power_fit, open_series_datasets
 from citkid.tone_plan import place_cal_tones, plan_tone_sets, select_isolated
-from citkid.vna.fq_finder import run_fqfinder
+from citkid.vna.fq_finder import accept_fres_update, run_fqfinder
 from citkid.qt_compat import set_theme
 
 ################################################################################
@@ -38,7 +38,7 @@ from settings import (SERIAL_NUMBER, INTERFACE, MODULES, DATA_DIR, COOLDOWN,
                       DEVICE, SUFFIX, SETUP, LIGHT_MODE)
 
 # Tuning
-TUNING = None
+TUNING_NAME = None
 
 # Tone plan
 RESONATORS = None
@@ -49,6 +49,7 @@ STREAM_DEC = 6
 N_CAL_TONES = 0
 CAL_MIN_SEP_LW = 10.
 WINDOWS = None
+FQ_WINDOW = True
 FMIN = None
 FMAX = None
 
@@ -66,6 +67,7 @@ F_AVG = 4
 A_FIT_RANGE = (0.05, 0.8)
 ANL = 0.5
 ARES_LIMITS = (-60., -35.)
+FALLBACK_NEAREST = 100
 
 # fq finder
 FRES_UPDATE_METHOD = 'spacing'
@@ -74,7 +76,7 @@ RMV_GAIN_SIMPLE = True
 
 # Port the powers of an earlier tuning
 PORT_STORE = None
-PORT_TUNE = None
+PORT_TUNING_NAME = None
 PREDICT = None
 
 STEPS = ('plan', 'power_sweep', 'power_fits', 'fq_sweep', 'fq_finder',
@@ -111,16 +113,20 @@ def parse_args(argv = None):
     p.add_argument('--modules', type = int, nargs = '+', default = MODULES)
     p.add_argument('--resonators', type = int, default = RESONATORS,
                    help = 'resonator list index (default: the latest)')
-    p.add_argument('--tuning', default = TUNING,
+    p.add_argument('--tuning', default = TUNING_NAME,
                    help = 'the tuning, by name or index: continued if it '
                    'exists, else made (default: the latest, or a first '
                    'one)')
-    p.add_argument('--port-tune', default = PORT_TUNE,
+    p.add_argument('--port-tune', default = PORT_TUNING_NAME,
                    help = 'a new tuning keeps the powers of this tuning '
                    '(of --port-store, or this store) and only optimizes '
                    'the frequencies and spans')
     p.add_argument('--port-store', default = PORT_STORE,
                    help = 'the store of --port-tune (default: this one)')
+    p.add_argument('--no-fq-window', action = 'store_true',
+                   help = 'skip the fq_finder window: every tone takes '
+                   'the automatic frequency update (FRES_UPDATE_METHOD) '
+                   'and keeps its span')
     p.add_argument('--redo', default = None, choices = REDOABLE,
                    help = 'repeat this step and the ones after it')
     p.add_argument('--simulate', action = 'store_true',
@@ -343,7 +349,7 @@ def plan(root, args, path):
 
 def port_source(root, args):
     """
-    Find the tuning whose powers are ported (``PORT_TUNE``, in this store
+    Find the tuning whose powers are ported (``PORT_TUNING_NAME``, in this store
     or ``PORT_STORE``).
 
     Parameters:
@@ -563,8 +569,13 @@ def describe_windows(fres, tplan, window):
 
 def cal_tones(res, tplan, max_tones):
     """
-    Place ``N_CAL_TONES`` calibration tones in each NCO window of the plan
-    (``tone_plan.place_cal_tones``), within the windows' tone limits.
+    Place ``N_CAL_TONES`` calibration tones in the tuning, spread as
+    evenly as they go over its NCO windows (every tone set and
+    module), each in its window's widest gaps between resonances
+    (``tone_plan.place_cal_tones``), at least ``CAL_MIN_SEP_LW``
+    linewidths from any. A window short of gaps or of room (its
+    tone limit) gives its share to the others; when they are short
+    too, fewer tones are placed and a line says so.
 
     Parameters:
     res (dict): the resonator list (``daq_layout.load_resonators``).
@@ -575,21 +586,59 @@ def cal_tones(res, tplan, max_tones):
     fcal (np.array): tone frequencies in Hz.
     tone_set, tone_module (np.array, int): their tone sets and modules.
     """
-    out = ([], [], [])
+    empty = tuple(np.zeros(0, dtype = t) for t in (float, int, int))
     if not N_CAL_TONES:
-        return tuple(np.zeros(0, dtype = t) for t in (float, int, int))
+        return empty
     half = (575e6 / 2 if tplan['extended_bw'] else 250e6) - EDGE_MARGIN
     lw = res['fres_all'] / res['Qr_all']
+    windows = []
     for s, ncos in enumerate(tplan['ncos']):
         for m, nco in ncos.items():
             used = np.sum((tplan['tone_set'] == s) &
                           (tplan['tone_module'] == int(m)))
-            n = min(N_CAL_TONES, max_tones - int(used))
-            f = place_cal_tones(res['fres_all'], lw, nco - half, nco + half,
-                                n, min_sep_lw = CAL_MIN_SEP_LW)
-            out[0].extend(f)
-            out[1].extend([s] * len(f))
-            out[2].extend([int(m)] * len(f))
+            windows.append((s, int(m), float(nco), max_tones - int(used)))
+    if not windows:
+        return empty
+
+    def place(w, n):
+        """
+        Place up to n tones in window w (within its room).
+        """
+        s, m, nco, room = windows[w]
+        return place_cal_tones(res['fres_all'], lw, nco - half, nco + half,
+                               max(0, min(n, room)),
+                               min_sep_lw = CAL_MIN_SEP_LW)
+
+    # Fair shares first (the first windows get the remainder), then
+    # the shortfall goes round the windows that still have gaps
+    total = int(N_CAL_TONES)
+    want = [total // len(windows) + (1 if w < total % len(windows) else 0)
+            for w in range(len(windows))]
+    placed = [place(w, want[w]) for w in range(len(windows))]
+    short = total - sum(len(f) for f in placed)
+    while short > 0:
+        progressed = False
+        for w in range(len(windows)):
+            if len(placed[w]) < want[w]:
+                continue        # this window has no more gaps or room
+            more = place(w, want[w] + 1)
+            if len(more) > len(placed[w]):
+                want[w] += 1
+                placed[w] = more
+                short -= 1
+                progressed = True
+            if short == 0:
+                break
+        if not progressed:
+            print(f'plan: only {total - short} of {total} calibration '
+                  'tones fit (gaps between resonances or room in the '
+                  'windows)')
+            break
+    out = ([], [], [])
+    for (s, m, _, _), f in zip(windows, placed):
+        out[0].extend(f)
+        out[1].extend([s] * len(f))
+        out[2].extend([m] * len(f))
     return (np.asarray(out[0], dtype = float),
             np.asarray(out[1], dtype = int), np.asarray(out[2], dtype = int))
 
@@ -672,13 +721,22 @@ def power_fits(tune, args):
     if fallback.all():
         raise ValueError('no power was chosen for any tone: check the '
                          'power fits (--redo power_fits)')
-    median = float(np.median(chosen[~fallback]))
-    unclipped = np.where(fallback, median, chosen)
+    # A tone without a chosen power gets the median of the chosen
+    # powers of the FALLBACK_NEAREST tones nearest to it in frequency
+    fres_init = tune['tones_init/fres'][:]
+    good = np.flatnonzero(~fallback)
+    unclipped = chosen.copy()
+    for i in np.flatnonzero(fallback):
+        near = good[np.argsort(np.abs(fres_init[good] - fres_init[i]),
+                               kind = 'stable')[:int(FALLBACK_NEAREST)]]
+        unclipped[i] = float(np.median(chosen[near]))
     ares = np.clip(unclipped, *ARES_LIMITS)
     grp = dl.create_group(tune, 'power_choice', 'decision', attrs = dict(
         notes = (args.notes or '').strip(),
         source = f'{tune.basename}/power_fits/xy_fit/x_chosen', anl = ANL,
-        a_fit_range = list(A_FIT_RANGE), fallback = median,
+        a_fit_range = list(A_FIT_RANGE),
+        fallback = f'median of the {int(FALLBACK_NEAREST)} nearest tones',
+        fallback_nearest = int(FALLBACK_NEAREST),
         limits = list(ARES_LIMITS)), overwrite = True)
     for name, value in (('ares', ares), ('res_idxs', res_idxs),
                         ('fallback', fallback), ('user_chosen', user)):
@@ -687,14 +745,26 @@ def power_fits(tune, args):
           f'hand, {int(fallback.sum())} fallback, '
           f'{int(np.sum(ares != unclipped))} clipped)')
 
-def fq_finder(tune):
+def fq_finder(tune, window = True):
     """
-    Set each tone's frequency and span in the fq_finder window.
+    Set each tone's frequency and span in the fq_finder window, or
+    without it accept the automatic frequency update for every tone
+    (``fq_finder.accept_fres_update``).
 
     Parameters:
     tune (zarr.Group): the tuning.
     """
     fq = tune['fq_sweep']
+    if not window:
+        fres = accept_fres_update(
+            fq['fine_sweep/f'][:], fq['fine_sweep/z'][:], fq['fres'][:],
+            fq['qres'][:], fq['res_idxs'][:], fq,
+            fres_update_method = FRES_UPDATE_METHOD,
+            rmv_gain_simple = RMV_GAIN_SIMPLE,
+            npoints_update = NPOINTS_UPDATE)
+        print(f'fq_finder: no window; {len(fres)} tones take the '
+              f'{FRES_UPDATE_METHOD!r} frequency update')
+        return
     run_fqfinder(
         f = fq['fine_sweep/f'][:], z = fq['fine_sweep/z'][:],
         fres = fq['fres'][:], qres = fq['qres'][:],
@@ -777,7 +847,7 @@ def main(args):
         if tune is None:
             return None
     else:
-        # A tuning ported from PORT_TUNE is continued with the same
+        # A tuning ported from PORT_TUNING_NAME is continued with the same
         # settings; porting into any other tuning needs a new name
         if args.port_tune is not None:
             _, store, src = port_source(root, args)
@@ -791,14 +861,14 @@ def main(args):
                 raise ValueError(
                     f'tuning {dl.tuning_name(tune)!r} ({tune.basename}) '
                     f'exists and was not ported from {args.port_tune!r}; '
-                    'porting powers makes a new tuning: give TUNING '
+                    'porting powers makes a new tuning: give TUNING_NAME '
                     f'(--tuning) a new name. Tunings: {names}')
         print(f'{path}: continuing {tune.basename} '
               f'({dl.tuning_name(tune)!r})')
     redo = STEPS.index(args.redo) if args.redo else len(STEPS)
     if args.redo == 'power_fits' and 'fq_sweep' in tune:
         raise ValueError('the fq sweep was taken at the chosen powers; '
-                         'start a new tuning (a new TUNING name) to '
+                         'start a new tuning (a new TUNING_NAME name) to '
                          'choose them again')
     for step in STEPS[1:]:
         if done(tune, step) and STEPS.index(step) < redo:
@@ -809,7 +879,7 @@ def main(args):
         elif step == 'power_fits':
             power_fits(tune, args)
         elif step == 'fq_finder':
-            fq_finder(tune)
+            fq_finder(tune, window = FQ_WINDOW and not args.no_fq_window)
             if not done(tune, 'fq_finder'):
                 if ask_make_tones(tune):
                     tones(tune, args)
