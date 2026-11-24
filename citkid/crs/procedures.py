@@ -1130,9 +1130,12 @@ async def stream_batch(
     runs (list of dict): the timestreams, in order: ``name``,
         ``dec_stage``, ``duration_s`` and optionally ``notes``
         (``stream_tone_sets``; a name is used once per tuning).
-    calibration (zarr.Group, str or None): a calibration of the set to
-        reuse (a ``cal{j}`` group of the tuning, or its path), in frame.
-        Default None: take one (``calibrate_tone_set``).
+    calibration (zarr.Group, str or None): the calibration: a
+        ``cal{j}`` group of the tuning or its path, to reuse (in
+        frame); or a name: the tuning's sweep of that name
+        (``daq_layout.find_calibration_sweep``) is reused if there is
+        one, else one is taken and given the name (attribute
+        ``name``). Default None: take one (``calibrate_tone_set``).
     fres_update (dict or None): of a calibration taken here
         (``apply_fres_update``). Default None.
     tone_chunks (list of int or None): which of the chunks planned for
@@ -1156,14 +1159,26 @@ async def stream_batch(
     """
     s = int(tone_set)
     root = dl.store_root(tune, mode = 'r+')
+    name = None
+    if isinstance(calibration, str):
+        if calibration in root:
+            calibration = root[calibration]
+        else:
+            found = dl.find_calibration_sweep(tune, calibration)
+            if found is None:
+                # A new name: the sweep taken below gets it
+                name, calibration = calibration, None
+            else:
+                calibration = found
     if calibration is None:
         cal = await calibrate_tone_set(
             crs, tune, s, status = status, verbose = False,
             progress = progress, notes = notes, cancelled = cancelled,
             fres_update = fres_update, **target_sweep_kwargs)
+        if name is not None:
+            cal.attrs['name'] = str(name)
     else:
-        cal = root[calibration] if isinstance(calibration, str) \
-            else calibration
+        cal = calibration
         if int(cal.attrs.get('tone_set', -1)) != s:
             raise ValueError(f'{cal.path} is not a calibration of tone set '
                              f'{s}')

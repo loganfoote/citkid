@@ -960,6 +960,31 @@ def store_root(grp, mode = 'r'):
     """
     return zarr.open_group(grp.store, path = '', mode = mode)
 
+def find_calibration_sweep(tune, name):
+    """
+    Find a tuning's calibration sweep by the name it was given
+    (attribute ``name``, e.g. by 4b_stream_batch.py), by its group
+    name ('cal2') or by its index.
+
+    Parameters:
+    tune (zarr.Group): the tuning.
+    name (str or int): the name, group name or index.
+
+    Returns:
+    grp (zarr.Group or None): the sweep, or None if there is none.
+    """
+    if isinstance(name, (int, np.integer)):
+        key = set_name(int(name), CAL_PREFIX)
+        return tune[key] if key in tune else None
+    name = str(name)
+    if name in tune and name.startswith(CAL_PREFIX):
+        return tune[name]
+    for j in list_indices(tune, CAL_PREFIX):
+        grp = tune[set_name(j, CAL_PREFIX)]
+        if str(grp.attrs.get('name') or '') == name:
+            return grp
+    return None
+
 def calibrations(tune):
     """
     Return a tuning's saved calibration sweeps (``cal{j}``, made by
@@ -969,7 +994,8 @@ def calibrations(tune):
     tune (zarr.Group): the tuning.
 
     Returns:
-    cals (list of dict): per sweep: ``name`` ('cal{j}'), ``path`` (in the
+    cals (list of dict): per sweep: ``name`` ('cal{j}'), ``label`` (the
+        name given to it, '' if none), ``path`` (in the
         store), ``index`` (j), ``tone_set``, ``created``, ``notes`` ('' if
         none), ``complete``, ``ntones``, ``npoints_fine`` (0 without a
         fine sweep), ``nsamps``, and ``nco_ids`` (the NCO settings it was
@@ -983,6 +1009,7 @@ def calibrations(tune):
             if 'fine_sweep' in grp and 'z' in grp['fine_sweep'] else 0
         out.append(dict(
             name = grp.basename, path = grp.path, index = j,
+            label = str(grp.attrs.get('name') or ''),
             tone_set = grp.attrs.get('tone_set'),
             created = grp.attrs.get('created'),
             notes = str(grp.attrs.get('notes') or ''),
@@ -1174,8 +1201,9 @@ MARK_SCOPES = ('global', 'local')
 MARK_LEVELS = {'tune': 1, 'ts_cal': 2, 'photons': 3, 'hee': 3,
                'ts_psd': 3}
 # Reasons offered when a tone is marked bad (any text can be typed)
-BAD_REASONS = ('double resonance', 'no resonance', 'weird pulse shape',
-               'low or no pulses', 'high noise', 'bad fit', 'other')
+BAD_REASONS = ('double resonance', 'no resonance', 'shallow resonance',
+               'weird pulse shape', 'low or no pulses', 'high noise',
+               'bad fit', 'other')
 
 WORK_BY = 'work_by'
 

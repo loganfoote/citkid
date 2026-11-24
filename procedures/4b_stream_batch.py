@@ -26,7 +26,7 @@ from settings import (SERIAL_NUMBER, INTERFACE, MODULES, DATA_DIR, COOLDOWN,
 
 # Calibration
 TONE_SET = 0
-CALIBRATION = None
+CALIBRATION_NAME = None
 FRES_UPDATE = None
 NPOINTS_FINE = 1000
 NPOINTS_GAIN = 50
@@ -150,7 +150,8 @@ async def connect(args, root, path):
 
 async def take(crs, tune, notes = ''):
     """
-    Calibrate TONE_SET (or use CALIBRATION) and take RUNS, each writing
+    Calibrate TONE_SET (named CALIBRATION_NAME, or reusing the sweep of
+    that name) and take RUNS, each writing
     its stage's tone chunks (or TONE_CHUNKS). Change the settings and
     call it again for the next set.
 
@@ -163,7 +164,7 @@ async def take(crs, tune, notes = ''):
     result (dict): ``calibration``, ``runs`` (``stream_batch``).
     """
     result = await stream_batch(
-        crs, tune, TONE_SET, RUNS, calibration = CALIBRATION,
+        crs, tune, TONE_SET, RUNS, calibration = CALIBRATION_NAME,
         fres_update = FRES_UPDATE, tone_chunks = TONE_CHUNKS,
         notes = notes, status = print, setup = SETUP,
         npoints_fine = NPOINTS_FINE, npoints_gain = NPOINTS_GAIN,

@@ -799,7 +799,8 @@ class StreamWindow(QtWidgets.QMainWindow):
         label (str): one line.
         """
         notes = ' '.join(cal.get('notes', '').split())
-        return (f"{cal['name']}: {cal['ntones']} tones, "
+        label = f" {cal['label']}" if cal.get('label') else ''
+        return (f"{cal['name']}{label}: {cal['ntones']} tones, "
                 f"{cal['npoints_fine']} fine points x {cal['nsamps']} "
                 f"samples, {cal.get('created', '')}"
                 + ('' if cal['complete'] else ', incomplete')
