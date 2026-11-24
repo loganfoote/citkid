@@ -28,7 +28,7 @@ from citkid.crs.sim import simulated_crs
 from citkid.pipeline.interactive import run_iq_series
 from citkid.pipeline.sweep_series import a_vs_power_fit, open_series_datasets
 from citkid.tone_plan import place_cal_tones, plan_tone_sets, select_isolated
-from citkid.vna.fq_finder import accept_fres_update, run_fqfinder
+from citkid.vna.fq_finder import accept_fres_update, run_fq_finder
 from citkid.qt_compat import set_theme
 
 ################################################################################
@@ -765,7 +765,7 @@ def fq_finder(tune, window = True):
         print(f'fq_finder: no window; {len(fres)} tones take the '
               f'{FRES_UPDATE_METHOD!r} frequency update')
         return
-    run_fqfinder(
+    run_fq_finder(
         f = fq['fine_sweep/f'][:], z = fq['fine_sweep/z'][:],
         fres = fq['fres'][:], qres = fq['qres'][:],
         res_idxs = fq['res_idxs'][:], zarr_grp = fq,

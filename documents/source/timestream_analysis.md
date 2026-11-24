@@ -33,7 +33,7 @@ and saves reduced results in a group of the store.
 # 6a_find_photons.py: find photons
 
 Each timestream is calibrated with the stream calibration of its own
-sweep (there is normally one; `CALIBRATION` chooses when a sweep has
+sweep (there is normally one; `CALIBRATION_NAME` chooses when a sweep has
 several, and a calibration of another sweep is refused). Choose
 the timestreams (`TIMESTREAMS`, by index as listed or run name; empty
 lists them). A timestream is one tone set of one run. Tones whose
@@ -89,7 +89,7 @@ the buttons. Right, for the selected tone (or all tones together):
   window with no detection; only changed tones rerun.
 - `--refit-tau` refits every saved lifetime with `TAU_SKIP` and
   `TAU_FIT_S`, no detection.
-- `REFERENCE = '<name>'` searches other timestreams with a saved result,
+- `REFERENCE_NAME = '<name>'` searches other timestreams with a saved result,
   without the window: `REUSE = 'settings'` (its thresholds) or
   `'filter'` (its optimal filters, same decimation stage).
 
@@ -116,10 +116,10 @@ by `citkid.pipeline.photon_finder.migrate_results(root)`.
 
 | Setting | Meaning |
 |---|---|
-| `CALIBRATION` | Calibration to use when a sweep has several, by name or `ts_cal` index (`None`: each timestream's own) |
+| `CALIBRATION_NAME` | Calibration to use when a sweep has several, by name or `ts_cal` index (`None`: each timestream's own) |
 | `TIMESTREAMS` | Timestreams, by index as listed or run name; empty: list them |
 | `NAME` | Result name for a single timestream (`''`: the run's name) |
-| `REFERENCE`, `REUSE` | A saved result to reuse (its name), and `'settings'` or `'filter'` |
+| `REFERENCE_NAME`, `REUSE` | A saved result to reuse (its name), and `'settings'` or `'filter'` |
 | `INTERACTIVE` | Check the thresholds in the window |
 | `TONES_BEFORE_WINDOW` | Tones detected before the window opens (`None`: all). The others are listed "not run" and run when selected, when thresholds are applied to all tones, or with the window's thresholds when it closes |
 | `WINDOW_FIRST_ONLY` | Open the window on the first chosen timestream only; the others take its result as the reference (`REUSE`) |
@@ -148,7 +148,7 @@ naming and existing-result popup as `6a_find_photons.py`; results are
 
 | Step | What it does |
 |---|---|
-| Events | `EVENTS = 'photons'`: the HEEs `6a` saved (or those of `PHOTONS`); `'triggers'`: peaks above `TRIG_NSIGMA` on each tone, clustered within `COINC_WIN` samples, kept when `HEE_MIN_MULT` tones see them; `'auto'`: photons if saved, else triggers |
+| Events | `EVENTS = 'photons'`: the HEEs `6a` saved (or those of `PHOTONS_NAME`); `'triggers'`: peaks above `TRIG_NSIGMA` on each tone, clustered within `COINC_WIN` samples, kept when `HEE_MIN_MULT` tones see them; `'auto'`: photons if saved, else triggers |
 | Pulses | A snippet `PRE_S` before to `POST_S` after each event, baseline subtracted; the peak within `SEARCH_S` |
 | Threshold | Only pulses with peaks in [`HMIN`, `HMAX`] are averaged |
 | Alignment | The pulses differ in height and near the peak but decay alike: each is first placed where it falls through `LEVEL` (10 kHz/GHz), then moved by the few samples that best overlap the mean tail over the fit range, and they are averaged over that range only |
@@ -190,10 +190,10 @@ hee/<name>/          attrs: run, tone set, calibration, events,
 
 | Setting | Meaning |
 |---|---|
-| `CALIBRATION`, `TIMESTREAMS`, `NAME`, `INTERACTIVE`, `TONES_BEFORE_WINDOW` | As in `6a_find_photons.py` |
+| `CALIBRATION_NAME`, `TIMESTREAMS`, `NAME`, `INTERACTIVE`, `TONES_BEFORE_WINDOW` | As in `6a_find_photons.py` |
 | `WINDOW_FIRST_ONLY` | Open the window on the first chosen timestream only; the others take its values (global and per tone) |
 | `EVENTS` | `'auto'`, `'photons'`, or `'triggers'` |
-| `PHOTONS` | Photon result to take the events from (`None`: this timestream's) |
+| `PHOTONS_NAME` | Photon result to take the events from (`None`: this timestream's) |
 | `TRIG_NSIGMA`, `COINC_WIN`, `HEE_MIN_MULT` | Triggers: threshold (noise sigma), largest gap within an event (samples), fewest tones |
 | `HMIN`, `HMAX` | Peak height window of the pulses fitted, kHz/GHz |
 | `LEVEL` | A tail begins where the pulse falls below this, kHz/GHz |
@@ -243,7 +243,7 @@ noise of the tone's own level. `DEGLITCH` picks how they are found:
 |---|---|
 | `None` | Not at all: the spectra include the pulses |
 | `'peaks'` | Peak finding on each tone alone: no photon result needed. Slow drifts are removed first by binning the timestream to `GLITCH_BASELINE_S` bins and subtracting that baseline, so the threshold applies to the fast noise. `GLITCH_SIGN` says which way a pulse goes in x (`-1`: a pulse lowers the frequency, the usual case). A peak counts when it exceeds `GLITCH_NSTD` standard deviations of the baseline-subtracted timestream; peaks closer than `GLITCH_DISTANCE_S` are one pulse. `GLITCH_ROUNDS` repeats the search: the pulses found in a round are removed and the standard deviation is taken again without them, so the next round catches the smaller pulses that the large ones hid by inflating the threshold. Two rounds is usually enough; one is fine for a quiet timestream |
-| `'photons'` | The optimal filters of a photon result (`PHOTONS`, from `6a_find_photons.py`) find the pulses, as the photon search did. `GLITCH_PULSES = 'hee'` cuts only the high-energy events (`COINC_WIN`, `HEE_MIN_MULT`, as in 6a) and leaves the photons in; `'all'` cuts every pulse |
+| `'photons'` | The optimal filters of a photon result (`PHOTONS_NAME`, from `6a_find_photons.py`) find the pulses, as the photon search did. `GLITCH_PULSES = 'hee'` cuts only the high-energy events (`COINC_WIN`, `HEE_MIN_MULT`, as in 6a) and leaves the photons in; `'all'` cuts every pulse |
 
 Either way, `GLITCH_PRE_S` before and `GLITCH_POST_S` after each
 pulse are replaced; `GLITCH_POST_S` should cover the pulse tail, a few
@@ -284,7 +284,7 @@ or name.
 
 | Setting | Meaning |
 |---|---|
-| `CALIBRATION` | Calibration to use when a sweep has several (`None`: each timestream's own) |
+| `CALIBRATION_NAME` | Calibration to use when a sweep has several (`None`: each timestream's own) |
 | `TIMESTREAMS` | Index as listed, run name, or `dict(name = ..., or run = n, tone_sets = [...], cal = c)`; empty: list them |
 | `NAME` | Name of this set of spectra |
 | `INTERACTIVE` | Review each timestream in the overview window |
@@ -303,7 +303,7 @@ or name.
 | `GLITCH_BASELINE_S` | `'peaks'`: bin length of the slow baseline subtracted first, s |
 | `GLITCH_DISTANCE_S` | `'peaks'`: peaks closer than this are one pulse, s |
 | `GLITCH_ROUNDS` | `'peaks'`: searches, each with the threshold taken without the pulses found so far |
-| `PHOTONS` | `'photons'`: name of the photon result whose filters find the pulses |
+| `PHOTONS_NAME` | `'photons'`: name of the photon result whose filters find the pulses |
 | `GLITCH_PULSES` | `'photons'`: `'hee'` cuts the high-energy events only, `'all'` every pulse |
 | `COINC_WIN`, `HEE_MIN_MULT` | `'photons'`: an event spans pulses within ± this many samples, and needs this many tones to count as high-energy |
 

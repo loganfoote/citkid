@@ -150,10 +150,10 @@ async def connect(args, root, path):
 
 async def take(crs, tune, notes = ''):
     """
-    Calibrate TONE_SET (named CALIBRATION_NAME, or reusing the sweep of
-    that name) and take RUNS, each writing
-    its stage's tone chunks (or TONE_CHUNKS). Change the settings and
-    call it again for the next set.
+    Calibrate the tone sets in TONE_SET (every set when None; named
+    CALIBRATION_NAME, or reusing the sweeps of that name) and take
+    RUNS, each streaming every set in turn and writing its stage's
+    tone chunks (or TONE_CHUNKS).
 
     Parameters:
     crs (CRS or SimulatedCRS): the attached instrument.

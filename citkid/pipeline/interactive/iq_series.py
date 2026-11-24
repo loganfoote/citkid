@@ -914,9 +914,11 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         tone_bad_btn = QtWidgets.QPushButton('Mark Tone Bad')
         tone_bad_btn.setToolTip(
             "Record this resonator as bad in the store's tone marks, with "
-            'a reason: it is removed from the tuned set (Ctrl+M)'
+            'a reason: it is removed from the tuned set (M)'
         )
         tone_bad_btn.clicked.connect(self._mark_tone_bad)
+        QtGui.QShortcut(QtGui.QKeySequence('M'), self,
+                        activated = self._mark_tone_bad)
         QtGui.QShortcut(QtGui.QKeySequence('Ctrl+M'), self,
                         activated=self._mark_tone_bad)
         row2.addWidget(tone_bad_btn)
@@ -924,9 +926,11 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         note_btn = QtWidgets.QPushButton('Add Note')
         note_btn.setToolTip(
             "Record a note on this resonator in the store's tone marks; "
-            'the tone is kept (Ctrl+T)'
+            'the tone is kept (T)'
         )
         note_btn.clicked.connect(self._add_note)
+        QtGui.QShortcut(QtGui.QKeySequence('T'), self,
+                        activated = self._add_note)
         QtGui.QShortcut(QtGui.QKeySequence('Ctrl+T'), self,
                         activated=self._add_note)
         row2.addWidget(note_btn)
@@ -955,6 +959,11 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         # when their text changes. The apply status takes the spare width.
         self._apply_status_label = StatusLabel(min_width=120)
         layout.addWidget(self._apply_status_label, 1)
+        # The tone's marks (BAD with its reason, notes), kept current
+        self._marks_label = StatusLabel(min_width=120)
+        self._marks_label.setToolTip("The tone's marks in the store: bad "
+                                     'with its reason, and notes')
+        layout.addWidget(self._marks_label, 1)
 
         self._prefetch_label = StatusLabel(min_width=110)
         self._prefetch_label.setToolTip(
@@ -1517,6 +1526,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._data_idx_spin.setValue(new_di)
         self._data_idx_spin.blockSignals(False)
         self._update_res_label()
+        self._update_marks_label()
+        self._apply_status_label.setText('')
 
         # Deselect the series point; it is selected again below if it is held.
         held_si = self._series_idx if self._hold_series_point else None
@@ -1955,6 +1966,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                          'global')
         elif text:
             self._record('note', text)
+        self._update_marks_label()
 
     def _ask_all_bad(self):
         """
@@ -1971,7 +1983,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
     def _mark_tone_bad(self):
         """
         Record the current resonator as bad in the store's tone marks,
-        with a reason (the Mark Tone Bad button, Ctrl+M). It is then
+        with a reason (the Mark Tone Bad button, M or Ctrl+M). It is then
         removed from the tuned set.
         """
         reason, scope = _marks.reason_and_scope(self._ask_reason(),
@@ -1982,6 +1994,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             self._apply_status_label.setText('Tone marked bad')
         else:
             self._apply_status_label.setText('No tone marks (no store)')
+        self._update_marks_label()
 
     def _ask_reason(self):
         """
@@ -1992,17 +2005,31 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         Returns:
         choice (tuple or None): (reason, scope), or None if cancelled.
         """
-        return _marks.ask_reason(self, f'Mark res {self._res_idx()} bad',
-                                 scope = 'global')
+        root, stage = _marks.registry(getattr(self._ARs[0].DS, 'root', None))
+        return _marks.ask_reason(
+            self, f'Mark res {self._res_idx()} bad', scope = 'global',
+            current = _marks.current_reason(root, self._res_idx(), stage))
+
+    def _update_marks_label(self):
+        """
+        Show the current tone's marks (bad with its reason, notes) from
+        the store's tone marks.
+        """
+        if not hasattr(self, '_marks_label'):
+            return
+        root, stage = _marks.registry(getattr(self._ARs[0].DS, 'root', None))
+        self._marks_label.setText(
+            _marks.mark_label(root, self._res_idx(), stage))
 
     def _add_note(self):
         """
         Record a note on the current resonator in the store's tone marks
-        (the Add Note button, Ctrl+T). The tone is kept.
+        (the Add Note button, T or Ctrl+T). The tone is kept.
         """
         note = self._ask_note()
         if note and self._record('note', note):
             self._apply_status_label.setText('Note saved')
+            self._update_marks_label()
 
     def _ask_note(self):
         """

@@ -3829,3 +3829,19 @@ def test_series_points_without_y_are_drawn_as_x_markers(qt_app, monkeypatch):
     win._update_series_scatter()
     assert list(dot.getData()[1]) == [0.] and len(cross.getData()[0]) == 0
     _close(win)
+
+
+def test_series_window_marks_line_and_status(qt_app, monkeypatch):
+    """
+    The toolbar shows the tone's marks (none without a store), the apply
+    status clears when the resonator changes, and the M and T keys are
+    bound beside Ctrl+M and Ctrl+T.
+    """
+    win = _make_series_window(qt_app, monkeypatch)
+    assert win._marks_label.text() == ''
+    win._apply_status_label.setText('Tone marked bad')
+    win._set_data_idx(1)
+    assert win._apply_status_label.text() == ''
+    keys = {s.key().toString() for s in win.findChildren(QtGui.QShortcut)}
+    assert {'M', 'Ctrl+M', 'T', 'Ctrl+T'} <= keys
+    win.close()

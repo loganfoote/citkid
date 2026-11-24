@@ -18,7 +18,7 @@ from citkid.qt_compat import set_theme
 ################################################################################
 from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, LIGHT_MODE
 
-TUNING = None
+TUNING_NAME = None
 
 ################################################################################
 ################################### Script #####################################
@@ -42,7 +42,7 @@ def parse_args(argv = None):
                    '(blank: <device>.zarr)')
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device)')
-    p.add_argument('--tuning', default = TUNING,
+    p.add_argument('--tuning', default = TUNING_NAME,
                    help = 'tuning shown first, by name or index (default: '
                    'the latest with runs)')
     return p.parse_args(argv)

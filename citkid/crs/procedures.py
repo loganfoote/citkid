@@ -1109,33 +1109,86 @@ async def _stream_sets(
                              **({} if progress is None else
                                 dict(progress = progress)))
 
+class _bar:
+    """
+    A progress bar fed by a ``progress(done, total)`` callback, as a
+    context manager that is falsy when bars are off (so ``bar or
+    other`` picks the caller's callback).
+
+    Parameters:
+    on (bool): If False, no bar: the object is falsy.
+    desc (str): the bar's text.
+    unit (str): the unit shown.
+    """
+
+    def __init__(self, on, desc, unit):
+        self.on, self.desc, self.unit = bool(on), desc, unit
+        self.bar = None
+
+    def __bool__(self):
+        return self.on
+
+    def __enter__(self):
+        if self.on:
+            self.bar = tqdm(total = 1, desc = self.desc, unit = self.unit,
+                            leave = False)
+        return self
+
+    def __exit__(self, *exc):
+        if self.bar is not None:
+            self.bar.close()
+        return False
+
+    def __call__(self, done, total):
+        """
+        Move the bar (the ``progress`` callback).
+
+        Parameters:
+        done (int): units done.
+        total (int): units in all.
+        """
+        if self.bar is None:
+            return
+        if total and self.bar.total != total:
+            self.bar.total = int(total)
+        self.bar.n = int(done)
+        self.bar.refresh()
+
 async def stream_batch(
     crs, tune, tone_set, runs, calibration = None, fres_update = None,
     tone_chunks = None, keep_tones = False, notes = '', status = None,
-    progress = None, cancelled = None, setup = None, **target_sweep_kwargs
+    progress = None, cancelled = None, setup = None, bars = True,
+    **target_sweep_kwargs
 ):
     """
-    Calibrate a tone set (or reuse a calibration) and take one or more
-    timestreams of it, without a window (``procedures/4b_stream_batch.py``;
-    loop over this to take sets with other settings). Each run writes
-    the chunks its stage needs (``plan_stream_chunks``), or those in
-    ``tone_chunks``, and streams each; tones already on the board are
-    not written again.
+    Calibrate one or more tone sets (or reuse calibrations) and take one
+    or more timestreams of them, without a window
+    (``procedures/4b_stream_batch.py``). The sets go one after another:
+    a set is calibrated (its NCOs move, so a calibration holds for one
+    set at a time), then every run is taken on it, each writing the
+    chunks its stage needs (``plan_stream_chunks``), or those in
+    ``tone_chunks``; tones already on the board are not written again.
+    With several sets a run's name gets ``_set{s}`` appended, since a
+    name is used once per tuning.
 
     Parameters:
     crs (CRS): configured CRS instrument, with global control.
     tune (zarr.Group): the tuning, with ``tones`` and ``crs_config``,
         in a writable store.
-    tone_set (int): the tone set.
+    tone_set (int, list of int or None): the tone set, or sets in the
+        order streamed. None: every set of the tuning.
     runs (list of dict): the timestreams, in order: ``name``,
         ``dec_stage``, ``duration_s`` and optionally ``notes``
         (``stream_tone_sets``; a name is used once per tuning).
-    calibration (zarr.Group, str or None): the calibration: a
-        ``cal{j}`` group of the tuning or its path, to reuse (in
+    calibration (zarr.Group, str, dict or None): the calibration of one
+        set: a ``cal{j}`` group of the tuning or its path, to reuse (in
         frame); or a name: the tuning's sweep of that name
         (``daq_layout.find_calibration_sweep``) is reused if there is
-        one, else one is taken and given the name (attribute
-        ``name``). Default None: take one (``calibrate_tone_set``).
+        one, else one is taken and given the name (attribute ``name``).
+        With several sets, a dict of those per set (a set left out
+        takes one), or one name, which each set's sweep gets with
+        ``_set{s}`` appended. Default None: take one per set
+        (``calibrate_tone_set``).
     fres_update (dict or None): of a calibration taken here
         (``apply_fres_update``). Default None.
     tone_chunks (list of int or None): which of the chunks planned for
@@ -1146,59 +1199,93 @@ async def stream_batch(
         Default False: clear them.
     notes (str): notes saved with a calibration taken here. Default ''.
     status, progress, cancelled: see ``stream_tone_sets``.
+    bars (bool): If True (default), show progress bars: one over the
+        tone sets (with several), one for each calibration sweep and
+        each stream; ``status`` messages are then written above the
+        bars (``tqdm.write``) and ``progress`` is not called.
     **target_sweep_kwargs: settings of a calibration sweep taken here
         (``target_sweep``).
 
     Returns:
-    result (dict): ``calibration`` (its path), ``runs`` (the stream
-        paths of each run).
+    result (dict): ``calibration`` (its path, for one set; the paths in
+        set order for several), ``calibrations`` (set: path), ``runs``
+        (per run, its stream paths over every set, in set order).
 
     Raises:
-    ValueError: if the calibration is of another set or out of frame,
-        or a chunk in ``tone_chunks`` does not exist.
+    ValueError: if a calibration is of another set or out of frame, or
+        a chunk in ``tone_chunks`` does not exist.
     """
-    s = int(tone_set)
     root = dl.store_root(tune, mode = 'r+')
-    name = None
-    if isinstance(calibration, str):
-        if calibration in root:
-            calibration = root[calibration]
-        else:
-            found = dl.find_calibration_sweep(tune, calibration)
-            if found is None:
-                # A new name: the sweep taken below gets it
-                name, calibration = calibration, None
-            else:
-                calibration = found
-    if calibration is None:
-        cal = await calibrate_tone_set(
-            crs, tune, s, status = status, verbose = False,
-            progress = progress, notes = notes, cancelled = cancelled,
-            fres_update = fres_update, **target_sweep_kwargs)
-        if name is not None:
-            cal.attrs['name'] = str(name)
+    if tone_set is None:
+        sets = sorted(set(dl.load_tones(tune['tones'])['tone_set'].tolist()))
+    elif np.ndim(tone_set) == 0:
+        sets = [int(tone_set)]
     else:
-        cal = calibration
-        if int(cal.attrs.get('tone_set', -1)) != s:
-            raise ValueError(f'{cal.path} is not a calibration of tone set '
-                             f'{s}')
-        if not calibration_in_frame(crs, cal):
-            raise ValueError(f'{cal.path} is out of frame (an NCO was set '
-                             'since): calibrate again')
+        sets = [int(s) for s in tone_set]
+    if isinstance(calibration, dict):
+        wanted = {int(k): v for k, v in calibration.items()}
+    elif isinstance(calibration, str) and len(sets) > 1 and \
+            calibration not in root and \
+            dl.find_calibration_sweep(tune, calibration) is None:
+        wanted = {s: f'{calibration}_set{s}' for s in sets}
+    else:
+        wanted = {s: calibration for s in sets}
+    cals = {}
     written = {}
-    paths = []
-    for r in runs:
-        paths.append(await stream_tone_sets(
-            crs, tune, r['name'], r['duration_s'], r['dec_stage'],
-            notes = r.get('notes', ''), set_idxs = [s],
-            calibrations = {s: cal.path}, written = written,
-            keep_tones = True, status = status, verbose = False,
-            progress = progress, cancelled = cancelled, setup = setup,
-            tone_chunks = tone_chunks))
+    paths = [[] for _ in runs]
+    if bars:
+        status = lambda m: tqdm.write(str(m))
+    sets_bar = tqdm(sets, desc = 'Tone sets', disable = not bars
+                    or len(sets) < 2, leave = False)
+    for s in sets_bar:
+        sets_bar.set_postfix_str(f'set {s}')
+        choice, name = wanted.get(s), None
+        if isinstance(choice, str):
+            if choice in root:
+                choice = root[choice]
+            else:
+                found = dl.find_calibration_sweep(tune, choice)
+                if found is None:
+                    # A new name: the sweep taken below gets it
+                    name, choice = choice, None
+                else:
+                    choice = found
+        if choice is None:
+            with _bar(bars, f'Calibrating set {s}', 'points') as cal_bar:
+                cal = await calibrate_tone_set(
+                    crs, tune, s, status = status, verbose = False,
+                    progress = cal_bar or progress, notes = notes,
+                    cancelled = cancelled, fres_update = fres_update,
+                    **target_sweep_kwargs)
+            if name is not None:
+                cal.attrs['name'] = str(name)
+            written.clear()     # the sweep cleared the board's tones
+        else:
+            cal = choice
+            if int(cal.attrs.get('tone_set', -1)) != s:
+                raise ValueError(f'{cal.path} is not a calibration of tone '
+                                 f'set {s}')
+            if not calibration_in_frame(crs, cal):
+                raise ValueError(f'{cal.path} is out of frame (an NCO was '
+                                 'set since): calibrate again')
+        cals[s] = cal.path
+        for k, r in enumerate(runs):
+            run_name = r['name'] if len(sets) == 1 else f"{r['name']}_set{s}"
+            with _bar(bars, f'{run_name} (stage {r["dec_stage"]})',
+                      'samples') as run_bar:
+                paths[k] += await stream_tone_sets(
+                    crs, tune, run_name, r['duration_s'], r['dec_stage'],
+                    notes = r.get('notes', ''), set_idxs = [s],
+                    calibrations = {s: cal.path}, written = written,
+                    keep_tones = True, status = status, verbose = False,
+                    progress = run_bar or progress, cancelled = cancelled,
+                    setup = setup, tone_chunks = tone_chunks)
     if not keep_tones:
         await crs.clear_tones()
         written.clear()
-    return dict(calibration = cal.path, runs = paths)
+    return dict(calibration = cals[sets[0]] if len(sets) == 1
+                else [cals[s] for s in sets],
+                calibrations = cals, runs = paths)
 
 ################################################################################
 ################################# VNA sweeps ###################################

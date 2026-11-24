@@ -73,6 +73,9 @@ def test_dialogs(qapp, monkeypatch):
     monkeypatch.setattr(QtWidgets.QDialog, 'exec_',
                         lambda self: QtWidgets.QDialog.Accepted)
     assert marks.ask_reason(None, 'Mark res 1 bad') == dl.BAD_REASONS[0]
+    assert 'shallow resonance' in dl.BAD_REASONS
+    assert marks.ask_reason(None, 'Mark res 1 bad',
+                            current = 'high noise') == 'high noise'
     assert marks.ask_reason(None, 't', reasons = ('x', 'y')) == 'x'
     assert marks.ask_note(None, 'Note', text = '  a note ') == 'a note'
     assert marks.ask_note(None, 'Note') is None

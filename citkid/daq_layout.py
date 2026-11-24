@@ -1617,12 +1617,17 @@ def dependents(root, paths):
         (nothing under another found path, or under ``paths``).
     """
     paths = [paths] if isinstance(paths, str) else [str(p) for p in paths]
+    # Nothing to look for matches nothing: an empty pattern would match
+    # every empty attribute and find the whole store
+    paths = [p for p in paths if p.strip('/')]
+    if not paths:
+        return []
     groups = [g for g in _all_groups(root)
               if g.basename not in (STREAMS_GROUP, TONE_MARKS_GROUP)]
     texts = {g.path: json.dumps(to_jsonable(dict(g.attrs))) for g in groups}
     found = []
     while True:
-        targets = paths + found
+        targets = [p for p in paths + found if p]
         pattern = re.compile('"(?:' + '|'.join(re.escape(p) for p in targets)
                              + ')(?:/[^"]*)?"')
         new = [p for p, text in texts.items()
@@ -1638,7 +1643,14 @@ def delete_item(root, path, run = None):
     """
     Delete an item from the store, with everything that depends on it
     (``dependents``). A run's streams go; its record stays with no
-    streams (its index is kept). Tone marks on the item stay.
+    streams (its index is kept). Tone marks on the item stay. The
+    store browser no longer offers this; it is for scripts.
+
+    Nothing above the item can go: a dependent at a lower mark level
+    than the item (``mark_level``; a tuning's groups are level 1,
+    stream calibrations 2, analyses 3) or at level 0 (the root, VNA
+    sweeps, resonator lists) stops the whole deletion, as does an
+    item with no path (a run without streams deletes nothing).
 
     Parameters:
     root (zarr.Group): the store root, writable.
@@ -1648,15 +1660,31 @@ def delete_item(root, path, run = None):
 
     Returns:
     deleted (list of str): the paths deleted, the item first.
+
+    Raises:
+    ValueError: if the item is the store root or a dependent lies
+        above the item.
     """
     if run is not None:
         rec = root[run[0]][STREAMS_GROUP].attrs['runs'][int(run[1])]
-        paths = [p for p in rec.get('paths') or [] if p in root]
+        paths = [p for p in rec.get('paths') or [] if p and p in root]
     else:
         paths = [str(path)]
+    paths = [p.strip('/') for p in paths if p and p.strip('/')]
+    if not paths:
+        return []
     deps = dependents(root, paths)
+    level = min(mark_level(p) for p in paths)
+    above = [d for d in deps if not d or mark_level(d) < max(level, 1)
+             or mark_level(d) == 0]
+    if above:
+        raise ValueError(f"deleting {', '.join(paths)} would take "
+                         f"{', '.join(above)} with it, which lies above "
+                         'it in the store: nothing was deleted')
     for p in paths + deps:
         parent, _, leaf = p.rpartition('/')
+        if not leaf:
+            raise ValueError('refusing to delete the store root')
         del (root[parent] if parent else root)[leaf]
     return paths + deps
 

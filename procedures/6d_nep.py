@@ -1,5 +1,5 @@
 """
-09: the NEP of every tone from a sweep of optical power (4c_power_sweep.py):
+6d: the NEP of every tone from a blackbody series (4c_ts_series.py):
 calibrate each point's timestream and fit its resonances, compute the
 spectra with peak removal and common-mode removal, fit the responsivity
 and the photon-noise NEP, review in a window, and save nep/<NAME>.
@@ -26,8 +26,8 @@ from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB, LIGHT_MODE
 NAME = 'bb_sweep'
 POINTS = {
 }
-TUNING = None
-CALIBRATION = None
+TUNING_NAME = None
+CALIBRATION_NAME = None
 NU = 150e9
 FREQ_HZ = 10.
 F_AVG = 1
@@ -82,10 +82,10 @@ def parse_args(argv = None):
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device)')
     p.add_argument('--name', default = NAME, help = 'result name')
-    p.add_argument('--tuning', default = TUNING,
+    p.add_argument('--tuning', default = TUNING_NAME,
                    help = 'tuning whose runs are the points, by name or '
                    'index (default: every tuning)')
-    p.add_argument('--cal', default = CALIBRATION,
+    p.add_argument('--cal', default = CALIBRATION_NAME,
                    help = 'stream calibration to continue, by name or index '
                    '(default: one named after the result)')
     p.add_argument('--overwrite', action = 'store_true',
@@ -136,7 +136,7 @@ def spectra_settings():
 
 def calibration_group(root, points, args):
     """
-    Return the stream calibration of the sweep: ``--cal`` (CALIBRATION),
+    Return the stream calibration of the sweep: ``--cal`` (CALIBRATION_NAME),
     or one named after the result (continued when it exists).
 
     Parameters:

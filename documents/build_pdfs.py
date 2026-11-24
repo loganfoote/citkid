@@ -35,7 +35,7 @@ DOCUMENTS = [
      'Tuning and timestreams'),
     ('timestream_analysis.md', 'procedures/timestream_analysis.pdf',
      'Timestream analysis'),
-    ('nep.md', 'procedures/nep.pdf', 'NEP from a power sweep'),
+    ('nep.md', 'procedures/nep.pdf', 'NEP from a blackbody series'),
     ('report.md', 'procedures/report.pdf', 'Report'),
     ('crs_streaming_format.md', 'crs_streaming_format.pdf',
      'CRS streaming data format'),

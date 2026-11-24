@@ -344,11 +344,11 @@ def test_run_store_browser(qapp, store, monkeypatch):
     assert run_store_browser() is None
 
 
-def test_report_boxes_rename_delete(qapp, tmp_path, monkeypatch):
+def test_report_boxes_and_rename(qapp, tmp_path, monkeypatch):
     """
     Without a site folder the attach buttons are hidden; with one, the
     Report boxes save ``in_report``. Rename changes a run's or tuning's
-    name; Delete removes an item and what depends on it after asking.
+    name; the browser has no delete.
     """
     path = tmp_path / 'devB.zarr'
     root = dl.create_store(path, 'devB', 'cd1')
@@ -388,7 +388,7 @@ def test_report_boxes_rename_delete(qapp, tmp_path, monkeypatch):
             for i in range(win.notes_table.rowCount())}
     # Rename a tuning and a run
     win.notes_table.setCurrentCell(rows['tune0'], 0)
-    assert win.rename_btn.isEnabled() and win.delete_btn.isEnabled()
+    assert win.rename_btn.isEnabled()
     assert win.rename_selected('cold') == 'tune0'
     assert dl.tuning_name(dl.open_store(path)['tune0']) == 'cold'
     rows = {win.notes_table.item(i, 0).text(): i
@@ -410,24 +410,14 @@ def test_report_boxes_rename_delete(qapp, tmp_path, monkeypatch):
     rows = {win.notes_table.item(i, 0).text(): i
             for i in range(win.notes_table.rowCount())}
     win.notes_table.setCurrentCell(rows['(store)'], 0)
-    assert not win.rename_btn.isEnabled() and not win.delete_btn.isEnabled()
-    # Delete the run: its stream and the results that depend on it go
-    win.notes_table.setCurrentCell(rows['ts0 dark2'], 0)
+    assert not win.rename_btn.isEnabled()
+    # Nothing in the browser deletes data
+    assert not hasattr(win, 'delete_btn') and \
+        not hasattr(win, 'delete_selected')
     assert dl.dependents(r, 'tune0/cal0/write0/ts0') == ['photons/lights']
-    answers = []
-    monkeypatch.setattr(QtWidgets.QMessageBox, 'question',
-                        lambda *a, **k: answers.pop(0))
-    answers[:] = [QtWidgets.QMessageBox.No]
-    assert win.delete_selected() == []
-    answers[:] = [QtWidgets.QMessageBox.Yes, QtWidgets.QMessageBox.No]
-    assert win.delete_selected() == []
-    answers[:] = [QtWidgets.QMessageBox.Yes, QtWidgets.QMessageBox.Yes]
-    assert win.delete_selected() == ['tune0/cal0/write0/ts0',
-                                     'photons/lights']
-    r = dl.open_store(path)
-    assert 'ts0' not in r['tune0/cal0/write0'] and 'photons' in r
-    assert 'lights' not in r['photons'] and 'dark' in r['hee']
-    assert dl.stream_runs(r)[0]['paths'] == []
+    assert 'ts0' in r['tune0/cal0/write0'] and 'photons' in r
+    assert 'lights' in r['photons'] and 'dark' in r['hee']
+    assert dl.stream_runs(r)[0]['paths'] == ['tune0/cal0/write0/ts0']
     win.close()
     # The Report boxes, for a report
     win = StoreBrowserWindow(path, title = 't', site_dir = str(tmp_path))
@@ -480,9 +470,9 @@ def test_kind_tabs_select_and_summarize(qapp, store, monkeypatch):
     assert win.attrs.toPlainText().startswith('tune0/cal0')
     assert win.notes_table.item(win.notes_table.currentRow(), 0).text() == \
         'tune0/cal0'
-    assert win.delete_btn.isEnabled() and win.summary_delete_btn.isEnabled()
     assert win.tree_btn.isEnabled() and win.reveal_btn.isEnabled()
     assert not win.rename_btn.isEnabled()      # a sweep has no name
+    assert not win.summary_rename_btn.isEnabled()
     # A run: its record in the summary, made from its sweep and tuning
     win.runs_table.setCurrentCell(1, 0)
     text = win.summary.toPlainText()

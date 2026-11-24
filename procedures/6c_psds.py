@@ -24,7 +24,7 @@ from citkid.qt_compat import set_theme
 from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB, LIGHT_MODE
 
 # Timestreams
-CALIBRATION = None
+CALIBRATION_NAME = None
 TIMESTREAMS = [
 ]
 NAME = ''
@@ -55,7 +55,7 @@ GLITCH_NSTD = 5.
 GLITCH_BASELINE_S = 1.
 GLITCH_DISTANCE_S = 1.e-3
 GLITCH_ROUNDS = 2
-PHOTONS = None
+PHOTONS_NAME = None
 GLITCH_PULSES = 'hee'
 COINC_WIN = 2
 HEE_MIN_MULT = 3
@@ -89,7 +89,7 @@ def parse_args(argv = None):
     p.add_argument('--deglitch', default = DEGLITCH,
                    choices = [o for o in psds.DEGLITCH_OPTIONS if o],
                    help = 'take out glitches first')
-    p.add_argument('--photons', default = PHOTONS,
+    p.add_argument('--photons', default = PHOTONS_NAME,
                    help = 'photon result whose filters find the pulses '
                    '(the name of a photons/<name>), with --deglitch '
                    'photons')
@@ -262,7 +262,8 @@ def main(args):
               'timestreams.')
         return None
     chosen = psds.select_timestreams(timestreams, TIMESTREAMS,
-                                     calibration = CALIBRATION, root = root)
+                                     calibration = CALIBRATION_NAME,
+                                     root = root)
     interactive = INTERACTIVE and not args.no_gui
     name = args.name.strip() or None
     existing = psds.matching_group(root, name, list(TIMESTREAMS))
@@ -282,7 +283,7 @@ def main(args):
     ref_grp = None
     if settings['deglitch'] == 'photons':
         if photons is None:
-            raise ValueError("DEGLITCH = 'photons' needs PHOTONS (or "
+            raise ValueError("DEGLITCH = 'photons' needs PHOTONS_NAME (or "
                              '--photons): the name of a photon result')
         from citkid.pipeline.photon_finder import PHOTONS_GROUP
         ref_grp = root[PHOTONS_GROUP][str(photons)]

@@ -1389,8 +1389,13 @@ class ManualResFinder(QtCore.QObject):
         saves, and closing the last window ends ``app.exec()``. (Calling
         ``app.quit()`` without closing the window left it on screen with no
         event loop, so it froze.)
+
+        The close is deferred to the next event-loop turn: the button sits
+        in the plot's graphics scene, and closing (and so destroying) the
+        window from inside the scene's own mouse-release handling crashed
+        on Linux, with the scene then working on freed memory.
         """
-        self.win.close()
+        QtCore.QTimer.singleShot(0, self.win.close)
         
     def show_help(self):
         """

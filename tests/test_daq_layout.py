@@ -699,6 +699,23 @@ def test_dependents_and_delete(tmp_path):
     assert dl.dependents(root, 'tune0') == ['ts_psd0']
     assert dl.dependents(root, 'vna1') == []
     assert dl.item_name(t) == 'tune0' and dl.item_name(vna) is None
+    # Nothing to look for finds nothing (an empty pattern once matched
+    # every empty attribute and found the whole store)
+    assert dl.dependents(root, []) == [] and dl.dependents(root, '') == []
+    assert dl.dependents(root, ['', '/']) == []
+    # A run without streams deletes nothing; the root is refused
+    dl.register_stream_run(t, dict(name = 'empty', notes = '',
+                                   dec_stage = 6, duration_s = 1.,
+                                   paths = []))
+    before = sorted(root.group_keys())
+    assert dl.delete_item(root, '', run = ('tune0', 0)) == []
+    assert dl.delete_item(root, '') == []
+    assert sorted(root.group_keys()) == before
+    # A dependent above the item stops the deletion: here a sweep's
+    # fit is referred to by a resonator list and a tuning
+    with pytest.raises(ValueError, match = 'lies above'):
+        dl.delete_item(root, 'vna0/full_sweep_fit')
+    assert sorted(root.group_keys()) == before
     assert dl.delete_item(root, 'tune0') == ['tune0', 'ts_psd0']
     assert sorted(root.group_keys()) == ['resonators0', 'vna0', 'vna1']
     dl.set_in_report(root, 'vna1', False)

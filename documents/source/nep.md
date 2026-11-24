@@ -1,53 +1,22 @@
 ---
-title: "NEP from a power sweep"
-subtitle: "4c_power_sweep, 6d_nep"
+title: "NEP from a blackbody series"
+subtitle: "6d_nep"
 ---
 
 # Overview
 
-A power sweep: timestreams at several optical powers
-(`4c_power_sweep.py`, after a tuning from "Tuning and timestreams"),
-then the NEP of every tone (`6d_nep.py`, which calibrates the
-timestreams and computes their spectra itself, in place of
-`5_calibrate_streams.py` and `6c_psds.py`).
+A blackbody series: timestreams at several optical powers, taken
+with `4c_ts_series.py` ("Tuning and timestreams") with the points
+named by blackbody temperature, then the NEP of every tone
+(`6d_nep.py`, which calibrates the timestreams and computes their
+spectra itself, in place of `5_calibrate_streams.py` and
+`6c_psds.py`).
 
 | Script | What it does | Saves |
 |---|---|---|
-| `4c_power_sweep.py` | At each point of a power sweep: set the power, calibrate (or reuse), take the runs; the point's name is saved with them | `ts{n}` |
-| `6d_nep.py` | NEP from a power sweep: calibration, IQ fits, spectra, responsivity and photon-noise fits, with a review window | `nep/<name>` |
+| `6d_nep.py` | NEP from a blackbody series: calibration, IQ fits, spectra, responsivity and photon-noise fits, with a review window | `nep/<name>` |
 
-# 4c_power_sweep.py: a sweep of optical power
-
-At each point of `POINTS` (a name, e.g. the blackbody temperature), the
-script calls `set_optical_power` (edit it for the setup; it also
-waits for the power to settle), calibrates `TONE_SET` and takes
-`RUNS` as `4b_stream_batch.py` does, naming each run
-`<point>_dec<stage>` (`_2`, `_3`, ... when the name is taken). The
-point's name is saved with its runs and its calibration sweep, and
-`6d_nep.py` maps the names to powers. A point with `cal` reuses the
-calibration of an earlier point of the sweep (its name) or a saved
-sweep (its path) instead of taking one; this suits a single NCO
-window only, since with several the sets are retuned at each point.
-A sweep taken by hand works the same way: name the runs, and give
-`POINTS` in 6d with the run names.
-
-## Settings
-
-{{settings:4c_power_sweep.py}}
-
-| Setting | Meaning |
-|---|---|
-| `TONE_SET` | Tone set calibrated and streamed at every point |
-| `POINTS` | The points in order: `dict(name = ...)`, with `cal = 'name'` (an earlier point) or `cal = 'tune0/cal2'` to reuse a calibration |
-| `RUNS` | Timestreams at each point: `dec_stage`, `duration_s` (and `notes`); the names come from the point |
-| `TONE_CHUNKS`, `FRES_UPDATE`, `NPOINTS_FINE`, `NPOINTS_GAIN`, `GAIN_SPAN_FACTOR`, `NSAMPS` | As in `4b_stream_batch.py` |
-
-## Command line
-
-`--from name` (start at that point, e.g. after a stop), `--tuning
-name`, `--simulate`, `--notes`.
-
-# 6d_nep.py: NEP from a power sweep
+# 6d_nep.py: NEP from a blackbody series
 
 Takes the points of a sweep (`POINTS`: the point names of 4c, or run
 names, with their incident powers), calibrates each point's timestream
@@ -106,8 +75,8 @@ nep/<name>/             attrs: points, calibration, psd, freq_hz, nu,
 |---|---|
 | `NAME` | Result name (`nep/<NAME>`; the calibration and PSD set are named so too) |
 | `POINTS` | `{'BBT40K': 1e-15, ...}`: the point names (4c) or run names and their incident powers in W; a point taken twice is given by its run names |
-| `TUNING` | Only this tuning's runs (`None`: every tuning) |
-| `CALIBRATION` | Stream calibration to continue, by name or index (`None`: one named `NAME`) |
+| `TUNING_NAME` | Only this tuning's runs (`None`: every tuning) |
+| `CALIBRATION_NAME` | Stream calibration to continue, by name or index (`None`: one named `NAME`) |
 | `NU` | Photon frequency, Hz: one value, or `dict(res_idx = Hz, ..., default = Hz)` |
 | `FREQ_HZ` | Frequency of $S_{xx}$ for the NEP (on the reduced grid 0.1, 0.3, 1, 3, 10, ... Hz) |
 | `F_AVG` | Fine sweep points averaged in the fits |

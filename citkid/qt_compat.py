@@ -438,16 +438,24 @@ def draw_icon(size = 256):
     # on a circle, dense far from resonance and sparse through the
     # dip (x from -3 to 3 in Q x)
     cx, cy, rad = size * 0.5, size * 0.5, size * 0.36
+    n = 28
+    zs = [1 - 1 / (1 + 2j * (-3. + 6. * i / (n - 1))) for i in range(n)]
+    # The ring runs under the points only: from the first off-resonance
+    # point round through the resonance to the last one, leaving the
+    # sweep's gap open on the off-resonance side (circle of diameter 1
+    # at 0.5; Qt angles counter-clockwise from 3 o'clock, in 1/16 deg)
+    angle = lambda z: _math.degrees(_math.atan2(z.imag, z.real - 0.5))
+    start, end = angle(zs[-1]), angle(zs[0])
     ring = _QtGui.QPen(_QtGui.QColor(255, 255, 255, 110), size * 0.045)
+    ring.setCapStyle(_QtCore.Qt.RoundCap)
     p.setPen(ring)
     p.setBrush(_QtCore.Qt.NoBrush)
-    p.drawEllipse(_QtCore.QPointF(cx, cy), rad, rad)
+    p.drawArc(_QtCore.QRectF(cx - rad, cy - rad, 2 * rad, 2 * rad),
+              int(round(start * 16)),
+              int(round(((end - start) % 360.) * 16)))
     p.setPen(_QtCore.Qt.NoPen)
     p.setBrush(_QtGui.QColor(255, 255, 255))
-    n = 28
-    for i in range(n):
-        qx = -3. + 6. * i / (n - 1)
-        z = 1 - 1 / (1 + 2j * qx)      # circle of diameter 1 at 0.5
+    for z in zs:
         pt = _QtCore.QPointF(cx + 2 * rad * (z.real - 0.5),
                              cy - 2 * rad * z.imag)
         p.drawEllipse(pt, size * 0.028, size * 0.028)

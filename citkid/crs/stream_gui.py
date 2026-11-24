@@ -871,6 +871,12 @@ class StreamWindow(QtWidgets.QMainWindow):
                              'make the tuning with 3_tune.py')
         if self.written and self.crs is not None and not self.worker.busy:
             self.clear_tones()
+        # The tone set and the resonator shown stay where the new tuning
+        # has them
+        keep_set = self.set_box.currentData()
+        r = self.tone_box.currentData()
+        keep_res = None if r is None or self.tones is None else \
+            int(self.tones['res_idxs'][int(r)])
         self.tune, self.tones = tune, tones
         self.setWindowTitle(f'{self._title}: {dl.tuning_name(tune)} '
                             f'({tune.basename})')
@@ -882,6 +888,8 @@ class StreamWindow(QtWidgets.QMainWindow):
         for s in sorted(set(tones['tone_set'].tolist())):
             n = int(np.sum(tones['tone_set'] == s))
             self.set_box.addItem(f'Tone set {s} ({n} tones)', s)
+        if keep_set is not None and self.set_box.findData(keep_set) >= 0:
+            self.set_box.setCurrentIndex(self.set_box.findData(keep_set))
         self.set_box.blockSignals(False)
         self.runs_list.blockSignals(True)
         self.runs_list.clear()
@@ -894,8 +902,28 @@ class StreamWindow(QtWidgets.QMainWindow):
                 self.tune_box.findData(tune.basename))
             self.tune_box.blockSignals(False)
         self._on_set()
+        if keep_res is not None:
+            self.select_res(keep_res)
         self._on_run_selected(-1)
         self._set_status(f'Tuning {dl.tuning_name(tune)} ({tune.basename}).')
+
+    def select_res(self, res_idx):
+        """
+        Show a resonator in the Tone box, if it is listed.
+
+        Parameters:
+        res_idx (int): the resonator index.
+
+        Returns:
+        found (bool): True if it is listed (and now selected).
+        """
+        for i in range(self.tone_box.count()):
+            r = self.tone_box.itemData(i)
+            if r is not None and \
+                    int(self.tones['res_idxs'][int(r)]) == int(res_idx):
+                self.tone_box.setCurrentIndex(i)
+                return True
+        return False
 
     def tuning_runs(self):
         """

@@ -115,7 +115,8 @@ class NEPReviewWindow(QtWidgets.QMainWindow):
         for key, slot in (('A', lambda: self.step_tone(-1)),
                           ('D', lambda: self.step_tone(1)),
                           ('C', self.open_calibration), ('B', self.toggle_bad),
-                          ('T', self.add_note), ('O', self.open_overview),
+                          ('M', self.toggle_bad), ('T', self.add_note),
+                          ('O', self.open_overview),
                           ('R', self.rescale)):
             QtWidgets.QShortcut(QtGui.QKeySequence(key), self, slot)
         self._fill_list()

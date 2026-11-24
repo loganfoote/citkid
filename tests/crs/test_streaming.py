@@ -1077,3 +1077,101 @@ def test_stream_window_adjust_tones(qapp, tmp_path):
     win.deleteLater()
     QtCore.QCoreApplication.sendPostedEvents(None,
                                              QtCore.QEvent.DeferredDelete)
+
+
+def test_stream_window_tone_change_keeps_tuning(qapp, tmp_path):
+    """
+    Choosing another tone for the plots changes nothing else: the
+    tuning, the tone set, the calibration and the stages stay.
+    """
+    crs = make_crs()
+    asyncio.run(crs.attach())
+    root, tune = make_tuning(tmp_path, crs)
+    dl.derive_tuning(root, tune, 'second', power_db = -3.)
+
+    async def connect():
+        """
+        Return the simulated board.
+
+        Returns:
+        crs (SimulatedCRS): the board.
+        """
+        return crs
+
+    win = StreamWindow(connect, root['tune0'], preview_s = 0.2,
+                       extra_features = True)
+    wait_for(lambda: win.crs is not None)
+    assert win.tune_box.count() == 2
+    # Switching tunings keeps the tone set and the resonator shown
+    win.set_box.setCurrentIndex(1)
+    win.tone_box.setCurrentIndex(1)
+    row = win.tone_box.currentData()
+    res = int(win.tones['res_idxs'][row])
+    win.tune_box.setCurrentIndex(win.tune_box.findData('tune1'))
+    assert win.tune.basename == 'tune1'
+    assert win.set_box.currentData() == 1
+    assert int(win.tones['res_idxs'][win.tone_box.currentData()]) == res
+    win.tune_box.setCurrentIndex(win.tune_box.findData('tune0'))
+    assert win.set_box.currentData() == 1
+    assert int(win.tones['res_idxs'][win.tone_box.currentData()]) == res
+    win.tune_box.setCurrentIndex(win.tune_box.findData('tune1'))
+    win.set_box.setCurrentIndex(1)
+    before = (win.tune.basename, win.tune_box.currentData(),
+              win.set_box.currentData(), win.write_dec.value(),
+              win.run_dec.value(), win.cal_box.currentIndex())
+    for i in range(min(3, win.tone_box.count())):
+        win.tone_box.setCurrentIndex(i)
+        assert win.tone_box.currentData() is not None
+        after = (win.tune.basename, win.tune_box.currentData(),
+                 win.set_box.currentData(), win.write_dec.value(),
+                 win.run_dec.value(), win.cal_box.currentIndex())
+        assert after == before
+    wait_for(lambda: not win.worker.busy)
+    win.close()
+    win.deleteLater()
+    QtCore.QCoreApplication.sendPostedEvents(None,
+                                             QtCore.QEvent.DeferredDelete)
+
+
+@pytest.mark.asyncio
+async def test_stream_batch_every_set(tmp_path):
+    """
+    With tone_set None every set is calibrated and each run streams all
+    of them in turn; a name gives each set's sweep its own name, and the
+    same name next time reuses them.
+    """
+    crs = make_crs()
+    await crs.attach()
+    root, tune = make_tuning(tmp_path, crs)
+    runs = [dict(name = 'all', dec_stage = 6, duration_s = 0.1)]
+    result = await stream_batch(crs, tune, None, runs,
+                                calibration = 'dark', npoints_fine = 40,
+                                npoints_gain = 10)
+    assert result['calibrations'] == {0: 'tune0/cal0', 1: 'tune0/cal1'}
+    assert result['calibration'] == ['tune0/cal0', 'tune0/cal1']
+    assert [root[p].attrs['name'] for p in result['calibration']] == \
+        ['dark_set0', 'dark_set1']
+    assert result['runs'] == [['tune0/cal0/write0/ts0',
+                               'tune0/cal1/write0/ts1']]
+    runs_made = dl.stream_runs(root)
+    assert [r['name'] for r in runs_made] == ['all_set0', 'all_set1']
+    assert [r['tone_set'] for r in runs_made] == [0, 1]
+    assert [c['name'] for c in dl.calibrations(tune)] == ['cal0', 'cal1']
+    # The same name again reuses both sweeps (in frame: the last set's
+    # NCOs are the board's, so set 1 is; set 0 is calibrated again)
+    result = await stream_batch(crs, tune, [1], [dict(
+        name = 'one', dec_stage = 6, duration_s = 0.1)],
+        calibration = 'dark_set1')
+    assert result['calibration'] == 'tune0/cal1'
+    assert [c['name'] for c in dl.calibrations(tune)] == ['cal0', 'cal1']
+    assert dl.stream_runs(root)[-1]['name'] == 'one'
+    # Without bars the caller's callbacks are used
+    seen = []
+    result = await stream_batch(crs, tune, [1], [dict(
+        name = 'two', dec_stage = 6, duration_s = 0.1)],
+        calibration = 'dark_set1', bars = False,
+        progress = lambda done, total: seen.append((done, total)),
+        status = lambda m: seen.append(m))
+    assert result['calibration'] == 'tune0/cal1'
+    assert any(isinstance(x, str) for x in seen)
+    assert any(isinstance(x, tuple) and x[1] > 0 for x in seen)

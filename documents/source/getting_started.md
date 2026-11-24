@@ -19,14 +19,14 @@ noise spectra. Run them in this order:
 | 6 | `3_tune.py`: tone powers and frequencies | Tuning and timestreams |
 | 7 | `4a_stream.py`: take timestreams in a window | Tuning and timestreams |
 | 8 | `4b_stream_batch.py` (instead of 4a): take timestreams without a window | Tuning and timestreams |
-| 9 | `4c_power_sweep.py` (for a power sweep): timestreams at each optical power | NEP |
+| 9 | `4c_ts_series.py` (for a series): timestreams at each point of an external parameter (blackbody power, temperature) | Tuning and timestreams |
 | 10 | `store_browser.py` (optional, any time): look around the store | this one |
 | 10b | `view_timestreams.py` (optional, any time): look at saved timestreams | Tuning and timestreams |
 | 11 | `5_calibrate_streams.py`: calibrate the timestreams | Tuning and timestreams |
 | 12 | `6a_find_photons.py`: photons and high-energy events (HEEs) | Timestream analysis |
 | 13 | `6b_hee.py`: lifetimes from HEEs | Timestream analysis |
 | 14 | `6c_psds.py`: noise spectra | Timestream analysis |
-| 15 | `6d_nep.py` (for a power sweep, instead of 5 and 6c): NEP from a power sweep | NEP |
+| 15 | `6d_nep.py` (for a blackbody series, instead of 5 and 6c): NEP from the series | NEP |
 | 16 | `7_report_site.py`: browsable pages of every device | Report |
 
 # The environment
@@ -144,10 +144,10 @@ right side is about the item selected in any of them:
 
 | Right tab | Shows |
 |---|---|
-| Summary | What the item is and when it was made, its notes, what it was made from and what depends on it (links that select those items); Open in store tree, Reveal folder, Rename..., Delete... |
+| Summary | What the item is and when it was made, its notes, what it was made from and what depends on it (links that select those items); Open in store tree, Reveal folder, Rename... |
 | Attributes | Its attributes as saved; for an array, its shape, dtype, chunks and first values |
 | Tone marks | Every bad mark and note on a tone; Clear mark, Make global and Make local act on the selected bad mark |
-| Notes | The notes of the store and of every item; select a row and edit below (saved when you move on); Rename..., Delete... |
+| Notes | The notes of the store and of every item; select a row and edit below (saved when you move on); Rename... |
 
 | Left tab | Lists |
 |---|---|
@@ -157,11 +157,10 @@ right side is about the item selected in any of them:
 | Store | The tree; expand a group to read its contents |
 
 **Rename...** changes the name of a tuning, run, PSD group, NEP sweep
-or photon or HEE result (references follow). **Delete...** removes the
-item from the store with everything that depends on it (a resonator
-list with its tunings, a run with its results, ...), after asking, and
-asking again when something depends on it; the Summary lists what would
-go. Double-click an item, or **Open in store tree**, to see its group;
+or photon or HEE result (references follow). Nothing in the browser
+deletes data: raw data is never overwritten or removed, and an item
+to be left out of a report is unchecked in the Report column instead.
+Double-click an item, or **Open in store tree**, to see its group;
 **Reveal folder** opens its directory in the file browser; a right-click
 offers the same. **H** shows the help. **Open** (Ctrl+O) chooses another
 store; `--pick` starts with the dialog; `--runs` prints the runs instead

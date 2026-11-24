@@ -29,7 +29,7 @@ CALIBRATE = [
     dict(name = 'dark_dec0', chunks = (0, 2), tone_sets = [0]),
     dict(run = 3)
 ]
-CALIBRATION = None
+CALIBRATION_NAME = None
 F_AVG = 1
 INTERACTIVE = True
 FIT_IQ = False
@@ -59,7 +59,7 @@ def parse_args(argv = None):
                    '(blank: <device>.zarr)')
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device)')
-    p.add_argument('--cal', default = CALIBRATION,
+    p.add_argument('--cal', default = CALIBRATION_NAME,
                    help = 'calibration to continue, by name or index, or '
                    'the name of a new one (default: the latest made '
                    'with CALIBRATE, else a new one)')

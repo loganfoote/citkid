@@ -138,12 +138,12 @@ def power_store(tmp_path, n_points = 4):
     dl.save_tones(dl.create_group(tune, 'tones', 'decision'),
                   fr, qr / 5, -55., np.arange(n),
                   tone_set = np.zeros(n, int), tone_module = np.ones(n, int))
-    m = load_script('4c_power_sweep.py')
+    m = load_script('4c_ts_series.py')
     m.POINTS = [dict(name = f'P{j}') for j in range(n_points)]
     m.RUNS = [dict(dec_stage = 6, duration_s = 0.5)]
     m.NPOINTS_FINE, m.NPOINTS_GAIN, m.NSAMPS = 60, 10, 10
     m.FRES_UPDATE = None
-    m.set_optical_power = lambda name: None
+    m.set_point = lambda name: None
 
     async def same_board(args, root, path):
         """

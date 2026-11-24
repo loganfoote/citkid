@@ -25,11 +25,11 @@ from citkid.qt_compat import set_theme
 from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB, LIGHT_MODE
 
 # Timestreams
-CALIBRATION = None
+CALIBRATION_NAME = None
 TIMESTREAMS = [
 ]
 NAME = ''
-REFERENCE = None
+REFERENCE_NAME = None
 REUSE = 'settings'
 INTERACTIVE = True
 TONES_BEFORE_WINDOW = None
@@ -81,12 +81,12 @@ def parse_args(argv = None):
                    '(blank: <device>.zarr)')
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device)')
-    p.add_argument('--cal', default = CALIBRATION,
+    p.add_argument('--cal', default = CALIBRATION_NAME,
                    help = 'calibration to use when a sweep has several, by '
                    "name or index (default: each timestream's own)")
     p.add_argument('--name', default = NAME,
                    help = 'name of the result of a single timestream')
-    p.add_argument('--reference', default = REFERENCE,
+    p.add_argument('--reference', default = REFERENCE_NAME,
                    help = 'saved result to reuse (its name)')
     p.add_argument('--reuse', choices = pf.REUSE_OPTIONS, default = REUSE,
                    help = 'what to take from the reference')

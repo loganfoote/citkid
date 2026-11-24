@@ -470,7 +470,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             treated as 1.0. The window is sized to 80% of the screen
             independently of this.
         fres_update_method (str): automatic fres update applied to the input
-            ``fres`` before the session; see ``run_fqfinder``.
+            ``fres`` before the session; see ``run_fq_finder``.
         start_idx (int): data index to start at. The cursor starts at the
             first interactive resonator whose index is >= ``start_idx`` (0
             if there is none).
@@ -550,7 +550,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             i for i in range(self._M) if self._res_idxs[i] >= 0
         ]
         if not self._interactive_indices:
-            # Nothing to edit: the UI is not built and run_fqfinder does not
+            # Nothing to edit: the UI is not built and run_fq_finder does not
             # show the window
             return
 
@@ -1607,7 +1607,7 @@ def accept_fres_update(
 
     Parameters:
     f, z, fres, qres, res_idxs, zarr_grp, fres_update_method,
-        rmv_gain_simple, npoints_update: see ``run_fqfinder``.
+        rmv_gain_simple, npoints_update: see ``run_fq_finder``.
 
     Returns:
     fres (np.array): the frequencies saved, Hz.
@@ -1634,7 +1634,7 @@ def accept_fres_update(
     zarr_grp[_DATA_IDX_KEY][0] = max(len(fres) - 1, 0)
     return fres
 
-def run_fqfinder(
+def run_fq_finder(
     f, z, fres, qres, res_idxs, zarr_grp, title = "FQ Finder", ui_scale = 1.0,
     fres_update_method = "none", rmv_gain_simple = False, ares = None,
     npoints_update = None,
@@ -1733,3 +1733,6 @@ def run_fqfinder(
     win.show()
     # exec() is the modern name (PyQt6+); exec_() is kept for PyQt5/PySide2.
     (getattr(app, 'exec', None) or app.exec_)()
+
+# The earlier spelling
+run_fqfinder = run_fq_finder

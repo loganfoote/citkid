@@ -539,7 +539,8 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         Parameters:
         event (QKeyEvent): the key event.
         """
-        keys = {Qt.Key_B: self.toggle_bad, Qt.Key_T: self.add_note,
+        keys = {Qt.Key_B: self.toggle_bad, Qt.Key_M: self.toggle_bad,
+                Qt.Key_T: self.add_note,
                 Qt.Key_A: lambda: self.step_tone(-1),
                 Qt.Key_D: lambda: self.step_tone(1)}
         if event.key() in keys and not isinstance(

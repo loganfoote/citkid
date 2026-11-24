@@ -3,7 +3,7 @@ Power sweeps: the NEP of every tone from a sweep of optical power
 (``procedures/6d_nep.py``).
 
 A sweep is a list of points: one timestream run per point, taken on a
-calibration sweep at an incident power. 4c_power_sweep.py names the
+calibration sweep at an incident power. 4c_ts_series.py names the
 points (attribute ``point`` on the run and its sweep); 6d_nep.py maps
 the names to powers (``select_points``). Points may share a calibration
 sweep. The analysis:
@@ -53,7 +53,7 @@ TONE_FIELDS = ('R0', 'P0', 'x0', 'R0_err', 'P0_err', 'x0_err', 'f1', 'eta',
 def list_points(root, tuning = None):
     """
     List the runs of a power sweep: those with a point name (attribute
-    ``point``, written by 4c_power_sweep.py) or a recorded power
+    ``point``, written by 4c_ts_series.py) or a recorded power
     (``power_w``) that have streams.
 
     Parameters:

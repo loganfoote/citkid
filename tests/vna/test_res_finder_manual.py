@@ -1754,6 +1754,10 @@ def test_quit_and_save_closes_window_and_saves_once(
     with patch.object(finder, 'save_data', wraps=finder.save_data) as save, \
             patch.object(finder.app, 'quit') as app_quit:
         finder.quit_and_save()
+        # The close waits for the next event-loop turn (the button lives
+        # in the graphics scene, which must finish its click first)
+        assert finder.win.isVisible()
+        finder.app.processEvents()
 
     assert not finder.win.isVisible()
     save.assert_called_once()

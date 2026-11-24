@@ -945,6 +945,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
                                                  QtWidgets.QAbstractSpinBox))
         keys = {Qt.Key_R: self.rescale,
                 Qt.Key_B: self.toggle_bad,
+                Qt.Key_M: self.toggle_bad,
                 Qt.Key_T: self.add_note,
                 Qt.Key_O: self.open_overview,
                 Qt.Key_A: lambda: self.step_tone(-1),

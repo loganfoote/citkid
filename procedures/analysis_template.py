@@ -11,7 +11,7 @@ from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-CALIBRATION = None
+CALIBRATION_NAME = None
 TIMESTREAM = 'dark_dec6'
 TONE_SET = None
 
@@ -20,13 +20,14 @@ TONE_SET = None
 ################################################################################
 root = dl.open_store(dl.store_path(DATA_DIR, COOLDOWN, DEVICE, SUFFIX))
 
-# The calibration (the latest ts_cal, or CALIBRATION: 'ts_cal2' or 2) applied
+# The calibration (the latest ts_cal, or CALIBRATION_NAME: 'ts_cal2' or 2)
+# applied
 # to the timestream (a run name, or an index in the calibration's list):
 # xt is the fractional frequency shift, thetat the loop angle and At the
 # amplitude, one row per calibrated tone of the tone set, one column per
 # sample
 DS, ts, out = calibrated_timestream(
-    root, TIMESTREAM, cal = CALIBRATION, tone_set = TONE_SET,
+    root, TIMESTREAM, cal = CALIBRATION_NAME, tone_set = TONE_SET,
     outputs = ('xt', 'thetat', 'At'))
 xt, thetat, At = out['xt'], out['thetat'], out['At']
 t = np.arange(xt.shape[1]) * ts['dt']
@@ -50,6 +51,7 @@ z_counts, counts_to_s21 = stream['z'], stream['counts_to_s21'][:]
 # root with kind 'analysis', one array per quantity, and the inputs in its
 # attributes
 grp = dl.create_group(root, 'my_analysis', 'analysis', attrs = dict(
-    timestream = ts['name'], run = ts['run'], calibration = str(CALIBRATION)))
+    timestream = ts['name'], run = ts['run'],
+    calibration = str(CALIBRATION_NAME)))
 dl.write_array(grp, 'res_idxs', res_idxs)
 dl.write_array(grp, 'x_rms', np.nanstd(xt, axis = 1))

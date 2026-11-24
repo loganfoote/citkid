@@ -308,7 +308,7 @@ async def test_01_vna_sweep(monkeypatch, tmp_path):
     argv = ['--data-dir', str(tmp_path), '--cooldown', 'cd1', '--device',
             'devA', '--modules', '3', '--nsamps', '7', '--qr-median', '1e4',
             '--pts-per-lw', '5', '--notes',
-            '\n20 dB on the DAC line\nLPF on the ADC\n']
+            '\n20 dB on the DAC line\nLPF on the ADC\n', '--no-view']
     k = await m.main(m.parse_args(argv))
     assert k == 0
     assert made[0]['module_idxs'] == [3] and not made[0]['global_control']
@@ -354,6 +354,8 @@ async def test_01_vna_sweep_view(monkeypatch, tmp_path):
     monkeypatch.setattr(m, 'run_vna_view', fake_view)
     argv = ['--data-dir', str(tmp_path), '--cooldown', 'cd1', '--device',
             'devA', '--qr-median', '1e4', '--pts-per-lw', '1']
+    # VIEW is the default of --view / --no-view
+    monkeypatch.setattr(m, 'VIEW', False)
     assert await m.main(m.parse_args(argv)) == 0 and seen == []
     assert await m.main(m.parse_args(argv + ['--view'])) == 1
     root, k = seen[-1]
@@ -488,7 +490,7 @@ def test_03_tune(tmp_path, monkeypatch, capsys, n_cal):
         n = len(np.asarray(datasets[0].res_idxs))
         chosen = np.full(n, -47.)
         chosen[1] = -60.     # clipped
-        chosen[0] = np.nan   # fallback: the median of the others
+        chosen[0] = np.nan   # fallback: the median of the nearest tones
         root.require_group('xy_fit').create_array('x_chosen', data = chosen)
 
     def fake_fqfinder(f, z, fres, qres, res_idxs, zarr_grp, **kwargs):
@@ -511,7 +513,7 @@ def test_03_tune(tmp_path, monkeypatch, capsys, n_cal):
         arr[:] = rr.astype(str)
 
     monkeypatch.setattr(m, 'run_iq_series', fake_iq_series)
-    monkeypatch.setattr(m, 'run_fqfinder', fake_fqfinder)
+    monkeypatch.setattr(m, 'run_fq_finder', fake_fqfinder)
     answers = []
     monkeypatch.setattr(m, 'ask_make_tones', lambda t: answers.pop(0))
     argv = ['--store', str(path), '--simulate']
@@ -525,6 +527,7 @@ def test_03_tune(tmp_path, monkeypatch, capsys, n_cal):
     assert sorted(dl.list_indices(tune['power_sweep'], 'set')) == [0, 1, 2]
     pc = tune['power_choice']
     assert pc['ares'][0] == -47. and pc['fallback'][0]
+    assert pc.attrs['fallback_nearest'] == m.FALLBACK_NEAREST
     assert pc['ares'][1] == m.ARES_LIMITS[0]
     np.testing.assert_allclose(pc['ares'][2:], -47.)
     np.testing.assert_allclose(tune['fq_sweep/ares'][:], pc['ares'][:])
@@ -615,14 +618,14 @@ def test_03_tune(tmp_path, monkeypatch, capsys, n_cal):
             fake_fqfinder(f, z, fres, qres, res_idxs, zarr_grp, **kwargs)
         zarr_grp['fres_opt'][0] = np.nan
 
-    monkeypatch.setattr(m, 'run_fqfinder', unfinished)
+    monkeypatch.setattr(m, 'run_fq_finder', unfinished)
     answers[:] = [False]
     assert m.main(m.parse_args(argv + ['--tuning', 'part',
                                        '--port-tune', '0'])) == 2
     out = capsys.readouterr().out
     assert 'not finished' in out and 'tones' not in root['tune2']
     answers[:] = [True]
-    monkeypatch.setattr(m, 'run_fqfinder', unfinished)
+    monkeypatch.setattr(m, 'run_fq_finder', unfinished)
     assert m.main(m.parse_args(argv + ['--tuning', 'part',
                                        '--port-tune', '0'])) == 2
     assert len(dl.load_tones(root['tune2/tones'])['fres']) == \
@@ -709,7 +712,7 @@ def test_04b_stream_batch(tmp_path, monkeypatch, capsys):
     """
     Step 04b calibrates the tone set (moving the tones to the sweep's
     resonances when asked), writes its tones, takes RUNS and frees the
-    board; CALIBRATION reuses a calibration instead of sweeping again.
+    board; CALIBRATION_NAME reuses a calibration instead of sweeping again.
     """
     from citkid.crs import board_lock
     from citkid.crs.sim import simulate_vna_store, simulated_crs
@@ -777,13 +780,37 @@ def test_04b_stream_batch(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert 'moved to the sweep' in out and "a: ['tune0/cal0/write0/ts0']" in out
     # Reusing the calibration: no new sweep, the tones written again
-    monkeypatch.setattr(m, 'CALIBRATION', 'tune0/cal0')
+    monkeypatch.setattr(m, 'CALIBRATION_NAME', 'tune0/cal0')
     monkeypatch.setattr(m, 'RUNS', [dict(name = 'c', dec_stage = 6,
                                          duration_s = 0.1)])
     result = m.main(m.parse_args(argv))
     assert result['calibration'] == 'tune0/cal0'
     assert result['runs'] == [['tune0/cal0/write1/ts2']]
     assert [c['name'] for c in dl.calibrations(root['tune0'])] == ['cal0']
+    # A name no sweep has: one is taken and named; the same name next
+    # time reuses it
+    monkeypatch.setattr(m, 'CALIBRATION_NAME', 'dark_cal')
+    monkeypatch.setattr(m, 'RUNS', [dict(name = 'd', dec_stage = 6,
+                                         duration_s = 0.1)])
+    result = m.main(m.parse_args(argv))
+    assert result['calibration'] == 'tune0/cal1'
+    root = dl.open_store(path)
+    assert root['tune0/cal1'].attrs['name'] == 'dark_cal'
+    assert dl.find_calibration_sweep(root['tune0'], 'dark_cal').basename \
+        == 'cal1'
+    assert dl.find_calibration_sweep(root['tune0'], 'cal0').basename \
+        == 'cal0'
+    assert dl.find_calibration_sweep(root['tune0'], 1).basename == 'cal1'
+    assert dl.find_calibration_sweep(root['tune0'], 'none') is None
+    assert [c['label'] for c in dl.calibrations(root['tune0'])] == \
+        ['', 'dark_cal']
+    monkeypatch.setattr(m, 'RUNS', [dict(name = 'e', dec_stage = 6,
+                                         duration_s = 0.1)])
+    result = m.main(m.parse_args(argv))
+    assert result['calibration'] == 'tune0/cal1'
+    assert [c['name'] for c in dl.calibrations(dl.open_store(path)
+                                               ['tune0'])] == \
+        ['cal0', 'cal1']
 
 
 def test_archive_store_script(tmp_path, capsys):
@@ -861,7 +888,7 @@ def test_05_calibrate_streams(tmp_path, monkeypatch, capsys):
     m.main(m.parse_args(argv))
     assert dl.list_indices(dl.open_store(tmp_path / 's.zarr'),
                            'ts_cal') == [0, 1]
-    # CALIBRATION (--cal) continues a group that is not the latest,
+    # CALIBRATION_NAME (--cal) continues a group that is not the latest,
     # by index in any form, if it was made with the same choice
     monkeypatch.setattr(m, 'CALIBRATE', sel)
     for which in ('0', 'ts_cal0'):
@@ -1919,7 +1946,7 @@ def test_07_psds(photon_store, monkeypatch, capsys):
     assert np.median(t['sxx_reduced'][:, 0] / raw) < 0.7
     # A photon result's filters: HEEs only (a few per second), or
     # every pulse
-    with pytest.raises(ValueError, match = 'PHOTONS'):
+    with pytest.raises(ValueError, match = 'PHOTONS_NAME'):
         m.main(m.parse_args(argv + ['--deglitch', 'photons', '--new']))
     root = dl.open_store(path, mode = 'a')
     if 'photons' not in root or 'dark0_set0' not in root['photons']:
@@ -2662,7 +2689,7 @@ def test_06_names_the_calibration_with_the_timestream(
     """
     A timestream takes the calibration of its own sweep; a calibration
     asked for that is not on the sweep is refused, naming the ones that
-    are, and a sweep with several calibrations needs CALIBRATION.
+    are, and a sweep with several calibrations needs CALIBRATION_NAME.
     """
     from citkid.pipeline import photon_finder as pf
     path, _ = photon_store
@@ -2685,7 +2712,7 @@ def test_06_names_the_calibration_with_the_timestream(
         with pytest.raises(KeyError, match = r"no run 'nope' with "
                            'calibrated streams'):
             m.main(m.parse_args(['--store', str(path)]))
-        # A second calibration on the same sweep: CALIBRATION decides
+        # A second calibration on the same sweep: CALIBRATION_NAME decides
         from citkid.zarr_util import copy_group
         copy_group(root['ts_cal0'],
                    dl.create_group(root, 'ts_cal9', 'analysis'))
@@ -2703,7 +2730,7 @@ def test_06_names_the_calibration_with_the_timestream(
         del root['ts_cal8']
 
 
-def test_04c_power_sweep(tmp_path, monkeypatch, capsys):
+def test_04c_ts_series(tmp_path, monkeypatch, capsys):
     """
     Step 04c sets the power at each point (the hook), calibrates the tone
     set (or reuses an earlier point's calibration) and takes RUNS named
@@ -2727,7 +2754,7 @@ def test_04c_power_sweep(tmp_path, monkeypatch, capsys):
     dl.save_tones(dl.create_group(tune, 'tones', 'decision'),
                   fr, qr / 5, -55., np.arange(n),
                   tone_set = np.zeros(n, int), tone_module = np.ones(n, int))
-    m = load_script('4c_power_sweep.py')
+    m = load_script('4c_ts_series.py')
     monkeypatch.setattr(m, 'POINTS', [dict(name = 'BBT40K'),
                                       dict(name = 'BBT80K', cal = 'BBT40K')])
     monkeypatch.setattr(m, 'RUNS', [dict(dec_stage = 6, duration_s = 0.2),
@@ -2737,7 +2764,7 @@ def test_04c_power_sweep(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(m, 'NSAMPS', 10)
     monkeypatch.setattr(m, 'FRES_UPDATE', None)
     set_calls = []
-    monkeypatch.setattr(m, 'set_optical_power',
+    monkeypatch.setattr(m, 'set_point',
                         lambda name: set_calls.append(name))
 
     async def same_board(args, root, path):
@@ -2852,3 +2879,40 @@ def test_06c_reuses_timestreams(photon_store, monkeypatch, capsys):
     grp = psds.matching_group(dl.open_store(path), 'reuse', [0])
     t = grp['timestream0']
     assert t['status'][:][0] == 'marked bad: noisy' and t['bad'][:][0]
+
+
+def test_cal_tones_total(tmp_path, monkeypatch, capsys):
+    """
+    N_CAL_TONES is the whole tuning's count, spread over the NCO
+    windows; a window short of gaps or room hands its share to the
+    others, and the count drops (with a line) only when every window
+    is short.
+    """
+    import numpy as np
+    m = load_script('3_tune.py')
+    # Two windows (two tone sets on module 1): resonances in the first
+    # (four gaps, the edges included), none in the second (one gap)
+    fres = np.array([1.00e9, 1.02e9, 1.04e9])
+    res = dict(fres_all = fres, Qr_all = np.full(3, 2e4))
+    tplan = dict(ncos = [{'1': 1.05e9}, {'1': 1.65e9}],
+                 tone_set = np.array([0, 0, 0]),
+                 tone_module = np.array([1, 1, 1]), extended_bw = False)
+    monkeypatch.setattr(m, 'CAL_MIN_SEP_LW', 10.)
+    monkeypatch.setattr(m, 'N_CAL_TONES', 4)
+    fcal, scal, mcal = m.cal_tones(res, tplan, max_tones = 100)
+    # Two each by fair share, then the empty window's shortfall goes
+    # to the first
+    assert len(fcal) == 4 and np.all(mcal == 1)
+    assert list(scal).count(0) == 3 and list(scal).count(1) == 1
+    assert 'only' not in capsys.readouterr().out
+    # More than the gaps hold: fewer, and a line says so
+    monkeypatch.setattr(m, 'N_CAL_TONES', 6)
+    fcal, scal, _ = m.cal_tones(res, tplan, max_tones = 100)
+    assert len(fcal) == 5 and list(scal).count(0) == 4
+    assert 'only 5 of 6 calibration tones' in capsys.readouterr().out
+    # Room of 1 in the first window (3 tones of 4): one there, one in
+    # the empty window
+    fcal, scal, _ = m.cal_tones(res, tplan, max_tones = 4)
+    assert len(fcal) == 2 and sorted(scal.tolist()) == [0, 1]
+    monkeypatch.setattr(m, 'N_CAL_TONES', 0)
+    assert len(m.cal_tones(res, tplan, max_tones = 100)[0]) == 0

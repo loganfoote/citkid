@@ -26,12 +26,12 @@ from citkid.qt_compat import set_theme
 from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB, LIGHT_MODE
 
 # Timestreams
-CALIBRATION = None
+CALIBRATION_NAME = None
 TIMESTREAMS = [
 ]
 NAME = ''
 EVENTS = 'auto'
-PHOTONS = None
+PHOTONS_NAME = None
 INTERACTIVE = True
 TONES_BEFORE_WINDOW = None
 WINDOW_FIRST_ONLY = False
@@ -78,14 +78,14 @@ def parse_args(argv = None):
                    '(blank: <device>.zarr)')
     p.add_argument('--store', default = None,
                    help = 'store path (instead of data dir/cooldown/device)')
-    p.add_argument('--cal', default = CALIBRATION,
+    p.add_argument('--cal', default = CALIBRATION_NAME,
                    help = 'calibration to use when a sweep has several, by '
                    "name or index (default: each timestream's own)")
     p.add_argument('--name', default = NAME,
                    help = 'name of the result of a single timestream')
     p.add_argument('--events', choices = ('auto', 'photons', 'triggers'),
                    default = EVENTS, help = 'where the events come from')
-    p.add_argument('--photons', default = PHOTONS,
+    p.add_argument('--photons', default = PHOTONS_NAME,
                    help = 'photon result to take the events from (name)')
     p.add_argument('--continue', dest = 'cont', action = 'store_true',
                    default = False,

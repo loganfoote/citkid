@@ -31,7 +31,7 @@ from citkid.vna.fq_finder import (
     _SpanRegionItem,
     _InteractiveViewBox,
     FqFinderWindow,
-    run_fqfinder,
+    run_fq_finder,
 )
 
 
@@ -429,6 +429,7 @@ def test_title_set(qapp):
 
 def test_reject_reasons_class_constant():
     expected = ["tone off resonance", "double resonance",
+                "shallow resonance",
                 "bifurcated", "other"]
     assert FqFinderWindow._REJECT_REASONS == expected
 
@@ -1312,12 +1313,12 @@ def test_read_saved_data_idx(saved, expected):
 
 
 # ===========================================================================
-# run_fqfinder startup dialogs
+# run_fq_finder startup dialogs
 # ===========================================================================
 
 def _run_with_dialogs(qapp, zg, choice=None, start_choice=None):
     """
-    Run ``run_fqfinder`` with the dialogs, window, and event loop patched.
+    Run ``run_fq_finder`` with the dialogs, window, and event loop patched.
 
     Parameters:
     qapp (QApplication): the test application.
@@ -1341,11 +1342,11 @@ def _run_with_dialogs(qapp, zg, choice=None, start_choice=None):
         patch.object(type(qapp), "exec", create=True),
         patch.object(type(qapp), "exec_", create=True),
     ):
-        run_fqfinder(f, z, fres, qres, res_idxs, zg)
+        run_fq_finder(f, z, fres, qres, res_idxs, zg)
     return window_cls, startup, ask_start
 
 
-def test_run_fqfinder_no_existing_data_skips_dialogs(qapp):
+def test_run_fq_finder_no_existing_data_skips_dialogs(qapp):
     window_cls, startup, ask_start = _run_with_dialogs(qapp, _make_zarr())
     startup.assert_not_called()
     ask_start.assert_not_called()
@@ -1354,14 +1355,14 @@ def test_run_fqfinder_no_existing_data_skips_dialogs(qapp):
     assert kwargs["start_idx"] == 0
 
 
-def test_run_fqfinder_cancel_raises(qapp):
+def test_run_fq_finder_cancel_raises(qapp):
     zg = _make_zarr()
     _ensure_zarr_arrays(zg, 3)
     with pytest.raises(RuntimeError, match="cancelled"):
         _run_with_dialogs(qapp, zg, choice="cancel")
 
 
-def test_run_fqfinder_overwrite_clears_saved_data(qapp):
+def test_run_fq_finder_overwrite_clears_saved_data(qapp):
     zg = _make_zarr()
     _ensure_zarr_arrays(zg, 3)
     zg[_DATA_IDX_KEY][0] = 2
@@ -1375,7 +1376,7 @@ def test_run_fqfinder_overwrite_clears_saved_data(qapp):
 
 
 @pytest.mark.parametrize("start_choice", [2, 0])
-def test_run_fqfinder_load_asks_for_saved_idx(qapp, start_choice):
+def test_run_fq_finder_load_asks_for_saved_idx(qapp, start_choice):
     zg = _make_zarr()
     _ensure_zarr_arrays(zg, 3)
     zg[_DATA_IDX_KEY][0] = 2
@@ -1388,7 +1389,7 @@ def test_run_fqfinder_load_asks_for_saved_idx(qapp, start_choice):
     assert kwargs["start_idx"] == start_choice
 
 
-def test_run_fqfinder_load_without_saved_idx_starts_at_zero(qapp):
+def test_run_fq_finder_load_without_saved_idx_starts_at_zero(qapp):
     zg = _make_zarr()
     _ensure_zarr_arrays(zg, 3)          # data index left at -1
     window_cls, _, ask_start = _run_with_dialogs(qapp, zg, choice="load")
@@ -1422,15 +1423,15 @@ def test_ask_start_idx_builds_and_defaults_to_zero(qapp):
 # All-calibration input and editing rejected resonators
 # ===========================================================================
 
-def test_run_fqfinder_all_cal_tones_does_not_open_window(qapp):
-    """With no interactive resonators, run_fqfinder returns without showing."""
+def test_run_fq_finder_all_cal_tones_does_not_open_window(qapp):
+    """With no interactive resonators, run_fq_finder returns without showing."""
     f, z, fres, qres, _ = _make_sweep(M=2)
     zg = _make_zarr()
     mod = "citkid.vna.fq_finder"
     with patch(f"{mod}.FqFinderWindow.show") as show, \
          patch.object(type(qapp), "exec", create=True) as app_exec, \
          patch.object(type(qapp), "exec_", create=True) as app_exec_:
-        run_fqfinder(f, z, fres, qres, np.array([-1, -2]), zg)
+        run_fq_finder(f, z, fres, qres, np.array([-1, -2]), zg)
     show.assert_not_called()
     app_exec.assert_not_called()
     app_exec_.assert_not_called()
@@ -1579,3 +1580,57 @@ def test_tone_marks_follow_rejection(basic_win):
         ('note', 'odd shape', '')
     assert dl.tone_marks(root, res_idx)[0]['scope'] == 'global'
     assert w._marks_label.text() == '1 note'
+
+
+def test_toggle_reject_key(basic_win):
+    """
+    M rejects the current resonator with the combo's reason (the first
+    one when none is chosen) and restores it when pressed again; the
+    reasons offer 'shallow resonance'.
+    """
+    from citkid import daq_layout as dl
+    w = basic_win
+    assert 'shallow resonance' in w._REJECT_REASONS
+    ri, res_idx = w._ri, int(w._res_idxs[w._ri])
+    w._toggle_reject()
+    assert ri in w._reject_reasons
+    assert w._reject_reasons[ri] == w._REJECT_REASONS[0]
+    assert set(dl.bad_tones(w._zg)) == {res_idx}
+    w._toggle_reject()
+    assert ri not in w._reject_reasons
+    assert w._reason_combo.currentText() == 'not rejected'
+    assert dl.bad_tones(w._zg) == {}
+
+
+def test_accept_fres_update(tmp_path):
+    """
+    Without the window every tone takes the automatic frequency update
+    and keeps its span, nothing is rejected, the saved index is the
+    last tone, and an earlier run's arrays are replaced.
+    """
+    from citkid import daq_layout as dl
+    from citkid.vna.fq_finder import accept_fres_update, _DATA_IDX_KEY
+    M, N = 4, 201
+    fres = 1e9 + np.arange(M) * 1e7
+    qres = np.full(M, 2e4)
+    f = fres[:, None] + np.linspace(-1, 1, N)[None, :] * 4 * fres[:, None] \
+        / qres[:, None]
+    # The resonances sit 0.3 linewidths above the guesses
+    true = fres * (1 + 0.3 / qres)
+    x = (f - true[:, None]) / true[:, None] * qres[:, None]
+    z = 1 - 0.8 / (1 + 2j * x)
+    root = dl.create_store(tmp_path / 's.zarr', 'd', 'c')
+    grp = dl.create_group(root, 'fq', 'raw')
+    grp.create_array('fres_opt', shape = (M,), dtype = np.float64,
+                     fill_value = 0.)
+    grp.create_array('qres_opt', shape = (M,), dtype = np.float64,
+                     fill_value = 0.)
+    out = accept_fres_update(f, z, fres, qres, np.arange(M), grp,
+                             fres_update_method = 'minS21')
+    np.testing.assert_allclose(out, true, rtol = 1e-6)
+    np.testing.assert_allclose(grp['fres_opt'][:], out)
+    np.testing.assert_allclose(grp['qres_opt'][:], qres)
+    assert list(grp['reject_reason'][:]) == [''] * M
+    assert int(grp[_DATA_IDX_KEY][0]) == M - 1
+    same = accept_fres_update(f, z, fres, qres, np.arange(M), grp)
+    np.testing.assert_allclose(same, fres)

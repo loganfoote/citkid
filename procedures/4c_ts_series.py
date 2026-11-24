@@ -1,14 +1,16 @@
 """
-04c: take a sweep of optical power: at each point, set the power
-(``set_optical_power``, edited for the setup and settling there),
+4c: take a series of timestreams over an external parameter (the
+blackbody power, the stage temperature, ...): at each point, set the
+parameter (``set_point``, edited for the setup, settling included),
 calibrate the tone set (or reuse a calibration) and take the
 timestreams in RUNS (``stream_batch``, as 4b). The point's name is
-saved with its calibration sweep and its runs, for 6d_nep.py, where
-the names are mapped to powers. Needs crs_init.py first.
+saved with its calibration sweep and its runs; a blackbody series is
+analyzed for NEP by 6d_nep.py, which maps the names to powers. Needs
+crs_init.py first.
 
 Usage:
-    python 4c_power_sweep.py --device deviceA --modules 1
-    python 4c_power_sweep.py --device deviceA --modules 1 --from BBT80K
+    python 4c_ts_series.py --device deviceA --modules 1
+    python 4c_ts_series.py --device deviceA --modules 1 --from BBT80K
 """
 import argparse
 import asyncio
@@ -51,15 +53,16 @@ NSAMPS = 200
 NOTES = """
 """
 
-def set_optical_power(name):
+def set_point(name):
     """
-    Set the optical power of a point and wait for it to settle: edit
-    this for the setup (the blackbody temperature, an attenuator, ...).
+    Set the external parameter of a point and wait for it to settle:
+    edit this for the setup (the blackbody temperature, the stage
+    temperature, an attenuator, ...).
 
     Parameters:
     name (str): the point's name, e.g. 'BBT40K'.
     """
-    print(f'Set the optical power for {name}')
+    print(f'Set the point {name}')
 
 ################################################################################
 ################################### Script #####################################
@@ -74,8 +77,8 @@ def parse_args(argv = None):
     Returns:
     args (argparse.Namespace): the options.
     """
-    p = argparse.ArgumentParser(description = 'Take a sweep of optical '
-                                'power.')
+    p = argparse.ArgumentParser(description = 'Take a series of '
+                                'timestreams over an external parameter.')
     p.add_argument('--serial', type = int, default = SERIAL_NUMBER)
     p.add_argument('--iface', default = INTERFACE)
     p.add_argument('--data-dir', default = DATA_DIR)
@@ -240,7 +243,7 @@ def calibration_of(point, results):
 
 async def take(crs, tune, args):
     """
-    Take the sweep: every point from ``--from`` on. A point with ``cal``
+    Take the series: every point from ``--from`` on. A point with ``cal``
     reuses that calibration (one NCO window only: with several, the
     sets are retuned at each point, so every point takes its own).
 
@@ -264,7 +267,7 @@ async def take(crs, tune, args):
     results = {}
     for point in POINTS[first:]:
         print(f"Point {point['name']}")
-        set_optical_power(point['name'])
+        set_point(point['name'])
         notes = (args.notes or '').strip()
         taken = [r['name'] for r in dl.stream_runs(root, tune.basename)]
         result = await stream_batch(
@@ -283,7 +286,7 @@ async def take(crs, tune, args):
 
 def main(args):
     """
-    Connect, hold the board, and take the sweep.
+    Connect, hold the board, and take the series.
 
     Parameters:
     args (argparse.Namespace): options from ``parse_args``.
@@ -296,11 +299,11 @@ def main(args):
     dl.check_store(root)
     tune = find_tuning(root, args.tuning)
     serial = SIM_SERIAL if args.simulate else args.serial
-    owner = f'4c_power_sweep.py ({os.path.basename(path)}, {tune.basename})'
+    owner = f'4c_ts_series.py ({os.path.basename(path)}, {tune.basename})'
     with board_lock.exclusive(serial, owner = owner):
         async def run():
             """
-            Connect and take the sweep on one event loop.
+            Connect and take the series on one event loop.
 
             Returns:
             results (dict): ``take``'s result.

@@ -17,7 +17,7 @@ GLOBAL_LABEL = 'Also leave the tone out of every later step (global)'
 
 def ask_reason(
     parent, title, reasons = BAD_REASONS, label = 'Reason:', scope = None,
-    forced = False
+    forced = False, current = None
 ):
     """
     Ask why a tone is bad: one of some reasons, or typed; with a scope,
@@ -35,6 +35,12 @@ def ask_reason(
     forced (bool): If True, the box shows ``scope`` and cannot be
         changed, e.g. global where the tone's outputs become NaN, or
         local for a step no later stage needs. Default False.
+    current (str or None): the tone's reason so far, shown as the
+        starting text (a tone marked bad already). Default None: the
+        first of ``reasons``.
+    current (str or None): the tone's reason so far, shown as the
+        starting text (a tone marked bad already). Default None: the
+        first of ``reasons``.
 
     Returns:
     if scope is None:
@@ -49,6 +55,8 @@ def ask_reason(
     box = QtWidgets.QComboBox()
     box.setEditable(True)
     box.addItems(list(reasons))
+    if current:
+        box.setCurrentText(str(current))
     lay.addWidget(box)
     box.setFocus()
     box.lineEdit().selectAll()
@@ -232,6 +240,42 @@ def record(root, res_idx, kind, text, stage, scope = None):
         return True
     dl.add_tone_mark(root, res_idx, kind, text, stage, scope)
     return True
+
+def current_reason(root, res_idx, stage = None):
+    """
+    Return the reason a tone is marked bad with, for a stage, or None.
+
+    Parameters:
+    root (zarr.Group or None): the store root (``registry``).
+    res_idx (int): the resonator.
+    stage (str or None): the stage. Default None.
+
+    Returns:
+    reason (str or None): the mark's text, or None if not marked bad.
+    """
+    from ... import daq_layout as dl
+    if root is None:
+        return None
+    entry = dl.bad_tones(root, stage).get(int(res_idx))
+    return None if entry is None else str(entry.get('text') or '')
+
+def current_reason(root, res_idx, stage = None):
+    """
+    Return the reason a tone is marked bad with, for a stage, or None.
+
+    Parameters:
+    root (zarr.Group or None): the store root (``registry``).
+    res_idx (int): the resonator.
+    stage (str or None): the stage. Default None.
+
+    Returns:
+    reason (str or None): the mark's text, or None if not marked bad.
+    """
+    from ... import daq_layout as dl
+    if root is None:
+        return None
+    entry = dl.bad_tones(root, stage).get(int(res_idx))
+    return None if entry is None else str(entry.get('text') or '')
 
 def mark_label(root, res_idx, stage = None):
     """

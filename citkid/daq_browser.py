@@ -11,7 +11,7 @@ layout matters. The right side is about the selected item, whichever
 tab it was chosen in: a summary (what it is, when, its notes, what it
 was made from and what depends on it, as links), its attributes (or an
 array's shape and first values), the tone marks, and the notes editor
-with Rename and Delete. Double-click, or Open in store tree, shows the
+with Rename. Double-click, or Open in store tree, shows the
 item's group in the tree; Reveal folder opens its directory in the file
 browser; a right-click gives the same actions. Open (Ctrl+O) picks
 another store. The store is opened read-only for browsing (Refresh, F5,
@@ -300,7 +300,7 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         lay.addWidget(hint_label(
             'Pick a kind on the left and click an item: the right side '
             'shows it. Double-click shows its group in the store tree; '
-            'right-click for Rename, Delete and Reveal folder. F5 rereads '
+            'right-click for Rename and Reveal folder. F5 rereads '
             'the store, Ctrl+O opens another.'))
         self.setCentralWidget(central)
         add_help(self, 'Store browser', [
@@ -325,8 +325,7 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
                  'make it global (later stages too) or local (its stage only)'),
                 ('Notes', 'Edit the notes of the store, a step, a result or a '
                  'run (saved by themselves); Rename changes the name of a '
-                 'tuning, run, PSD group or result; Delete removes an item and '
-                 'what depends on it, after asking; for a report, the Report '
+                 'tuning, run, PSD group or result; for a report, the Report '
                  'column leaves unchecked items out of it, and Attach file '
                  'copies a file into the report next to the item')]),
             ('Keyboard', [('H', 'Show / hide this help')]),
@@ -468,11 +467,7 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         self.reveal_btn.clicked.connect(self.reveal_selected)
         self.summary_rename_btn = QtWidgets.QPushButton('Rename...')
         self.summary_rename_btn.clicked.connect(self._on_rename)
-        self.summary_delete_btn = QtWidgets.QPushButton('Delete...')
-        self.summary_delete_btn.clicked.connect(
-            lambda: self.delete_selected())
-        for b in (self.tree_btn, self.reveal_btn, self.summary_rename_btn,
-                  self.summary_delete_btn):
+        for b in (self.tree_btn, self.reveal_btn, self.summary_rename_btn):
             b.setEnabled(False)
             row.addWidget(b)
         row.addStretch(1)
@@ -681,13 +676,6 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         self.rename_btn.clicked.connect(self._on_rename)
         self.rename_btn.setEnabled(False)
         row.addWidget(self.rename_btn)
-        self.delete_btn = QtWidgets.QPushButton('Delete...')
-        self.delete_btn.setToolTip('Delete the selected item from the '
-                                   'store, with what depends on it, '
-                                   'after asking')
-        self.delete_btn.clicked.connect(lambda: self.delete_selected())
-        self.delete_btn.setEnabled(False)
-        row.addWidget(self.delete_btn)
         self.attach_btn = QtWidgets.QPushButton('Attach file...')
         self.attach_btn.setToolTip('Copy a file into the report site next '
                                    "to this item's notes (not into the "
@@ -789,16 +777,13 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
 
     def _update_item_buttons(self):
         """
-        Enable Rename for a selected item that has a name and Delete for
-        any selected item but the store (a writable store).
+        Enable Rename for a selected item that has a name.
         """
         e = self._notes[self._notes_row] if self._notes_row is not None \
             else None
         writable = e is not None and not self.notes_edit.isReadOnly()
         self.rename_btn.setEnabled(writable and e.get('name') is not None)
-        self.delete_btn.setEnabled(writable and e['kind'] != 'store')
         self.summary_rename_btn.setEnabled(self.rename_btn.isEnabled())
-        self.summary_delete_btn.setEnabled(self.delete_btn.isEnabled())
         here = e is not None and e['kind'] != 'store'
         self.tree_btn.setEnabled(here)
         self.reveal_btn.setEnabled(here and bool(self.path) and
@@ -861,50 +846,6 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
             return None
         self.refresh()
         return path
-
-    def delete_selected(self, ask = True):
-        """
-        Delete the selected item from the store, with what depends on
-        it (``daq_layout.delete_item``), after asking once, and again
-        when something depends on it.
-
-        Parameters:
-        ask (bool): If True (default), ask first.
-
-        Returns:
-        deleted (list of str): the paths deleted (none if refused).
-        """
-        e = self._notes[self._notes_row] if self._notes_row is not None \
-            else None
-        if e is None or e['kind'] == 'store' or not self.path:
-            return []
-        root = self._writable_root()
-        if e['run'] is not None:
-            rec = root[e['run'][0]][dl.STREAMS_GROUP].attrs['runs'][
-                int(e['run'][1])]
-            paths = [p for p in rec.get('paths') or [] if p in root]
-        else:
-            paths = [e['path']]
-        deps = dl.dependents(root, paths)
-        if ask:
-            box = QtWidgets.QMessageBox
-            text = f"Delete {e['label']} from the store? This cannot be " \
-                'undone.'
-            if deps:
-                text += ('\n\nThese depend on it and will be deleted too:'
-                         '\n' + '\n'.join(deps))
-            if box.question(self, 'Delete', text, box.Yes | box.No,
-                            box.No) != box.Yes:
-                return []
-            if deps and box.question(
-                    self, 'Delete', f"Really delete {e['label']} and the "
-                    f'{len(deps)} item(s) that depend on it?',
-                    box.Yes | box.No, box.No) != box.Yes:
-                return []
-        self.flush_notes(refresh = False)
-        deleted = dl.delete_item(root, e['path'], run = e['run'])
-        self.refresh()
-        return deleted
 
     def _update_detach(self):
         """
@@ -1567,7 +1508,7 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         except Exception:
             deps = []
         if deps:
-            parts.append('<p>Depends on it (deleted with it): ' + ', '.join(
+            parts.append('<p>Depends on it: ' + ', '.join(
                 link(p) for p in deps) + '</p>')
         return ''.join(parts)
 
@@ -1627,8 +1568,6 @@ class StoreBrowserWindow(QtWidgets.QMainWindow):
         act.setEnabled(self.reveal_btn.isEnabled())
         act = menu.addAction('Rename...', self._on_rename)
         act.setEnabled(self.rename_btn.isEnabled())
-        act = menu.addAction('Delete...', lambda: self.delete_selected())
-        act.setEnabled(self.delete_btn.isEnabled())
         menu.exec_(widget.mapToGlobal(pos))
 
     def closeEvent(self, event):
