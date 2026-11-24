@@ -164,6 +164,7 @@ Tuning box at the top switches to another):
 | Plots | The capture or the viewed run, whichever was last (the plot title says which): one tone as x, parallel/perpendicular to the loop, or I and Q, its PSD with Show PSD, and without the mean of each series with Subtract offset |
 | Run | Name, notes, decimation stage and duration (or a `PRESETS` entry); the tones on the board are streamed and saved as `cal{j}/write{w}/ts{n}` and listed in the run list; a name is used once per tuning |
 | View run | Shows a run's first chunks like a capture |
+| Adjust tones (`EXTRA_FEATURES`) | Saves the tuning's tones as a new, named tuning with every power offset by the dB given (or set to one power) and every frequency offset by a fraction of the total span (highest minus lowest tone), then switches to it; it needs its own calibrations |
 | Grey buttons | A grey button says beside it what it needs |
 | Cancel | Stops the running calibration, capture or run at its next sweep point or packet batch; what it saved is removed (the calibration group, or the run's streams and record). No shortcut, so it is not hit by accident |
 
@@ -183,6 +184,7 @@ window is open. `--simulate` streams the store's simulated device.
 |---|---|
 | `PREVIEW_DEC`, `PREVIEW_S` | Preview decimation stage and duration, s |
 | `PRESETS` | Runs offered in the window: name, stage, duration, notes |
+| `EXTRA_FEATURES` | `True`: show the Adjust tones box |
 | `NPOINTS_FINE`, `NPOINTS_GAIN`, `GAIN_SPAN_FACTOR`, `NSAMPS` | Calibration sweeps, as in `3_tune.py` |
 | `FRES_UPDATE` | `None`, or `dict(method = 'spacing', max_shift = 0.1, npoints_update = None)`: after each calibration sweep, move every tone to the resonance its fine sweep shows (`method`: `'spacing'`, `'spacing_fit'`, `'distance'` or `'minS21'`, as in `3_tune.py`; only the points within `npoints_update` of the swept frequency are considered, `None`: all), if the move is at most `max_shift` of the sweep span; a tone whose update is farther keeps its frequency. The frequencies swept are kept as `fres_sweep` |
 

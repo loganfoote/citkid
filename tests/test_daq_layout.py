@@ -843,3 +843,44 @@ def test_rename_hee(tmp_path):
     dl.create_group(dl.open_store(path, mode = 'a'), 'cosmic', 'analysis')
     with pytest.raises(ValueError, match = 'both'):
         dl.rename_hee(dl.open_store(path, mode = 'a'))
+
+
+def test_derive_tuning(tmp_path):
+    """
+    A derived tuning carries the source's tones with every power and
+    frequency moved as asked, its sets, modules, resonator list, CRS
+    configuration and setup, and says what it was made from.
+    """
+    root = _tuned_store(tmp_path / 'a.zarr')
+    src = root['tune0']
+    src.attrs['setup'] = dict(fridge_ch = '3')
+    grp, k = dl.derive_tuning(root, src, 'louder', power_db = 2.5,
+                              freq_frac = 0.01, notes = 'louder')
+    assert k == 1 and grp.attrs['name'] == 'louder'
+    assert grp.attrs['resonators'] == 'resonators0'
+    assert grp.attrs['setup'] == {'fridge_ch': '3'}
+    assert grp.attrs['notes'] == 'louder'
+    t, s = dl.load_tones(grp['tones']), dl.load_tones(src['tones'])
+    np.testing.assert_allclose(t['ares'], s['ares'] + 2.5)
+    span = s['fres'].max() - s['fres'].min()
+    np.testing.assert_allclose(t['fres'], s['fres'] + 0.01 * span)
+    np.testing.assert_array_equal(t['tone_set'], s['tone_set'])
+    np.testing.assert_array_equal(t['res_idxs'], s['res_idxs'])
+    d = grp.attrs['derived_from']
+    assert d['group'] == 'tune0' and d['power_db'] == 2.5
+    assert d['freq_frac'] == 0.01 and d['span_hz'] == span
+    assert grp['tones'].attrs['derived_from']['group'] == 'tune0/tones'
+    assert grp['crs_config'].attrs['config'] == \
+        src['crs_config'].attrs['config']
+    assert dl.find_tuning(root, 'louder').basename == 'tune1'
+    # A constant power replaces the powers (the offset is ignored)
+    grp2, _ = dl.derive_tuning(root, src, 'flat', power_db = 9.,
+                               power_dbm = -60.)
+    np.testing.assert_array_equal(dl.load_tones(grp2['tones'])['ares'],
+                                  [-60., -60.])
+    assert grp2.attrs['derived_from']['power_db'] is None
+    assert grp2.attrs['derived_from']['power_dbm'] == -60.
+    with pytest.raises(ValueError, match = 'nothing to change'):
+        dl.derive_tuning(root, src, 'same')
+    with pytest.raises(ValueError, match = 'exists'):
+        dl.derive_tuning(root, src, 'louder', power_db = 1.)

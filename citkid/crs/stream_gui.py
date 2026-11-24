@@ -267,7 +267,7 @@ class StreamWindow(QtWidgets.QMainWindow):
     def __init__(
         self, connect, tune, preview_dec = 6, preview_s = 5., presets = (),
         sweep_kwargs = None, title = 'Timestreams', ui_scale = 1.0,
-        fres_update = None, setup = None
+        fres_update = None, setup = None, extra_features = False
     ):
         """
         Build the window and start connecting.
@@ -292,6 +292,8 @@ class StreamWindow(QtWidgets.QMainWindow):
             Default None: no.
         setup (dict or None): the readout chain (the scripts' ``SETUP``),
             saved in each run's record. Default None.
+        extra_features (bool): If True, show the Adjust tones box (a new
+            tuning with every power or frequency moved). Default False.
         title (str): window title. Default 'Timestreams'.
         ui_scale (float): font size multiplier. Default 1.0.
         """
@@ -309,6 +311,7 @@ class StreamWindow(QtWidgets.QMainWindow):
         self.sweep_kwargs = dict(sweep_kwargs or {})
         self.fres_update = dict(fres_update) if fres_update else None
         self.setup = dict(setup) if setup else None
+        self.extra_features = bool(extra_features)
         self.presets = [dict(p) for p in presets]
         self.cals = dl.calibrations(tune)
         self.crs, self.cal, self.preview, self.runs = None, None, None, []
@@ -527,6 +530,8 @@ class StreamWindow(QtWidgets.QMainWindow):
         form.addRow(action_row(self.clear_btn))
         form.addRow(self.written_label)
         left.addWidget(box)
+        if self.extra_features:
+            left.addWidget(self._build_adjust_box())
 
         # Preview
         box = QtWidgets.QGroupBox('Preview (not saved)')
@@ -660,6 +665,90 @@ class StreamWindow(QtWidgets.QMainWindow):
         self._scroll.setMinimumHeight(300)
         if self.presets:
             self.preset_box.setCurrentIndex(1)
+
+    def _build_adjust_box(self):
+        """
+        Build the Adjust tones box (``extra_features``): every tone's
+        power offset or set, every frequency offset, saved as a new
+        tuning the window then works on (``daq_layout.derive_tuning``).
+
+        Returns:
+        box (QGroupBox): the box.
+        """
+        box = QtWidgets.QGroupBox('Adjust tones (saved as a new tuning)')
+        form = QtWidgets.QFormLayout(box)
+        self.adjust_power = QtWidgets.QDoubleSpinBox()
+        self.adjust_power.setRange(-40., 40.)
+        self.adjust_power.setDecimals(1)
+        self.adjust_power.setSuffix(' dB')
+        self.adjust_power.setToolTip('Added to every tone power '
+                                     '(negative lowers them)')
+        form.addRow('Power offset', self.adjust_power)
+        self.adjust_freq = QtWidgets.QDoubleSpinBox()
+        self.adjust_freq.setRange(-1., 1.)
+        self.adjust_freq.setDecimals(6)
+        self.adjust_freq.setSingleStep(1e-4)
+        self.adjust_freq.setToolTip('Added to every tone frequency, as '
+                                    'a fraction of the total span '
+                                    '(highest minus lowest tone)')
+        form.addRow('Frequency offset', self.adjust_freq)
+        row = QtWidgets.QHBoxLayout()
+        self.adjust_const = QtWidgets.QCheckBox('Set every power to')
+        self.adjust_const.setToolTip('Every tone gets this power; the '
+                                     'power offset is then not used')
+        self.adjust_dbm = QtWidgets.QDoubleSpinBox()
+        self.adjust_dbm.setRange(-120., 10.)
+        self.adjust_dbm.setDecimals(1)
+        self.adjust_dbm.setSuffix(' dBm')
+        self.adjust_dbm.setValue(-55.)
+        self.adjust_dbm.setEnabled(False)
+        self.adjust_const.toggled.connect(self.adjust_dbm.setEnabled)
+        row.addWidget(self.adjust_const)
+        row.addWidget(self.adjust_dbm, stretch = 1)
+        form.addRow(row)
+        self.adjust_name = QtWidgets.QLineEdit()
+        self.adjust_name.setPlaceholderText('name of the new tuning')
+        form.addRow('Name', self.adjust_name)
+        self.adjust_btn = QtWidgets.QPushButton('Make tuning')
+        self.adjust_btn.setToolTip('Save the adjusted tones as a new '
+                                   'tuning and switch to it (it needs '
+                                   'its own calibrations)')
+        self.adjust_btn.clicked.connect(self.adjust_tones)
+        form.addRow(self.adjust_btn)
+        return box
+
+    def adjust_tones(self):
+        """
+        Save the adjusted tones as a new tuning (the Adjust tones box)
+        and switch the window to it.
+
+        Returns:
+        tune (zarr.Group or None): the new tuning, or None if nothing
+            was made (no name, a used name, nothing to change).
+        """
+        name = self.adjust_name.text().strip()
+        if not name:
+            self._set_status('Adjust tones needs a name for the new '
+                             'tuning.')
+            return None
+        const = self.adjust_const.isChecked()
+        root = dl.store_root(self.tune, mode = 'r+')
+        try:
+            tune, k = dl.derive_tuning(
+                root, root[self.tune.basename], name,
+                power_db = self.adjust_power.value(),
+                freq_frac = self.adjust_freq.value(),
+                power_dbm = self.adjust_dbm.value() if const else None)
+        except (ValueError, KeyError) as exc:
+            self._set_status(f'Adjust tones: {exc}')
+            return None
+        self._fill_tune_box()
+        self.set_tuning(tune)
+        self._set_status(
+            f'Tuning {name} ({tune.basename}) made from '
+            f"{tune.attrs['derived_from']['name']}: calibrate it before "
+            'writing tones.')
+        return tune
 
     def _build_plots(self):
         """
@@ -1595,7 +1684,7 @@ class StreamWindow(QtWidgets.QMainWindow):
 def run_stream_gui(
     connect, tune, preview_dec = 6, preview_s = 5., presets = (),
     sweep_kwargs = None, title = 'Timestreams', ui_scale = 1.0,
-    fres_update = None, setup = None
+    fres_update = None, setup = None, extra_features = False
 ):
     """
     Open the timestream window on a tuning and wait until it is closed.
@@ -1607,7 +1696,7 @@ def run_stream_gui(
         loop, which every sweep and stream then uses.
     tune (zarr.Group): the tuning, writable.
     preview_dec, preview_s, presets, sweep_kwargs, title, ui_scale,
-        fres_update, setup: see ``StreamWindow``.
+        fres_update, setup, extra_features: see ``StreamWindow``.
 
     Returns:
     runs (list of list of str): stream paths of each run of the session.
@@ -1617,7 +1706,7 @@ def run_stream_gui(
                        preview_s = preview_s, presets = presets,
                        sweep_kwargs = sweep_kwargs, title = title,
                        ui_scale = ui_scale, fres_update = fres_update,
-                       setup = setup)
+                       setup = setup, extra_features = extra_features)
     delete_on_close(win)
     fit_window_to_screen(win)
     win.show()

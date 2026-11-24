@@ -1030,3 +1030,50 @@ async def test_calibration_survives_a_restart(tmp_path, monkeypatch):
     crs4 = session()
     await crs4.attach()
     assert crs4.nco_ids == {}
+
+
+def test_stream_window_adjust_tones(qapp, tmp_path):
+    """
+    With extra_features the window has the Adjust tones box; Make
+    tuning saves a derived tuning and switches to it, and refuses to
+    without a name or a change.
+    """
+    crs = make_crs()
+    asyncio.run(crs.attach())
+    root, tune = make_tuning(tmp_path, crs)
+
+    async def connect():
+        """
+        Return the simulated board.
+
+        Returns:
+        crs (SimulatedCRS): the board.
+        """
+        return crs
+
+    win = StreamWindow(connect, tune, preview_s = 0.2,
+                       extra_features = True)
+    wait_for(lambda: win.crs is not None)
+    assert win.extra_features and win.adjust_btn.isEnabled()
+    assert win.adjust_tones() is None and 'needs a name' in \
+        win.status.text()
+    win.adjust_name.setText('quiet')
+    assert win.adjust_tones() is None and 'nothing to change' in \
+        win.status.text()
+    win.adjust_power.setValue(-3.)
+    new = win.adjust_tones()
+    assert new is not None and new.basename == 'tune1'
+    assert win.tune.basename == 'tune1' and 'quiet' in win.windowTitle()
+    assert win.tune_box.count() == 2 and win.tune_box.currentData() == \
+        'tune1'
+    t = dl.load_tones(new['tones'])
+    np.testing.assert_allclose(t['ares'], -58.)
+    assert win.cal is None and win.cal_box.count() == 0
+    # The same name again is refused
+    assert win.adjust_tones() is None and 'exists' in \
+        win.status.text()
+    wait_for(lambda: not win.worker.busy)
+    win.close()
+    win.deleteLater()
+    QtCore.QCoreApplication.sendPostedEvents(None,
+                                             QtCore.QEvent.DeferredDelete)

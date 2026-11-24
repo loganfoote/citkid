@@ -2350,6 +2350,70 @@ def port_tuning(src, tune, dst, cooldown = None, setup = None):
             dict(ported, group = f'{name}/crs_config'))
     return k
 
+def derive_tuning(root, tune, name, power_db = 0., freq_frac = 0.,
+                  power_dbm = None, notes = ''):
+    """
+    Make a new tuning from another's tones with every power or
+    frequency moved the same way: the powers offset by ``power_db``
+    or set to ``power_dbm``, the frequencies offset by ``freq_frac``
+    of the tones' total span (highest minus lowest frequency). The
+    tone sets, modules, resonator list and CRS configuration are
+    the source's; the new tuning records what it was derived from.
+    It has no calibrations: calibrate it before streaming.
+
+    Parameters:
+    root (zarr.Group): the store root, writable.
+    tune (zarr.Group): the source tuning, with ``tones``.
+    name (str): the new tuning's name (unused in the store).
+    power_db (float): added to every tone's power, dB. Default 0.
+    freq_frac (float): added to every tone's frequency, as a fraction
+        of the total span. Default 0.
+    power_dbm (float or None): every tone's power, dBm, in place of
+        the source's (``power_db`` is then ignored). Default None.
+    notes (str): notes saved on the new tuning. Default ''.
+
+    Returns:
+    grp (zarr.Group): the new tuning.
+    k (int): its index.
+
+    Raises:
+    KeyError: if the tuning has no ``tones``.
+    ValueError: if a tuning named ``name`` exists, or nothing changes.
+    """
+    if 'tones' not in tune:
+        raise KeyError(f'{tune.basename} has no tones')
+    if power_dbm is None and not power_db and not freq_frac:
+        raise ValueError('nothing to change: give a power offset, a '
+                         'power or a frequency offset')
+    tones = load_tones(tune['tones'])
+    fres = np.asarray(tones['fres'], dtype = np.float64)
+    span = float(fres.max() - fres.min()) if len(fres) else 0.
+    tones['fres'] = fres + float(freq_frac) * span
+    if power_dbm is not None:
+        tones['ares'] = np.full(len(fres), float(power_dbm))
+    else:
+        tones['ares'] = np.asarray(tones['ares'], dtype = np.float64) \
+            + float(power_db)
+    derived = dict(group = tune.basename, name = tuning_name(tune),
+                   power_db = None if power_dbm is not None
+                   else float(power_db),
+                   power_dbm = None if power_dbm is None
+                   else float(power_dbm),
+                   freq_frac = float(freq_frac), span_hz = span)
+    attrs = dict(derived_from = derived)
+    if tune.attrs.get('setup') is not None:
+        attrs['setup'] = tune.attrs['setup']
+    grp, k = new_tuning(root, tune.attrs['resonators'], attrs = attrs,
+                        name = str(name))
+    if notes and str(notes).strip():
+        grp.attrs['notes'] = str(notes).strip()
+    tgrp = create_group(grp, 'tones', 'decision', attrs = dict(
+        derived_from = dict(derived, group = f'{tune.basename}/tones')))
+    save_tones(tgrp, **tones)
+    if 'crs_config' in tune:
+        write_tune_config(grp, tune['crs_config'].attrs['config'])
+    return grp, k
+
 ################################################################################
 ################################## Archiving ###################################
 ################################################################################

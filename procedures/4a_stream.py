@@ -40,6 +40,7 @@ PRESETS = [
     dict(name = 'dark_dec0', dec_stage = 0, duration_s = 60.,
          notes = 'dark, fast'),
 ]
+EXTRA_FEATURES = False
 
 
 ################################################################################
@@ -164,7 +165,8 @@ def main(args):
                 npoints_fine = NPOINTS_FINE, npoints_gain = NPOINTS_GAIN,
                 nsamps = NSAMPS,
                 gain_span_factor = GAIN_SPAN_FACTOR),
-            fres_update = FRES_UPDATE, setup = SETUP)
+            fres_update = FRES_UPDATE, setup = SETUP,
+            extra_features = EXTRA_FEATURES)
 
 if __name__ == '__main__':
     main(parse_args())
