@@ -1211,7 +1211,7 @@ def set_work_by(root, text):
     """
     Record who did the work (the store's ``work_by`` attribute, shown
     at the top of the device's report page and in the site's top
-    page), e.g. 'LF DAQ + analysis'.
+    page), e.g. 'AB DAQ + analysis'.
 
     Parameters:
     root (zarr.Group): the store root (writable).

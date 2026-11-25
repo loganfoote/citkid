@@ -2311,34 +2311,34 @@ def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
     # Who did the work is needed: --by, or the value saved in the store
     assert m.main(m.parse_args(argv)) is None
     assert 'Who did the work' in capsys.readouterr().out
-    built = m.main(m.parse_args(argv + ['--by', 'LF DAQ + analysis']))
+    built = m.main(m.parse_args(argv + ['--by', 'AB DAQ + analysis']))
     dev = out / cooldown / device
     assert built == [str(dev)]
-    assert dl.open_store(path).attrs['work_by'] == 'LF DAQ + analysis'
+    assert dl.open_store(path).attrs['work_by'] == 'AB DAQ + analysis'
     page = (dev / 'index.html').read_text('utf-8')
-    assert '</h1><p class="small work-by">Work by: LF DAQ + analysis' \
+    assert '</h1><p class="small work-by">Work by: AB DAQ + analysis' \
         in page
     # Saved in the store, so a later run needs no --by; --fill changes
     # it in the store and the pages without a rebuild
     assert m.main(m.parse_args(argv)) == [str(dev)]
     built_at = json.loads((dev / 'manifest.json').read_text('utf-8'))[
         'built']
-    assert m.main(m.parse_args(argv + ['--by', 'LF + BE DAQ, LF analysis',
+    assert m.main(m.parse_args(argv + ['--by', 'AB + CD DAQ, AB analysis',
                                        '--fill'])) == [str(dev)]
     filled = json.loads((dev / 'manifest.json').read_text('utf-8'))
     assert filled['built'] == built_at
-    assert filled['attrs']['work_by'] == 'LF + BE DAQ, LF analysis'
+    assert filled['attrs']['work_by'] == 'AB + CD DAQ, AB analysis'
     page = (dev / 'index.html').read_text('utf-8')
-    assert page.count('work-by') == 1 and 'LF + BE DAQ' in page
-    assert dl.open_store(path).attrs['work_by'] == 'LF + BE DAQ, LF analysis'
+    assert page.count('work-by') == 1 and 'AB + CD DAQ' in page
+    assert dl.open_store(path).attrs['work_by'] == 'AB + CD DAQ, AB analysis'
     # --fill where no report exists yet: saved in the store only
     capsys.readouterr()
     assert m.main(m.parse_args(['--store', str(path), '--out',
                                 str(tmp_path / 'other'), '--no-gui',
-                                '--by', 'LF DAQ', '--fill'])) == []
+                                '--by', 'AB DAQ', '--fill'])) == []
     assert 'no report yet' in capsys.readouterr().out
-    assert dl.open_store(path).attrs['work_by'] == 'LF DAQ'
-    m.main(m.parse_args(argv + ['--by', 'LF + BE DAQ, LF analysis',
+    assert dl.open_store(path).attrs['work_by'] == 'AB DAQ'
+    m.main(m.parse_args(argv + ['--by', 'AB + CD DAQ, AB analysis',
                                 '--fill']))
     # The top page (index.php) only with INDEX (off in the template)
     assert not (out / 'index.php').exists()
@@ -2372,12 +2372,12 @@ def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
     assert 'Comments (0)' in (dev / 'index.html').read_text('utf-8')
     for c in site.INDEX_COLUMNS:
         assert f'<th>{c}</th>' in top
-    assert '<th>created</th>' not in top and 'LF + BE' not in top
+    assert '<th>created</th>' not in top and 'AB + CD' not in top
     # The row the page lists is saved in the manifest
     row = manifest['index_row']
     assert list(row) == site.INDEX_COLUMNS
     assert row['Photon lifetime [us]'].endswith(' res)')
-    assert row['Work by'] == 'LF + BE DAQ, LF analysis'
+    assert row['Work by'] == 'AB + CD DAQ, AB analysis'
     assert row['Report generated'] == manifest['built']
     assert row['Resonators'] == str(ov['schedule']['n'])
     sched = manifest['overview']['schedule']
@@ -2506,7 +2506,7 @@ def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
     # Comments added on the served site survive the overwrite and are
     # rendered on the page
     (dev / 'comments.json').write_text(json.dumps([dict(
-        who = 'LF', when = '2026-11-23 10:00:00', text = 'keep me')]),
+        who = 'AB', when = '2026-11-23 10:00:00', text = 'keep me')]),
         'utf-8')
     answers.append('overwrite')
     assert m.main(m.parse_args(['--store', str(path), '--out', str(out),

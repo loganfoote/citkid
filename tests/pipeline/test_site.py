@@ -77,18 +77,18 @@ def test_comments(tmp_path):
     assert site.comments_summary([]) == ''
     assert 'No comments yet' in site.comments_html([])
     (dev / 'comments.json').write_text(json.dumps([
-        dict(who = 'LF', when = '2026-11-23 10:00:00', text = 'looks\nfine'),
+        dict(who = 'AB', when = '2026-11-23 10:00:00', text = 'looks\nfine'),
         dict(who = '', when = '2026-11-23 11:00:00',
              text = 'x' * 100 + ' <b>')]), 'utf-8')
     comments = site.load_comments(str(dev))
-    assert [c['who'] for c in comments] == ['LF', '']
+    assert [c['who'] for c in comments] == ['AB', '']
     assert comments[0]['id'] == '' and comments[0]['edited'] == ''
     text = site.comments_summary(comments)
     assert text.startswith('2; latest 2026-11-23 11:00:00: xxx')
     assert text.endswith('...') and len(text) < 120
     html = site.comments_html(comments)
     assert 'looks<br>fine' in html and '&lt;b&gt;' in html
-    edited = site.comments_html([dict(id = 'c1', who = 'LF',
+    edited = site.comments_html([dict(id = 'c1', who = 'AB',
                                       when = '2026-11-23 10:00:00',
                                       text = 'x', edited = '2026-11-23 '
                                       '12:00:00')])

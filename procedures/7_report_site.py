@@ -11,7 +11,7 @@ last build is left alone.
 Usage:
     python 7_report_site.py
     python 7_report_site.py --store Z:/cd/deviceA_screen.zarr --no-gui
-    python 7_report_site.py --store <store> --by "LF DAQ + analysis" --fill
+    python 7_report_site.py --store <store> --by "AB DAQ + analysis" --fill
 """
 import argparse
 import os
@@ -66,7 +66,7 @@ def parse_args(argv = None):
                    help = 'rebuild an existing report keeping its '
                    'attachments and notes.md, without asking')
     p.add_argument('--by', default = WORK_BY,
-                   help = "who did the work, e.g. 'LF DAQ + analysis' "
+                   help = "who did the work, e.g. 'AB DAQ + analysis' "
                    '(default: WORK_BY, the value saved in the store, '
                    'or a dialog)')
     p.add_argument('--fill', action = 'store_true',
@@ -137,7 +137,7 @@ def work_by(store, args):
             text = saved
         else:
             print('Who did the work? Run with --by, e.g. '
-                  '--by "LF DAQ + analysis"')
+                  '--by "AB DAQ + analysis"')
             return None
     text = text.strip()
     if text != saved:

@@ -23,7 +23,7 @@ tuned tones of the resonances found (yield), their frequency range,
 and the 1st to 99th percentile of the photon and HEE lifetimes and
 of Sxx at 10 Hz. Each run builds one store (`STORE`, `--store`, or
 a dialog). A dialog first asks who did the work (initials for the
-DAQ and the analysis, e.g. `LF + BE DAQ, LF analysis`); it is
+DAQ and the analysis, e.g. `AB + CD DAQ, AB analysis`); it is
 saved in the store, offered again next time, shown at the top of
 the device page and in the top page's `work_by` column. The store
 browser then opens on its Notes tab: edit the
@@ -81,7 +81,7 @@ without text it lists the notes).
 |---|---|
 | `REPORT_DIR` | The report site folder; the device's pages go in `<REPORT_DIR>/<cooldown>/<device>` (`--out` gives another folder for one run) |
 | `STORE` | The store; `None`: a dialog |
-| `WORK_BY` | Who did the work, e.g. `'LF DAQ + analysis'`; `None`: the dialog, offering the store's saved value (`--by` gives it for one run) |
+| `WORK_BY` | Who did the work, e.g. `'AB DAQ + analysis'`; `None`: the dialog, offering the store's saved value (`--by` gives it for one run) |
 | `RES_PAGES` | One page per resonator (about 100 kB each) |
 | `SXX_RUN` | The timestream run whose spectra give the Sxx and s-factor values of the resonator table and the top page, e.g. `'dark'`; `None`: the latest spectra of each tone, whatever the run (on a power sweep that is the last point) |
 | `INTERACTIVE` | Open the store browser on its Notes tab first |

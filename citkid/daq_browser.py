@@ -1619,7 +1619,7 @@ def ask_work_by(current = ''):
     text, ok = QtWidgets.QInputDialog.getText(
         None, 'Who did the work',
         'Who did the work, for the report (initials: DAQ, analysis),\n'
-        "e.g. 'LF + BE DAQ, LF analysis':", text = current or '')
+        "e.g. 'AB + CD DAQ, AB analysis':", text = current or '')
     return text.strip() if ok else None
 
 def ask_existing_report(out_dir):
