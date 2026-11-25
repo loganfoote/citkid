@@ -277,7 +277,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
                 ('Ctrl+F', 'Apply the fitted thresholds'),
                 ('Ctrl+D', "Revert the tone to the script's thresholds"),
                 ('B', 'Mark the tone bad (or clear the mark), with a reason'),
-                ('T', 'Add a note on the tone'),
+                ('N (or T)', 'Add a note on the tone'),
                 ('O', 'Open the tone overview'),
                 ('R', 'Rescale the plots'),
                 ('H', 'Show / hide this help')]),
@@ -947,6 +947,7 @@ class PhotonThresholdWindow(QtWidgets.QMainWindow):
                 Qt.Key_B: self.toggle_bad,
                 Qt.Key_M: self.toggle_bad,
                 Qt.Key_T: self.add_note,
+                Qt.Key_N: self.add_note,
                 Qt.Key_O: self.open_overview,
                 Qt.Key_A: lambda: self.step_tone(-1),
                 Qt.Key_D: lambda: self.step_tone(1)}

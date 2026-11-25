@@ -1523,11 +1523,14 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
         # H: show or hide the help dialog
         QtGui.QShortcut(QtGui.QKeySequence("H"), self,
                         activated=self._toggle_help)
-        # M: mark the tone bad; T: add a note (the store's tone marks)
-        QtGui.QShortcut(QtGui.QKeySequence("M"), self,
-                        activated=self._mark_tone_bad)
-        QtGui.QShortcut(QtGui.QKeySequence("T"), self,
-                        activated=self._add_note)
+        # B (or M): mark the tone bad; N (or T): add a note (the store's
+        # tone marks)
+        for key in ('B', 'M'):
+            QtGui.QShortcut(QtGui.QKeySequence(key), self,
+                            activated=self._mark_tone_bad)
+        for key in ('N', 'T'):
+            QtGui.QShortcut(QtGui.QKeySequence(key), self,
+                            activated=self._add_note)
 
         # Number keys 1-9: run panel N and all following (1-indexed).
         for idx in range(1, 10):
@@ -1840,9 +1843,9 @@ class InteractiveAnalysisWindow(QtWidgets.QMainWindow):
                 ('A / D  or  Left / Right', 'Previous / next data index'),
                 ('R', 'Rescale every plot'),
                 ('1-9', 'Run panel N and every panel after it'),
-                ('M', "Mark the tone bad with a reason (every panel's "
+                ('B (or M)', "Mark the tone bad with a reason (every panel's "
                       "outputs NaN; recorded in the store's tone marks)"),
-                ('T', "Add a note on the tone to the store's tone marks "
+                ('N (or T)', "Add a note on the tone to the store's tone marks "
                       '(the tone is kept)'),
                 ('H', 'Show / hide this help'),
             ]),

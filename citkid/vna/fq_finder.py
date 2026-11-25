@@ -697,7 +697,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
         self._reject_label.setMinimumWidth(_text_width("✓ Not rejected  xx"))
         reject_row.addWidget(self._reject_label)
 
-        self._note_btn = QtWidgets.QPushButton("Add note (T)")
+        self._note_btn = QtWidgets.QPushButton("Add note (N)")
         self._note_btn.setToolTip(
             "Record a note on this resonator in the store's tone marks; "
             "the tone is kept")
@@ -991,7 +991,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
 
     def _toggle_reject(self):
         """
-        Reject the current resonator with the combo's reason (the M key),
+        Reject the current resonator with the combo's reason (the B key),
         or restore it when it is rejected already.
         """
         if self._ri in self._reject_reasons:
@@ -1225,9 +1225,9 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             "<li><b>R:</b> Auto-scale both plots</li>"
             "<li><b>Z:</b> Reset fres/qres to initial values for this "
             "resonator</li>"
-            "<li><b>M:</b> Reject this resonator with the chosen reason, "
-            "or restore it when it is rejected</li>"
-            "<li><b>T (or N):</b> Add a note on this resonator to the "
+            "<li><b>B (or M):</b> Reject this resonator with the chosen "
+            "reason, or restore it when it is rejected</li>"
+            "<li><b>N (or T):</b> Add a note on this resonator to the "
             "store's tone marks (the tone is kept)</li>"
             "<li><b>H:</b> Toggle this help panel</li>"
             "</ul>"
@@ -1546,7 +1546,7 @@ class FqFinderWindow(QtWidgets.QMainWindow):
             if key in (_Qt.Key_T, _Qt.Key_N):
                 self._add_note()
                 return True
-            if key == _Qt.Key_M:
+            if key in (_Qt.Key_B, _Qt.Key_M):
                 self._toggle_reject()
                 return True
         return super().eventFilter(obj, event)

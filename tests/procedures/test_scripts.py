@@ -642,6 +642,26 @@ def test_03_tune(tmp_path, monkeypatch, capsys, n_cal):
     np.testing.assert_array_equal(dl.load_tones(b['tune0/tones'])['ares'],
                                   t['ares'])
 
+    # A tone marked bad globally in the power fits window is not even
+    # swept by the fq sweep, so the finder never shows it
+    root = dl.open_store(path, mode = 'a')
+    tune = root['tune0']
+    n = tune['tones_init/fres'].shape[0]
+    second = int(tune['fq_sweep/res_idxs'][1])
+    dl.add_tone_mark(root, second, 'bad', 'shallow resonance',
+                     'tune0/power_fits', scope = 'global')
+    del root['tune0/fq_sweep']
+    del root['tune0/tones']
+    answers[:] = [True]
+    m.main(m.parse_args(argv + ['--tuning', '0']))
+    out = capsys.readouterr().out
+    assert 'fq_sweep: 1 tones marked bad left out' in out
+    root = dl.open_store(path)
+    fq = root['tune0/fq_sweep']
+    assert fq.attrs['left_out'] == [second]
+    assert second not in fq['res_idxs'][:]
+    assert fq['res_idxs'].shape[0] == n - 1
+    assert second not in dl.load_tones(root['tune0/tones'])['res_idxs']
 
 def test_04a_stream(tmp_path, monkeypatch):
     """

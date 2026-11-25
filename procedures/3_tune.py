@@ -676,13 +676,24 @@ def sweep(root, tune, args, path, step):
             return
         if 'fq_sweep' in tune:
             del tune['fq_sweep']    # an empty group left by a failed pass
+        # Tones marked bad in this tuning so far (the power fits window,
+        # or any global mark of the tuning) are not swept: they are out
+        # of every later step
+        bad = dl.bad_tones(root, f'{tune.basename}/fq_sweep')
+        keep = np.array([int(r) not in bad for r in t['res_idxs']],
+                        dtype = bool)
+        left_out = [int(r) for r in t['res_idxs'][~keep]]
+        if left_out:
+            print(f'fq_sweep: {len(left_out)} tones marked bad left out: '
+                  f'res {left_out}')
         grp = dl.create_group(tune, 'fq_sweep', 'raw', attrs = dict(
             notes = (args.notes or '').strip(),
-            ares_source = f'{tune.basename}/power_choice/ares'))
+            ares_source = f'{tune.basename}/power_choice/ares',
+            left_out = left_out))
         await stitched_target_sweep(
-            crs, t['fres'], tune['power_choice/ares'][:], t['qres'],
-            t['res_idxs'], t['tone_set'], t['tone_module'], ncos, grp,
-            **sweep_kwargs())
+            crs, t['fres'][keep], tune['power_choice/ares'][:][keep],
+            t['qres'][keep], t['res_idxs'][keep], t['tone_set'][keep],
+            t['tone_module'][keep], ncos, grp, **sweep_kwargs())
 
     asyncio.run(run())
     print(f'{step}: done')
@@ -710,7 +721,7 @@ def power_fits(tune, args):
         x_param_name = 'ares', x_name = 'Tone power (dBm)',
         y_param_name = 'a', xy_fit = a_vs_power_fit(a_min = A_FIT_RANGE[0],
                                                     a_max = A_FIT_RANGE[1]),
-        y_target = ANL)
+        y_target = ANL, y_range = (0., 1.))
     res_idxs = tune['tones_init/res_idxs'][:]
     chosen = out['xy_fit/x_chosen'][:] if 'xy_fit/x_chosen' in out else \
         np.full(len(res_idxs), np.nan)
@@ -809,13 +820,18 @@ def tones(tune, args):
                              f'set {s} (NCO {nco / 1e6:.3f} MHz)')
     grp = dl.create_group(tune, 'tones', 'decision', overwrite = True)
     save_notes(grp, args.notes)
+    # The powers the fq sweep was taken at (the chosen powers of the
+    # tones it swept; tones marked bad before it were left out)
+    ares = fq['ares'][:] if 'ares' in fq else \
+        tune['power_choice/ares'][:]
     dl.save_tones(
-        grp, fres, fq['qres_opt'][:][keep],
-        tune['power_choice/ares'][:][keep], fq['res_idxs'][:][keep],
+        grp, fres, fq['qres_opt'][:][keep], ares[keep],
+        fq['res_idxs'][:][keep],
         tone_set = tone_set, tone_module = tone_module, source = dict(
             fres = f'{name}/fq_sweep/fres_opt',
             qres = f'{name}/fq_sweep/qres_opt',
-            ares = f'{name}/power_choice/ares',
+            ares = f'{name}/fq_sweep/ares' if 'ares' in fq
+            else f'{name}/power_choice/ares',
             res_idxs = f'{name}/fq_sweep/res_idxs',
             tone_set = f'{name}/tones_init/tone_set'))
     print(f'tones: {keep.sum()} tones saved in {name}/tones '

@@ -76,17 +76,18 @@ they are when the report is built. `store_browser.py` (see Getting
 started) lists every
 mark (Tone marks tab) and can clear one or change its scope.
 
-In every window M marks the tone bad and T adds a note (B still
-works where it did; the reason box opens on the tone's current
-reason when it is marked already).
+In every window B marks the tone bad, with the reason box (type or
+pick a reason, Enter), and B again clears the mark; N adds a note.
+M and T do the same, for habit. The reason box opens on the tone's
+current reason when it is marked already.
 
 | Where | Mark bad | Default scope | Note |
 |---|---|---|---|
-| `3_tune.py`, IQ series window | Mark Tone Bad (M); Mark All Series Bad asks keep (note) or remove (bad). The toolbar shows the tone's marks | global | Add Note (T) |
-| `3_tune.py`, fq_finder window | Rejecting a tone (M, with the chosen reason; M again restores it); un-rejecting clears it | global | T |
-| `5_calibrate_streams.py` window | Mark tone bad (M), or a panel's Bad Data | global (forced); local (forced) for the IQ fit panel, whose fit no later stage uses | T |
-| `6a`, `6b` windows | B or M (again to clear) | local | T |
-| `6c_psds.py` overview window | B or M (again to clear); marked tones and `BAD_TONES` are left out of the spectra | local | T |
+| `3_tune.py`, IQ series window | Mark Tone Bad (B); X marks the selected fit point bad, Shift+X every point of the tone (asks keep as a note or remove as bad), Ctrl+Shift+X the points above. The toolbar shows the tone's marks | global | Add Note (N) |
+| `3_tune.py`, fq_finder window | Rejecting a tone (B, with the chosen reason; B again restores it); un-rejecting clears it | global | N |
+| `5_calibrate_streams.py` window | Mark tone bad (B), or a panel's Bad Data | global (forced); local (forced) for the IQ fit panel, whose fit no later stage uses | N |
+| `6a`, `6b` windows | B (again to clear) | local | N |
+| `6c_psds.py` overview window | B (again to clear); marked tones and `BAD_TONES` are left out of the spectra | local | N |
 
 Resonances the plan drops as too close get a note automatically.
 
@@ -103,8 +104,8 @@ sweeps are never retaken.
 |---|---|---|
 | plan | From a resonator list, drops tones within `MIN_SEP_LW` linewidths of another (`PAIRS`: both, or the shallower), plans the tone sets, adds `N_CAL_TONES` off-resonance tones in all, spread over the NCO windows | `tones_init`, `crs_config` |
 | power_sweep | Target sweep at each power in `POWERS` | `power_sweep/set{i}` |
-| power_fits | IQ series window: IQ loop fits at every power, $a_\mathrm{nl}$ vs power per resonator; the power where $a_\mathrm{nl}$ reaches `ANL` is marked (Shift+click or drag to choose another); no fit: the median of the chosen powers of the `FALLBACK_NEAREST` tones nearest in frequency; clipped to `ARES_LIMITS` | `power_fits`, `power_choice` |
-| fq_sweep | Target sweep at the chosen powers | `fq_sweep` |
+| power_fits | IQ series window: IQ loop fits at every power, $a_\mathrm{nl}$ vs power per resonator (the $a_\mathrm{nl}$ axis stays on 0 to 1); the power where $a_\mathrm{nl}$ reaches `ANL` is marked (Shift+click or drag to choose another); no fit: the median of the chosen powers of the `FALLBACK_NEAREST` tones nearest in frequency; clipped to `ARES_LIMITS` | `power_fits`, `power_choice` |
+| fq_sweep | Target sweep at the chosen powers, without the tones marked bad globally so far (in the power fits window, or any global mark of this tuning); they are then out of the fq_finder and the tones | `fq_sweep` |
 | fq_finder | Window: set each tone's frequency and span, or reject it (the tone's power is shown); resumes where it stopped. Closed early, a box asks whether to make the tones from the resonators set so far or to stop and continue later | `fres_opt`, `qres_opt`, `reject_reason` |
 | tones | The tuned tones, without rejected and bad-marked ones | `tones` |
 
@@ -315,7 +316,7 @@ continues in the latest one; `CALIBRATION_NAME` continues in the one with
 that name, or starts a new one with it when none has it; another
 choice or `--new` starts a new one.
 
-In the window, Mark tone bad (M) or a panel's Bad Data asks a reason,
+In the window, Mark tone bad (B) or a panel's Bad Data asks a reason,
 sets the tone's outputs to NaN and records the mark; Add note (T) keeps
 the tone. Bad Data on the IQ fit panel (`FIT_IQ`) marks the fit bad
 only: the mark is local, so the timestream stays good for the later

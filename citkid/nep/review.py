@@ -95,7 +95,7 @@ class NEPReviewWindow(QtWidgets.QMainWindow):
                 ('C', "Open the calibration and IQ fit of this tone at the "
                  'chosen point'),
                 ('B', 'Mark the tone bad (or clear the mark), with a reason'),
-                ('T', 'Add a note on the tone'),
+                ('N (or T)', 'Add a note on the tone'),
                 ('O', 'Open the tone overview'),
                 ('R', 'Rescale the plots'),
                 ('H', 'Show / hide this help')]),
@@ -116,7 +116,7 @@ class NEPReviewWindow(QtWidgets.QMainWindow):
                           ('D', lambda: self.step_tone(1)),
                           ('C', self.open_calibration), ('B', self.toggle_bad),
                           ('M', self.toggle_bad), ('T', self.add_note),
-                          ('O', self.open_overview),
+                          ('N', self.add_note), ('O', self.open_overview),
                           ('R', self.rescale)):
             QtWidgets.QShortcut(QtGui.QKeySequence(key), self, slot)
         self._fill_list()

@@ -166,7 +166,7 @@ line; the aligned pulses (blue) with their mean (white), the fit
 The plots zoom with the mouse (scroll, drag, right-drag for one axis);
 R puts them back: the timestream's heights up to a little above the
 99th percentile of the pulses, and the mean pulse over the fit range up
-to its own peak. B marks bad, T adds a note, O opens the overview
+to its own peak. B marks bad, N adds a note, O opens the overview
 (median height, lifetime, pulse rate). Two boxes above the tone list
 show only the flagged tones (outside the overview limits) and
 include the tones marked bad. A tone "not run"
@@ -259,7 +259,7 @@ flagged tones (outside the limits) or all, with or without the tones
 marked bad (the boxes above it), with their values; click a tone, or
 near its bar, to see its binned spectrum. B marks the tone bad with a
 reason (saved with the result and in the store's tone marks; again to
-clear), T adds a note. The limits are saved with the result. The common
+clear), N adds a note. The limits are saved with the result. The common
 modes are then found without the bad tones.
 
 ```text

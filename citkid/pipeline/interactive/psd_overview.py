@@ -279,7 +279,7 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
             ('Keyboard', [
                 ('A / D', 'Previous / next tone'),
                 ('B', 'Mark the tone bad (or clear the mark), with a reason'),
-                ('T', 'Add a note on the tone'),
+                ('N (or T)', 'Add a note on the tone'),
                 ('H', 'Show / hide this help')]),
             ('Buttons', [
                 ('After common-mode removal', 'Show the spectra after it'),
@@ -540,7 +540,7 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         event (QKeyEvent): the key event.
         """
         keys = {Qt.Key_B: self.toggle_bad, Qt.Key_M: self.toggle_bad,
-                Qt.Key_T: self.add_note,
+                Qt.Key_T: self.add_note, Qt.Key_N: self.add_note,
                 Qt.Key_A: lambda: self.step_tone(-1),
                 Qt.Key_D: lambda: self.step_tone(1)}
         if event.key() in keys and not isinstance(

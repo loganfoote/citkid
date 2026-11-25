@@ -1611,7 +1611,7 @@ def test_set_data_idx_does_not_trust_prefetch_when_outputs_missing(
 
 
 @pytest.mark.parametrize('key, called, not_called', [
-    ('Key_B', '_mark_bad_above', '_mark_all_series_bad'),
+    ('Key_X', '_mark_bad_above', '_mark_all_series_bad'),
     ('Key_A', None, '_apply_to_all'),
 ])
 def test_ctrl_shift_shortcuts(qt_app, monkeypatch, key, called, not_called):
@@ -1855,12 +1855,12 @@ def test_failed_background_save_is_reported(qt_app, monkeypatch):
     _close(win)
 
 
-def test_shift_b_shortcut_marks_all_series_bad(qt_app, monkeypatch):
+def test_shift_x_shortcut_marks_all_series_bad(qt_app, monkeypatch):
     win = _make_series_window(qt_app, monkeypatch)
     win._mark_all_series_bad = MagicMock()
 
     handled = win._handle_modified_letter_shortcut(
-        iseries.QtCore.Qt.Key.Key_B,
+        iseries.QtCore.Qt.Key.Key_X,
         iseries._Qt.ShiftModifier,
     )
 
@@ -2453,7 +2453,7 @@ def test_analysis_window_help(qt_app, monkeypatch):
 def test_series_window_help(qt_app, monkeypatch):
     win = _make_series_window(qt_app, monkeypatch)
     text = help_text(win)
-    for item in ('W / S', 'Ctrl+Shift+B', 'Mark Bad Above', 'Hold Series Point',
+    for item in ('W / S', 'Ctrl+Shift+X', 'Mark Bad Above', 'Hold Series Point',
                  'Click a point', 'Bad Data'):
         assert item in text
     assert 'Fit curve' not in text  # no xy fit
@@ -3843,5 +3843,23 @@ def test_series_window_marks_line_and_status(qt_app, monkeypatch):
     win._set_data_idx(1)
     assert win._apply_status_label.text() == ''
     keys = {s.key().toString() for s in win.findChildren(QtGui.QShortcut)}
-    assert {'M', 'Ctrl+M', 'T', 'Ctrl+T'} <= keys
+    assert {'B', 'M', 'Ctrl+M', 'N', 'T', 'Ctrl+T', 'X'} <= keys
+    win.close()
+
+
+def test_series_window_fixed_y_range(qt_app, monkeypatch):
+    """
+    With y_range the series plot's y axis stays on that range plus a
+    small margin after every rescale.
+    """
+    win = _make_series_window(qt_app, monkeypatch)
+    assert win._y_range is None
+    win._y_range = (0., 1.)
+    win._rescale_series()
+    lo, hi = win._plot_series.viewRange()[1]
+    assert lo == pytest.approx(-0.05, abs = 1e-6)
+    assert hi == pytest.approx(1.05, abs = 1e-6)
+    win._autoscale_all()
+    assert win._plot_series.viewRange()[1] == pytest.approx([-0.05, 1.05],
+                                                            abs = 1e-6)
     win.close()

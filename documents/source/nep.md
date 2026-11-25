@@ -47,7 +47,7 @@ again: the glitch positions found in the batch are cut again, and the
 common modes found in the batch are taken out with weights fitted anew.
 `p_min` (the box, in units of the highest power, or the dashed line)
 refits the photon noise; **Apply p_min to all** gives it to every tone.
-B marks the tone bad (local to this result), T adds a note, O opens the
+B marks the tone bad (local to this result), N adds a note, O opens the
 overview ($R_0$, $P_0$, $x_0$, $\eta$, NEPinc, NEPabs with draggable
 limits), R rescales.
 

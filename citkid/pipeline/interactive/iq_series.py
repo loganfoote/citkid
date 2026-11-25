@@ -474,6 +474,9 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         chose). The chosen x values are saved with the fits as ``x_chosen``
         (nrows,) and ``x_chosen_user`` (see ``SeriesXYFitStore``). None
         (default) chooses nothing.
+    y_range (tuple or None): (lo, hi) the series plot's y axis is
+        held to, with a 5% margin, whatever the data (e.g. the
+        fit range of a_nl). Default None: fit the data.
 
     Notes:
     While the window is open, every dataset writes through its fast write
@@ -492,7 +495,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
 
     _prefetch_status_changed = QtCore.pyqtSignal(str)
     _marks_saved = QtCore.pyqtSignal(str)
-    # Offer Mark Bad Above (button and Ctrl+Shift+B).
+    # Offer Mark Bad Above (button and Ctrl+Shift+X).
     _MARK_BAD_ABOVE = True
 
     def __init__(
@@ -501,7 +504,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         parent=None, state_group=None, xy_fit=None, panels=None,
         precompute_values=False, background_fitting=False, x_values=None,
         xscale='linear', yscale='linear', hold_series_point=False,
-        mask_nearby_tones=False, y_target=None,
+        mask_nearby_tones=False, y_target=None, y_range=None,
     ):
         """
         Build the window, toolbar, series plots and analysis panels.
@@ -612,6 +615,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         # (or by the user) and marked on the series plot. The fit's values
         # are recomputed here in case the target changed since they were saved.
         self._y_target = None if y_target is None else float(y_target)
+        self._y_range = None if y_range is None else \
+            (float(y_range[0]), float(y_range[1]))
         if self._y_target is not None:
             self._xy_store.y_target = self._y_target
             self._recompute_fit_chosen_x()
@@ -640,7 +645,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._init_all_current_di: int | None = None
         self._worker_ars = None  # built once by the background thread
 
-        # Bad marks (Shift+B) are saved by one background writer, in order.
+        # Bad marks (Shift+X) are saved by one background writer, in order.
         # _pending_marks maps data_idx -> futures not yet known to be done.
         self._mark_writer = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix='series-mark-bad')
@@ -720,8 +725,13 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             sc.activated.connect(lambda: self._advance_series(-1))
         sc_r = QtGui.QShortcut(QtGui.QKeySequence('R'), self)
         sc_r.activated.connect(self._autoscale_all)
-        sc_b = QtGui.QShortcut(QtGui.QKeySequence('B'), self)
-        sc_b.activated.connect(self._mark_all_bad)
+        # X: the fit point (every panel's outputs) bad; B: the tone
+        sc_x = QtGui.QShortcut(QtGui.QKeySequence('X'), self)
+        sc_x.activated.connect(self._mark_all_bad)
+        QtGui.QShortcut(QtGui.QKeySequence('B'), self,
+                        activated = self._toggle_tone_bad)
+        QtGui.QShortcut(QtGui.QKeySequence('N'), self,
+                        activated = self._add_note)
         QtGui.QShortcut(QtGui.QKeySequence('H'), self,
                         activated=self._toggle_help)
         # N: run panel N and all following
@@ -889,9 +899,11 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
                      else '')
         choose = '   [⇧click] choose x' if self._y_target is not None else ''
         self._hints_label = hint_label(
-            '[A/D] resonator   [W/S] series point   [R] rescale   [B] mark bad'
-            f'   [⇧B] mark all bad{bad_above}   [N] run+following'
-            f'   [⇧N] run panel only   [⇧A] apply to all{choose}   [H] help'
+            '[A/D] resonator   [W/S] series point   [R] rescale   '
+            '[B] tone bad   [N] note   [X] point bad'
+            f'   [⇧X] all points bad{bad_above}   [1-9] run+following'
+            f'   [⇧1-9] run panel only   [⇧A] apply to all{choose}'
+            '   [H] help'
         )
 
         apply_all_btn = QtWidgets.QPushButton('Apply to All')
@@ -905,7 +917,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         mark_all_series_bad_btn = QtWidgets.QPushButton('Mark All Series Bad')
         mark_all_series_bad_btn.setToolTip(
             'Mark all series indices for the current resonator as bad '
-            '(Shift+B); asks whether to keep the tone or remove it from '
+            '(Shift+X); asks whether to keep the tone or remove it from '
             'the tuned set'
         )
         mark_all_series_bad_btn.clicked.connect(self._mark_all_series_bad)
@@ -914,7 +926,8 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         tone_bad_btn = QtWidgets.QPushButton('Mark Tone Bad')
         tone_bad_btn.setToolTip(
             "Record this resonator as bad in the store's tone marks, with "
-            'a reason: it is removed from the tuned set (M)'
+            'a reason: it is removed from the tuned set (B; B again '
+            'clears the mark)'
         )
         tone_bad_btn.clicked.connect(self._mark_tone_bad)
         QtGui.QShortcut(QtGui.QKeySequence('M'), self,
@@ -926,7 +939,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         note_btn = QtWidgets.QPushButton('Add Note')
         note_btn.setToolTip(
             "Record a note on this resonator in the store's tone marks; "
-            'the tone is kept (T)'
+            'the tone is kept (N)'
         )
         note_btn.clicked.connect(self._add_note)
         QtGui.QShortcut(QtGui.QKeySequence('T'), self,
@@ -940,7 +953,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             mark_bad_above_btn.setToolTip(
                 'Mark the selected series point and every point with a '
                 f'larger x ({self._x_name}) as bad for the current resonator '
-                '(Ctrl+Shift+B)'
+                '(Ctrl+Shift+X)'
             )
             mark_bad_above_btn.clicked.connect(self._mark_bad_above)
             row2.addWidget(mark_bad_above_btn)
@@ -986,11 +999,15 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             ('A / D  or  Left / Right', 'Previous / next data index'),
             ('W / S  or  Up / Down', 'Previous / next series point'),
             ('R', 'Rescale every plot'),
-            ('B', 'Mark the selected series point bad (every panel)'),
-            ('Shift+B', 'Mark every series point bad for this data index'),
+            ('B', "Mark the tone bad with a reason, in the store's tone "
+                  'marks (B again clears the mark); M too'),
+            ('N', "Add a note on the tone to the store's tone marks; T "
+                  'too'),
+            ('X', 'Mark the selected series point bad (every panel)'),
+            ('Shift+X', 'Mark every series point bad for this data index'),
         ]
         if self._MARK_BAD_ABOVE:
-            keys.append(('Ctrl+Shift+B', 'Mark the selected series point and '
+            keys.append(('Ctrl+Shift+X', 'Mark the selected series point and '
                          'every point with a larger x bad'))
         keys += [
             ('Shift+A', 'Apply the panel settings to every series point '
@@ -1003,10 +1020,10 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
             ('◀ / ▶, data_idx', 'Previous / next data index, or type one'),
             ('Series index', 'Select a series point'),
             ('Apply to All', 'Same as Shift+A'),
-            ('Mark All Series Bad', 'Same as Shift+B'),
+            ('Mark All Series Bad', 'Same as Shift+X'),
         ]
         if self._MARK_BAD_ABOVE:
-            toolbar.append(('Mark Bad Above', 'Same as Ctrl+Shift+B'))
+            toolbar.append(('Mark Bad Above', 'Same as Ctrl+Shift+X'))
         toolbar += self._extra_toolbar_help()
         toolbar.append(('Hold Series Point', 'On: keep the selected series '
                         'point selected when the data index changes. Off: '
@@ -1272,7 +1289,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         """
         shift = bool(modifiers & _Qt.ShiftModifier)
         ctrl = bool(modifiers & _Qt.ControlModifier)
-        if shift and ctrl and key == QtCore.Qt.Key.Key_B:
+        if shift and ctrl and key == QtCore.Qt.Key.Key_X:
             if not self._MARK_BAD_ABOVE:
                 return False
             self._mark_bad_above()
@@ -1282,7 +1299,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         if key == QtCore.Qt.Key.Key_A:
             self._apply_to_all()
             return True
-        if key == QtCore.Qt.Key.Key_B:
+        if key == QtCore.Qt.Key.Key_X:
             self._mark_all_series_bad()
             return True
         return False
@@ -1980,11 +1997,24 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         return _marks.ask_all_bad(
             self, f'Mark every point of res {self._res_idx()} bad')
 
+    def _toggle_tone_bad(self):
+        """
+        Mark the current resonator bad (``_mark_tone_bad``), or clear
+        its mark when it is marked already (the B key).
+        """
+        root, stage = _marks.registry(getattr(self._ARs[0].DS, 'root', None))
+        if _marks.current_reason(root, self._res_idx(), stage) is None:
+            self._mark_tone_bad()
+            return
+        if self._record('clear', ''):
+            self._apply_status_label.setText('Bad mark cleared')
+        self._update_marks_label()
+
     def _mark_tone_bad(self):
         """
         Record the current resonator as bad in the store's tone marks,
-        with a reason (the Mark Tone Bad button, M or Ctrl+M). It is then
-        removed from the tuned set.
+        with a reason (the Mark Tone Bad button, B, M or Ctrl+M). It is
+        then removed from the tuned set.
         """
         reason, scope = _marks.reason_and_scope(self._ask_reason(),
                                                 'global')
@@ -2024,7 +2054,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
     def _add_note(self):
         """
         Record a note on the current resonator in the store's tone marks
-        (the Add Note button, T or Ctrl+T). The tone is kept.
+        (the Add Note button, N, T or Ctrl+T). The tone is kept.
         """
         note = self._ask_note()
         if note and self._record('note', note):
@@ -2734,8 +2764,19 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         """
         for panel in self.panels:
             panel.autoscale_plots()
-        self._plot_series.autoRange()
+        self._rescale_series()
         self._plot_waterfall.autoRange()
+
+    def _rescale_series(self):
+        """
+        Fit the series plot to its data; with ``y_range`` the y axis
+        stays on that range (a 5% margin each side) whatever the data.
+        """
+        self._plot_series.autoRange()
+        if self._y_range is not None:
+            lo, hi = self._y_range
+            pad = 0.05 * (hi - lo)
+            self._plot_series.setYRange(lo - pad, hi + pad, padding = 0)
 
     # ------------------------------------------------------------------
     # Series plot
@@ -2950,7 +2991,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._series_combo_label.setText(f'series index, {x_name}:')
         self._update_series_combo_items(self._data_idx)
         self._update_series_scatter()
-        self._plot_series.autoRange()
+        self._rescale_series()
         if self._precompute_values or self._xy_fit is not None:
             self._restart_background = True
             self._start_background_initialize_remaining()
@@ -2989,7 +3030,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         self._update_selected_marker()
         self._refresh_xy_fit()
         if rescale:
-            self._plot_series.autoRange()
+            self._rescale_series()
 
     def _plot_coords(self, x, y):
         """
@@ -3024,7 +3065,7 @@ class IQSeriesWindow(QtWidgets.QMainWindow):
         _checked (bool or None): New check state (unused; both are read).
         """
         self._update_series_scatter()
-        self._plot_series.autoRange()
+        self._rescale_series()
 
     # ------------------------------------------------------------------
     # Optional y vs x fit
@@ -3404,7 +3445,7 @@ def run_iq_series(
     y_param_name='a', start_idx=None, data_idxs=None,
     title="IQ Series", ui_scale=1.0, plot_scale=1.0, xy_fit=None, datasets=None,
     x_values=None, xscale='linear', yscale='linear', hold_series_point=False,
-    mask_nearby_tones=False, y_target=None,
+    mask_nearby_tones=False, y_target=None, y_range=None,
 ):
     """
     Build one AnalysisRunner per series index, then launch the IQSeriesWindow.
@@ -3497,6 +3538,9 @@ def run_iq_series(
         saved with the fits as ``x_chosen`` (nrows,; NaN where none), with
         ``x_chosen_user`` marking the ones you chose, e.g.
         ``root['xy_fit/x_chosen'][...]``. None (default) chooses nothing.
+    y_range (tuple or None): (lo, hi) the series plot's y axis is
+        held to, with a 5% margin, whatever the data (e.g. the
+        fit range of a_nl). Default None: fit the data.
 
     Returns:
     win (IQSeriesWindow): The created (and already shown) window.
@@ -3575,7 +3619,7 @@ def run_iq_series(
         yscale=yscale,
         hold_series_point=hold_series_point,
         mask_nearby_tones=mask_nearby_tones,
-        y_target=y_target,
+        y_target=y_target, y_range=y_range,
     )
     win.show()
     app.exec()
