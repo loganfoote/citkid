@@ -75,7 +75,8 @@ def test_window(qapp):
     assert [c.currentText() for c in win.combos] == ['1 Hz', '10 Hz',
                                                      '30 Hz']
     assert win.cn_box.isChecked() and win.has_cn
-    assert set(win.limits) == {'1 Hz cn', '10 Hz cn', '30 Hz cn'}
+    assert set(win.limits) == {'1 Hz cn', '10 Hz cn', '30 Hz cn',
+                               'sfactor 10-100 Hz'}
     v = win.values(0)
     assert np.isnan(v[2]) and np.isnan(v[5]) and np.isfinite(v[0])
     assert v[0] == pytest.approx(1e-16 / 2)
@@ -155,7 +156,8 @@ def test_window_without_cn(qapp):
     ts, result, f_reduced = make_result(cn = False)
     win = PsdOverviewWindow(ts, result, f_reduced)
     assert not win.has_cn and not win.cn_box.isEnabled()
-    assert set(win.limits) == {'1 Hz', '10 Hz', '30 Hz'}
+    assert set(win.limits) == {'1 Hz', '10 Hz', '30 Hz',
+                               'sfactor 10-100 Hz'}
     win.only_outside.setChecked(False)
     win.tone_list.setCurrentRow(0)
     assert len(win.spec_cn_curve.getData()[0] or []) == 0
@@ -184,3 +186,83 @@ def test_ask_existing_psd(monkeypatch):
     answers += ['Overwrite', 'Overwrite']
     assert po.ask_existing_psd('ts_psd0', 'desc') == 'overwrite'
     assert answers == []
+
+
+def test_window_several_timestreams(qapp):
+    """
+    With other timestreams the histogram values are the geometric mean
+    over the ones that have the tone and did not flag it, the s-factor
+    histogram averages 10 to 100 Hz, the spectrum plot has a curve per
+    timestream, and a bad mark goes to every timestream's stage.
+    """
+    from citkid.pipeline.interactive.psd_overview import (
+        N_HIST, PsdOverviewWindow)
+    ts, result, f_reduced = make_result()
+    ts2, result2, _ = make_result()
+    # The second timestream lacks the last tone, has every frequency,
+    # has 10 x the noise and an s-factor; tone 5 is fine in it
+    ts2['res_idxs'] = ts2['res_idxs'][:-1]
+    ts2['rows'] = ts2['rows'][:-1]
+    for key in ('sxx_reduced', 'sxx_binned', 'sxx_reduced_cn',
+                'sxx_binned_cn'):
+        result2[key] = result2[key][:-1] * 10.
+    for key in ('sxx_reduced', 'sxx_reduced_cn'):
+        result2[key][:, 4] = result2[key][:, 3]
+        result2[key][5] = 1e-15
+    result2['status'] = result2['status'][:-1]
+    result2['status'][5] = ''
+    result2['valid_reduced'] = np.array([True] * 5)
+    result2['sfactor_reduced'] = np.outer(np.arange(7), np.ones(5)) + \
+        np.array([0., 0., 1., 3., 100.])
+    result2['sfactor_reduced'][2] = np.nan
+    root = zarr.group()
+    win = PsdOverviewWindow(ts, result, f_reduced, root = root,
+                            stage = 'ts_psd0/timestream0', label = 'long',
+                            others = [dict(ts = ts2, result = result2,
+                                           stage = 'ts_psd0/timestream1',
+                                           label = 'short')])
+    assert win.res_idxs == list(100 + np.arange(8))
+    assert [e['label'] for e in win.entries] == ['long', 'short']
+    assert len(win.plots) == N_HIST + 1 and len(win.spec_curves) == 2
+    # Tone 0 at 1 Hz (before the common modes): geometric mean of 1e-16
+    # and 1e-15; the last tone has the first timestream only; tone 5 the
+    # second only (flagged in the first); tone 2 none
+    win.cn_box.setChecked(False)
+    win.combos[0].setCurrentIndex(0)
+    v = win.values(0)
+    assert v[0] == pytest.approx(np.sqrt(1e-16 * 1e-15))
+    assert v[7] == pytest.approx(10. ** (-16 + 0.2 * 7))
+    assert v[5] == pytest.approx(1e-15) and np.isnan(v[2])
+    # 100 Hz: only the second timestream has it
+    win.combos[0].setCurrentIndex(list(win.f_idx).index(4))
+    assert win.values(0)[0] == pytest.approx(
+        result2['sxx_reduced'][0, 4])
+    win.cn_box.setChecked(True)
+    assert win.values(0)[0] == pytest.approx(
+        result2['sxx_reduced_cn'][0, 4])
+    # The s-factor: mean over 10, 30 and 100 Hz of the second (the
+    # first has none): tone 0 -> (1 + 3 + 100) / 3
+    sf = win.values(N_HIST)
+    assert sf[0] == pytest.approx(104. / 3)
+    assert np.isnan(sf[2]) and np.isnan(sf[7])
+    assert win._key(N_HIST) == 'sfactor 10-100 Hz'
+    assert 'sfactor 10-100 Hz' in win.limits
+    # A bad mark goes to both stages
+    win.only_outside.setChecked(False)
+    win.tone_list.setCurrentRow(win._listed.index(0))
+    win._ask_reason = lambda: 'high noise'
+    win.toggle_bad()
+    assert win.bad[100] == 'high noise'
+    assert set(dl.bad_tones(root, 'ts_psd0/timestream0')) == {100}
+    assert set(dl.bad_tones(root, 'ts_psd0/timestream1')) == {100}
+    win.toggle_bad()
+    assert 100 not in win.bad and dl.bad_tones(root, 'ts_psd0/timestream0') \
+        == {}
+    # The selected tone shows both curves and both statuses
+    win.select(0)
+    assert len(win.spec_curves[1].getData()[0]) == 40
+    assert 'long: analyzed' in win.status.text()
+    assert 'short: analyzed' in win.status.text()
+    win.select(7)
+    assert 'short: not in this timestream' in win.status.text()
+    win.close()

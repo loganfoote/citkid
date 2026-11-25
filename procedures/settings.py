@@ -17,6 +17,7 @@ SUFFIX = ''
 SETUP = dict(fridge_ch = '', dac_attenuation = '', dac_filters = '',
              adc_filters = '', warm_amps = '', temperature = '')
 MEMORY_GB = 12.
+N_WORKERS = None
 LIGHT_MODE = False
 
 ################################################################################

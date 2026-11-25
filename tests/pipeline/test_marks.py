@@ -74,6 +74,7 @@ def test_dialogs(qapp, monkeypatch):
                         lambda self: QtWidgets.QDialog.Accepted)
     assert marks.ask_reason(None, 'Mark res 1 bad') == dl.BAD_REASONS[0]
     assert 'shallow resonance' in dl.BAD_REASONS
+    assert 'amplifier noise' in dl.BAD_REASONS
     assert marks.ask_reason(None, 'Mark res 1 bad',
                             current = 'high noise') == 'high noise'
     assert marks.ask_reason(None, 't', reasons = ('x', 'y')) == 'x'

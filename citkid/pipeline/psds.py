@@ -25,6 +25,7 @@ only reduced results are saved (``save_timestream``). Per write:
    step 2 is repeated on the cleaned tones, and the common modes get
    binned spectra of their own.
 """
+import concurrent.futures
 import json
 import numpy as np
 from .. import daq_layout as dl
@@ -34,6 +35,7 @@ from ..signal.psd import bin_psd, get_psd
 from ..xcal.corr import calc_cm, remove_cm
 from ..xcal.reduced_params import get_sxx_reduced
 from ..signal.basic_filt import decimate
+from ..parallel import resolve_workers
 from ..zarr_util import to_jsonable
 from . import photon_finder as pf
 from .stream_sources import apply_stream_calibration, open_calibration
@@ -258,6 +260,43 @@ def psd_summary(x, dt, freqs, valid = None, nbins = 100, fmin = None):
             f_binned, binned = fb, np.full((n, len(fb)), np.nan)
         binned[i] = sb
     if binned is None:
+        binned = np.zeros((n, 0))
+    return f_binned, binned, reduced
+
+def psd_rows(x, dt, freqs, valid = None, n_workers = 1, **bins):
+    """
+    ``psd_summary`` with the rows shared out over threads (the FFTs
+    release the interpreter lock, so several run side by side without
+    copying the timestreams).
+
+    Parameters:
+    x (np.array, (N, T)): timestreams.
+    dt (float): sample period, s.
+    freqs (np.array): frequencies to reduce the PSD at.
+    valid (np.array, bool, or None): as ``psd_summary``.
+    n_workers (int): threads. Default 1: ``psd_summary`` itself.
+    bins: ``nbins`` and ``fmin`` for ``psd_summary``.
+
+    Returns:
+    f_binned, binned, reduced: as ``psd_summary``.
+    """
+    x = np.atleast_2d(np.asarray(x, dtype = np.float64))
+    n = x.shape[0]
+    n_workers = min(int(n_workers), n)
+    if n_workers <= 1:
+        return psd_summary(x, dt, freqs, valid, **bins)
+    chunks = np.array_split(np.arange(n), n_workers)
+    with concurrent.futures.ThreadPoolExecutor(n_workers) as ex:
+        parts = list(ex.map(
+            lambda c: psd_summary(x[c], dt, freqs, valid, **bins), chunks))
+    f_binned = next((fb for fb, _, _ in parts if len(fb)), np.zeros(0))
+    binned = np.full((n, len(f_binned)), np.nan)
+    reduced = np.full((n, len(np.asarray(freqs))), np.nan)
+    for c, (fb, sb, sr) in zip(chunks, parts):
+        if len(fb):
+            binned[c] = sb
+        reduced[c] = sr
+    if not len(f_binned):
         binned = np.zeros((n, 0))
     return f_binned, binned, reduced
 
@@ -536,7 +575,9 @@ def analyze_timestream(
         'peaks' or 'photons'), ``glitch_pre_s``, ``glitch_post_s``,
         ``glitch_sign``, ``glitch_nstd``, ``glitch_baseline_s``,
         ``glitch_distance_s``, ``glitch_rounds``, ``glitch_pulses``,
-        ``coinc_win``, ``hee_min_mult``, ``memory_gb``; optionally
+        ``coinc_win``, ``hee_min_mult``, ``memory_gb``, optionally
+        ``n_workers`` (threads for the spectra of a write, ``psd_rows``;
+        None: up to 4, by the cores; default 1); optionally
         ``modes_rate_hz``: keep each write's common modes decimated to
         this sample rate (``modes_dec``, ``dt_dec`` per write), for
         ``nep.sweep`` to take out of a tone computed again.
@@ -587,6 +628,7 @@ def analyze_timestream(
     """
     s = settings
     dt, T = float(ts['dt']), int(ts['stop'] - ts['start'])
+    nw = resolve_workers(s.get('n_workers', 1))
     duration = T * dt
     n = len(ts['rows'])
     nf = len(f_reduced)
@@ -675,9 +717,9 @@ def analyze_timestream(
                 if reason is not None:
                     x[k] = par[k] = perp[k] = np.nan
                     out['status'][i] = f'marked bad: {reason}'
-        fb, sb, sr_par = psd_summary(par, dt, f_reduced, valid, **bins)
+        fb, sb, sr_par = psd_rows(par, dt, f_reduced, valid, nw, **bins)
         _fill(out, 'spar_binned', idx, fb, sb, n)
-        fb, sb, sr_per = psd_summary(perp, dt, f_reduced, valid, **bins)
+        fb, sb, sr_per = psd_rows(perp, dt, f_reduced, valid, nw, **bins)
         _fill(out, 'sper_binned', idx, fb, sb, n)
         with np.errstate(divide = 'ignore', invalid = 'ignore'):
             out['sfactor_reduced'][idx] = 10 * np.log10(sr_par / sr_per)
@@ -698,7 +740,7 @@ def analyze_timestream(
                 pulses = s['glitch_pulses'], coinc_win = int(s['coinc_win']),
                 min_mult = int(s['hee_min_mult']), pre = pre, post = post)
             out['n_glitches'][idx], out['glitch_frac'][idx] = ng, fr
-        fb, sb, sr = psd_summary(x, dt, f_reduced, valid, **bins)
+        fb, sb, sr = psd_rows(x, dt, f_reduced, valid, nw, **bins)
         _fill(out, 'sxx_binned', idx, fb, sb, n)
         out['sxx_reduced'][idx] = sr
         if not s['cn_remove']:
@@ -780,12 +822,13 @@ def _remove_write_modes(
     cm = remove_common_modes(x, dt, s['cn_n_comp'], s['cn_n_iter'],
                              (lowpass_hz, order), highpass)
     del x
-    fb, sb, sr = psd_summary(cm['y'], dt, f_reduced, valid, **bins)
+    fb, sb, sr = psd_rows(cm['y'], dt, f_reduced, valid,
+                          resolve_workers(s.get('n_workers', 1)), **bins)
     _fill(out, 'sxx_binned_cn', idx, fb, sb, n)
     out['sxx_reduced_cn'][idx] = sr
     out['cn_weights'][idx, :cm['n_comp']] = cm['a']
     if cm['n_comp']:
-        fbA, sA, _ = psd_summary(cm['A'], dt, np.zeros(0), **bins)
+        fbA, sA, _ = psd_rows(cm['A'], dt, np.zeros(0), **bins)
     else:
         fbA, sA = np.zeros(0), np.zeros((0, 0))
     write = dict(

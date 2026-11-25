@@ -21,7 +21,8 @@ from citkid.qt_compat import set_theme
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB, LIGHT_MODE
+from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB, \
+    N_WORKERS, LIGHT_MODE
 
 # Timestreams
 CALIBRATION_NAME = None
@@ -158,31 +159,37 @@ def analysis_settings(args):
         glitch_distance_s = GLITCH_DISTANCE_S, glitch_rounds = GLITCH_ROUNDS,
         glitch_pulses = GLITCH_PULSES, coinc_win = COINC_WIN,
         hee_min_mult = HEE_MIN_MULT, memory_gb = MEMORY_GB,
+        n_workers = N_WORKERS,
         photons = args.photons)
 
-def review(ts, result, f_reduced, root, stage, limits = None):
+def review(items, f_reduced, root, limits = None):
     """
-    Open the overview window on a timestream's raw spectra.
+    Open the overview window on the raw spectra of every timestream of
+    the run, together.
 
     Parameters:
-    ts (dict): the timestream.
-    result (dict): ``analyze_timestream`` output without common-mode
-        removal.
+    items (list of dict): ``prepare_one`` output with ``raw``.
     f_reduced (np.array): the group's reduced frequencies.
     root (zarr.Group): the store root (the tone-marks registry).
-    stage (str): the result's path, recorded with the marks.
     limits (dict or None): review limits to open with. Default None.
 
     Returns:
-    bad (dict): res_idx: reason, the tones marked bad.
+    bad (dict): res_idx: reason, the tones marked bad (every timestream).
     limits (dict): the overview's review limits.
     """
     from citkid.pipeline.interactive.psd_overview import run_psd_overview
+    first, others = items[0], items[1:]
+    bad = {}
+    for it in items:
+        bad.update({int(r): v for r, v in it['bad0'].items()})
+    labels = ', '.join(f"{it['ts']['run']} ({it['ts']['name']})"
+                       for it in items)
     return run_psd_overview(
-        ts, result, f_reduced, root = root, stage = stage,
-        limits = dict(limits or {}),
-        title = f"Noise spectra: {ts['run']} ({ts['name']}), tone set "
-        f"{ts['tone_set']}")
+        first['ts'], first['raw'], f_reduced, bad = bad, root = root,
+        stage = first['stage'], limits = dict(limits or {}),
+        title = f'Noise spectra: {labels}',
+        others = [dict(ts = it['ts'], result = it['raw'], stage = it['stage'])
+                  for it in others])
 
 def existing_choice(grp, args, interactive):
     """
@@ -277,7 +284,8 @@ def main(args):
     saved = {} if existing is None else psds.saved_review(existing)
     if choice == 'load':
         # The saved settings and review, no window
-        settings = {**existing.attrs['settings'], 'memory_gb': MEMORY_GB}
+        settings = {**existing.attrs['settings'], 'memory_gb': MEMORY_GB,
+                    'n_workers': N_WORKERS}
         photons = settings.get('photons')
         interactive = False
     ref_grp = None
@@ -314,10 +322,22 @@ def main(args):
           f'{f_reduced.tolist()} Hz')
     out = {}
     try:
-        for j, ts in enumerate(chosen):
-            out[f'timestream{j}'] = analyze_one(
-                root, ts, j, datasets, out_grp, f_reduced, settings,
-                ref_grp, saved, choice, interactive, existing = existing)
+        # Every timestream's raw spectra first, one window over all of
+        # them, then each one's common modes and saving
+        keep = keep_in_memory(chosen, settings['memory_gb'])
+        items = [prepare_one(root, ts, j, datasets, out_grp, f_reduced,
+                             settings, ref_grp, saved, choice,
+                             interactive, existing = existing,
+                             keep_x = keep[j])
+                 for j, ts in enumerate(chosen)]
+        bad = limits = None
+        if interactive and choice != 'load':
+            limits0 = next((it['limits0'] for it in items
+                            if it['limits0']), {})
+            bad, limits = review(items, f_reduced, root, limits0)
+        for it in items:
+            out[it['name']] = finish_one(root, it, settings, out_grp,
+                                         f_reduced, choice, bad, limits)
     finally:
         if not out and choice != 'load':
             # Nothing was saved: no empty set is left behind
@@ -326,15 +346,44 @@ def main(args):
     print(f'Done: {out_grp.path}')
     return out
 
-def analyze_one(
+def keep_in_memory(chosen, memory_gb):
+    """
+    Decide which timestreams stay in memory from the raw pass to the
+    common-mode pass: in order, each while the timestreams kept so far,
+    its own, and the working copies of the common-mode removal (about
+    four times its size) fit in ``memory_gb``. The others are computed
+    again after the review.
+
+    Parameters:
+    chosen (list of dict): the timestreams.
+    memory_gb (float): the memory budget, GB.
+
+    Returns:
+    keep (list of bool): per timestream.
+    """
+    budget = float(memory_gb) * 1e9
+    kept, keep = 0., []
+    for ts in chosen:
+        size = 8. * len(ts['res_idxs']) * (ts['stop'] - ts['start'])
+        ok = kept + 5 * size <= budget
+        keep.append(ok)
+        if ok:
+            kept += size
+        else:
+            print(f"{ts['run']} ({ts['name']}): computed again after the "
+                  f'review rather than kept in memory ({size / 1e9:.1f} GB '
+                  f'with {kept / 1e9:.1f} GB kept; MEMORY_GB {memory_gb})')
+    return keep
+
+def prepare_one(
     root, ts, j, datasets, out_grp, f_reduced, settings, ref_grp, saved,
-    choice, interactive, existing = None
+    choice, interactive, existing = None, keep_x = True
 ):
     """
-    Compute, review and save one timestream's spectra. Spectra saved
-    earlier for the same timestream, settings and marks are kept (or
-    copied into a new set) instead of being computed again
-    (``psds.same_spectra``); ``--overwrite`` always computes.
+    Get one timestream ready: the tones it leaves out, its saved review,
+    and, for the window, its raw spectra (the saved ones when nothing
+    changed, ``psds.same_spectra``, else computed with the calibrated
+    timestreams kept in memory for the common-mode pass).
 
     Parameters:
     root (zarr.Group): the store root.
@@ -347,54 +396,92 @@ def analyze_one(
     ref_grp (zarr.Group or None): the photon result for deglitching.
     saved (dict): ``psds.saved_review`` of the set being made again.
     choice (str): 'new', 'load' or 'overwrite'.
-    interactive (bool): If True, the overview window opens.
+    interactive (bool): If True, the overview window opens: the raw
+        spectra are computed (or kept).
     existing (zarr.Group or None): the set made earlier for the same
         choice, whose spectra may be kept. Default None.
+    keep_x (bool): If True (default), the calibrated timestreams stay in
+        memory for the common-mode pass; else that pass computes them
+        again (``keep_in_memory``).
 
     Returns:
-    result (dict): ``analyze_timestream`` output (loaded, when kept).
+    item (dict): ``ts``, ``j``, ``name``, ``stage``, ``DS``, ``filters``,
+        ``ph_settings``, ``exclude`` (res_idx: reason, from the store's
+        marks and ``BAD_TONES``), ``bad0``, ``limits0`` (the saved
+        review), ``prev`` (the saved group, or None), ``raw`` (the raw
+        spectra, or {} without the window).
     """
     DS = datasets[ts['cal']][ts['dataset']]['DS']
     filters, ph_settings = None, None
     if ref_grp is not None:
         filters, ph_settings = psds.load_photon_reference(ref_grp)
     name = f'timestream{j}'
+    stage = f'{out_grp.path}/{name}'
     exclude = {int(r): dl.bad_reason(e) for r, e in dl.bad_tones(
-        root, f'{out_grp.path}/{name}',
+        root, stage,
         tuning = str(ts['source']['group']).split('/')[0]).items()}
     exclude.update({int(r): 'BAD_TONES' for r in BAD_TONES})
     left_out = sorted(set(exclude) & set(ts['res_idxs'].tolist()))
     if left_out:
-        print(f'{len(left_out)} tones left out (marked bad): res '
-              f'{left_out}')
-    bad, limits = saved.get(name, ({}, {}))
-    raw = {}
+        print(f"{ts['run']} ({ts['name']}): {len(left_out)} tones left out "
+              f'(marked bad): res {left_out}')
+    bad0, limits0 = saved.get(name, ({}, {}))
     prev = existing[name] if existing is not None and choice != 'overwrite' \
         and name in existing else None
-    if choice == 'load':
-        exclude = {**exclude, **{int(r): v for r, v in bad.items()}}
-    elif interactive:
-        # The raw spectra first, for the overview window (the saved
-        # ones when nothing changed); the tones marked bad there stay
-        # out of the common-mode fit
-        marked = {**exclude, **{int(r): v for r, v in bad.items()}}
+    raw = {}
+    if interactive and choice != 'load':
+        # The raw spectra for the overview window (the saved ones when
+        # nothing changed); the tones marked bad there stay out of the
+        # common-mode fit
+        marked = {**exclude, **{int(r): v for r, v in bad0.items()}}
         if prev is not None and psds.same_spectra(prev, ts, settings,
                                                  marked):
             raw = psds.load_timestream(prev)
             raw['sxx_reduced_cn'] = None
             print(f'{prev.path}: raw spectra kept for the review')
         else:
-            # The timestreams stay in memory for the common-mode
-            # removal after the review
             raw = psds.analyze_timestream(
                 root, ts, DS, f_reduced, dict(settings, cn_remove = False),
                 filters = filters, photon_settings = ph_settings,
-                progress = print, exclude = exclude, keep_x = True)
-        bad, limits = review(ts, raw, f_reduced, root,
-                             f'{out_grp.path}/{name}', limits)
-        exclude = {**exclude, **{int(r): v for r, v in bad.items()}}
+                progress = print, exclude = exclude, keep_x = keep_x)
+    return dict(ts = ts, j = j, name = name, stage = stage, DS = DS,
+                filters = filters, ph_settings = ph_settings,
+                exclude = exclude, bad0 = bad0, limits0 = limits0,
+                prev = prev, raw = raw)
+
+def finish_one(root, item, settings, out_grp, f_reduced, choice, bad, limits):
+    """
+    Compute and save one timestream's spectra after the review: the
+    common modes without the tones marked bad, from the timestreams kept
+    in memory by ``prepare_one``. Spectra saved earlier for the same
+    timestream, settings and marks are kept (or copied into a new set)
+    instead of being computed again; ``--overwrite`` always computes.
+
+    Parameters:
+    root (zarr.Group): the store root.
+    item (dict): ``prepare_one`` output.
+    settings (dict): the analysis settings.
+    out_grp (zarr.Group): the set's group.
+    f_reduced (np.array): the set's reduced frequencies.
+    choice (str): 'new', 'load' or 'overwrite'.
+    bad (dict or None): the window's marks (res_idx: reason), for every
+        timestream. None: no window (the saved review with 'load',
+        nothing otherwise).
+    limits (dict or None): the window's review limits. None: no window.
+
+    Returns:
+    result (dict): ``analyze_timestream`` output (loaded, when kept).
+    """
+    ts, name, prev, raw = item['ts'], item['name'], item['prev'], item['raw']
+    listed = {int(r) for r in ts['res_idxs']}
+    if bad is not None:
+        ts_bad = {int(r): v for r, v in bad.items() if int(r) in listed}
+        ts_limits = dict(limits or {})
+    elif choice == 'load':
+        ts_bad, ts_limits = dict(item['bad0']), dict(item['limits0'])
     else:
-        bad, limits = {}, {}
+        ts_bad, ts_limits = {}, {}
+    exclude = {**item['exclude'], **ts_bad}
     if prev is not None and psds.same_spectra(prev, ts, settings, exclude):
         # Nothing that changes the spectra changed: keep the saved ones
         if prev.path != f'{out_grp.path}/{name}':
@@ -402,21 +489,21 @@ def analyze_one(
             copy_group(prev, dl.create_group(out_grp, name, 'analysis',
                                              overwrite = True))
         grp = out_grp[name]
-        grp.attrs['limits'] = dl.to_jsonable(dict(limits))
+        grp.attrs['limits'] = dl.to_jsonable(dict(ts_limits))
         result = psds.load_timestream(grp)
         result['writes'] = result.get('common_modes', [])
         print(f'{grp.path}: unchanged, spectra kept (--overwrite computes '
               'them again)')
-        report(ts, result, settings, bad)
+        report(ts, result, settings, ts_bad)
         return result
     result = psds.analyze_timestream(
-        root, ts, DS, f_reduced, settings, filters = filters,
-        photon_settings = ph_settings, progress = print,
+        root, ts, item['DS'], f_reduced, settings, filters = item['filters'],
+        photon_settings = item['ph_settings'], progress = print,
         exclude = exclude, reuse = raw if raw.get('x') else None)
     psds.save_timestream(
         dl.create_group(out_grp, name, 'analysis', overwrite = True),
-        ts, result, settings, bad = bad, limits = limits)
-    report(ts, result, settings, bad)
+        ts, result, settings, bad = ts_bad, limits = ts_limits)
+    report(ts, result, settings, ts_bad)
     return result
 
 if __name__ == '__main__':

@@ -1,7 +1,8 @@
 """
-PSD overview window: histograms over all tones of a timestream's noise
-spectra at chosen frequencies (``pipeline.psds``), with review limits,
-the selected tone's spectrum, and marking tones bad with a reason.
+PSD overview window: histograms over all tones of a run's noise
+spectra at chosen frequencies and of the s-factor (``pipeline.psds``),
+with review limits, the selected tone's spectra (every timestream of
+the run together), and marking tones bad with a reason.
 
 Left: three histograms of Sxx (1/Hz, on a log axis labelled 1e-16,
 1e-15, ...) at frequencies picked from the reduced grid (before or after
@@ -23,8 +24,44 @@ from ...qt_compat import (
 from .marks import ask_note, ask_reason, reason_and_scope, mark_label, record, registry
 from .photon_thresholds import _message_box
 
-# Histograms shown
+# Histograms shown (Sxx at chosen frequencies); the s-factor is one more
 N_HIST = 3
+# The s-factor shown is the mean over this band, Hz
+SFACTOR_BAND = (10., 100.)
+# Spectrum colours per timestream shown: (raw, after common modes)
+ENTRY_COLOURS = [((150, 150, 150), (80, 160, 255)),
+                 ((230, 170, 90), (255, 110, 0)),
+                 ((140, 210, 140), (0, 160, 60)),
+                 ((210, 140, 210), (170, 0, 170))]
+
+def _nanmean(a, axis = 1):
+    """
+    Average over an axis, leaving out NaN, without a warning for rows
+    of nothing but NaN (they give NaN).
+
+    Parameters:
+    a (np.array): 2d values.
+    axis (int): the axis averaged over. Default 1.
+
+    Returns:
+    m (np.array): the means.
+    """
+    ok = np.isfinite(a)
+    n = ok.sum(axis = axis)
+    total = np.where(ok, a, 0.).sum(axis = axis)
+    return np.where(n > 0, total / np.maximum(n, 1), np.nan)
+
+def _ts_label(ts):
+    """
+    Name a timestream for the legend and the status.
+
+    Parameters:
+    ts (dict): the timestream (``psds.list_timestreams``).
+
+    Returns:
+    label (str): e.g. 'ts0 dark0'.
+    """
+    return f"{ts.get('run', '')} {ts.get('name', '')}".strip() or 'timestream'
 
 
 class LogAxisItem(pg.AxisItem):
@@ -102,17 +139,26 @@ def valid_frequencies(result, f_reduced):
 
 class PsdOverviewWindow(QtWidgets.QMainWindow):
     """
-    Window for reviewing one timestream's spectra tone by tone.
+    Window for reviewing the spectra of one run's timestreams tone by
+    tone: the first timestream and ``others`` (the same run at another
+    decimation stage, say) are shown together, each tone's histogram
+    values being the geometric mean over the timestreams that have the
+    tone and did not flag it.
 
     Attributes:
-    bad (dict): res_idx: reason, the tones marked bad (changed in place).
+    bad (dict): res_idx: reason, the tones marked bad (changed in place;
+        a mark applies to every timestream shown).
     limits (dict): review limits, '<frequency> Hz' (and ' cn' after
-        common-mode removal): [low, high] of Sxx, 1/Hz.
+        common-mode removal): [low, high] of Sxx, 1/Hz; and
+        'sfactor 10-100 Hz': [low, high] of the s-factor, dB.
+    entries (list of dict): per timestream shown: ``ts``, ``result``,
+        ``stage``, ``label``.
     """
 
     def __init__(
         self, ts, result, f_reduced, bad = None, limits = None, root = None,
-        stage = '', title = 'Noise spectra', ui_scale = 1.0
+        stage = '', title = 'Noise spectra', ui_scale = 1.0, label = None,
+        others = ()
     ):
         """
         Build the window.
@@ -129,6 +175,11 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         stage (str): the result's path, recorded with the marks.
         title (str): window title. Default 'Noise spectra'.
         ui_scale (float): font size multiplier. Default 1.0.
+        label (str or None): the timestream's name in the legend.
+            Default None: its run and name.
+        others (sequence of dict): more timestreams of the run shown
+            with it: ``ts``, ``result``, and optionally ``stage`` and
+            ``label``. Default none.
         """
         super().__init__()
         self.setWindowTitle(title)
@@ -136,15 +187,39 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         if ui_scale and ui_scale != 1.0:
             self.setStyleSheet(widget_font_stylesheet(ui_scale))
         self.root, self.stage = root, stage
-        self.rows = [int(r) for r in ts['rows']]
-        self.res_idxs = [int(r) for r in ts['res_idxs']]
+        self.entries = [dict(ts = ts, result = result, stage = stage,
+                             label = label or _ts_label(ts))]
+        for e in others:
+            e = dict(e)
+            e.setdefault('stage', '')
+            e['label'] = e.get('label') or _ts_label(e['ts'])
+            self.entries.append(e)
+        self.stages = []
+        for e in self.entries:
+            if e['stage'] and e['stage'] not in self.stages:
+                self.stages.append(e['stage'])
+        # The tones: every timestream's, in order of first appearance
+        self.res_idxs = []
+        for e in self.entries:
+            for r in e['ts']['res_idxs']:
+                if int(r) not in self.res_idxs:
+                    self.res_idxs.append(int(r))
+        self.rows = list(range(len(self.res_idxs)))
+        for e in self.entries:
+            e['pos'] = {int(r): i for i, r in enumerate(e['ts']['res_idxs'])}
         self.result = result
         self.f_reduced = np.asarray(f_reduced, dtype = float)
-        self.f_idx = valid_frequencies(result, self.f_reduced)
+        f_idx = set()
+        for e in self.entries:
+            f_idx |= set(valid_frequencies(e['result'],
+                                           self.f_reduced).tolist())
+        self.f_idx = np.array(sorted(f_idx), dtype = int)
         self.bad = {} if bad is None else bad
         self.limits = {} if limits is None else limits
-        self.has_cn = 'sxx_reduced_cn' in result and \
-            result['sxx_reduced_cn'] is not None
+        self.has_cn = any(
+            'sxx_reduced_cn' in e['result']
+            and e['result']['sxx_reduced_cn'] is not None
+            for e in self.entries)
         self._updating = False
         self._listed = []
         self._only_outside = True
@@ -154,17 +229,63 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
             scope = 'local')
         self._ask_note = lambda: ask_note(
             self, f'Note on res {self.res_idxs[self.current()]}')
-        # Tones the analysis left out as bad keep their reason
-        for i, s in enumerate(result['status']):
-            if str(s).startswith('marked bad') and \
-                    self.res_idxs[i] not in self.bad:
-                self.bad[self.res_idxs[i]] = str(s)[len('marked bad: '):]
+        # Tones every timestream left out as bad keep their reason
+        for e in self.entries:
+            for i, st in enumerate(e['result']['status']):
+                r = int(e['ts']['res_idxs'][i])
+                if str(st).startswith('marked bad') and r not in self.bad \
+                        and all(self._flagged(o, r) for o in self.entries
+                                if r in o['pos']):
+                    self.bad[r] = str(st)[len('marked bad: '):]
         self._build()
         self.refresh()
         if self.tone_list.count():
             self.tone_list.setCurrentRow(0)
 
     ############################################################################
+    @staticmethod
+    def _flagged(entry, r):
+        """
+        Say whether a timestream's analysis flagged a tone (left it out
+        as bad, or could not calibrate it).
+
+        Parameters:
+        entry (dict): the timestream.
+        r (int): the resonator index.
+
+        Returns:
+        flagged (bool): True if so, or if the timestream lacks the tone.
+        """
+        i = entry['pos'].get(int(r))
+        if i is None:
+            return True
+        return bool(str(entry['result']['status'][i]))
+
+    def _entry_values(self, entry, key, j):
+        """
+        Return one timestream's values of an array at a reduced
+        frequency, per tone of the window.
+
+        Parameters:
+        entry (dict): the timestream.
+        key (str): 'sxx_reduced', 'sxx_reduced_cn' or 'sfactor_reduced'.
+        j (int): index into ``f_reduced``.
+
+        Returns:
+        v (np.array): per tone, NaN where the timestream lacks the tone,
+            flagged it, or has no value.
+        """
+        out = np.full(len(self.res_idxs), np.nan)
+        arr = entry['result'].get(key)
+        if arr is None:
+            return out
+        arr = np.asarray(arr, dtype = float)
+        for i, r in enumerate(self.res_idxs):
+            k = entry['pos'].get(r)
+            if k is not None and not self._flagged(entry, r):
+                out[i] = arr[k, j]
+        return out
+
     def _build(self):
         """
         Build the histograms, the list, the spectrum plot and the buttons.
@@ -182,19 +303,25 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         n = len(self.f_idx)
         picks = [self.f_idx[int(round(k * (n - 1) / max(N_HIST - 1, 1)))]
                  for k in range(N_HIST)] if n else []
-        for k in range(N_HIST):
-            combo = QtWidgets.QComboBox()
-            for j in self.f_idx:
-                combo.addItem(f'{self.f_reduced[j]:g} Hz', int(j))
-            if picks:
-                combo.setCurrentIndex(list(self.f_idx).index(picks[k]))
-            combo.currentIndexChanged.connect(self.refresh)
-            self.combos.append(combo)
-            plot = self.hist_widget.addPlot(
-                row = k, col = 0,
-                axisItems = {'bottom': LogAxisItem('bottom')})
-            plot.setLogMode(x = True)
-            plot.setLabel('bottom', 'Sxx (1/Hz)')
+        for k in range(N_HIST + 1):
+            log = k < N_HIST
+            if log:
+                combo = QtWidgets.QComboBox()
+                for j in self.f_idx:
+                    combo.addItem(f'{self.f_reduced[j]:g} Hz', int(j))
+                if picks:
+                    combo.setCurrentIndex(list(self.f_idx).index(picks[k]))
+                combo.currentIndexChanged.connect(self.refresh)
+                self.combos.append(combo)
+                plot = self.hist_widget.addPlot(
+                    row = k, col = 0,
+                    axisItems = {'bottom': LogAxisItem('bottom')})
+                plot.setLogMode(x = True)
+                plot.setLabel('bottom', 'Sxx (1/Hz)')
+            else:
+                plot = self.hist_widget.addPlot(row = k, col = 0)
+                plot.setLabel('bottom', 's-factor, parallel / perpendicular '
+                              '(dB)')
             plot.setLabel('left', 'tones')
             # The histograms are a metric, not a plot to roam in
             plot.setMouseEnabled(False, False)
@@ -221,6 +348,8 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         combos = QtWidgets.QHBoxLayout()
         for combo in self.combos:
             combos.addWidget(combo)
+        combos.addWidget(QtWidgets.QLabel(
+            f's-factor: {SFACTOR_BAND[0]:g} to {SFACTOR_BAND[1]:g} Hz'))
         left.addLayout(combos)
         left.addWidget(self.hist_widget, stretch = 1)
         lay.addLayout(left, stretch = 1)
@@ -249,16 +378,27 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         self.spec_plot.setLabel('bottom', 'Frequency (Hz)')
         self.spec_plot.setLabel('left', 'Sxx (1/Hz)')
         self.spec_plot.addLegend(offset = (-10, 10))
-        self.spec_curve = self.spec_plot.plot(
-            pen = pg.mkPen((150, 150, 150)), name = 'raw')
-        self.spec_cn_curve = self.spec_plot.plot(
-            pen = pg.mkPen((80, 160, 255), width = 1.5),
-            name = 'common modes removed')
+        # One pair of curves per timestream: raw (thin, dashed when there
+        # are several) and after the common modes
+        self.spec_curves, self.spec_cn_curves = [], []
+        several = len(self.entries) > 1
+        for e_i, e in enumerate(self.entries):
+            raw_c, cn_c = ENTRY_COLOURS[e_i % len(ENTRY_COLOURS)]
+            name = e['label'] if several else ''
+            self.spec_curves.append(self.spec_plot.plot(
+                pen = pg.mkPen(raw_c, style = Qt.DashLine if several
+                               else Qt.SolidLine),
+                name = f'{name} raw'.strip()))
+            self.spec_cn_curves.append(self.spec_plot.plot(
+                pen = pg.mkPen(cn_c, width = 1.5),
+                name = f'{name} common modes removed'.strip()))
+        self.spec_curve = self.spec_curves[0]
+        self.spec_cn_curve = self.spec_cn_curves[0]
         self.spec_plot.setMinimumHeight(int(220 * self._ui_scale))
         right.addWidget(self.spec_plot, stretch = 1)
         self.bad_btn = QtWidgets.QPushButton('Mark tone bad (B)')
         self.bad_btn.clicked.connect(self.toggle_bad)
-        self.note_btn = QtWidgets.QPushButton('Add note (T)')
+        self.note_btn = QtWidgets.QPushButton('Add note (N)')
         self.note_btn.clicked.connect(self.add_note)
         self.done_btn = QtWidgets.QPushButton('Done')
         self.done_btn.clicked.connect(self.close)
@@ -266,7 +406,7 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
             right.addWidget(b)
         self.status = QtWidgets.QLabel()
         self.status.setWordWrap(True)
-        self.status.setFixedHeight(int(60 * self._ui_scale))
+        self.status.setFixedHeight(int(80 * self._ui_scale))
         self.status.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         right.addWidget(self.status)
         panel = QtWidgets.QWidget()
@@ -278,7 +418,8 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         add_help(self, 'Noise spectra', [
             ('Keyboard', [
                 ('A / D', 'Previous / next tone'),
-                ('B', 'Mark the tone bad (or clear the mark), with a reason'),
+                ('B', 'Mark the tone bad (or clear the mark), with a reason; '
+                 'the mark applies to every timestream shown'),
                 ('N (or T)', 'Add a note on the tone'),
                 ('H', 'Show / hide this help')]),
             ('Buttons', [
@@ -287,10 +428,18 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
                  'window'),
                 ('Include tones marked bad', 'List them too'),
                 ('Done', 'Save and close')]),
+            ('Histograms', [
+                ('Sxx', 'At the frequency chosen above each; with several '
+                 'timestreams, the geometric mean over the ones that have '
+                 'the tone and did not flag it'),
+                ('s-factor', f'The mean over {SFACTOR_BAND[0]:g} to '
+                 f'{SFACTOR_BAND[1]:g} Hz of the parallel / perpendicular '
+                 'noise ratio, dB (the nearest point when a timestream '
+                 'has none there)')]),
             ('Mouse', [('Scroll / drag', 'Zoom / pan a plot'),
                        ('Right-click', 'Plot menu (axes, log scale, export)')]),
         ])
-        self.resize(int(1100 * self._ui_scale), int(750 * self._ui_scale))
+        self.resize(int(1100 * self._ui_scale), int(800 * self._ui_scale))
 
     ############################################################################
     def _key(self, k):
@@ -298,84 +447,129 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         Return the limits key of histogram k.
 
         Parameters:
-        k (int): histogram.
+        k (int): histogram (``N_HIST`` is the s-factor's).
 
         Returns:
-        key (str): e.g. '10 Hz cn'.
+        key (str): e.g. '10 Hz cn', or 'sfactor 10-100 Hz'.
         """
+        if k >= N_HIST:
+            return f'sfactor {SFACTOR_BAND[0]:g}-{SFACTOR_BAND[1]:g} Hz'
         j = self.combos[k].currentData()
         return f'{self.f_reduced[j]:g} Hz' + (' cn' if self.cn_box.isChecked()
                                               else '')
 
-    def values(self, k):
+    def _is_log(self, k):
         """
-        Return every tone's Sxx at histogram k's frequency.
+        Say whether histogram k is on a log axis (the Sxx ones).
 
         Parameters:
         k (int): histogram.
 
         Returns:
-        v (np.array): per tone, 1/Hz, NaN without a value.
+        log (bool): True for Sxx, False for the s-factor.
         """
+        return k < N_HIST
+
+    def values(self, k):
+        """
+        Return every tone's value for histogram k: Sxx at its frequency
+        (1/Hz), or the s-factor over ``SFACTOR_BAND`` (dB); over several
+        timestreams, the geometric mean (Sxx) or mean (s-factor) of the
+        ones that have the tone and did not flag it.
+
+        Parameters:
+        k (int): histogram.
+
+        Returns:
+        v (np.array): per tone, NaN without a value.
+        """
+        n = len(self.res_idxs)
+        if k >= N_HIST:
+            per = []
+            for e in self.entries:
+                valid = valid_frequencies(e['result'], self.f_reduced)
+                f = self.f_reduced[valid]
+                band = valid[(f >= SFACTOR_BAND[0]) & (f <= SFACTOR_BAND[1])]
+                if not len(band) and len(valid):
+                    band = valid[[int(np.argmin(np.abs(f - SFACTOR_BAND[0])))]]
+                if not len(band):
+                    continue
+                cols = np.stack([self._entry_values(e, 'sfactor_reduced', j)
+                                 for j in band], axis = 1)
+                per.append(_nanmean(cols))
+            if not per:
+                return np.full(n, np.nan)
+            return _nanmean(np.stack(per, axis = 1))
         j = self.combos[k].currentData()
         if j is None:
-            return np.full(len(self.rows), np.nan)
+            return np.full(n, np.nan)
         key = 'sxx_reduced_cn' if self.cn_box.isChecked() else 'sxx_reduced'
-        sxx = np.asarray(self.result[key], dtype = float)[:, j]
-        return np.where(sxx > 0, sxx, np.nan)
+        per = []
+        for e in self.entries:
+            v = self._entry_values(e, key, j)
+            per.append(np.where(v > 0, np.log10(np.where(v > 0, v, 1.)),
+                                np.nan))
+        mean = _nanmean(np.stack(per, axis = 1))
+        return np.where(np.isfinite(mean), 10. ** mean, np.nan)
 
     def outside_limits(self):
         """
-        Find the tones outside the review limits or without a value, and
+        Find the tones outside the review limits or without an Sxx value
+        (a missing s-factor, as in older results, is not flagged), and
         the tones marked bad.
 
         Returns:
         outside (set of int): indices in ``rows``.
         """
         outside = {i for i, r in enumerate(self.res_idxs) if r in self.bad}
-        for k in range(N_HIST):
+        for k in range(N_HIST + 1):
             v = self.values(k)
             lim = self.limits.get(self._key(k))
-            bad = ~np.isfinite(v)
+            bad = ~np.isfinite(v) if self._is_log(k) else \
+                np.zeros(len(v), dtype = bool)
             if lim is not None:
                 with np.errstate(invalid = 'ignore'):
-                    bad |= (v < lim[0] * (1 - 1e-9)) | \
-                        (v > lim[1] * (1 + 1e-9))
+                    bad |= (v < lim[0] - abs(lim[0]) * 1e-9) | \
+                        (v > lim[1] + abs(lim[1]) * 1e-9)
             outside |= set(np.flatnonzero(bad).tolist())
         return outside
 
     def refresh(self):
         """
-        Draw the histograms (bins even in log Sxx) with their limits
-        (unset limits at the edges of the data), and list the tones.
+        Draw the histograms (bins even in log Sxx, or in dB for the
+        s-factor) with their limits (unset limits at the edges of the
+        data), and list the tones.
         """
         self._updating = True
         # The histograms leave out the tones marked bad (the list keeps
         # them, flagged)
         keep = np.array([r not in self.bad for r in self.res_idxs],
                         dtype = bool)
-        for k in range(N_HIST):
+        for k in range(N_HIST + 1):
+            log = self._is_log(k)
             v = self.values(k)[keep]
             v = v[np.isfinite(v)]
             key = self._key(k)
             lim = self.limits.get(key)
             if lim is None:
-                lim = [float(v.min()), float(v.max())] if len(v) else \
-                    [1e-18, 1e-14]
+                if len(v):
+                    lim = [float(v.min()), float(v.max())]
+                else:
+                    lim = [1e-18, 1e-14] if log else [-10., 10.]
                 self.limits[key] = lim
-            # The lines live in the plot's log coordinates
-            self.lines[k][0].setValue(np.log10(lim[0]))
-            self.lines[k][1].setValue(np.log10(lim[1]))
+            t = np.log10 if log else (lambda x: x)
+            # The lines live in the plot's own coordinates
+            self.lines[k][0].setValue(t(lim[0]))
+            self.lines[k][1].setValue(t(lim[1]))
             self.plots[k].setTitle(key)
             if len(v):
-                lv = np.log10(v)
-                lo = min(lv.min(), np.log10(lim[0]))
-                hi = max(lv.max(), np.log10(lim[1]))
+                lv = t(v)
+                lo = min(lv.min(), t(lim[0]))
+                hi = max(lv.max(), t(lim[1]))
                 span = (hi - lo) or 1.
                 edges = np.linspace(lo - 0.05 * span, hi + 0.05 * span,
                                     max(10, min(60, len(v) // 2 + 10)))
                 counts, _ = np.histogram(lv, edges)
-                # The curve is drawn in the plot's log coordinates
                 self.curves[k].setData(edges, counts)
                 self.plots[k].setXRange(edges[0], edges[-1], padding = 0)
                 self.plots[k].setYRange(0, max(counts.max(), 1) * 1.1,
@@ -398,14 +592,16 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
             listed = [i for i in listed if self.res_idxs[i] not in self.bad]
         if selected >= 0 and selected not in listed:
             listed = sorted(set(listed) | {selected})
-        vals = [self.values(k) for k in range(N_HIST)]
+        vals = [self.values(k) for k in range(N_HIST + 1)]
         self.tone_list.blockSignals(True)
         self.tone_list.clear()
         self._listed = listed
         for i in listed:
             r = self.res_idxs[i]
             parts = [f'{v[i]:.3g}' if np.isfinite(v[i]) else '-'
-                     for v in vals]
+                     for v in vals[:N_HIST]]
+            sf = vals[N_HIST][i]
+            parts.append(f'{sf:.1f} dB' if np.isfinite(sf) else '-')
             mark = 'x' if r in self.bad else '*' if i in outside else ' '
             self.tone_list.addItem(f"{mark} res {r}: {', '.join(parts)}")
         self.tone_list.blockSignals(False)
@@ -469,22 +665,35 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
 
     def select(self, i):
         """
-        Show tone i: its spectrum and status.
+        Show tone i: every timestream's spectrum of it, and its status.
 
         Parameters:
         i (int): index in ``rows``.
         """
         r = self.res_idxs[i]
-        f = np.asarray(self.result['f_binned'], dtype = float)
-        sxx = np.asarray(self.result['sxx_binned'], dtype = float)[i]
-        ok = (f > 0) & (sxx > 0)
-        self.spec_curve.setData(f[ok], sxx[ok])
-        if self.has_cn:
-            cn = np.asarray(self.result['sxx_binned_cn'], dtype = float)[i]
-            ok = (f > 0) & (cn > 0)
-            self.spec_cn_curve.setData(f[ok], cn[ok])
-        else:
-            self.spec_cn_curve.setData([], [])
+        lines = []
+        for e, raw_curve, cn_curve in zip(self.entries, self.spec_curves,
+                                          self.spec_cn_curves):
+            k = e['pos'].get(r)
+            res = e['result']
+            if k is None:
+                raw_curve.setData([], [])
+                cn_curve.setData([], [])
+                lines.append(f"{e['label']}: not in this timestream")
+                continue
+            f = np.asarray(res['f_binned'], dtype = float)
+            sxx = np.asarray(res['sxx_binned'], dtype = float)[k]
+            ok = (f > 0) & (sxx > 0)
+            raw_curve.setData(f[ok], sxx[ok])
+            cn = res.get('sxx_binned_cn')
+            if cn is not None:
+                cn = np.asarray(cn, dtype = float)[k]
+                ok = (f > 0) & (cn > 0)
+                cn_curve.setData(f[ok], cn[ok])
+            else:
+                cn_curve.setData([], [])
+            status = str(res['status'][k])
+            lines.append(f"{e['label']}: {status or 'analyzed'}")
         self.spec_plot.enableAutoRange()
         self.bad_btn.setText('Clear bad mark (B)' if r in self.bad
                              else 'Mark tone bad (B)')
@@ -493,8 +702,11 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         marks = mark_label(self.root, r, self.stage)
         if marks and r not in self.bad:
             head += marks + '\n'
-        status = str(self.result['status'][i])
-        self.status.setText(head + f'res {r}: ' + (status or 'analyzed'))
+        if len(self.entries) == 1:
+            self.status.setText(head + f'res {r}: '
+                                + lines[0].split(': ', 1)[1])
+        else:
+            self.status.setText(head + f'res {r}\n' + '\n'.join(lines))
 
     def _on_line(self):
         """
@@ -502,8 +714,9 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         """
         if self._updating:
             return
-        for k in range(N_HIST):
-            lo, hi = sorted(10. ** float(ln.value()) for ln in self.lines[k])
+        for k in range(N_HIST + 1):
+            back = (lambda x: 10. ** x) if self._is_log(k) else (lambda x: x)
+            lo, hi = sorted(back(float(ln.value())) for ln in self.lines[k])
             self.limits[self._key(k)] = [lo, hi]
         self._fill_list()
 
@@ -522,8 +735,9 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         v = self.values(k)
         if not np.isfinite(v).any():
             return
+        t = np.log10 if self._is_log(k) else (lambda a: a)
         with np.errstate(invalid = 'ignore'):
-            i = int(np.nanargmin(np.abs(np.log10(v) - x)))
+            i = int(np.nanargmin(np.abs(t(v) - x)))
         if i not in self._listed:
             self.only_outside.setChecked(False)
         if i not in self._listed:
@@ -533,7 +747,7 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
 
     def keyPressEvent(self, event):
         """
-        B marks the selected tone bad, T adds a note, A and D move
+        B marks the selected tone bad, N adds a note, A and D move
         through the listed tones.
 
         Parameters:
@@ -555,7 +769,8 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
     def toggle_bad(self):
         """
         Mark the selected tone bad with a reason, or clear its mark (the
-        button, or B); the store's tone marks follow.
+        button, or B); the store's tone marks of every timestream shown
+        follow.
         """
         i = self.current()
         if i < 0:
@@ -563,13 +778,15 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         r = self.res_idxs[i]
         if r in self.bad:
             del self.bad[r]
-            record(self.root, r, 'clear', '', self.stage)
+            for stage in self.stages or ['']:
+                record(self.root, r, 'clear', '', stage)
         else:
             reason, scope = reason_and_scope(self._ask_reason(), 'local')
             if reason is None:
                 return
             self.bad[r] = reason
-            record(self.root, r, 'bad', reason, self.stage, scope)
+            for stage in self.stages or ['']:
+                record(self.root, r, 'bad', reason, stage, scope)
         # The histograms change too: the tone leaves or rejoins them
         self.refresh()
         self.select(i)
@@ -577,7 +794,7 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
     def add_note(self):
         """
         Record a note on the selected tone in the store's tone marks (the
-        button, or T).
+        button, or N).
         """
         i = self.current()
         if i < 0:
@@ -586,7 +803,6 @@ class PsdOverviewWindow(QtWidgets.QMainWindow):
         if note:
             record(self.root, self.res_idxs[i], 'note', note, self.stage)
             self.select(i)
-
 
 def ask_existing_psd(path, description):
     """
@@ -623,14 +839,15 @@ def ask_existing_psd(path, description):
 
 def run_psd_overview(
     ts, result, f_reduced, bad = None, limits = None, root = None,
-    stage = '', title = 'Noise spectra', ui_scale = 1.0
+    stage = '', title = 'Noise spectra', ui_scale = 1.0, label = None,
+    others = ()
 ):
     """
     Open the PSD overview window and wait until it is closed.
 
     Parameters:
-    ts, result, f_reduced, bad, limits, root, stage, title, ui_scale: see
-        ``PsdOverviewWindow``.
+    ts, result, f_reduced, bad, limits, root, stage, title, ui_scale,
+        label, others: see ``PsdOverviewWindow``.
 
     Returns:
     bad (dict): res_idx: reason, the tones marked bad.
@@ -639,7 +856,8 @@ def run_psd_overview(
     app = get_qapp(title)
     win = PsdOverviewWindow(ts, result, f_reduced, bad = bad,
                             limits = limits, root = root, stage = stage,
-                            title = title, ui_scale = ui_scale)
+                            title = title, ui_scale = ui_scale,
+                            label = label, others = others)
     delete_on_close(win)
     fit_window_to_screen(win)
     win.show()

@@ -31,6 +31,7 @@ CALIBRATE = [
 ]
 CALIBRATION_NAME = None
 F_AVG = 1
+PARAMS = {}
 INTERACTIVE = True
 FIT_IQ = False
 
@@ -207,11 +208,13 @@ def main(args):
         fres_all, qres_all = f'{res}/fres_all', f'{res}/qres_all'
         grp = cal.require_group(name)
         grp.attrs.update(entries = to_jsonable(g['entries']),
-                         resonators = res, f_avg = F_AVG)
+                         resonators = res, f_avg = F_AVG,
+                         params = to_jsonable(dict(PARAMS)))
         DS = open_stream_dataset(grp, g['sources'], fres_all, qres_all,
                                  f_avg = F_AVG)
         datasets[name] = DS
-        AR = AnalysisRunner(DS, analysis_yaml_path = 'ts')
+        AR = AnalysisRunner(DS, analysis_yaml_path = 'ts',
+                            param_overrides = PARAMS)
         nrows = len(DS.res_idxs[:])
         print(f'{name}: {nrows} rows from {len(g["sources"])} sources')
         if INTERACTIVE and not args.no_gui:
@@ -230,7 +233,8 @@ def main(args):
                 cal.require_group(f'{name}_caltones'), g['sources'],
                 fres_all, qres_all, rows = 'calibration', f_avg = F_AVG)
             datasets[f'{name}_caltones'] = DSc
-            AnalysisRunner(DSc, analysis_yaml_path = 'ts_offres') \
+            AnalysisRunner(DSc, analysis_yaml_path = 'ts_offres',
+                           param_overrides = PARAMS) \
                 .execute_remaining(verbose = True)
     print(f'Done: {cal.path}')
     return datasets

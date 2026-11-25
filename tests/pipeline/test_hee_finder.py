@@ -52,6 +52,13 @@ def test_analyze_and_refit(rays):
     th = cf.TailThresholds(hmin = 0., hmax = 1000., level = 3.,
                            fit_s = 1e-3)
     res = cf.analyze_tone(ds[1], times, DT, SETTINGS, th.for_tone(0))
+    # The same in a worker process (the pool of the per-tone fits)
+    from citkid.parallel import map_in_pool
+    pooled = map_in_pool(cf.analyze_tone, [
+        (k, (ds[1], times, DT, SETTINGS, th.for_tone(0)))
+        for k in range(2)], 2)
+    for key in ('h', 'start', 'avg', 'tau'):
+        np.testing.assert_allclose(pooled[1][key], res[key], equal_nan = True)
     assert res['pulses'].shape == (len(times), 170) and \
         res['pulses'].dtype == np.float32
     assert res['pre'] == 20 and res['post'] == 150

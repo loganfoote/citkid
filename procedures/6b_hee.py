@@ -23,13 +23,15 @@ from citkid.qt_compat import set_theme
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB, LIGHT_MODE
+from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB, \
+    N_WORKERS, LIGHT_MODE
 
 # Timestreams
 CALIBRATION_NAME = None
-TIMESTREAMS = [
-]
-NAME = ''
+# index as listed or run name: result name (None: named after the run)
+TIMESTREAMS = {
+    'dark_dec0': 'dark_dec0'
+}
 EVENTS = 'auto'
 PHOTONS_NAME = None
 INTERACTIVE = True
@@ -45,7 +47,7 @@ HEE_MIN_MULT = 3
 HMIN = 0.
 HMAX = 1000.
 LEVEL = 10.
-FIT_S = 2.e-3
+FIT_S = 4.e-3
 FIT_START_S = None
 PRE_S = 0.5e-3
 POST_S = 5.e-3
@@ -81,8 +83,6 @@ def parse_args(argv = None):
     p.add_argument('--cal', default = CALIBRATION_NAME,
                    help = 'calibration to use when a sweep has several, by '
                    "name or index (default: each timestream's own)")
-    p.add_argument('--name', default = NAME,
-                   help = 'name of the result of a single timestream')
     p.add_argument('--events', choices = ('auto', 'photons', 'triggers'),
                    default = EVENTS, help = 'where the events come from')
     p.add_argument('--photons', default = PHOTONS_NAME,
@@ -259,7 +259,8 @@ def review(
         results (dict): row: result.
         """
         return cf.analyze_timestream(root, ts, data, events, settings, th,
-                                     rows = rows, progress = progress)
+                                     rows = rows, progress = progress,
+                                     n_workers = workers())
 
     if not interactive:
         return results, thresholds
@@ -335,6 +336,16 @@ def report(ts, results, events):
         if not isinstance(res, dict):
             print(f"  res {ts['res_idxs'][int(r)]}: failed: {res}")
 
+def workers():
+    """
+    Return the number of tail-fit processes (``N_WORKERS``).
+
+    Returns:
+    n (int): at least 1.
+    """
+    from citkid.parallel import resolve_workers
+    return resolve_workers(N_WORKERS)
+
 def main(args):
     """
     Fit the HEE tails of the chosen timestreams, or list them.
@@ -359,19 +370,14 @@ def main(args):
         print('Set TIMESTREAMS at the top of the script to choose '
               'timestreams.')
         return None
-    chosen = pf.resolve_timestreams(timestreams, TIMESTREAMS,
-                                    calibration = args.cal, root = root)
-    if args.name and len(chosen) != 1:
-        raise ValueError('NAME names the result of a single timestream; '
-                         f'{len(chosen)} are chosen')
+    named = pf.resolve_named(timestreams, TIMESTREAMS,
+                             calibration = args.cal, root = root)
     settings = tail_settings()
     results_grp = cf.results_group(root)
     interactive = INTERACTIVE and not args.no_gui
     out = {}
     first = None     # (name, thresholds) of the first window
-    for ts in chosen:
-        name = args.name.strip() if args.name else \
-            pf.result_name(ts, timestreams)
+    for name, ts in named:
         DS = datasets[ts['cal']][ts['dataset']]['DS']
         data = pf.TimestreamData(
             root, ts, DS, DetectionSettings(highpass_hz = HIGHPASS_HZ),
@@ -416,7 +422,8 @@ def main(args):
                 continued is None:
             rows = [int(r) for r in ts['rows'][:int(TONES_BEFORE_WINDOW)]]
         results = cf.analyze_timestream(root, ts, data, events, settings,
-                                        thresholds, rows = rows)
+                                        thresholds, rows = rows,
+                                        n_workers = workers())
         results, thresholds = review(ts, results, thresholds, window,
                                      root = root, stage = f'hee/{name}',
                                      data = data, events = events,

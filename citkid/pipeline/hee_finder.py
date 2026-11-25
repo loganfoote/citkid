@@ -27,6 +27,7 @@ import dataclasses
 import numpy as np
 from tqdm.auto import tqdm
 from .. import daq_layout as dl
+from ..parallel import map_in_pool
 from ..signal import hee as cr
 from ..signal.photons import PPM
 from . import photon_finder as pf
@@ -487,7 +488,8 @@ def refit_tone(res, th):
 
 def analyze_timestream(
     root, ts, data, events, settings, thresholds, rows = None,
-    progress = True
+    progress = True,
+    n_workers = 1
 ):
     """
     Cut and fit every tone's pulses at the events of its tone write.
@@ -502,6 +504,8 @@ def analyze_timestream(
     rows (list of int or None): DataSet rows to analyze. Default None:
         all.
     progress (bool): If True (default), show a progress bar.
+    n_workers (int): processes fitting tones side by side
+        (``parallel.map_in_pool``). Default 1: this process.
 
     Returns:
     results (dict): row: ``analyze_tone`` result (with 'res_idx'), or
@@ -515,14 +519,24 @@ def analyze_timestream(
             write_of[int(r)] = w
     rows = [int(r) for r in (ts['rows'] if rows is None else rows)]
     out = {}
-    for r, d in tqdm(data.get(rows), total = len(rows),
-                     disable = not progress, desc = 'Fitting tails'):
-        if isinstance(d, str):
-            out[r] = d
-            continue
-        t0 = events['t0'][events['write_idx'] == write_of.get(r, -1)]
-        res = analyze_tone(d, t0, float(ts['dt']), settings,
-                           thresholds.for_tone(res_of[r]))
+
+    def items():
+        """
+        Yield each tone's arguments (the tones without a timestream are
+        answered here).
+        """
+        for r, d in data.get(rows):
+            if isinstance(d, str):
+                out[r] = d
+                continue
+            t0 = events['t0'][events['write_idx'] == write_of.get(r, -1)]
+            yield r, (d, t0, float(ts['dt']), settings,
+                      thresholds.for_tone(res_of[r]))
+
+    found = map_in_pool(analyze_tone, items(), n_workers,
+                        progress = progress, desc = 'Fitting tails',
+                        total = len(rows))
+    for r, res in found.items():
         res['res_idx'] = int(res_of[r])
         out[r] = res
     return out

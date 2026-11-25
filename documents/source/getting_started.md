@@ -60,6 +60,7 @@ lists them.
 | `SUFFIX` | Names the store `<DEVICE>_<SUFFIX>.zarr` (`''`: no suffix) |
 | `SETUP` | The readout chain and the stage temperature, as text: `fridge_ch`, `dac_attenuation`, `dac_filters`, `adc_filters`, `warm_amps`, `temperature` (e.g. `'125 mK'`). Saved with the store and with every VNA sweep, tuning and timestream run, so change it when the chain changes; the report marks the items whose chain differs from the store's |
 | `MEMORY_GB` | Timestreams kept in memory by the analysis scripts, GB |
+| `N_WORKERS` | Processes (or threads) the analysis scripts use side by side: the photon detection and HEE tail fits per tone, the spectra of a write, the report's resonator pages (`None`: up to 4, by the cores; `1`: one at a time) |
 | `LIGHT_MODE` | `True`: white plots with black text in every window, for screens where the dark plots lack contrast |
 
 Every script also has `NOTES`, text saved with the data (`--notes`).

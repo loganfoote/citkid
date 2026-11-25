@@ -35,7 +35,8 @@ class AnalysisRunner:
     Runner for executing analysis steps on a pipeline DataSet.
     """
 
-    def __init__(self, DS, analysis_yaml_path=None, custom_path=None):
+    def __init__(self, DS, analysis_yaml_path=None, custom_path=None,
+                 param_overrides=None):
         """
         Initialize the analysis runner and load its pipeline definition.
 
@@ -51,12 +52,18 @@ class AnalysisRunner:
             is used if present. On first use, the file contents (not the
             path) are embedded in the dataset. The top-level ``main_dir``
             assignment is replaced by ``DS.custom_main_dir_overwrite`` if set.
+        param_overrides (dict or None): parameter values used in place
+            of the YAML's, by name (e.g. ``xcal_std_cutoff``), for every
+            step that has that parameter in its YAML entry; the windows
+            start from them too. Not embedded in the dataset: record
+            them where the run is recorded. Default None.
 
         Raises:
         ValueError: If the supplied analysis definition is invalid or conflicts
             with the embedded dataset definition.
         """
         self.DS = DS
+        self.param_overrides = dict(param_overrides or {})
 
         resolved = self._resolve_analysis_definition(analysis_yaml_path,
                                                      custom_path)
@@ -654,12 +661,17 @@ class AnalysisRunner:
         step (plStep): Step whose YAML parameters should be returned.
 
         Returns:
-        params (dict): Parameter mapping defined in the YAML, or {} if the
-            step is not in the analysis path (e.g. a calibration step).
+        params (dict): Parameter mapping defined in the YAML, with
+            ``param_overrides`` in place of the values it names, or {}
+            if the step is not in the analysis path (e.g. a calibration
+            step).
         """
         for step_dict in self.path:
             if step_dict["task"].name == step.name:
-                return dict(step_dict.get("params", {}) or {})
+                params = dict(step_dict.get("params", {}) or {})
+                params.update({k: v for k, v in self.param_overrides.items()
+                               if k in params})
+                return params
         return {}
 
     def _expand_none_masks(self, user_params, func_type, data_idx):

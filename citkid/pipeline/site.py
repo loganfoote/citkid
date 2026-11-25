@@ -30,6 +30,7 @@ import re
 import numpy as np
 import pandas as pd
 from .. import daq_layout as dl
+from ..parallel import map_in_pool, resolve_workers
 from ..vna import report as vreport
 from . import hee_finder as cf
 from . import photon_finder as pf
@@ -1832,8 +1833,66 @@ def schedule_text(schedule):
         text += f', {above} above'
     return text
 
+def store_location(root):
+    """
+    Return a store's path on disk, for worker processes to open it.
+
+    Parameters:
+    root (zarr.Group): the store root.
+
+    Returns:
+    path (str): the path, or '' for a store without one (in memory).
+    """
+    path = getattr(root.store, 'root', None)
+    return '' if path is None else str(path)
+
+def _write_res_pages(store, inv, res_idxs, all_res_idxs, out_dir):
+    """
+    Write some resonators' pages and figures (in a worker, or here).
+
+    Parameters:
+    store (str or zarr.Group): the store's path, or its root (here
+        only).
+    inv (dict): ``inventory`` output.
+    res_idxs (list of int): the resonators to write.
+    all_res_idxs (list of int): every resonator with a page, in order
+        (the Previous / Next links).
+    out_dir (str): the device's folder.
+
+    Returns:
+    n (int): pages written.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    data = DeviceData(dl.open_store(store), inv) if isinstance(store, str) \
+        else DeviceData(store, inv)
+    device = inv['device']
+    for r in res_idxs:
+        n = all_res_idxs.index(r)
+        fig = resonator_figure(data, r)
+        fig_path = os.path.join(out_dir, 'res', f'res{r}.png')
+        fig.savefig(fig_path, dpi = RES_DPI)
+        plt.close(fig)
+        parts = [f'<p><img class="figure" src="res{r}.png"></p>']
+        for title, table in resonator_rows(data, r):
+            parts.append(f'<h3>{_esc(title)}</h3>' + table_html(table))
+        prev_r = all_res_idxs[n - 1] if n else None
+        next_r = all_res_idxs[n + 1] if n + 1 < len(all_res_idxs) else None
+        nav = '<p class="nav"><a href="../index.html">Device page</a>' + (
+            f'<a href="res{prev_r}.html">Previous ({prev_r})</a>'
+            if prev_r is not None else '') + (
+            f'<a href="res{next_r}.html">Next ({next_r})</a>'
+            if next_r is not None else '') + '</p>'
+        with open(os.path.join(out_dir, 'res', f'res{r}.html'), 'w',
+                  encoding = 'utf-8') as fh:
+            fh.write(page_html(f'{device}: resonator {r}', nav
+                               + ''.join(parts), 3, inv['cooldown']))
+    return len(res_idxs)
+
 def build_device(root, out_root, force = False, dpi = FIG_DPI,
-                 res_pages = True, progress = None, sxx_run = None):
+                 res_pages = True, progress = None, sxx_run = None,
+                 n_workers = 1):
     """
     Build (or refresh) one device's pages.
 
@@ -1844,6 +1903,9 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
         since the last build. Default False.
     dpi (int): figure resolution. Default ``FIG_DPI``.
     res_pages (bool): If True (default), one page per resonator.
+    n_workers (int or None): processes writing the resonator pages
+        (``parallel.map_in_pool``; a store in memory is written here).
+        Default 1: here.
     progress (callable or None): called with progress text. Default
         None.
     sxx_run (str or None): the timestream run the resonator table's
@@ -1923,27 +1985,24 @@ def build_device(root, out_root, force = False, dpi = FIG_DPI,
     summary.to_csv(summary_csv, index = False)
     # Resonator pages
     res_idxs = data.res_idxs() if res_pages else []
-    for n, r in enumerate(res_idxs):
-        if n % 20 == 0:
-            say(f'  resonator pages: {n} of {len(res_idxs)}')
-        fig = resonator_figure(data, r)
-        fig_path = os.path.join(out_dir, 'res', f'res{r}.png')
-        fig.savefig(fig_path, dpi = RES_DPI)
-        plt.close(fig)
-        parts = [f'<p><img class="figure" src="res{r}.png"></p>']
-        for title, table in resonator_rows(data, r):
-            parts.append(f'<h3>{_esc(title)}</h3>' + table_html(table))
-        prev_r = res_idxs[n - 1] if n else None
-        next_r = res_idxs[n + 1] if n + 1 < len(res_idxs) else None
-        nav = '<p class="nav"><a href="../index.html">Device page</a>' + (
-            f'<a href="res{prev_r}.html">Previous ({prev_r})</a>'
-            if prev_r is not None else '') + (
-            f'<a href="res{next_r}.html">Next ({next_r})</a>'
-            if next_r is not None else '') + '</p>'
-        with open(os.path.join(out_dir, 'res', f'res{r}.html'), 'w',
-                  encoding = 'utf-8') as fh:
-            fh.write(page_html(f'{device}: resonator {r}', nav
-                               + ''.join(parts), 3, inv['cooldown']))
+    if res_idxs:
+        store = store_location(root)
+        nw = resolve_workers(n_workers) if store else 1
+        chunks = [list(map(int, c)) for c in np.array_split(
+            np.array(res_idxs), min(nw * 4, len(res_idxs)))]
+        say(f'  resonator pages: {len(res_idxs)}'
+            + (f' over {nw} processes' if nw > 1 else ''))
+        if nw > 1:
+            map_in_pool(_write_res_pages,
+                        ((k, (store, inv, c, list(map(int, res_idxs)),
+                              out_dir)) for k, c in enumerate(chunks)),
+                        nw)
+        else:
+            for n, c in enumerate(chunks):
+                say(f'  resonator pages: {sum(map(len, chunks[:n]))} of '
+                    f'{len(res_idxs)}')
+                _write_res_pages(store or root, inv, c,
+                                 list(map(int, res_idxs)), out_dir)
     if backend != matplotlib.get_backend():
         matplotlib.use(backend)
     # The device page

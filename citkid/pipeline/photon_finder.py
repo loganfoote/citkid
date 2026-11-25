@@ -40,6 +40,7 @@ import warnings
 import numpy as np
 from tqdm.auto import tqdm
 from .. import daq_layout as dl
+from ..parallel import map_in_pool, resolve_workers, worker_pool
 from ..signal import photons as ph
 from .stream_sources import apply_stream_calibration
 
@@ -392,6 +393,51 @@ def select_timestreams(timestreams, choice, root = None, cal = None):
         out += match
     return out
 
+def resolve_named(timestreams, choice, calibration = None, root = None):
+    """
+    Pick timestreams by index or run name, each with the name of its
+    result: the one given, or with None ``result_name`` (the run's
+    name, ``_set<s>`` with several tone sets). A run name picks every
+    tone set of its latest run, and a given name gets ``_set<s>`` added
+    for each.
+
+    Parameters:
+    timestreams (list of dict): ``list_all_timestreams`` output.
+    choice (dict): timestream (an index as listed, or a run name):
+        result name, or None.
+    calibration (int, str or None): as ``resolve_timestreams``.
+    root (zarr.Group or None): as ``resolve_timestreams``.
+
+    Returns:
+    named (list of tuple): (name, timestream), in the order of
+        ``choice``.
+
+    Raises:
+    KeyError: as ``resolve_timestreams``.
+    TypeError: if ``choice`` is not a dict.
+    ValueError: if two timestreams get the same name.
+    """
+    if not isinstance(choice, dict):
+        raise TypeError('TIMESTREAMS is a dict of timestream (index as '
+                        'listed or run name): result name (None: named '
+                        'after the run)')
+    named = []
+    for entry, given in choice.items():
+        chosen = resolve_timestreams(timestreams, [entry], calibration,
+                                     root)
+        for ts in chosen:
+            if given is None:
+                name = result_name(ts, timestreams)
+            elif len(chosen) == 1:
+                name = str(given)
+            else:
+                name = f"{given}_set{ts['tone_set']}"
+            if name in [n for n, _ in named]:
+                raise ValueError(f'two timestreams of TIMESTREAMS are named '
+                                 f'{name!r}')
+            named.append((name, ts))
+    return named
+
 def list_all_timestreams(root):
     """
     List the timestreams of every stream calibration in the store: every
@@ -638,6 +684,13 @@ class TimestreamData:
             for r in part:
                 yield r, self._kept.get(r, fresh.get(r))
 
+    def drop(self):
+        """
+        Forget the timestreams kept in memory; they are computed again
+        when asked for.
+        """
+        self._kept.clear()
+
     def _detection(self, x):
         """
         Make one tone's detection timestream.
@@ -856,9 +909,33 @@ class Thresholds:
 ################################################################################
 ################################### Detection ##################################
 ################################################################################
+def _detect_one(d, dt, settings, hmin, hmax, ref):
+    """
+    Detect one tone's photons (in a worker): with a reference's filter,
+    or from scratch.
+
+    Parameters:
+    d (np.array): the detection timestream.
+    dt (float): sample period, s.
+    settings (DetectionSettings): detection settings, the tone's
+        ``init_hmax`` in them.
+    hmin, hmax (float): the tone's height window.
+    ref (dict or None): the reference's result for the tone, or None.
+
+    Returns:
+    res (dict or str): the result, or the error message.
+    """
+    try:
+        if ref is not None:
+            return ph.detect_with_filter(d, dt, ref, settings, hmin = hmin,
+                                         hmax = hmax)
+        return ph.run_detection(d, dt, settings, hmin = hmin, hmax = hmax)
+    except (ph.DetectionError, ValueError) as err:
+        return str(err)
+
 def detect_timestream(
     ts, data, settings, thresholds, rows = None, reference = None,
-    progress = True
+    progress = True, n_workers = 1
 ):
     """
     Run the photon detection on the tones of one timestream.
@@ -876,6 +953,10 @@ def detect_timestream(
         instead of iterating. Tones without a reference are detected from
         scratch. None (default): every tone from scratch.
     progress (bool): If True (default), show a progress bar.
+    n_workers (int): processes detecting tones side by side
+        (``parallel.map_in_pool``); the timestreams are calibrated here
+        and handed to them one tone at a time. Default 1: every tone in
+        this process (also for a single tone).
 
     Returns:
     results (dict): row: the detection result (dict), or the error
@@ -884,28 +965,28 @@ def detect_timestream(
     rows = ts['rows'] if rows is None else rows
     res_of_row = dict(zip(ts['rows'].tolist(), ts['res_idxs'].tolist()))
     out = {}
-    for row, d in tqdm(data.get(rows), total = len(rows),
-                       disable = not progress, desc = 'Detecting'):
-        r_idx = res_of_row[row]
-        th = thresholds.for_tone(r_idx)
-        if isinstance(d, str):
-            out[row] = d
-            continue
-        try:
+
+    def items():
+        """
+        Yield each tone's arguments (the tones without a timestream are
+        answered here).
+        """
+        for row, d in data.get(rows):
+            r_idx = res_of_row[row]
+            if isinstance(d, str):
+                out[row] = d
+                continue
+            th = thresholds.for_tone(r_idx)
             ref = None if reference is None else reference.get(r_idx)
-            if ref is not None:
-                res = ph.detect_with_filter(d, data.dt, ref, settings,
-                                            hmin = th['hmin'],
-                                            hmax = th['hmax'])
-            else:
-                s = dataclasses.replace(settings,
-                                        init_hmax = th['init_hmax'])
-                res = ph.run_detection(d, data.dt, s, hmin = th['hmin'],
-                                       hmax = th['hmax'])
-            res['res_idx'] = r_idx
-            out[row] = res
-        except (ph.DetectionError, ValueError) as err:
-            out[row] = str(err)
+            s = dataclasses.replace(settings, init_hmax = th['init_hmax'])
+            yield row, (d, data.dt, s, th['hmin'], th['hmax'], ref)
+
+    found = map_in_pool(_detect_one, items(), n_workers, progress = progress,
+                        desc = 'Detecting', total = len(rows))
+    for row, res in found.items():
+        if isinstance(res, dict):
+            res['res_idx'] = res_of_row[row]
+        out[row] = res
     return out
 
 def tone_writes(root, ts):

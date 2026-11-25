@@ -20,7 +20,8 @@ from citkid.qt_compat import set_theme
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB, LIGHT_MODE
+from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB, \
+    N_WORKERS, LIGHT_MODE
 
 # Sweep
 NAME = 'bb_sweep'
@@ -132,7 +133,8 @@ def spectra_settings():
         glitch_baseline_s = GLITCH_BASELINE_S,
         glitch_distance_s = GLITCH_DISTANCE_S, glitch_rounds = GLITCH_ROUNDS,
         glitch_pulses = 'hee', coinc_win = 2, hee_min_mult = 3,
-        memory_gb = MEMORY_GB, modes_rate_hz = MODES_RATE_HZ)
+        memory_gb = MEMORY_GB, modes_rate_hz = MODES_RATE_HZ,
+        n_workers = N_WORKERS)
 
 def calibration_group(root, points, args):
     """

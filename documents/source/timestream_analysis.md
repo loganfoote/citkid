@@ -35,11 +35,11 @@ and saves reduced results in a group of the store.
 Each timestream is calibrated with the stream calibration of its own
 sweep (there is normally one; `CALIBRATION_NAME` chooses when a sweep has
 several, and a calibration of another sweep is refused). Choose
-the timestreams (`TIMESTREAMS`, by index as listed or run name; empty
-lists them). A timestream is one tone set of one run. Tones whose
-calibration failed are left out. Each result is `photons/<name>` (the
-run's name, `_set<s>` with several tone sets, or `NAME`), one per
-timestream: when it exists, a popup offers to continue from it
+the timestreams (`TIMESTREAMS`: index as listed or run name, each with
+the name of its result; empty lists them). A timestream is one tone set
+of one run. Tones whose calibration failed are left out. Each result is
+`photons/<name>`, one per timestream: the name given, or with `None` the
+run's name (`_set<s>` with several tone sets); when it exists, a popup offers to continue from it
 (default), overwrite it (asks again) or skip; with `--no-gui`,
 `--continue` or `--overwrite` decide.
 
@@ -87,6 +87,12 @@ the buttons. Right, for the selected tone (or all tones together):
 
 - Continue (the popup, or `--continue`) opens the saved result in the
   window with no detection; only changed tones rerun.
+- `--skip-saved` skips every timestream with a saved result without
+  asking, to go on where a run of several timestreams left off.
+- `PHASED = True` (or `--phased`) runs the timestreams in phases: every
+  timestream is detected (all tones) before the first window opens, the
+  windows then open one after another, and the results are finished
+  and saved last. Start it and come back when the detection is done.
 - `--refit-tau` refits every saved lifetime with `TAU_SKIP` and
   `TAU_FIT_S`, no detection.
 - `REFERENCE_NAME = '<name>'` searches other timestreams with a saved result,
@@ -117,12 +123,13 @@ by `citkid.pipeline.photon_finder.migrate_results(root)`.
 | Setting | Meaning |
 |---|---|
 | `CALIBRATION_NAME` | Calibration to use when a sweep has several, by name or `ts_cal` index (`None`: each timestream's own) |
-| `TIMESTREAMS` | Timestreams, by index as listed or run name; empty: list them |
-| `NAME` | Result name for a single timestream (`''`: the run's name) |
+| `TIMESTREAMS` | Timestream: result name, e.g. `{0: 'dark_dec6', 'dark1': None}`. The timestream is an index as listed or a run name (every tone set of its latest run); the name is the result's, `_set<s>` added when the run has several tone sets, or `None` for the run's name. Empty: list the timestreams |
 | `REFERENCE_NAME`, `REUSE` | A saved result to reuse (its name), and `'settings'` or `'filter'` |
 | `INTERACTIVE` | Check the thresholds in the window |
 | `TONES_BEFORE_WINDOW` | Tones detected before the window opens (`None`: all). The others are listed "not run" and run when selected, when thresholds are applied to all tones, or with the window's thresholds when it closes |
 | `WINDOW_FIRST_ONLY` | Open the window on the first chosen timestream only; the others take its result as the reference (`REUSE`) |
+| `PHASED` | Detect every timestream before the windows open, then the windows, then the finish (`False`: each timestream start to end before the next). Not with `WINDOW_FIRST_ONLY` |
+| (`N_WORKERS`, in `settings.py`) | Processes detecting tones side by side; the tones are calibrated in this process and handed out one at a time, and the window's reruns of several tones use them too |
 | `INIT_NSIGMA`, `INIT_HMAX` | First pass: peak threshold (noise sigma) and upper cut (times the median peak) |
 | `OF_ITERATIONS` | Rounds of optimal filtering: each round builds the template and filter from the pulses the last one found in the height window |
 | `HMIN`, `HMAX` | Height window of single photons, kHz/GHz |
@@ -136,8 +143,8 @@ by `citkid.pipeline.photon_finder.migrate_results(root)`.
 
 ## Command line
 
-`--cal name`, `--name`, `--continue`, `--overwrite`, `--reference name
---reuse filter`, `--refit-tau`, `--no-gui`.
+`--cal name`, `--continue`, `--overwrite`, `--skip-saved`, `--phased`,
+`--reference name --reuse filter`, `--refit-tau`, `--no-gui`.
 
 # 6b_hee.py: HEE lifetimes
 
@@ -192,6 +199,7 @@ hee/<name>/          attrs: run, tone set, calibration, events,
 |---|---|
 | `CALIBRATION_NAME`, `TIMESTREAMS`, `NAME`, `INTERACTIVE`, `TONES_BEFORE_WINDOW` | As in `6a_find_photons.py` |
 | `WINDOW_FIRST_ONLY` | Open the window on the first chosen timestream only; the others take its values (global and per tone) |
+| (`N_WORKERS`, in `settings.py`) | Processes fitting tones side by side, as in `6a_find_photons.py` |
 | `EVENTS` | `'auto'`, `'photons'`, or `'triggers'` |
 | `PHOTONS_NAME` | Photon result to take the events from (`None`: this timestream's) |
 | `TRIG_NSIGMA`, `COINC_WIN`, `HEE_MIN_MULT` | Triggers: threshold (noise sigma), largest gap within an event (samples), fewest tones |
@@ -205,8 +213,8 @@ hee/<name>/          attrs: run, tone set, calibration, events,
 
 ## Command line
 
-`--cal name`, `--name`, `--events triggers`, `--photons name`,
-`--continue`, `--overwrite`, `--no-gui`.
+`--cal name`, `--events triggers`, `--photons name`, `--continue`,
+`--overwrite`, `--no-gui`.
 
 # 6c_psds.py: noise spectra
 
@@ -230,7 +238,7 @@ calibrating again.
 | Deglitch (optional) | Pulses are cut out of each timestream before the spectra, by peak finding or with a photon result's filters (see Deglitching below) |
 | Spectra | $S_{xx}$ per tone: reduced values (the mean within 20% of 0.1, 0.3, 1, 3, 10, ... Hz, from `FMIN_MULT` / duration to Nyquist / 2 / `FMAX_DIV`) and `NBINS` logarithmic bins; also the spectra of the loop components, parallel to the loop ($r\theta$, dissipation) and perpendicular to it ($A$, amplitude), and their ratio in dB at the reduced frequencies, the s-factor. The droop of the CRS decimation filters is undone (the rfmux transfer function), and the spectra end at 0.8 of the Nyquist frequency |
 | Common modes | Per tone write, `CN_N_COMP` modes by `citkid.xcal.corr.calc_cm` (`CN_N_ITER` iterations; highpass `CN_HIGHPASS_HZ` while finding the weights, lowpass `CN_LOWPASS_HZ` on the modes while iterating; the removed modes are unfiltered), then the spectra again on the cleaned tones, and the modes' spectra |
-| Review | The overview window on the raw spectra, before the common modes (skip it with `INTERACTIVE = False` or `--no-gui`); tones marked bad there stay out of the common-mode fit. The timestreams stay in memory, so after the window only the common modes are computed |
+| Review | One overview window on the raw spectra of every chosen timestream, before the common modes (skip it with `INTERACTIVE = False` or `--no-gui`); a tone marked bad there stays out of the common-mode fit of every timestream. The timestreams stay in memory while they fit in `MEMORY_GB` together, so after the window only the common modes are computed; a timestream that does not fit is computed again after the window |
 
 ## Deglitching
 
@@ -252,15 +260,24 @@ of samples replaced (`n_glitches`, `glitch_frac`).
 
 ## The window
 
-Three histograms over all tones of the raw $S_{xx}$ (1/Hz, log axis)
-at frequencies picked from the reduced grid, each with
-draggable review limits; the histograms do not zoom. The list shows the
-flagged tones (outside the limits) or all, with or without the tones
-marked bad (the boxes above it), with their values; click a tone, or
-near its bar, to see its binned spectrum. B marks the tone bad with a
-reason (saved with the result and in the store's tone marks; again to
-clear), N adds a note. The limits are saved with the result. The common
-modes are then found without the bad tones.
+One window for the run: every chosen timestream together (the usual
+pair is a long run at stage 6 and a short one at stage 0; a series
+over optical power or temperature is one 6c run per point). Three
+histograms over all tones of the raw $S_{xx}$ (1/Hz, log axis) at
+frequencies picked from the reduced grid, and one of the s-factor
+(parallel over perpendicular noise, dB, the mean over 10 to 100 Hz),
+each with draggable review limits; the histograms do not zoom. With
+several timestreams a tone's value is the geometric mean (mean for
+the s-factor) over the timestreams that have the tone and did not
+flag it. The list shows the flagged tones (outside the limits) or
+all, with or without the tones marked bad (the boxes above it), with
+their values; click a tone, or near its bar, to see its binned
+spectra, one curve per timestream (a legend names them) before and
+after the common modes, and each timestream's status for it. B
+marks the tone bad with a reason in every timestream of the run
+(saved with each result and in the store's tone marks; again to
+clear), N adds a note. The limits are saved with every result. The
+common modes are then found without the bad tones.
 
 ```text
 ts_psd{p}/              attrs: name, timestreams, settings, reference
@@ -288,6 +305,7 @@ or name.
 | `TIMESTREAMS` | Index as listed, run name, or `dict(name = ..., or run = n, tone_sets = [...], cal = c)`; empty: list them |
 | `NAME` | Name of this set of spectra |
 | `INTERACTIVE` | Review each timestream in the overview window |
+| (`N_WORKERS`, in `settings.py`) | Threads computing the spectra of a write side by side (the common modes are one matrix operation) |
 | `NBINS` | Number of logarithmic frequency bins of the binned spectra |
 | `FMIN_MULT` | Lowest frequency, times 1 / duration |
 | `FMAX_DIV` | Highest reduced frequency: Nyquist / 2 / this |

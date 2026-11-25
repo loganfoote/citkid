@@ -22,7 +22,7 @@ from citkid.qt_compat import set_theme
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-from settings import LIGHT_MODE
+from settings import LIGHT_MODE, N_WORKERS
 
 REPORT_DIR = '~/reports'
 STORE = None
@@ -204,7 +204,8 @@ def main(args):
     out = site.build_device(os.path.expanduser(store), args.out,
                             force = args.force,
                             res_pages = RES_PAGES and not args.no_res_pages,
-                            progress = print, sxx_run = args.sxx_run)
+                            progress = print, sxx_run = args.sxx_run,
+                            n_workers = N_WORKERS)
     if INDEX:
         print(f'Site: {site.build_index(args.out)}')
     return [out] if out is not None else []

@@ -31,6 +31,10 @@ def load_script(name):
     spec = importlib.util.spec_from_file_location(name[:-3], path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    if hasattr(module, 'N_WORKERS'):
+        # The tests run the detection in this process (one test covers
+        # the worker pool)
+        module.N_WORKERS = 1
     return module
 
 
@@ -884,6 +888,7 @@ def test_05_calibrate_streams(tmp_path, monkeypatch, capsys):
     assert 'dark6' in capsys.readouterr().out
     sel = [dict(name = 'dark6', chunks = 1), dict(run = 1, tone_sets = [1])]
     monkeypatch.setattr(m, 'CALIBRATE', sel)
+    monkeypatch.setattr(m, 'PARAMS', dict(xcal_std_cutoff = 8.))
     ds = m.main(m.parse_args(argv))
     # One DataSet per calibration sweep: set 0 from the first entry,
     # and set 1 of each entry on its own sweep (the second run
@@ -894,6 +899,8 @@ def test_05_calibrate_streams(tmp_path, monkeypatch, capsys):
     root = dl.open_store(tmp_path / 's.zarr')
     cal = root['ts_cal0']
     assert cal.attrs['kind'] == 'analysis' and cal.attrs['selection'] == sel
+    # PARAMS went to the runner and are recorded on the group
+    assert cal[names[0]].attrs['params'] == {'xcal_std_cutoff': 8.0}
     tone_set = root['tune0/tones/tone_set'][:]
     for name in names:
         d, s = ds[name], (0 if name == 'set0' else 1)
@@ -1206,7 +1213,7 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
     path, log = photon_store
     m = load_script('6a_find_photons.py')
     argv = ['--store', str(path)]
-    monkeypatch.setattr(m, 'TIMESTREAMS', [])
+    monkeypatch.setattr(m, 'TIMESTREAMS', {})
     assert m.main(m.parse_args(argv)) is None
     out = capsys.readouterr().out
     assert "0: tune0 ts0, 'dark0', set 0" in out and \
@@ -1251,7 +1258,7 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
     logs = (log[:1], log[1:3], log[3:4], log[4:6])
     # From scratch, with the window: the result is named after the run
     # and tone set (the run has two tone sets)
-    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    monkeypatch.setattr(m, 'TIMESTREAMS', {0: None})
     m.main(m.parse_args(argv))
     assert windows == ['ts0']
     root = dl.open_store(path)
@@ -1269,7 +1276,7 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
     assert not g0['bad'][:].any() and all(r == '' for r in g0['bad_reason'])
     assert 'dark0_set0: ts0 set 0, ts_cal0, full' in pf.describe_results(root)
     # Its thresholds for both tone sets of run 1, no window
-    monkeypatch.setattr(m, 'TIMESTREAMS', ['dark0b'])
+    monkeypatch.setattr(m, 'TIMESTREAMS', {'dark0b': None})
     m.main(m.parse_args(argv + ['--reference', 'dark0_set0']))
     assert windows == ['ts0']
     root = dl.open_store(path)
@@ -1283,7 +1290,7 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
     # Its filters for run 1's tone set 0: heights in its photon units,
     # replacing that timestream's result. Without the window, a saved
     # result is only replaced with --overwrite: otherwise it is skipped
-    monkeypatch.setattr(m, 'TIMESTREAMS', [2])
+    monkeypatch.setattr(m, 'TIMESTREAMS', {2: None})
     before = dl.open_store(path)['photons/dark0b_set0'].attrs['created']
     assert m.main(m.parse_args(argv + ['--reference', 'dark0_set0',
                                        '--reuse', 'filter'])) == {}
@@ -1295,6 +1302,33 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
     m.main(m.parse_args(argv + ['--reference', 'dark0_set0', '--reuse',
                                 'filter', '--overwrite']))
     assert 'Replacing photons/dark0b_set0' in capsys.readouterr().out
+    # --skip-saved: the saved results are skipped without the popup,
+    # the timestream without one runs
+    created = dl.open_store(path)['photons/dark0b_set0'].attrs['created']
+    monkeypatch.setattr(m, 'TIMESTREAMS', {'dark0b': None, 1: None})
+    monkeypatch.setattr(pt, 'ask_existing_result',
+                        lambda *a, **k: pytest.fail('asked'))
+    res = m.main(m.parse_args(argv + ['--skip-saved']))
+    assert list(res) == ['dark0_set1'] and windows == ['ts0', 'ts0']
+    out = capsys.readouterr().out
+    assert 'photons/dark0b_set0 exists: skipped (--skip-saved)' in out
+    root = dl.open_store(path)
+    assert root['photons/dark0b_set0'].attrs['created'] == created
+    assert root['photons/dark0_set1'].attrs['tone_set'] == 1
+    del dl.open_store(path, mode = 'a')['photons/dark0_set1']
+    windows.pop()       # the later counts see the earlier windows only
+    # A name given in TIMESTREAMS names the result (the tone set added
+    # when the run has several)
+    monkeypatch.setattr(m, 'TIMESTREAMS', {2: 'named', 'dark0b': 'both'})
+    res = m.main(m.parse_args(argv + ['--reference', 'dark0_set0',
+                                      '--no-gui']))
+    assert list(res) == ['named', 'both_set0', 'both_set1']
+    root = dl.open_store(path)
+    assert root['photons/named'].attrs['tone_set'] == 0
+    assert root['photons/both_set1'].attrs['tone_set'] == 1
+    root = dl.open_store(path, mode = 'a')
+    for n in ('named', 'both_set0', 'both_set1'):
+        del root[f'photons/{n}']
     root = dl.open_store(path)
     assert pf.list_results(root) == ['dark0_set0', 'dark0b_set0',
                                      'dark0b_set1']
@@ -1303,14 +1337,17 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
     check_photons(g2, logs[2], dt)
     np.testing.assert_allclose(g2['amp_ph'][:], g0['amp_ph_own'][:])
     # Another timestream from scratch, under a name: the window opens
-    # again; a name needs a single timestream
-    monkeypatch.setattr(m, 'TIMESTREAMS', [1])
-    m.main(m.parse_args(argv + ['--name', 'first_set1']))
+    # again; two timestreams with one name are refused
+    monkeypatch.setattr(m, 'TIMESTREAMS', {1: 'first_set1'})
+    m.main(m.parse_args(argv))
     assert windows == ['ts0', 'ts0']
     check_photons(dl.open_store(path)['photons/first_set1'], logs[1], dt)
+    monkeypatch.setattr(m, 'TIMESTREAMS', {0: 'x', 1: 'x'})
+    with pytest.raises(ValueError, match = 'named'):
+        m.main(m.parse_args(argv))
     monkeypatch.setattr(m, 'TIMESTREAMS', ['dark0b'])
-    with pytest.raises(ValueError, match = 'single'):
-        m.main(m.parse_args(argv + ['--name', 'x']))
+    with pytest.raises(TypeError, match = 'dict'):
+        m.main(m.parse_args(argv))
     # With the window, a run on a timestream whose result is saved asks:
     # Cancel skips it, Overwrite detects again from scratch
     asked = []
@@ -1331,7 +1368,7 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
         return answers.pop(0)
 
     monkeypatch.setattr(m, 'ask_existing', answer)
-    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    monkeypatch.setattr(m, 'TIMESTREAMS', {0: None})
     answers = [None]
     before = dl.open_store(path)['photons/dark0_set0'].attrs['created']
     assert m.main(m.parse_args(argv)) == {}
@@ -1405,7 +1442,7 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
         return thresholds, {**results, **new}
 
     monkeypatch.setattr(pt, 'run_photon_thresholds', continue_window)
-    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    monkeypatch.setattr(m, 'TIMESTREAMS', {0: None})
     answers = ['continue']
     m.main(m.parse_args(argv))
     assert windows[-1] == 'continue' and len(reruns) == 1 and answers == []
@@ -1478,7 +1515,9 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
     root = dl.open_store(path, mode = 'a')
     copy_group(root['photons/dark0_set0'], root['photons'].create_group(
         'old'), exclude = ('detail',))
-    m.main(m.parse_args(argv + ['--continue', '--name', 'old']))
+    monkeypatch.setattr(m, 'TIMESTREAMS', {0: 'old'})
+    m.main(m.parse_args(argv + ['--continue']))
+    monkeypatch.setattr(m, 'TIMESTREAMS', {0: None})
     out = capsys.readouterr().out
     assert 'holds no detection detail' in out and windows[-1] == 'continue'
     g_old = dl.open_store(path)['photons/old']
@@ -1513,7 +1552,7 @@ def test_06_find_photons(photon_store, monkeypatch, capsys):
     mask_saved = mask[1]
     mask[1] = False
     try:
-        monkeypatch.setattr(m, 'TIMESTREAMS', [])
+        monkeypatch.setattr(m, 'TIMESTREAMS', {})
         m.main(m.parse_args(argv))
         out = capsys.readouterr().out
         assert "0: tune0 ts0, 'dark0', set 0, 1.5 s, 4 tones (2 uncalibrated " \
@@ -1615,11 +1654,11 @@ def test_06b_hee(photon_store, monkeypatch, capsys):
         # The photon result of run 0's tone set 0 (made by the 06a test
         # when the whole file runs)
         m6 = load_script('6a_find_photons.py')
-        monkeypatch.setattr(m6, 'TIMESTREAMS', [0])
+        monkeypatch.setattr(m6, 'TIMESTREAMS', {0: None})
         m6.main(m6.parse_args(argv + ['--no-gui']))
     monkeypatch.setattr(m, 'LEVEL', 3.)
     monkeypatch.setattr(m, 'FIT_S', 1e-3)
-    monkeypatch.setattr(m, 'TIMESTREAMS', [])
+    monkeypatch.setattr(m, 'TIMESTREAMS', {})
     assert m.main(m.parse_args(argv)) is None
     out = capsys.readouterr().out
     assert "1: tune0 ts0, 'dark0', set 1" in out and 'Previous results' in out
@@ -1656,7 +1695,7 @@ def test_06b_hee(photon_store, monkeypatch, capsys):
 
     monkeypatch.setattr(ct, 'run_hee_tails', fake_window)
     # Run 0's tone set 1 has no photon result: events from triggers
-    monkeypatch.setattr(m, 'TIMESTREAMS', [1])
+    monkeypatch.setattr(m, 'TIMESTREAMS', {1: None})
     res = m.main(m.parse_args(argv))
     assert windows == ['ts0'] and list(res) == ['dark0_set1']
     assert 'events from triggers' in capsys.readouterr().out
@@ -1702,7 +1741,7 @@ def test_06b_hee(photon_store, monkeypatch, capsys):
         '1 bad' in cf.describe_results(root)
     # Run 0's tone set 0 has a photon result: its HEEs are the
     # events (no window)
-    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    monkeypatch.setattr(m, 'TIMESTREAMS', {0: None})
     m.main(m.parse_args(argv + ['--no-gui']))
     assert windows == ['ts0']
     root = dl.open_store(path)
@@ -1715,11 +1754,11 @@ def test_06b_hee(photon_store, monkeypatch, capsys):
     # Asking for photons where there is no result fails; triggers can be
     # forced where there is one; a photon result saved without its HEEs
     # counts as none
-    monkeypatch.setattr(m, 'TIMESTREAMS', [1])
+    monkeypatch.setattr(m, 'TIMESTREAMS', {1: None})
     with pytest.raises(KeyError, match = 'no photon result'):
         m.main(m.parse_args(argv + ['--events', 'photons', '--overwrite',
                                     '--no-gui']))
-    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    monkeypatch.setattr(m, 'TIMESTREAMS', {0: None})
     dl.open_store(path, mode = 'a')['photons'].create_group('nohee')
     with pytest.raises(KeyError, match = 'no photon result'):
         m.main(m.parse_args(argv + ['--events', 'photons', '--photons',
@@ -1728,7 +1767,7 @@ def test_06b_hee(photon_store, monkeypatch, capsys):
                                 '--no-gui']))
     out = capsys.readouterr().out
     assert 'holds no HEEs' in out and 'events from triggers' in out
-    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    monkeypatch.setattr(m, 'TIMESTREAMS', {0: None})
     m.main(m.parse_args(argv + ['--events', 'triggers', '--overwrite',
                                 '--no-gui']))
     assert 'Replacing hee/dark0_set0' in capsys.readouterr().out
@@ -1774,7 +1813,7 @@ def test_06b_hee(photon_store, monkeypatch, capsys):
         return thresholds, results
 
     monkeypatch.setattr(ct, 'run_hee_tails', continue_window)
-    monkeypatch.setattr(m, 'TIMESTREAMS', [1])
+    monkeypatch.setattr(m, 'TIMESTREAMS', {1: None})
     m.main(m.parse_args(argv + ['--continue']))
     bad_res = int(dl.open_store(path)['hee/dark0_set1']['res_idxs'][1])
     assert seen == [(50., {bad_res: 'weird pulse shape'})]
@@ -1782,12 +1821,12 @@ def test_06b_hee(photon_store, monkeypatch, capsys):
     assert g1.attrs['continued_from'] == 'hee/dark0_set1'
     assert g1['bad'][:][1]
     with pytest.raises(KeyError, match = 'no saved result'):
-        monkeypatch.setattr(m, 'TIMESTREAMS', [3])
+        monkeypatch.setattr(m, 'TIMESTREAMS', {3: None})
         m.main(m.parse_args(argv + ['--continue']))
-    # A name needs a single timestream
-    monkeypatch.setattr(m, 'TIMESTREAMS', ['dark0b'])
-    with pytest.raises(ValueError, match = 'single'):
-        m.main(m.parse_args(argv + ['--name', 'x']))
+    # Two timestreams with one name are refused
+    monkeypatch.setattr(m, 'TIMESTREAMS', {0: 'x', 1: 'x'})
+    with pytest.raises(ValueError, match = 'named'):
+        m.main(m.parse_args(argv))
     assert cf.list_results(dl.open_store(path)) == ['dark0_set0',
                                                     'dark0_set1']
 
@@ -1808,7 +1847,8 @@ def test_07_psds(photon_store, monkeypatch, capsys):
     marking = []
 
     def fake_overview(ts, result, f_reduced, bad = None, limits = None,
-                      root = None, stage = '', title = '', ui_scale = 1.):
+                      root = None, stage = '', title = '', ui_scale = 1.,
+                      label = None, others = ()):
         """
         Stand in for the overview window: mark the first tone bad, with
         a reason, in the result and the store's tone marks.
@@ -1827,9 +1867,13 @@ def test_07_psds(photon_store, monkeypatch, capsys):
         bad, limits (dict): as the window.
         """
         windows.append(stage)
+        windows.extend(o['stage'] for o in others)
         assert len(result['sxx_reduced']) == len(ts['rows'])
         # The window sees the raw spectra, before the common modes
         assert 'sxx_reduced_cn' not in result
+        for o in others:
+            assert 'sxx_reduced_cn' not in o['result']
+            assert len(o['result']['sxx_reduced']) == len(o['ts']['rows'])
         if not marking:
             return {}, {}
         r = int(ts['res_idxs'][0])
@@ -1852,7 +1896,8 @@ def test_07_psds(photon_store, monkeypatch, capsys):
     assert g.attrs['name'] == 'dark'
     assert g.attrs['timestreams'] == [0, 'dark0b']
     assert g.attrs['settings']['cn_remove'] is True
-    # The window ran per timestream; its marks and limits are saved
+    # One window over every timestream of the run; its marks and limits
+    # are saved with each
     assert windows == ['ts_psd0/timestream0', 'ts_psd0/timestream1',
                        'ts_psd0/timestream2']
     # A run whose window marks the first tone bad: the mark, reason and
@@ -1971,7 +2016,7 @@ def test_07_psds(photon_store, monkeypatch, capsys):
     root = dl.open_store(path, mode = 'a')
     if 'photons' not in root or 'dark0_set0' not in root['photons']:
         m6 = load_script('6a_find_photons.py')
-        monkeypatch.setattr(m6, 'TIMESTREAMS', [0])
+        monkeypatch.setattr(m6, 'TIMESTREAMS', {0: None})
         m6.main(m6.parse_args(argv + ['--no-gui']))
     m.main(m.parse_args(argv + ['--deglitch', 'photons', '--photons',
                                 'dark0_set0', '--new']))
@@ -2245,11 +2290,11 @@ def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
     store_argv = ['--store', str(path)]
     if 'dark0_set0' not in pf.list_results(root):
         m6 = load_script('6a_find_photons.py')
-        monkeypatch.setattr(m6, 'TIMESTREAMS', [0])
+        monkeypatch.setattr(m6, 'TIMESTREAMS', {0: None})
         m6.main(m6.parse_args(store_argv + ['--no-gui']))
     if 'dark0_set0' not in cf.list_results(root):
         m6b = load_script('6b_hee.py')
-        monkeypatch.setattr(m6b, 'TIMESTREAMS', [0])
+        monkeypatch.setattr(m6b, 'TIMESTREAMS', {0: None})
         m6b.main(m6b.parse_args(store_argv + ['--no-gui']))
     if not dl.list_indices(root, 'ts_psd'):
         m7 = load_script('6c_psds.py')
@@ -2391,6 +2436,15 @@ def test_08_report_site(photon_store, monkeypatch, capsys, tmp_path):
     assert m.site.build_device(str(path), str(out),
                                progress = print) is None
     assert 'up to date' in capsys.readouterr().out
+    # The resonator pages written by worker processes are the same
+    res_dir = dev / 'res'
+    before = {p.name: p.read_text('utf-8') for p in res_dir.glob('*.html')}
+    assert before
+    assert m.site.build_device(str(path), str(out), force = True,
+                               progress = print, n_workers = 2) == str(dev)
+    assert 'over 2 processes' in capsys.readouterr().out
+    after = {p.name: p.read_text('utf-8') for p in res_dir.glob('*.html')}
+    assert after == before
     assert m.main(m.parse_args(argv[:-1])) is None     # no --update
     assert 'exists' in capsys.readouterr().out
     assert m.main(m.parse_args(argv + ['--no-res-pages'])) == [str(dev)]
@@ -2544,7 +2598,7 @@ def test_06_tones_before_window(photon_store, monkeypatch, capsys):
         return thresholds, results
 
     monkeypatch.setattr(pt, 'run_photon_thresholds', fake_window)
-    monkeypatch.setattr(m, 'TIMESTREAMS', ['dark0'])
+    monkeypatch.setattr(m, 'TIMESTREAMS', {'dark0': None})
     monkeypatch.setattr(m, 'TONES_BEFORE_WINDOW', 2)
     monkeypatch.setattr(m, 'WINDOW_FIRST_ONLY', True)
     out = m.main(m.parse_args(argv))
@@ -2564,7 +2618,7 @@ def test_06_tones_before_window(photon_store, monkeypatch, capsys):
     assert all(s == '' for s in g1['status'][:])
     np.testing.assert_allclose(g1['hmax'][:], 3.4)
     # Without the window, every tone is detected before anything else
-    monkeypatch.setattr(m, 'TIMESTREAMS', [0])
+    monkeypatch.setattr(m, 'TIMESTREAMS', {0: None})
     out = m.main(m.parse_args(argv + ['--no-gui']))
     assert windows == ['ts0'] and 'not run' not in capsys.readouterr().out
     assert all(isinstance(r, dict)
@@ -2606,7 +2660,7 @@ def test_06b_tones_before_window(photon_store, monkeypatch, capsys):
         return thresholds, {**results, **new}
 
     monkeypatch.setattr(ct, 'run_hee_tails', fake_window)
-    monkeypatch.setattr(m, 'TIMESTREAMS', ['dark0'])
+    monkeypatch.setattr(m, 'TIMESTREAMS', {'dark0': None})
     monkeypatch.setattr(m, 'TONES_BEFORE_WINDOW', 2)
     monkeypatch.setattr(m, 'WINDOW_FIRST_ONLY', True)
     out = m.main(m.parse_args(argv))
@@ -2719,7 +2773,7 @@ def test_06_names_the_calibration_with_the_timestream(
         selection = [], name = 'empty'))
     try:
         m = load_script('6a_find_photons.py')
-        monkeypatch.setattr(m, 'TIMESTREAMS', ['dark0'])
+        monkeypatch.setattr(m, 'TIMESTREAMS', {'dark0': None})
         # The latest calibration is empty: dark0 still finds its own
         monkeypatch.setattr(m, 'INTERACTIVE', False)
         out = m.main(m.parse_args(['--store', str(path), '--overwrite']))
@@ -2728,7 +2782,7 @@ def test_06_names_the_calibration_with_the_timestream(
                            r"not on ts_cal8 \('empty'\); it is on "
                            r"ts_cal0 \('ts_cal0'\)"):
             m.main(m.parse_args(['--store', str(path), '--cal', '8']))
-        monkeypatch.setattr(m, 'TIMESTREAMS', ['nope'])
+        monkeypatch.setattr(m, 'TIMESTREAMS', {'nope': None})
         with pytest.raises(KeyError, match = r"no run 'nope' with "
                            'calibrated streams'):
             m.main(m.parse_args(['--store', str(path)]))
@@ -2737,7 +2791,7 @@ def test_06_names_the_calibration_with_the_timestream(
         copy_group(root['ts_cal0'],
                    dl.create_group(root, 'ts_cal9', 'analysis'))
         root['ts_cal9'].attrs['name'] = 'again'
-        monkeypatch.setattr(m, 'TIMESTREAMS', ['dark0'])
+        monkeypatch.setattr(m, 'TIMESTREAMS', {'dark0': None})
         with pytest.raises(KeyError, match = 'several calibrations'):
             m.main(m.parse_args(['--store', str(path)]))
         out = m.main(m.parse_args(['--store', str(path), '--cal', 'again',
@@ -2899,6 +2953,17 @@ def test_06c_reuses_timestreams(photon_store, monkeypatch, capsys):
     grp = psds.matching_group(dl.open_store(path), 'reuse', [0])
     t = grp['timestream0']
     assert t['status'][:][0] == 'marked bad: noisy' and t['bad'][:][0]
+    # Over the memory budget (its own working copies fit, keeping it
+    # with them does not): computed again after the review
+    size = 8 * len(ts['res_idxs']) * (ts['stop'] - ts['start'])
+    assert m.keep_in_memory([ts, ts], 5.5 * size / 1e9) == [True, False]
+    monkeypatch.setattr(m, 'MEMORY_GB', 4.5 * size / 1e9)
+    calls.clear()
+    m.main(m.parse_args(['--store', str(path), '--name', 'reuse',
+                         '--overwrite']))
+    assert len(calls) == 2 and calls[0]['keep_x'] is False
+    assert calls[1]['reuse'] is None
+    assert 'computed again after the review' in capsys.readouterr().out
 
 
 def test_cal_tones_total(tmp_path, monkeypatch, capsys):
@@ -2936,3 +3001,163 @@ def test_cal_tones_total(tmp_path, monkeypatch, capsys):
     assert len(fcal) == 2 and sorted(scal.tolist()) == [0, 1]
     monkeypatch.setattr(m, 'N_CAL_TONES', 0)
     assert len(m.cal_tones(res, tplan, max_tones = 100)[0]) == 0
+
+
+def test_resolve_named(photon_store):
+    """
+    TIMESTREAMS names each result: the name given (the tone set added
+    when the run has several), or the run's with None; two timestreams
+    with one name, and a list, are refused.
+    """
+    from citkid.pipeline import photon_finder as pf
+    path, _ = photon_store
+    root = dl.open_store(path)
+    listed, _ = pf.list_all_timestreams(root)
+    named = pf.resolve_named(listed, {0: 'first', 'dark0b': 'second'},
+                             root = root)
+    assert [n for n, _ in named] == ['first', 'second_set0', 'second_set1']
+    assert named[0][1]['index'] == 0 and named[1][1]['run'] == 'ts1'
+    named = pf.resolve_named(listed, {0: None, 'dark0b': None}, root = root)
+    assert [n for n, _ in named] == ['dark0_set0', 'dark0b_set0',
+                                     'dark0b_set1']
+    with pytest.raises(ValueError, match = 'named'):
+        pf.resolve_named(listed, {0: 'a_set0', 'dark0b': 'a'}, root = root)
+    with pytest.raises(KeyError):
+        pf.resolve_named(listed, {'nothing': 'a'}, root = root)
+    with pytest.raises(TypeError, match = 'dict'):
+        pf.resolve_named(listed, [0], root = root)
+
+
+def test_06_phased(photon_store, monkeypatch, capsys):
+    """
+    --phased detects every timestream (all tones) before the first
+    window opens, then opens the windows in order, then finishes and
+    saves in order; the timestreams are dropped from memory between
+    the phases; WINDOW_FIRST_ONLY is refused with it.
+    """
+    import citkid.pipeline.interactive.photon_thresholds as pt
+    from citkid.pipeline import photon_finder as pf
+    path, _ = photon_store
+    m = load_script('6a_find_photons.py')
+    argv = ['--store', str(path), '--overwrite']
+    order = []
+    real_detect = pf.detect_timestream
+
+    def detect(ts, data, settings, thresholds, rows = None, **kwargs):
+        """
+        Record each detection and run it.
+        """
+        order.append(('detect', ts['tone_set'], rows))
+        return real_detect(ts, data, settings, thresholds, rows = rows,
+                           **kwargs)
+
+    def fake_window(ts, results, thresholds, rerun, **kwargs):
+        """
+        Stand in for the window: record it and rerun one tone.
+        """
+        order.append(('window', ts['tone_set'], sorted(results)
+                      == sorted(int(r) for r in ts['rows'])))
+        r = int(ts['rows'][0])
+        return thresholds, {**results, **rerun([r], thresholds)}
+
+    real_save = pf.save_timestream
+
+    def save(grp, ts, *a, **k):
+        """
+        Record each save and do it.
+        """
+        order.append(('save', ts['tone_set']))
+        return real_save(grp, ts, *a, **k)
+
+    drops = []
+    real_drop = pf.TimestreamData.drop
+    monkeypatch.setattr(pf.TimestreamData, 'drop',
+                        lambda self: drops.append(len(self._kept))
+                        or real_drop(self))
+    monkeypatch.setattr(pf, 'detect_timestream', detect)
+    monkeypatch.setattr(pf, 'save_timestream', save)
+    monkeypatch.setattr(pt, 'run_photon_thresholds', fake_window)
+    monkeypatch.setattr(m, 'TIMESTREAMS', {0: 'ph0', 1: 'ph1'})
+    monkeypatch.setattr(m, 'TONES_BEFORE_WINDOW', 2)
+    out = m.main(m.parse_args(argv + ['--phased']))
+    assert list(out) == ['ph0', 'ph1']
+    # Every tone of both timestreams detected first (TONES_BEFORE_WINDOW
+    # does not apply), then the windows (each rerunning a tone), then
+    # the saves
+    assert [o[:2] for o in order] == [
+        ('detect', 0), ('detect', 1), ('window', 0), ('detect', 0),
+        ('window', 1), ('detect', 1), ('save', 0), ('save', 1)]
+    assert order[0][2] is None and order[1][2] is None
+    assert order[2][2] and order[4][2]
+    assert len(drops) == 4 and drops[0] > 0
+    text = capsys.readouterr().out
+    assert 'Every timestream detected; the windows of the 2' in text
+    root = dl.open_store(path)
+    for n, tone_set in (('ph0', 0), ('ph1', 1)):
+        g = root[f'photons/{n}']
+        assert g.attrs['tone_set'] == tone_set and g.attrs['mode'] == 'full'
+        assert all(s == '' for s in g['status'][:])
+    # The default: each timestream start to end, the first two tones
+    # before its window
+    order.clear()
+    m.main(m.parse_args(argv))
+    assert [o[:2] for o in order] == [
+        ('detect', 0), ('window', 0), ('detect', 0), ('detect', 0),
+        ('save', 0), ('detect', 1), ('window', 1), ('detect', 1),
+        ('detect', 1), ('save', 1)]
+    assert len(order[0][2]) == 2 and not order[1][2]
+    monkeypatch.setattr(m, 'WINDOW_FIRST_ONLY', True)
+    with pytest.raises(ValueError, match = 'WINDOW_FIRST_ONLY'):
+        m.main(m.parse_args(argv + ['--phased']))
+    root = dl.open_store(path, mode = 'a')
+    for n in ('ph0', 'ph1'):
+        del root[f'photons/{n}']
+
+
+def test_detect_timestream_workers(photon_store):
+    """
+    The detection with worker processes gives the serial results, tone
+    for tone, including the error of a tone without a timestream; one
+    tone runs in this process.
+    """
+    from citkid.pipeline import photon_finder as pf
+    from citkid.signal.photons import DetectionSettings
+    path, _ = photon_store
+    root = dl.open_store(path)
+    listed, datasets = pf.list_all_timestreams(root)
+    ts = pf.resolve_timestreams(listed, [0], root = root)[0]
+    DS = datasets[ts['cal']][ts['dataset']]['DS']
+    settings = DetectionSettings(highpass_hz = 10.)
+    data = pf.TimestreamData(root, ts, DS, settings)
+    th = pf.Thresholds(hmin = 1., hmax = 3.2, init_hmax = 3.)
+    serial = pf.detect_timestream(ts, data, settings, th, progress = False)
+    assert pf.resolve_workers(None) >= 1 and pf.resolve_workers(0) == 1
+    parallel = pf.detect_timestream(ts, data, settings, th,
+                                    progress = False, n_workers = 2)
+    assert pf.worker_pool(2) is pf.worker_pool(2)
+    assert sorted(parallel) == sorted(serial)
+    for row, res in serial.items():
+        got = parallel[row]
+        if isinstance(res, str):
+            assert got == res
+            continue
+        assert got['res_idx'] == res['res_idx']
+        for key, v in res.items():
+            if isinstance(v, np.ndarray):
+                np.testing.assert_allclose(got[key], v, equal_nan = True)
+            elif isinstance(v, (int, float, np.integer, np.floating)):
+                assert got[key] == pytest.approx(v, nan_ok = True)
+    # With the reference's filters too, and one tone alone
+    ref = {r['res_idx']: r for r in serial.values() if isinstance(r, dict)}
+    rows = [int(r) for r in ts['rows'][:1]]
+    one = pf.detect_timestream(ts, data, settings, th, rows = rows,
+                               reference = ref, progress = False,
+                               n_workers = 2)
+    two = pf.detect_timestream(ts, data, settings, th,
+                               rows = [int(r) for r in ts['rows'][:2]],
+                               reference = ref, progress = False,
+                               n_workers = 2)
+    assert list(one) == rows and sorted(two) == sorted(
+        int(r) for r in ts['rows'][:2])
+    np.testing.assert_allclose(two[rows[0]]['cand_h'],
+                               one[rows[0]]['cand_h'])

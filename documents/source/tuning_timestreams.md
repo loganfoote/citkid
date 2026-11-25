@@ -331,6 +331,7 @@ scripts, and the report's fit table shows the row as bad.
 | `CALIBRATE` | Runs to calibrate, one `dict(...)` per run with the keys `name` (the latest run with it) or `run` (its index n in `ts{n}`); `chunks` (left out: all, `n`: the first n, `(first, stop)`); `tone_sets` (left out: all). Empty: list the runs |
 | `CALIBRATION_NAME` | Name of the calibration: continued when it exists (e.g. to add the IQ fits to it), made otherwise; an index (`2`, `'ts_cal2'`) continues that one. `None`: the latest made with `CALIBRATE`, else a new one named `ts_cal{c}` |
 | `F_AVG` | Fine sweep points averaged together |
+| `PARAMS` | Step parameter values in place of the analysis YAML's for this run, by name, e.g. `dict(xcal_idx1_offset = 12, xcal_std_cutoff = 8.)` (`{}`: the YAML's); the window starts from them; saved on the calibration group as `params` |
 | `INTERACTIVE` | Review in the window before the batch |
 | `FIT_IQ` | Also fit each resonance (nonlinear IQ fit): an IQ fit panel in the window, the rest in batch; the fits go to the report |
 

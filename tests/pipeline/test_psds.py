@@ -94,6 +94,19 @@ def test_psd_summary_white_noise():
     fb, binned, reduced = psds.psd_summary(np.full((2, T), np.nan), dt,
                                            freqs)
     assert len(fb) == 0 and binned.shape == (2, 0)
+    # Over threads: the same, row for row, a NaN row and an all-NaN
+    # chunk included
+    fb1, b1, r1 = psds.psd_summary(x, dt, freqs, valid, nbins = 50,
+                                   fmin = 0.1)
+    fb2, b2, r2 = psds.psd_rows(x, dt, freqs, valid, n_workers = 3,
+                                nbins = 50, fmin = 0.1)
+    np.testing.assert_array_equal(fb1, fb2)
+    np.testing.assert_allclose(b1, b2, equal_nan = True)
+    np.testing.assert_allclose(r1, r2, equal_nan = True)
+    fb, binned, reduced = psds.psd_rows(np.full((2, T), np.nan), dt,
+                                        freqs, n_workers = 2)
+    assert len(fb) == 0 and binned.shape == (2, 0)
+    assert psds.psd_rows(x[:1], dt, freqs, n_workers = 4)[2].shape == (1, 5)
 
 
 def test_remove_common_modes():

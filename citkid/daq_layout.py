@@ -1203,7 +1203,7 @@ MARK_LEVELS = {'tune': 1, 'ts_cal': 2, 'photons': 3, 'hee': 3,
 # Reasons offered when a tone is marked bad (any text can be typed)
 BAD_REASONS = ('double resonance', 'no resonance', 'shallow resonance',
                'weird pulse shape', 'low or no pulses', 'high noise',
-               'bad fit', 'other')
+               'amplifier noise', 'bad fit', 'other')
 
 WORK_BY = 'work_by'
 

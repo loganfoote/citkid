@@ -9,6 +9,8 @@ Usage:
     python 6a_find_photons.py --device deviceA --continue
     python 6a_find_photons.py --device deviceA --reference dark --reuse filter
     python 6a_find_photons.py --device deviceA --refit-tau
+    python 6a_find_photons.py --device deviceA --skip-saved
+    python 6a_find_photons.py --device deviceA --phased
 """
 import argparse
 import dataclasses
@@ -22,18 +24,20 @@ from citkid.qt_compat import set_theme
 ################################################################################
 ################################### Settings ###################################
 ################################################################################
-from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB, LIGHT_MODE
+from settings import DATA_DIR, COOLDOWN, DEVICE, SUFFIX, MEMORY_GB, \
+    N_WORKERS, LIGHT_MODE
 
 # Timestreams
 CALIBRATION_NAME = None
-TIMESTREAMS = [
-]
-NAME = ''
+# index as listed or run name: result name (None: named after the run)
+TIMESTREAMS = {
+}
 REFERENCE_NAME = None
 REUSE = 'settings'
 INTERACTIVE = True
 TONES_BEFORE_WINDOW = None
 WINDOW_FIRST_ONLY = False
+PHASED = False
 
 # Pulse finding
 INIT_NSIGMA = 6.
@@ -84,8 +88,6 @@ def parse_args(argv = None):
     p.add_argument('--cal', default = CALIBRATION_NAME,
                    help = 'calibration to use when a sweep has several, by '
                    "name or index (default: each timestream's own)")
-    p.add_argument('--name', default = NAME,
-                   help = 'name of the result of a single timestream')
     p.add_argument('--reference', default = REFERENCE_NAME,
                    help = 'saved result to reuse (its name)')
     p.add_argument('--reuse', choices = pf.REUSE_OPTIONS, default = REUSE,
@@ -98,6 +100,12 @@ def parse_args(argv = None):
                    default = False,
                    help = "replace a timestream's saved result without "
                    'asking')
+    p.add_argument('--phased', action = 'store_true', default = PHASED,
+                   help = 'detect every timestream first, then open the '
+                   'windows one after another, then finish them all')
+    p.add_argument('--skip-saved', action = 'store_true', default = False,
+                   help = 'skip every timestream with a saved result '
+                   'without asking (go on where a run left off)')
     p.add_argument('--refit-tau', action = 'store_true',
                    help = "only fit the decay times of each timestream's "
                    'saved result again with TAU_SKIP and TAU_FIT_S')
@@ -153,7 +161,8 @@ def detection_settings():
 
 def find_photons(
     ts, data, settings, thresholds, interactive, reference = None,
-    results = None, root = None, stage = '', first_tones = None
+    results = None, root = None, stage = '', first_tones = None,
+    n_workers = 1
 ):
     """
     Detect one timestream's photons, with the window if asked. With
@@ -179,6 +188,8 @@ def find_photons(
     first_tones (int or None): tones detected before the window opens
         (``TONES_BEFORE_WINDOW``). Default None: all, as without the
         window.
+    n_workers (int): processes for the detection
+        (``photon_finder.detect_timestream``). Default 1.
 
     Returns:
     results (dict): row: result or error message.
@@ -189,7 +200,8 @@ def find_photons(
         if interactive and first_tones is not None:
             rows = [int(r) for r in ts['rows'][:int(first_tones)]]
         results = pf.detect_timestream(ts, data, settings, thresholds,
-                                       rows = rows, reference = reference)
+                                       rows = rows, reference = reference,
+                                       n_workers = n_workers)
     if interactive:
         from citkid.pipeline.interactive.photon_thresholds import \
             run_photon_thresholds
@@ -206,7 +218,8 @@ def find_photons(
             results (dict): row: result or error message.
             """
             return pf.detect_timestream(ts, data, settings, th,
-                                        rows = rows, progress = False)
+                                        rows = rows, progress = False,
+                                        n_workers = n_workers)
 
         def tone_data(row):
             """
@@ -231,7 +244,8 @@ def find_photons(
         print(f'Detecting the {len(rows)} tones not run in the window')
         results.update(pf.detect_timestream(ts, data, settings, thresholds,
                                             rows = rows,
-                                            reference = reference))
+                                            reference = reference,
+                                            n_workers = n_workers))
     return results, thresholds
 
 def report(ts, results, summary):
@@ -272,15 +286,161 @@ def reference_for(ref_grp, settings):
     """
     return pf.load_reference(ref_grp, settings)
 
-def refit_taus(root, chosen, timestreams):
+def workers():
+    """
+    Return the number of detection processes (``N_WORKERS``).
+
+    Returns:
+    n (int): at least 1.
+    """
+    return pf.resolve_workers(N_WORKERS)
+
+def start_one(
+    root, name, ts, datasets, settings, results_grp, ref_grp, args,
+    interactive
+):
+    """
+    Begin one timestream: decide about its saved result, load its
+    timestreams, and detect its photons (from a saved result when
+    continuing; with the reference's thresholds or filters when one is
+    given; else with the script's thresholds, on the first
+    ``TONES_BEFORE_WINDOW`` tones when the window follows at once, on
+    every tone when the windows come later).
+
+    Parameters:
+    root (zarr.Group): the store root.
+    name (str): the result's name.
+    ts (dict): the timestream.
+    datasets (dict): ``list_all_timestreams`` output.
+    settings (DetectionSettings): detection settings.
+    results_grp (zarr.Group): the photon results group.
+    ref_grp (zarr.Group or None): the reference result.
+    args (argparse.Namespace): options from ``parse_args``.
+    interactive (bool): If True, the window is in use.
+
+    Returns:
+    st (dict or None): the timestream's state for ``review_one`` and
+        ``finish_one``: ``name``, ``ts``, ``data``, ``results``,
+        ``thresholds``, ``reference``, ``window`` (bool), ``mode``,
+        ``continued`` (the saved result, or None); None when skipped.
+    """
+    DS = datasets[ts['cal']][ts['dataset']]['DS']
+    data = pf.TimestreamData(root, ts, DS, settings,
+                             max_bytes = MEMORY_GB * 1e9)
+    continued = None
+    cont = args.cont
+    if name in results_grp:
+        choice = existing_choice(name, results_grp[name], args, interactive)
+        if choice is None:
+            print(f'Skipped photons/{name}')
+            return None
+        cont = choice == 'continue'
+    elif cont:
+        raise KeyError(f"{ts['run']} tone set {ts['tone_set']} has "
+                       f'no saved result photons/{name} to continue')
+    stage = f'photons/{name}'
+    reference, window = None, interactive
+    if cont:
+        continued = results_grp[name]
+        results, thresholds = continue_from(continued, ts, data, settings)
+        marked = pf.apply_tone_marks(root, ts, thresholds, stage)
+        mode = f'continued from {stage}'
+    elif ref_grp is None:
+        thresholds = pf.Thresholds(hmin = HMIN, hmax = HMAX,
+                                   init_hmax = INIT_HMAX, tau_skip = TAU_SKIP,
+                                   tau_fit_s = TAU_FIT_S)
+        marked = pf.apply_tone_marks(root, ts, thresholds, stage)
+        rows = None
+        if window and not args.phased and TONES_BEFORE_WINDOW is not None:
+            rows = [int(r) for r in ts['rows'][:int(TONES_BEFORE_WINDOW)]]
+        results = pf.detect_timestream(ts, data, settings, thresholds,
+                                       rows = rows,
+                                       n_workers = workers())
+        mode = 'full'
+    else:
+        thresholds, filters = reference_for(ref_grp, settings)
+        if args.reuse == 'filter':
+            reference = filters
+            if any(abs(f['dt'] - ts['dt']) > 1e-12 * ts['dt']
+                   for f in filters.values()):
+                raise ValueError(
+                    f"the reference's filters are for another sample "
+                    f"period than {ts['run']}'s: use REUSE = 'settings'")
+        marked = pf.apply_tone_marks(root, ts, thresholds, stage)
+        results = pf.detect_timestream(ts, data, settings, thresholds,
+                                       reference = reference,
+                                       n_workers = workers())
+        mode = f'{args.reuse} from {ref_grp.path}'
+        window = False
+    if marked:
+        print(f"{len(marked)} tones marked bad in the store's tone marks "
+              f'are left out: res {marked}')
+    return dict(name = name, ts = ts, data = data, results = results,
+                thresholds = thresholds, reference = reference,
+                window = window, mode = mode, continued = continued)
+
+def review_one(st, root, settings):
+    """
+    Open one timestream's threshold window (when it has one) on its
+    detection, and detect the tones it left not run.
+
+    Parameters:
+    st (dict): ``start_one`` output; its ``results`` and ``thresholds``
+        are replaced.
+    root (zarr.Group): the store root.
+    settings (DetectionSettings): detection settings.
+    """
+    st['results'], st['thresholds'] = find_photons(
+        st['ts'], st['data'], settings, st['thresholds'], st['window'],
+        reference = st['reference'], results = st['results'], root = root,
+        stage = f"photons/{st['name']}", n_workers = workers())
+
+def finish_one(root, st, settings, results_grp, ref_grp, args):
+    """
+    Finish one timestream: the mean pulses, coincidences and HEEs, and
+    save its result.
+
+    Parameters:
+    st (dict): ``start_one`` output after ``review_one``.
+    root (zarr.Group): the store root.
+    settings (DetectionSettings): detection settings.
+    results_grp (zarr.Group): the photon results group.
+    ref_grp (zarr.Group or None): the reference result.
+    args (argparse.Namespace): options from ``parse_args``.
+
+    Returns:
+    out (dict): ``results``, ``summary``, ``thresholds``.
+    """
+    name, ts, data = st['name'], st['ts'], st['data']
+    results, thresholds, mode = st['results'], st['thresholds'], st['mode']
+    summary = pf.finish_timestream(root, ts, data, results, settings,
+                                   coinc_win = COINC_WIN,
+                                   hee_min_mult = HEE_MIN_MULT,
+                                   thresholds = thresholds)
+    if name in results_grp:
+        print(f'Replacing photons/{name}')
+    grp = dl.create_group(results_grp, name, 'analysis', overwrite = True)
+    pf.save_timestream(grp, ts, results, summary, thresholds, settings,
+                       mode, COINC_WIN, HEE_MIN_MULT)
+    grp.attrs.update(dl.to_jsonable(dict(
+        calibration = ts['cal'],
+        reference = None if ref_grp is None else ref_grp.path,
+        reuse = None if ref_grp is None else args.reuse,
+        continued_from = None if st['continued'] is None else mode[15:])))
+    save_notes(grp, args.notes)
+    report(ts, results, summary)
+    st['data'] = None
+    return dict(results = results, summary = summary,
+                thresholds = thresholds)
+
+def refit_taus(root, named):
     """
     Fit the decay times of the chosen timestreams' saved results again,
     with the script's ``TAU_SKIP`` and ``TAU_FIT_S``.
 
     Parameters:
     root (zarr.Group): the store root, writable.
-    chosen (list of dict): the timestreams.
-    timestreams (list of dict): every timestream (for the names).
+    named (list of tuple): (result name, timestream).
 
     Returns:
     taus (dict): result name: the new decay times (np.array).
@@ -289,8 +449,7 @@ def refit_taus(root, chosen, timestreams):
     KeyError: if a timestream has no saved result.
     """
     out = {}
-    for ts in chosen:
-        name = pf.result_name(ts, timestreams)
+    for name, ts in named:
         if name not in pf.list_results(root):
             raise KeyError(f'{ts["run"]} tone set {ts["tone_set"]} has no '
                            f'saved result photons/{name}')
@@ -325,8 +484,8 @@ def continue_from(grp, ts, data, settings):
         print(f'{grp.path} holds no detection detail: detecting again with '
               'its thresholds')
         thresholds = pf.load_reference(grp, settings)[0]
-        return pf.detect_timestream(ts, data, settings, thresholds), \
-            thresholds
+        return pf.detect_timestream(ts, data, settings, thresholds,
+                                    n_workers = workers()), thresholds
 
 def ask_existing(name, grp):
     """
@@ -346,9 +505,10 @@ def ask_existing(name, grp):
 def existing_choice(name, grp, args, interactive):
     """
     Decide what to do with a timestream's saved result: continue from it,
-    overwrite it, or skip the timestream. With the window (and no
-    reference) a popup asks; otherwise ``--overwrite`` replaces it and
-    anything else skips it.
+    overwrite it, or skip the timestream. ``--skip-saved`` skips it;
+    otherwise with the window (and no reference) a popup asks, and
+    without the window ``--overwrite`` replaces it and anything else
+    skips it.
 
     Parameters:
     name (str): the result's name.
@@ -359,6 +519,9 @@ def existing_choice(name, grp, args, interactive):
     Returns:
     choice (str or None): 'continue', 'overwrite', or None to skip.
     """
+    if args.skip_saved:
+        print(f'photons/{name} exists: skipped (--skip-saved)')
+        return None
     if args.cont:
         return 'continue'
     if args.overwrite:
@@ -394,108 +557,53 @@ def main(args):
         print('Set TIMESTREAMS at the top of the script to choose '
               'timestreams.')
         return None
-    chosen = pf.resolve_timestreams(timestreams, TIMESTREAMS,
-                                    calibration = args.cal, root = root)
+    named = pf.resolve_named(timestreams, TIMESTREAMS,
+                             calibration = args.cal, root = root)
     if args.refit_tau:
-        return refit_taus(root, chosen, timestreams)
-    if args.name and len(chosen) != 1:
-        raise ValueError('NAME names the result of a single timestream; '
-                         f'{len(chosen)} are chosen')
+        return refit_taus(root, named)
     settings = detection_settings()
     ref_grp = None
     if args.reference is not None and not args.cont:
         ref_grp = root[pf.PHOTONS_GROUP][str(args.reference)]
     results_grp = pf.results_group(root)
     interactive = INTERACTIVE and not args.no_gui
+    if args.phased and WINDOW_FIRST_ONLY:
+        raise ValueError('PHASED (--phased) and WINDOW_FIRST_ONLY do not go '
+                         'together: the window of the first timestream '
+                         'has to close before the others are detected')
     out = {}
-    for ts in chosen:
-        name = args.name.strip() if args.name else \
-            pf.result_name(ts, timestreams)
-        DS = datasets[ts['cal']][ts['dataset']]['DS']
-        data = pf.TimestreamData(root, ts, DS, settings,
-                                 max_bytes = MEMORY_GB * 1e9)
-        continued = None
-        cont = args.cont
-        if name in results_grp:
-            choice = existing_choice(name, results_grp[name], args,
-                                     interactive)
-            if choice is None:
-                print(f'Skipped photons/{name}')
-                del data
-                continue
-            cont = choice == 'continue'
-        elif cont:
-            raise KeyError(f"{ts['run']} tone set {ts['tone_set']} has "
-                           f'no saved result photons/{name} to continue')
-        if cont:
-            continued = results_grp[name]
-            results, thresholds = continue_from(continued, ts, data,
-                                                settings)
-            marked = pf.apply_tone_marks(root, ts, thresholds,
-                                        f'photons/{name}')
-            results, thresholds = find_photons(ts, data, settings,
-                                               thresholds, interactive,
-                                               results = results,
-                                               root = root,
-                                               stage = f'photons/{name}')
-            mode = f'continued from photons/{name}'
-        elif ref_grp is None:
-            thresholds = pf.Thresholds(hmin = HMIN, hmax = HMAX,
-                                       init_hmax = INIT_HMAX,
-                                       tau_skip = TAU_SKIP,
-                                       tau_fit_s = TAU_FIT_S)
-            marked = pf.apply_tone_marks(root, ts, thresholds,
-                                        f'photons/{name}')
-            results, thresholds = find_photons(
-                ts, data, settings, thresholds, interactive, root = root,
-                stage = f'photons/{name}',
-                first_tones = TONES_BEFORE_WINDOW)
-            mode = 'full'
-        else:
-            thresholds, filters = reference_for(ref_grp, settings)
-            reference = None
-            if args.reuse == 'filter':
-                reference = filters
-                if any(abs(f['dt'] - ts['dt']) > 1e-12 * ts['dt']
-                       for f in filters.values()):
-                    raise ValueError(
-                        f"the reference's filters are for another sample "
-                        f"period than {ts['run']}'s: use REUSE = 'settings'")
-            marked = pf.apply_tone_marks(root, ts, thresholds,
-                                        f'photons/{name}')
-            results, _ = find_photons(ts, data, settings, thresholds, False,
-                                      reference = reference)
-            mode = f'{args.reuse} from {ref_grp.path}'
-        if marked:
-            print(f"{len(marked)} tones marked bad in the store's tone "
-                  f'marks are left out: res {marked}')
-        summary = pf.finish_timestream(root, ts, data, results, settings,
-                                       coinc_win = COINC_WIN,
-                                       hee_min_mult = HEE_MIN_MULT,
-                                       thresholds = thresholds)
-        if name in results_grp:
-            print(f'Replacing photons/{name}')
-        grp = dl.create_group(results_grp, name, 'analysis',
-                              overwrite = True)
-        pf.save_timestream(grp, ts, results, summary, thresholds, settings,
-                           mode, COINC_WIN, HEE_MIN_MULT)
-        grp.attrs.update(dl.to_jsonable(dict(
-            calibration = ts['cal'],
-            reference = None if ref_grp is None else ref_grp.path,
-            reuse = None if ref_grp is None else args.reuse,
-            continued_from = None if continued is None else mode[15:])))
-        save_notes(grp, args.notes)
-        report(ts, results, summary)
-        out[name] = dict(results = results, summary = summary,
-                         thresholds = thresholds)
+    states = []
+    for name, ts in named:
+        st = start_one(root, name, ts, datasets, settings, results_grp,
+                       ref_grp, args, interactive)
+        if st is None:
+            continue
+        if args.phased:
+            # Phase 1 only: the windows and the finish come after every
+            # timestream is detected
+            st['data'].drop()
+            states.append(st)
+            continue
+        review_one(st, root, settings)
+        out[name] = finish_one(root, st, settings, results_grp, ref_grp,
+                               args)
         # With the window on the first timestream only, the others
         # take its result as the reference (REUSE)
-        if WINDOW_FIRST_ONLY and interactive and ref_grp is None \
-                and not cont:
-            ref_grp = grp
+        if WINDOW_FIRST_ONLY and st['window'] and ref_grp is None:
+            ref_grp = results_grp[name]
             print(f'The window opened on photons/{name} only: the '
                   f'other timestreams take its {args.reuse}')
-        del data
+        del st
+    if states:
+        print(f'Every timestream detected; the windows of the {len(states)} '
+              'timestreams open one after another')
+        for st in states:
+            review_one(st, root, settings)
+            st['data'].drop()
+        for st in states:
+            out[st['name']] = finish_one(root, st, settings, results_grp,
+                                         ref_grp, args)
+        states.clear()
     print(f"Done: {', '.join(f'photons/{n}' for n in out)}")
     return out
 
